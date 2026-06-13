@@ -1,0 +1,17 @@
+{
+  "name": "quilx",
+  "version": "0.1.0",
+  "description": "A modal source-code editor built with GTK 4, Adwaita and GtkSourceView 5, on node-gtk",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "src/editor.js",
+  "bin": {
+    "quilx": "src/editor.js"
+  },
+  "scripts": {
+    "start": "node src/editor.js"
+  },
+  "dependencies": {
+    "node-gtk": "link:../node-gtk"
+  }
+}
