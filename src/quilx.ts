@@ -16,6 +16,7 @@ import { CommandManager } from './CommandManager.ts';
 import { KeymapManager } from './KeymapManager.ts';
 import { NotificationManager } from './NotificationManager.ts';
 import { AgentManager } from './AgentManager.ts';
+import { SessionManager } from './SessionManager.ts';
 import { Config, type ConfigSchema } from './util/Config.ts';
 
 /*
@@ -54,6 +55,28 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: ['claude'],
     description: 'Argv of the terminal agent launched by AgentTerminal (agent:new).',
   },
+  'session.autosave': {
+    type: 'boolean',
+    default: true,
+    description: 'Persist the working state (layout, tabs, cursors) as it changes and on quit.',
+  },
+  'session.restoreOnLaunch': {
+    type: 'boolean',
+    default: false,
+    description: 'Reopen the saved session on startup (an explicit file arg always suppresses it).',
+  },
+  'session.promptOnExitWhenModified': {
+    type: 'boolean',
+    default: true,
+    description: 'Prompt before quitting when an editor has unsaved changes or an agent is running.',
+  },
+  'session.autosaveDebounceMs': {
+    type: 'integer',
+    default: 1000,
+    minimum: 0,
+    maximum: 60000,
+    description: 'Debounce window (ms) before an autosave is written after a change.',
+  },
 };
 
 class Quilx {
@@ -62,6 +85,7 @@ class Quilx {
   readonly keymaps = new KeymapManager();
   readonly notifications = new NotificationManager();
   readonly agents = new AgentManager();
+  readonly session = new SessionManager();
   readonly config = new Config(CONFIG_SCHEMA);
 }
 
