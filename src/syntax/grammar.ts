@@ -11,7 +11,9 @@
  * memory: node-gtk-vfunc-constraints / treesitter-highlight-fold-findings.
  */
 import { createRequire } from 'node:module';
+import * as Fs from 'node:fs';
 import * as Path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require_ = createRequire(import.meta.url);
 const Parser = require_('web-tree-sitter') as any;
@@ -37,74 +39,26 @@ export interface Grammar {
 interface GrammarSpec {
   wasm: string;          // resolvable module path to the grammar .wasm
   extensions: string[];  // file extensions that select this grammar
-  highlights: string;    // tree-sitter highlights query (capture names → styles)
+  queries: string[];     // queries/<name>/highlights.scm files, concatenated in order
   foldTypes: string[];   // node types that fold when they span >1 line
 }
 
-// Highlights queries. Capture names map to colors in the highlighter (see
-// COLORS). Patterns are ordered general → specific; tag priority (not query
-// order) resolves overlaps — e.g. a method-call identifier gets both @property
-// and @function, and the higher-priority @function wins. Keywords are split
-// into control-flow (@keyword.control) and declaration/storage (@keyword) to
-// mirror VS Code's purple/blue distinction.
+// Highlights queries are vendored grammar-own .scm files under
+// queries/<lang>/highlights.scm, pinned to the bundled grammar versions (see the
+// header in each file). They use the tree-sitter standard capture names; the
+// highlighter maps those to colors with longest-prefix fallback — e.g.
+// @function.method falls back to @function — so the dotted names need no special
+// handling here (see colors.ts and syntax-controller's resolveTag).
 //
-// COMMON works against JavaScript, TypeScript, and TSX (TS/TSX are supersets).
-// Language specs append the bits that differ (class-name node type, TS types).
-const COMMON_HIGHLIGHTS = `
-(comment) @comment
+// TS/TSX reuse the JavaScript query (their grammars are supersets) and append the
+// TypeScript-only additions, mirroring how the upstream grammar ships them.
+const QUERIES_DIR = Path.join(Path.dirname(fileURLToPath(import.meta.url)), 'queries');
 
-(string) @string
-(template_string) @string
-(regex) @string
-(escape_sequence) @escape
-
-(number) @number
-(true) @boolean
-(false) @boolean
-(null) @constant
-
-[
-  "if" "else" "for" "while" "do" "switch" "case" "break" "continue" "return"
-  "throw" "try" "catch" "finally" "yield" "await" "import" "export" "from" "default"
-] @keyword.control
-
-[
-  "const" "let" "var" "function" "class" "extends" "new" "static" "get" "set"
-  "async" "typeof" "instanceof" "in" "of" "delete" "void"
-] @keyword
-
-; properties and object keys
-(property_identifier) @property
-(shorthand_property_identifier) @property
-(pair key: (property_identifier) @property)
-
-; functions: declarations, methods, and call sites
-(function_declaration name: (identifier) @function)
-(generator_function_declaration name: (identifier) @function)
-(method_definition name: (property_identifier) @function)
-(call_expression function: (identifier) @function)
-(call_expression function: (member_expression property: (property_identifier) @function))
-(new_expression constructor: (identifier) @type)
-`;
-
-// JS: class name is a plain identifier.
-const JS_HIGHLIGHTS = COMMON_HIGHLIGHTS + `
-(class_declaration name: (identifier) @type)
-`;
-
-// TS/TSX: class name is a type_identifier, plus type nodes and TS keywords.
-const TS_HIGHLIGHTS = COMMON_HIGHLIGHTS + `
-(class_declaration name: (type_identifier) @type)
-(type_identifier) @type
-(predefined_type) @type
-(interface_declaration name: (type_identifier) @type)
-(type_alias_declaration name: (type_identifier) @type)
-
-[
-  "interface" "type" "enum" "namespace" "declare" "implements" "abstract"
-  "readonly" "public" "private" "protected" "override" "as" "keyof" "satisfies"
-] @keyword
-`;
+function loadHighlights(langs: string[]): string {
+  return langs
+    .map((lang) => Fs.readFileSync(Path.join(QUERIES_DIR, lang, 'highlights.scm'), 'utf8'))
+    .join('\n');
+}
 
 const JS_FOLD_TYPES = [
   'statement_block', 'object', 'array', 'class_body', 'switch_body',
@@ -120,19 +74,19 @@ const SPECS: Record<string, GrammarSpec> = {
   javascript: {
     wasm: 'tree-sitter-wasms/out/tree-sitter-javascript.wasm',
     extensions: ['.js', '.jsx', '.mjs', '.cjs'],
-    highlights: JS_HIGHLIGHTS,
+    queries: ['javascript'],
     foldTypes: JS_FOLD_TYPES,
   },
   typescript: {
     wasm: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
     extensions: ['.ts', '.mts', '.cts'],
-    highlights: TS_HIGHLIGHTS,
+    queries: ['javascript', 'typescript'],
     foldTypes: TS_FOLD_TYPES,
   },
   tsx: {
     wasm: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
     extensions: ['.tsx'],
-    highlights: TS_HIGHLIGHTS,
+    queries: ['javascript', 'typescript'],
     foldTypes: TS_FOLD_TYPES,
   },
 };
@@ -159,7 +113,7 @@ export async function loadGrammar(langId: string): Promise<Grammar | null> {
   const language = await Parser.Language.load(require_.resolve(spec.wasm));
   const grammar: Grammar = {
     language,
-    query: language.query(spec.highlights),
+    query: language.query(loadHighlights(spec.queries)),
     foldTypes: new Set(spec.foldTypes),
   };
   cache.set(langId, grammar);

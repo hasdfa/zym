@@ -17,32 +17,10 @@
  */
 import { Gdk, Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
+import { COLORS } from '../colors.ts';
 
 const HIGHLIGHT_DEBOUNCE_MS = 60;
 
-// Capture name → candidate GtkSource style ids (first that resolves wins), plus
-// Capture name → foreground color, using the VS Code "Dark+" palette directly
-// rather than the GtkSource style scheme, so highlighting looks like VS Code
-// regardless of the Adwaita light/dark chrome.
-//
-// KEY ORDER MATTERS: tags are created in this order and GtkTextTag priority
-// follows creation order (later = higher). Overlapping captures resolve by
-// priority, so more-specific categories come last: escape > string, and
-// function/type > property (so method calls and constructors win over the bare
-// property/identifier capture).
-const COLORS: Record<string, string> = {
-  comment: '#6A9955',
-  string: '#CE9178',
-  number: '#B5CEA8',
-  boolean: '#569CD6',
-  constant: '#569CD6',
-  keyword: '#569CD6',          // declaration/storage keywords (blue)
-  'keyword.control': '#C586C0', // control-flow + import/export (purple)
-  property: '#9CDCFE',
-  type: '#4EC9B0',
-  function: '#DCDCAA',
-  escape: '#D7BA7D',
-};
 
 interface FoldRegion {
   startLine: number; // line the block opens on (stays visible)
@@ -65,6 +43,10 @@ export class SyntaxController {
   private tree: any = null; // last parse tree, kept for incremental reparsing
 
   private readonly tags = new Map<string, any>();
+  // Memoized capture-name → tag (or null) lookups, including longest-prefix
+  // fallback; see resolveTag. Capture names are a small fixed set, so this
+  // amortizes the per-capture string work on every refresh.
+  private readonly tagCache = new Map<string, any>();
   private readonly invisibleTag: any;
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
@@ -181,7 +163,9 @@ export class SyntaxController {
 
   /** Diagnostic: capture-name counts from the current parse tree (for tests). */
   captureCounts(): Record<string, number> {
-    const counts: Record<string, number> = {};
+    // null-proto map: capture names like "constructor" would otherwise collide
+    // with Object.prototype keys.
+    const counts: Record<string, number> = Object.create(null);
     if (!this.grammar || !this.tree) return counts;
     for (const cap of this.grammar.query.captures(this.tree.rootNode)) {
       counts[cap.name] = (counts[cap.name] ?? 0) + 1;
@@ -190,9 +174,9 @@ export class SyntaxController {
   }
 
   /**
-   * Re-apply the VS Code token colors. Colors are fixed (not scheme-derived),
-   * so this is independent of the Adwaita light/dark chrome; kept as a method
-   * because the window calls it when the system scheme changes.
+   * Re-apply token colors from the kyntell palette. Colors are fixed (not
+   * scheme-derived), so this is independent of the Adwaita light/dark chrome;
+   * kept as a method because the window calls it when the system scheme changes.
    */
   restyle(): void {
     for (const [name, color] of Object.entries(COLORS)) {
@@ -232,7 +216,7 @@ export class SyntaxController {
     // invisible fold tag — are untouched, so folds persist.)
     for (const tag of this.tags.values()) buffer.removeTag(tag, start, end);
     for (const cap of this.grammar.query.captures(root)) {
-      const tag = this.tags.get(cap.name);
+      const tag = this.resolveTag(cap.name);
       if (!tag) continue;
       const n = cap.node;
       buffer.applyTag(
@@ -267,6 +251,27 @@ export class SyntaxController {
     const end = buffer.getEndIter();
     for (const tag of this.tags.values()) buffer.removeTag(tag, start, end);
     buffer.removeTag(this.invisibleTag, start, end);
+  }
+
+  /**
+   * Map a tree-sitter capture name to its TextTag, following the standard
+   * highlight-group fallback: an unknown dotted name drops its last segment and
+   * retries (e.g. `function.method` → `function`, `type.builtin` → `type`).
+   * Returns null — and caches it — when no prefix has a configured color, so
+   * captures like `@variable`/`@operator` simply stay the default foreground.
+   */
+  private resolveTag(name: string): any {
+    const cached = this.tagCache.get(name);
+    if (cached !== undefined) return cached;
+    let key: string | undefined = name;
+    while (key) {
+      const tag = this.tags.get(key);
+      if (tag) { this.tagCache.set(name, tag); return tag; }
+      const dot = key.lastIndexOf('.');
+      key = dot === -1 ? undefined : key.slice(0, dot);
+    }
+    this.tagCache.set(name, null);
+    return null;
   }
 
   private iterAt(line: number, col: number): any {
