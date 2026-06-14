@@ -232,7 +232,7 @@ Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
       (atomic), `session.*` config schema, the deserializer registry.
 - [x] Serialize seam: `Serializable` on `TextEditor`/`Terminal`/`AgentTerminal`;
       `PanelGroup.serializeLayout`/`restoreLayout`; `FileTree` expansion state.
-- [ ] Modified-status seam: `SessionParticipant` hook + `collectModified()`; the
+- [x] Modified-status seam: `SessionParticipant` hook + `collectModified()`; the
       exit-prompt `Adw.AlertDialog` (Save all / Discard / Cancel) replacing the
       immediate quit.
 - [ ] Lifecycle wiring: debounced autosave + on-quit flush; `session:restore` /

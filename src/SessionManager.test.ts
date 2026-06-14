@@ -120,6 +120,25 @@ test('delete removes the session file', () => {
   assert.equal(manager.load('/r'), null);
 });
 
+test('collectModified returns only participants reporting modified, and respects deregistration', () => {
+  const { manager } = makeManager();
+  const clean = { isModified: () => false };
+  let dirty = true;
+  const editor = { isModified: () => dirty, getModifiedLabel: () => 'foo.ts (unsaved)' };
+
+  manager.registerParticipant(clean);
+  const reg = manager.registerParticipant(editor);
+
+  assert.deepEqual(manager.collectModified(), [editor]);
+
+  dirty = false; // editor saved
+  assert.deepEqual(manager.collectModified(), []);
+
+  dirty = true;
+  reg.dispose(); // editor's tab closed
+  assert.deepEqual(manager.collectModified(), []);
+});
+
 test('deserializer registry builds by kind and unregisters', () => {
   const { manager } = makeManager();
   const fileTab: TabState = { kind: 'file', path: '/a.ts' };

@@ -35,6 +35,7 @@ import { openCommandPicker } from './CommandPicker.ts';
 import { openAgentPicker } from './AgentPicker.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
 import { quilx } from '../quilx.ts';
+import { type SessionParticipant } from '../SessionManager.ts';
 import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
 import { NotificationToasts } from './NotificationToasts.ts';
@@ -76,6 +77,12 @@ export class AppWindow {
   // Maps an agent's root widget to its center tab handle, so the agent list can
   // reveal (select) the agent's tab on activation.
   private readonly agentChildren = new Map<Widget, PanelChild>();
+  // Session modified-status registrations (editors, running agents), keyed by the
+  // tab's root widget so the registration is disposed when the tab closes.
+  private readonly participants = new Map<Widget, DisposableLike>();
+  // Set once the user has confirmed an exit past unsaved work, so the re-entrant
+  // close-request doesn't prompt again.
+  private quitting = false;
   private readonly windowTitle: WindowTitle;
   private readonly toastOverlay: ToastOverlay;
   private readonly overlay: InstanceType<typeof Gtk.Overlay>;
@@ -131,6 +138,8 @@ export class AppWindow {
         if (terminal instanceof AgentTerminal && terminal.exited) {
           quilx.agents.remove(terminal);
         }
+        this.participants.get(widget)?.dispose();
+        this.participants.delete(widget);
         this.editors.delete(widget);
         this.terminals.delete(widget);
         this.agentChildren.delete(widget);
@@ -223,18 +232,65 @@ export class AppWindow {
     this.lastBehind = this.git.getAheadBehind()?.behind ?? 0;
     this.git.onChange(() => this.checkUpstream());
 
+    // Closing the window consults the session's modified participants first: an
+    // editor with unsaved edits or a running agent blocks the quit behind a
+    // confirm prompt (Save all / Discard / Cancel). Returning true keeps the
+    // window open while the dialog decides; the dialog drives the actual quit.
     this.window.on('close-request', () => {
-      this.branchButton.dispose();
-      this.git.dispose();
-      this.configWatcher.dispose();
-      this.agentList.dispose();
-      this.notificationLog.dispose();
-      this.onQuit();
-      return false;
+      if (this.quitting) return false;
+      const modified = quilx.session.collectModified();
+      if (modified.length === 0 || quilx.config.get('session.promptOnExitWhenModified') !== true) {
+        this.teardownAndQuit();
+        return false;
+      }
+      this.promptModifiedThenQuit(modified);
+      return true;
     });
     this.window.present();
 
     this.openFile(initialFile);
+  }
+
+  // --- Shutdown --------------------------------------------------------------
+
+  // Dispose the window-level subscriptions and quit the application. Used by both
+  // the clean-exit path and, after confirmation, the unsaved-work path.
+  private teardownAndQuit() {
+    this.branchButton.dispose();
+    this.git.dispose();
+    this.configWatcher.dispose();
+    this.agentList.dispose();
+    this.notificationLog.dispose();
+    this.onQuit();
+  }
+
+  // Ask before discarding unsaved work. "Save all" flushes every participant that
+  // can be saved (editors); a running agent has nothing to flush and is killed on
+  // quit. "Discard" quits regardless; "Cancel" keeps the window open.
+  private promptModifiedThenQuit(modified: SessionParticipant[]) {
+    const items = modified
+      .map((p) => `• ${p.getModifiedLabel?.() ?? 'Unsaved work'}`)
+      .join('\n');
+    const dialog = new Adw.AlertDialog({
+      heading: 'Unsaved work',
+      body: `The following will be lost if you quit now:\n${items}`,
+    });
+    dialog.addResponse('cancel', 'Cancel');
+    dialog.addResponse('discard', 'Discard');
+    dialog.addResponse('save', 'Save All');
+    dialog.setResponseAppearance('discard', Adw.ResponseAppearance.DESTRUCTIVE);
+    dialog.setResponseAppearance('save', Adw.ResponseAppearance.SUGGESTED);
+    dialog.setDefaultResponse('save');
+    dialog.setCloseResponse('cancel');
+    dialog.on('response', (response: string) => {
+      if (response === 'cancel') return;
+      if (response === 'save') {
+        for (const participant of modified) participant.saveModified?.();
+      }
+      this.quitting = true; // bypass the re-entrant close-request check
+      this.teardownAndQuit();
+    });
+    dialog.present(this.window);
   }
 
   // --- Editor lifecycle ------------------------------------------------------
@@ -255,6 +311,7 @@ export class AppWindow {
     // Register before adding: selecting the new tab fires onActiveChanged, which
     // resolves the active editor through this map.
     this.editors.set(editor.root, editor);
+    this.participants.set(editor.root, quilx.session.registerParticipant(editor));
     this.wireEditor(editor);
     child = this.center.add(editor.root, { title: editor.title });
     editor.onTitleChange(() => child.setTitle(editor.title));
@@ -291,6 +348,8 @@ export class AppWindow {
       // closes the agent's current tab.
       onCloseRequest: () => this.agentChildren.get(agent.root)?.close(),
     });
+    // A running agent reports as modified, so it's consulted before exit.
+    this.participants.set(agent.root, quilx.session.registerParticipant(agent));
     // One persistent title binding that updates whichever tab currently shows the
     // agent (survives close/reopen, since it reads agentChildren on each change).
     agent.onTitleChange(() => this.agentChildren.get(agent.root)?.setTitle(agent.title));

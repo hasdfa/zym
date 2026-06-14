@@ -99,6 +99,7 @@ export type Deserializer = (state: TabState) => unknown | null;
 export class SessionManager {
   private readonly stateDir: string;
   private readonly deserializers = new Map<string, Deserializer>();
+  private readonly participants = new Set<SessionParticipant>();
 
   /**
    * @param stateDir override for the XDG state base (tests pass a temp dir);
@@ -127,6 +128,25 @@ export class SessionManager {
   deserialize(state: TabState): unknown | null {
     const build = this.deserializers.get(state.kind);
     return build ? build(state) : null;
+  }
+
+  // --- Modified-status registry ----------------------------------------------
+
+  /**
+   * Register a participant whose modified state should be consulted before exit
+   * (an editor with unsaved edits, a running agent…). Returns a Disposable that
+   * deregisters it — the host disposes it when the widget's tab closes.
+   */
+  registerParticipant(participant: SessionParticipant): Disposable {
+    this.participants.add(participant);
+    return new Disposable(() => {
+      this.participants.delete(participant);
+    });
+  }
+
+  /** The registered participants that currently report unsaved/live work. */
+  collectModified(): SessionParticipant[] {
+    return [...this.participants].filter((p) => p.isModified());
   }
 
   // --- Paths & identity ------------------------------------------------------
