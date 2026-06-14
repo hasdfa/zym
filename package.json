@@ -3,15 +3,21 @@
   "version": "0.1.0",
   "description": "A modal source-code editor built with GTK 4, Adwaita and GtkSourceView 5, on node-gtk",
   "license": "MIT",
-  "type": "commonjs",
-  "main": "src/editor.js",
+  "type": "module",
+  "main": "src/editor.ts",
   "bin": {
-    "quilx": "src/editor.js"
+    "quilx": "src/editor.ts"
   },
   "scripts": {
-    "start": "node src/editor.js"
+    "start": "node src/editor.ts",
+    "typecheck": "tsc --noEmit",
+    "generate-types": "node-gtk generate-types Gtk-4.0 Adw-1 GtkSource-5"
   },
   "dependencies": {
-    "node-gtk": "link:../node-gtk"
+    "node-gtk": "link:../../tmp/node-gtk-ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
   }
 }
