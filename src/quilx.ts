@@ -14,6 +14,8 @@
 import type { ApplicationWindow } from './gi.ts';
 import { CommandManager } from './CommandManager.ts';
 import { KeymapManager } from './KeymapManager.ts';
+import { NotificationManager } from './NotificationManager.ts';
+import { AgentManager } from './AgentManager.ts';
 import { Config, type ConfigSchema } from './util/Config.ts';
 
 /*
@@ -47,12 +49,19 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     maximum: 100,
     description: 'Editor font size in points.',
   },
+  'agent.command': {
+    type: 'array',
+    default: ['claude'],
+    description: 'Argv of the terminal agent launched by AgentTerminal (agent:new).',
+  },
 };
 
 class Quilx {
   window: ApplicationWindow | null = null;
   readonly commands = new CommandManager();
   readonly keymaps = new KeymapManager();
+  readonly notifications = new NotificationManager();
+  readonly agents = new AgentManager();
   readonly config = new Config(CONFIG_SCHEMA);
 }
 
