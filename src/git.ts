@@ -32,6 +32,12 @@ export interface GitStatus {
   removed: number;
 }
 
+/** Commit counts of the current branch relative to its upstream. */
+export interface AheadBehind {
+  ahead: number;
+  behind: number;
+}
+
 /** A single file's working-tree status: untracked, or tracked-and-modified
  *  with its inserted/deleted line counts. */
 export type FileGitStatus =
@@ -55,11 +61,21 @@ export interface GitRepo {
    */
   getStatus(): GitStatus | null;
   /**
+   * Commits the current branch is ahead/behind its upstream tracking branch.
+   * Null outside a repo, on a detached HEAD, or when there is no upstream.
+   */
+  getAheadBehind(): AheadBehind | null;
+  /**
    * Per-file working-tree status keyed by absolute path: untracked files, and
    * tracked files with their insert/delete line counts (matching `git diff
    * HEAD`). Empty map outside a repo or on error.
    */
   getFileStatuses(): Map<string, FileGitStatus>;
+  /**
+   * Absolute paths of every file tracked by git (present in the index — staged
+   * or committed). Empty outside a repo or on error.
+   */
+  getTrackedPaths(): Set<string>;
   /** Subscribe to branch / working-tree changes. Returns an unsubscribe fn. */
   onChange(callback: () => void): () => void;
   /** Stop watching and release resources. */
@@ -131,6 +147,24 @@ class GgitRepo implements GitRepo {
     }
   }
 
+  getAheadBehind(): AheadBehind | null {
+    const repo = this.openRepo();
+    if (!repo) return null;
+    try {
+      const head = repo.getHead();
+      const name = head?.getShorthand();
+      if (!name) return null;
+      const upstream = repo.lookupBranch(name, Ggit.BranchType.LOCAL)?.getUpstream();
+      const local = head?.getTarget();
+      const remote = upstream?.getTarget();
+      if (!local || !remote) return null; // detached, or no upstream configured
+      const [ahead, behind] = repo.getAheadBehind(local, remote);
+      return { ahead: Number(ahead), behind: Number(behind) };
+    } catch {
+      return null;
+    }
+  }
+
   getFileStatuses(): Map<string, FileGitStatus> {
     const statuses = new Map<string, FileGitStatus>();
     const repo = this.openRepo();
@@ -167,6 +201,27 @@ class GgitRepo implements GitRepo {
       // return whatever was collected before the error
     }
     return statuses;
+  }
+
+  getTrackedPaths(): Set<string> {
+    const paths = new Set<string>();
+    const repo = this.openRepo();
+    if (!repo) return paths;
+    try {
+      const workdir = repo.getWorkdir();
+      const workdirPath = workdir ? (FileProto.getPath.call(workdir) as string | null) : null;
+      if (!workdirPath) return paths;
+      const entries = repo.getIndex()?.getEntries();
+      if (!entries) return paths;
+      const count = Number(entries.size());
+      for (let i = 0; i < count; i++) {
+        const rel = entries.getByIndex(i)?.getPath();
+        if (rel) paths.add(Path.join(workdirPath, rel));
+      }
+    } catch {
+      // return whatever was collected before the error
+    }
+    return paths;
   }
 
   onChange(callback: () => void): () => void {
@@ -215,7 +270,14 @@ class GgitRepo implements GitRepo {
 
   private signature(): string {
     const status = this.getStatus();
-    return `${this.getBranch()}|${status?.added ?? 0}|${status?.removed ?? 0}`;
+    const sync = this.getAheadBehind();
+    return [
+      this.getBranch(),
+      status?.added ?? 0,
+      status?.removed ?? 0,
+      sync?.ahead ?? 0,
+      sync?.behind ?? 0,
+    ].join('|');
   }
 
   private maybeEmit(): void {
