@@ -47,7 +47,7 @@ interface GrammarSpec {
 // header in each .scm) under queries/<name>/highlights.scm. They use Zed's capture
 // names; the highlighter maps those to colors with longest-prefix fallback — e.g.
 // @function.method → @function — so dotted names need no special handling here
-// (see colors.ts and syntax-controller's resolveTag).
+// (see theme/theme.ts and syntax-controller's resolveTag).
 //
 // We DON'T use the stock tree-sitter-javascript grammar: Zed's javascript query is
 // written for Zed's TS-aware JS grammar and references TS-only nodes/tokens that

@@ -17,7 +17,7 @@
  */
 import { Gdk, Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
-import { COLORS } from '../colors.ts';
+import { theme } from '../theme/theme.ts';
 
 const HIGHLIGHT_DEBOUNCE_MS = 60;
 
@@ -57,9 +57,9 @@ export class SyntaxController {
     this.view = view;
     this.buffer = buffer;
 
-    // One highlight tag per capture, colored from the VS Code palette. Created
-    // in COLORS order so GtkTextTag priority resolves overlaps (see COLORS).
-    for (const [name, color] of Object.entries(COLORS)) {
+    // One highlight tag per capture, colored from the theme palette. Created in
+    // theme.syntax order so GtkTextTag priority resolves overlaps (see Theme).
+    for (const [name, color] of Object.entries(theme.syntax)) {
       const tag = new Gtk.TextTag({ name: `ts:${name}`, foreground: color });
       (buffer as any).getTagTable().add(tag);
       this.tags.set(name, tag);
@@ -174,12 +174,12 @@ export class SyntaxController {
   }
 
   /**
-   * Re-apply token colors from the kyntell palette. Colors are fixed (not
+   * Re-apply token colors from the theme palette. Colors are fixed (not
    * scheme-derived), so this is independent of the Adwaita light/dark chrome;
    * kept as a method because the window calls it when the system scheme changes.
    */
   restyle(): void {
-    for (const [name, color] of Object.entries(COLORS)) {
+    for (const [name, color] of Object.entries(theme.syntax)) {
       this.tags.get(name).foreground = color;
     }
   }

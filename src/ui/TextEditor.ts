@@ -12,7 +12,7 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { SyntaxController } from '../syntax/syntax-controller.ts';
-import { THEME } from '../colors.ts';
+import { theme } from '../theme/theme.ts';
 import { addStyles } from '../styles.ts';
 import {
   Adw,
@@ -23,7 +23,7 @@ import {
   type VimContext,
 } from '../gi.ts';
 
-addStyles(`.quilx-editor { color: ${THEME.fg}; }`);
+addStyles(`.quilx-editor { color: ${theme.ui.fg}; }`);
 
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;
