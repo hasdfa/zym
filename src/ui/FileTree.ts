@@ -6,12 +6,61 @@
  * activating a directory toggles its expansion. The assembled, scrollable tree
  * is exposed via `root`.
  */
+import * as Os from 'node:os';
+import * as Path from 'node:path';
 import { Gio, GObject, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
+import type { Disposable } from '../util/eventKit.ts';
+import type { GitRepo, FileGitStatus } from '../git.ts';
 import { fileIconGlyph } from './fileIcons.ts';
+
+// The file-tree filters are global config (so they can be set in config.json and
+// observed live). Defaults: both on — hide dotfiles and untracked files. The
+// `.`/`,` keys toggle these values; each FileTree observes them (see ctor).
+const treeConfig = quilx.config.scope('tree').register({
+  hideHidden: {
+    type: 'boolean',
+    default: true,
+    description: 'Hide dotfiles (POSIX hidden files) in the file tree.',
+  },
+  hideUntracked: {
+    type: 'boolean',
+    default: true,
+    description: 'Hide files not tracked by git in the file tree (only inside a repo).',
+  },
+});
+
+/** A directory path for display: the home directory collapsed to `~`. */
+function displayPath(path: string): string {
+  const home = Os.homedir();
+  if (path === home) return '~';
+  if (path.startsWith(home + Path.sep)) return '~' + path.slice(home.length);
+  return path;
+}
+
+// Git diff colors (theme success/error, Adwaita fallbacks), matching BranchButton.
+const GIT_ADDED_COLOR = theme.ui.success ?? '#2ec27e';
+const GIT_REMOVED_COLOR = theme.ui.error ?? '#e01b24';
+
+/** Pango markup for a file's git status: `?` for untracked, else +added/-removed.
+ *  Colors are per-segment; the wrapper makes the digits bold, slightly smaller,
+ *  and tabular (so they stay aligned across rows). */
+function statusMarkup(status: FileGitStatus | undefined): string {
+  let inner = '';
+  if (status?.kind === 'untracked') {
+    inner = `<span foreground="${GIT_ADDED_COLOR}">?</span>`;
+  } else if (status?.kind === 'modified') {
+    const parts: string[] = [];
+    if (status.added > 0) parts.push(`<span foreground="${GIT_ADDED_COLOR}">+${status.added}</span>`);
+    if (status.removed > 0) parts.push(`<span foreground="${GIT_REMOVED_COLOR}">-${status.removed}</span>`);
+    inner = parts.join(' ');
+  }
+  if (!inner) return '';
+  return `<span weight="bold" size="smaller" font_features="tnum=1">${inner}</span>`;
+}
 
 // Use the active theme's foreground for tree text/icons (rather than Adwaita's
 // default), to match the editor. `#FileTree` is the ScrolledWindow's widget name
@@ -20,7 +69,24 @@ import { fileIconGlyph } from './fileIcons.ts';
 // container won't inherit down — and exclude `:selected` rows so the selection
 // keeps its own contrast.
 addStyles(`
+  #FileTree .filetree-header {
+    color: ${theme.ui.fg};
+    font-weight: bold;
+    padding: 6px 8px;
+  }
   #FileTree row:not(:selected) label {
+    color: ${theme.ui.fg};
+  }
+  #FileTree expander {
+    color: alpha(${theme.ui.fg}, 0.45); /* mute the disclosure chevron */
+  }
+  /* When the tree isn't focused, drop the accent selection background (and
+     restore normal text) so the selected row reads as inactive; it regains the
+     accent highlight once the tree is focused again. */
+  #FileTree:not(:focus-within) row:selected {
+    background: none;
+  }
+  #FileTree:not(:focus-within) row:selected label {
     color: ${theme.ui.fg};
   }
 `);
@@ -43,14 +109,18 @@ const enumerateChildren = (file: GFile): InstanceType<typeof Gio.FileEnumerator>
   );
 const pathOf = (file: GFile): string | null => FileProto.getPath.call(file);
 
+/** Decides whether a directory entry is shown (by name, absolute path, kind). */
+type VisibleFn = (name: string, path: string | null, isDir: boolean) => boolean;
+
 /**
  * A directory's contents as a model sorted directories-first, then entries
- * ordered case-insensitively by name. GtkCustomSorter can't be used here —
- * node-gtk hands its compare callback untyped `gconstpointer` args (undefined in
- * JS) — so we enumerate and sort in JS into a GListStore instead. Each row's
- * GFile is stashed under `standard::file` for later expansion / opening.
+ * ordered case-insensitively by name, with entries rejected by `isVisible`
+ * filtered out. GtkCustomSorter/GtkCustomFilter can't be used here — node-gtk
+ * hands their `gconstpointer`/`gpointer` callback args to JS as `undefined` — so
+ * we enumerate, filter, and sort in JS into a GListStore instead. Each surviving
+ * row's GFile is stashed under `standard::file` for later expansion / opening.
  */
-function sortedDirectory(file: GFile): InstanceType<typeof Gio.ListStore> {
+function sortedDirectory(file: GFile, isVisible: VisibleFn): InstanceType<typeof Gio.ListStore> {
   const store = Gio.ListStore.new(FILE_INFO_GTYPE);
 
   let enumerator: InstanceType<typeof Gio.FileEnumerator>;
@@ -63,7 +133,10 @@ function sortedDirectory(file: GFile): InstanceType<typeof Gio.ListStore> {
   const infos: Array<InstanceType<typeof Gio.FileInfo>> = [];
   let info: InstanceType<typeof Gio.FileInfo> | null;
   while ((info = enumerator.nextFile(null)) !== null) {
-    info.setAttributeObject('standard::file', enumerator.getChild(info) as any);
+    const child = enumerator.getChild(info);
+    const isDir = info.getFileType() === Gio.FileType.DIRECTORY;
+    if (!isVisible(info.getName(), pathOf(child as any), isDir)) continue;
+    info.setAttributeObject('standard::file', child as any);
     infos.push(info);
   }
   enumerator.close(null);
@@ -79,46 +152,48 @@ function sortedDirectory(file: GFile): InstanceType<typeof Gio.ListStore> {
   return store;
 }
 
-// Vim-style tree navigation, registered once against the `FileTree` selector
-// (each tree sets its widget name to "FileTree"), so the CAPTURE-phase keymap
-// routes keystrokes to whichever tree holds focus. The `core:*` commands are
-// registered per-instance (see registerCommands), so dispatch lands on the
-// focused tree.
-const NAV_KEYMAP: Record<string, string> = {
-  j: 'core:down',
-  k: 'core:up',
-  l: 'core:right', // enter a directory / open a file
-  h: 'core:left',  // collapse a directory / go to parent
-};
-
-let keymapRegistered = false;
-function ensureKeymap(): void {
-  if (keymapRegistered) return;
-  keymapRegistered = true;
-  quilx.keymaps.add('FileTree', { FileTree: NAV_KEYMAP });
-}
-
 export interface FileTreeOptions {
   rootPath: string;
   onOpenFile: (path: string) => void;
+  /** When provided, rows show the file's git status (untracked / +/- lines). */
+  git?: GitRepo;
 }
 
 export class FileTree {
-  readonly root: InstanceType<typeof Gtk.ScrolledWindow>;
+  readonly root: InstanceType<typeof Gtk.Box>;
 
   private readonly list: InstanceType<typeof Gtk.ListView>;
-  private readonly tree: InstanceType<typeof Gtk.TreeListModel>;
+  private tree: InstanceType<typeof Gtk.TreeListModel>;
   private readonly selection: InstanceType<typeof Gtk.SingleSelection>;
   private readonly onOpenFile: (path: string) => void;
+  private readonly rootFile: GFile;
+
+  private readonly git?: GitRepo;
+  private statuses = new Map<string, FileGitStatus>();
+  private readonly boundItems = new Set<any>();
+  private gitUnsubscribe?: () => void;
+
+  // Filters, seeded from `tree.*` config and kept in sync via observers (so a
+  // config.json edit or the `.`/`,` toggles update the tree live). The untracked
+  // filter only takes effect inside a git repo.
+  private hideHidden: boolean;
+  private hideUntracked: boolean;
+  private trackedFiles = new Set<string>(); // absolute paths tracked by git
+  private trackedDirs = new Set<string>();  // their ancestor directories
+  private readonly configDisposables: Disposable[] = [];
 
   constructor(options: FileTreeOptions) {
     this.onOpenFile = options.onOpenFile;
-    const rootList = sortedDirectory(Gio.File.newForPath(options.rootPath));
+    this.git = options.git;
+    this.rootFile = Gio.File.newForPath(options.rootPath);
+    this.hideHidden = treeConfig.get('hideHidden') === true;
+    this.hideUntracked = treeConfig.get('hideUntracked') === true;
+    if (this.git) {
+      this.statuses = this.git.getFileStatuses();
+      this.refreshTracked();
+    }
 
-    const tree = Gtk.TreeListModel.new(rootList, false, false, (item: any) => {
-      if (item.getFileType() !== Gio.FileType.DIRECTORY) return null;
-      return sortedDirectory(item.getAttributeObject('standard::file') as any);
-    });
+    const tree = this.buildTree();
     const selection = new Gtk.SingleSelection({ model: tree });
 
     // Each row is a TreeExpander (for the disclosure triangle) wrapping a box of
@@ -136,8 +211,11 @@ export class FileTree {
       const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
       const icon = new Gtk.Label({ xalign: 0 });
       icon.setAttributes(iconAttrs);
+      const name = new Gtk.Label({ xalign: 0, hexpand: true }); // push status to the right
+      const status = new Gtk.Label({ xalign: 1, marginEnd: 6 });
       box.append(icon);
-      box.append(new Gtk.Label({ xalign: 0 }));
+      box.append(name);
+      box.append(status);
       expander.setChild(box);
       listItem.setChild(expander);
     });
@@ -149,12 +227,18 @@ export class FileTree {
       const info = row.getItem();
       const box = expander.getChild();
       const iconLabel = box.getFirstChild();
-      const nameLabel = box.getLastChild();
+      const nameLabel = iconLabel.getNextSibling();
 
       const name = info.getName();
       const isDir = info.getFileType() === Gio.FileType.DIRECTORY;
       iconLabel.setText(fileIconGlyph(name, isDir));
       nameLabel.setText(name);
+
+      this.boundItems.add(listItem);
+      this.applyStatus(listItem);
+    });
+    factory.on('unbind', (listItem: any) => {
+      this.boundItems.delete(listItem);
     });
 
     const list = new Gtk.ListView({ model: selection, factory });
@@ -164,21 +248,140 @@ export class FileTree {
     });
 
     const scrolled = new Gtk.ScrolledWindow();
-    scrolled.setName('FileTree'); // selector identity for command/keymap rules
     scrolled.setChild(list);
     scrolled.setVexpand(true);
-    this.root = scrolled;
+
+    // Header label: the root directory's full path (home collapsed to `~`), with
+    // the real absolute path as the tooltip.
+    const header = new Gtk.Label({
+      label: displayPath(options.rootPath),
+      tooltipText: options.rootPath,
+      xalign: 0,
+      ellipsize: Pango.EllipsizeMode.END,
+    });
+    header.addCssClass('filetree-header');
+
+    const rootBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    rootBox.setName('FileTree'); // selector identity for command/keymap rules + chrome
+    rootBox.append(header);
+    rootBox.append(scrolled);
+
+    this.root = rootBox;
     this.list = list;
     this.tree = tree;
     this.selection = selection;
 
-    ensureKeymap();
     this.registerCommands();
+
+    // Apply (and follow) the configured filter values. observe fires immediately
+    // with the current value — which equals the field seeded above, so the guard
+    // in each setter skips a redundant initial rebuild — then again whenever the
+    // config changes (user config.json load, or the toggle commands below).
+    this.configDisposables.push(
+      treeConfig.observe('hideHidden', (v) => this.setHideHidden(v === true)),
+      treeConfig.observe('hideUntracked', (v) => this.setHideUntracked(v === true)),
+    );
+
+    if (this.git) this.gitUnsubscribe = this.git.onChange(() => this.refreshStatuses());
   }
 
   /** Move keyboard focus into the tree. */
   focus() {
     this.list.grabFocus();
+  }
+
+  /** Release the git subscription and config observers. */
+  dispose() {
+    this.gitUnsubscribe?.();
+    for (const d of this.configDisposables) d.dispose();
+  }
+
+  // --- Filters -------------------------------------------------------------
+
+  /** Apply a new value for the dotfiles filter (driven by `tree.hideHidden`). */
+  private setHideHidden(value: boolean): void {
+    if (value === this.hideHidden) return;
+    this.hideHidden = value;
+    this.rebuild();
+  }
+
+  /** Apply a new value for the git filter (driven by `tree.hideUntracked`). */
+  private setHideUntracked(value: boolean): void {
+    if (value === this.hideUntracked) return;
+    this.hideUntracked = value;
+    if (this.hideUntracked) this.refreshTracked();
+    this.rebuild();
+  }
+
+  /** Whether a directory entry passes the active filters. */
+  private isVisible(name: string, path: string | null, isDir: boolean): boolean {
+    if (this.hideHidden && name.startsWith('.')) return false;
+    if (this.hideUntracked && this.git) {
+      if (!path) return false;
+      // Show tracked files, and directories that contain a tracked file.
+      return isDir ? this.trackedDirs.has(path) : this.trackedFiles.has(path);
+    }
+    return true;
+  }
+
+  /** A fresh TreeListModel for the root, lazily expanding through the filters. */
+  private buildTree(): InstanceType<typeof Gtk.TreeListModel> {
+    const isVisible: VisibleFn = (name, path, isDir) => this.isVisible(name, path, isDir);
+    return Gtk.TreeListModel.new(
+      sortedDirectory(this.rootFile, isVisible),
+      false,
+      false,
+      (item: any) =>
+        item.getFileType() !== Gio.FileType.DIRECTORY
+          ? null
+          : sortedDirectory(item.getAttributeObject('standard::file') as any, isVisible),
+    );
+  }
+
+  /** Re-derive the visible tree after a filter change (resets expansion). */
+  private rebuild(): void {
+    this.tree = this.buildTree();
+    this.selection.setModel(this.tree);
+  }
+
+  /** Refresh the tracked-paths set (and its ancestor directories) from git. */
+  private refreshTracked(): void {
+    if (!this.git) return;
+    this.trackedFiles = this.git.getTrackedPaths();
+    this.trackedDirs = new Set();
+    for (const file of this.trackedFiles) {
+      let dir = Path.dirname(file);
+      while (!this.trackedDirs.has(dir)) {
+        this.trackedDirs.add(dir);
+        const parent = Path.dirname(dir);
+        if (parent === dir) break; // reached filesystem root
+        dir = parent;
+      }
+    }
+  }
+
+  // --- Git status ----------------------------------------------------------
+
+  /** Recompute statuses (and tracked set) and refresh every bound row. */
+  private refreshStatuses(): void {
+    if (!this.git) return;
+    this.statuses = this.git.getFileStatuses();
+    this.refreshTracked(); // keep the tracked filter current for future expansions
+    for (const listItem of this.boundItems) this.applyStatus(listItem);
+  }
+
+  /** Update one row's status label from the current status map. */
+  private applyStatus(listItem: any): void {
+    const row = listItem.getItem();
+    if (!row) return;
+    const file = (row.getItem() as any).getAttributeObject('standard::file');
+    const path = file ? pathOf(file) : null;
+    const markup = statusMarkup(path ? this.statuses.get(path) : undefined);
+
+    const statusLabel = listItem.getChild().getChild().getLastChild();
+    statusLabel.setVisible(markup !== '');
+    if (markup) statusLabel.setMarkup(markup);
+    else statusLabel.setText('');
   }
 
   // --- Navigation ----------------------------------------------------------
@@ -189,6 +392,9 @@ export class FileTree {
       'core:up': () => this.move(-1),
       'core:right': () => this.enter(),
       'core:left': () => this.exit(),
+      // Toggle the config value; the observer applies it and rebuilds.
+      'tree:toggle-hidden-files': () => treeConfig.toggle('hideHidden'),
+      'tree:toggle-untracked-files': () => treeConfig.toggle('hideUntracked'),
     });
   }
 
