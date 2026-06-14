@@ -14,11 +14,46 @@
 import type { ApplicationWindow } from './gi.ts';
 import { CommandManager } from './CommandManager.ts';
 import { KeymapManager } from './KeymapManager.ts';
+import { Config, type ConfigSchema } from './util/Config.ts';
+
+/*
+ * The application-wide config schema (Atom's `core.*` / `editor.*`). This is the
+ * general, non-vim baseline; subsystems contribute their own namespaced
+ * parameters at load time via `quilx.config.scope(namespace).register(...)` —
+ * see `ui/TextEditor/vim/settings.ts`, which registers under `vim-mode-plus`.
+ */
+const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
+  'core.followSystemColorScheme': {
+    type: 'boolean',
+    default: true,
+    description: 'Follow the system light/dark preference for the active theme.',
+  },
+  'editor.tabLength': {
+    type: 'integer',
+    default: 2,
+    minimum: 1,
+    maximum: 16,
+    description: 'Number of spaces a tab is rendered as.',
+  },
+  'editor.fontFamily': {
+    type: 'string',
+    default: '',
+    description: 'Editor font family; empty uses the platform monospace default.',
+  },
+  'editor.fontSize': {
+    type: 'integer',
+    default: 13,
+    minimum: 6,
+    maximum: 100,
+    description: 'Editor font size in points.',
+  },
+};
 
 class Quilx {
   window: ApplicationWindow | null = null;
   readonly commands = new CommandManager();
   readonly keymaps = new KeymapManager();
+  readonly config = new Config(CONFIG_SCHEMA);
 }
 
 export const quilx = new Quilx();
