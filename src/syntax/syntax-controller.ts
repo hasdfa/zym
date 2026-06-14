@@ -13,7 +13,8 @@
  * from the live tag (iter.hasTag), so folds move with edits instead of resetting.
  *
  * `z`-prefixed fold commands (za/zo/zc/zR/zM) are handled here and fed in from a
- * key controller the window installs ahead of VimIMContext; see handleFoldKey.
+ * CAPTURE-phase key controller the editor installs on its root box (it runs
+ * while vim is in normal mode); see handleFoldKey.
  */
 import { Gdk, Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
@@ -341,10 +342,10 @@ export class SyntaxController {
   }
 
   /**
-   * Handle a key for the `z`-prefixed fold commands. Called from a key
-   * controller installed ahead of VimIMContext; `isNormalMode` should be true
-   * only outside insert mode (VimIMContext sets the view to overwrite mode in
-   * normal/visual mode). Returns true if the key was consumed.
+   * Handle a key for the `z`-prefixed fold commands. Called from the editor's
+   * CAPTURE-phase fold-key controller; `isNormalMode` (the vim layer's mode)
+   * gates folding so `z` is only a fold prefix outside insert mode. Returns true
+   * if the key was consumed.
    */
   handleFoldKey(keyval: number, isNormalMode: boolean): boolean {
     if (!isNormalMode) {

@@ -1,13 +1,13 @@
 /*
  * TextEditor — a single file's editor widget: a GtkSource.View + Buffer with
- * tree-sitter highlighting and folding (SyntaxController), vim modal editing
- * (GtkSource.VimIMContext), and a minimap. One TextEditor per open file (one per
- * tab). It owns its file I/O, its fold-key bindings, and follows the system
- * light/dark scheme. The assembled widget is exposed via `root`.
+ * tree-sitter highlighting and folding (SyntaxController), custom vim modal
+ * editing (the vendored vim-mode-plus core, via `attachVim`), and a minimap. One
+ * TextEditor per open file (one per tab). It owns its file I/O, its fold-key
+ * bindings, and follows the system light/dark scheme. The assembled widget is
+ * exposed via `root`.
  *
  * Load/save failures are reported through the injected `onToast` callback (the
- * toast overlay is window-level), and `onClose` is fired by the vim `:q`/`:wq`/
- * `:x` ex-commands.
+ * toast overlay is window-level).
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -23,7 +23,6 @@ import {
   GtkSource,
   type SourceBuffer,
   type SourceView,
-  type VimContext,
 } from '../../gi.ts';
 
 addStyles(`.quilx-editor { color: ${theme.ui.fg}; caret-color: ${theme.ui.fg}; }`);
@@ -31,41 +30,73 @@ addStyles(`.quilx-editor { color: ${theme.ui.fg}; caret-color: ${theme.ui.fg}; }
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;
 
-// Opt-in toggle for the custom (vendored vim-mode-plus) modal layer. Off by
-// default: the editor keeps GtkSource.VimIMContext until the port reaches
-// parity. Run with `QUILX_CUSTOM_VIM=1` to drive the new layer instead.
-const USE_CUSTOM_VIM = process.env.QUILX_CUSTOM_VIM === '1';
+type VimState = ReturnType<typeof attachVim>;
 
-// AppWindow's status line subscribes to the VimIMContext's command-bar signals.
-// Under the custom layer there is no VimIMContext yet, so we hand the window an
-// inert stand-in; the real command-line/status wiring lands in a later phase.
-function createVimStatusShim(): VimContext {
+/**
+ * The window's status line reads the active editor's vim state through this
+ * (kept signal-shaped — `on('notify::…')` + getters — so AppWindow's wiring is
+ * the same as it was for GtkSource.VimIMContext). `command-bar-text` carries the
+ * mode indicator (and, later, the `:`/`/` command line); `command-text` is the
+ * pending-command preview.
+ */
+export interface VimStatusLine {
+  on(signal: 'notify::command-bar-text' | 'notify::command-text', callback: () => void): void;
+  getCommandBarText(): string;
+  getCommandText(): string;
+}
+
+const VISUAL_LABEL: Record<string, string> = {
+  characterwise: '-- VISUAL --',
+  linewise: '-- VISUAL LINE --',
+  blockwise: '-- VISUAL BLOCK --',
+};
+
+/** Bridge VimState's mode/operation events to AppWindow's status line. */
+function createVimStatus(vimState: VimState): VimStatusLine {
+  const listeners: Record<string, Array<() => void>> = {};
+  const fire = (signal: string) => listeners[signal]?.forEach((cb) => cb());
+  // The mode indicator changes with the mode; refresh the command bar on both
+  // edges so it clears when returning to normal.
+  vimState.onDidActivateMode(() => fire('notify::command-bar-text'));
+  vimState.onDidDeactivateMode(() => fire('notify::command-bar-text'));
+
   return {
-    on() {},
+    on(signal, callback) {
+      (listeners[signal] ??= []).push(callback);
+    },
     getCommandBarText() {
+      // vim convention: mode shown bottom-left; normal mode shows nothing. The
+      // `:`/`/` command line will take precedence here once it lands.
+      if (vimState.mode === 'insert') return '-- INSERT --';
+      if (vimState.mode === 'visual') return VISUAL_LABEL[vimState.submode] ?? '-- VISUAL --';
       return '';
     },
     getCommandText() {
       return '';
     },
-  } as unknown as VimContext;
+  };
 }
 
 export interface TextEditorOptions {
   /** Surface a load/save message (the toast overlay is window-level). */
   onToast?: (message: string) => void;
-  /** Fired by the vim `:q`/`:wq`/`:x` ex-commands. */
+  /**
+   * Close request for this editor. Was fired by the `:q`/`:wq`/`:x` ex-commands;
+   * dormant until the custom vim layer grows an ex-command line. Closing is
+   * available meanwhile through the window's `tab:close`/`pane:close` commands.
+   */
   onClose?: () => void;
 }
 
 export class TextEditor {
   readonly root: InstanceType<typeof Gtk.Box>;
-  readonly vim: VimContext;
+  readonly vim: VimStatusLine;
 
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
   private readonly syntax: SyntaxController;
   private readonly editorModel: EditorModel;
+  private readonly vimState: VimState;
   private readonly onToast: (message: string) => void;
 
   private _currentFile: string | null = null;
@@ -81,14 +112,10 @@ export class TextEditor {
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
 
-    if (USE_CUSTOM_VIM) {
-      // Drive modal editing through the vendored vim-mode-plus core. The
-      // VimIMContext is not created, so it doesn't contend for keystrokes.
-      attachVim(this.editorModel);
-      this.vim = createVimStatusShim();
-    } else {
-      this.vim = this.createVim(this.view, options.onClose);
-    }
+    // Modal editing runs through the vendored vim-mode-plus core; the window's
+    // status line reads its mode via the adapter below.
+    this.vimState = attachVim(this.editorModel);
+    this.vim = createVimStatus(this.vimState);
 
     this.root = this.buildEditorArea();
     this.root.setName('TextEditor'); // selector identity for command/keymap rules
@@ -140,53 +167,17 @@ export class TextEditor {
   private installFoldKeys() {
     // Attached to this editor's root box (an ancestor of the view) in the
     // CAPTURE phase: capture propagates toplevel→focused, so this fires before
-    // the view's VimIMContext controller and can claim the `z` fold prefix.
-    // Gated to only act while this view is focused and in normal mode (overwrite
-    // == not insert).
+    // the view inserts the key as text and can claim the `z` fold prefix. Gated
+    // to only act while this view is focused and vim is in normal mode.
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => {
       // hasFocus() is typed as a property in the generated bindings; the runtime
       // method exists, so call through `any`.
       if (!(this.view as any).hasFocus()) return false;
-      return this.syntax.handleFoldKey(keyval, this.view.getOverwrite());
+      return this.syntax.handleFoldKey(keyval, this.vimState.mode === 'normal');
     });
     this.root.addController(keys);
-  }
-
-  // --- Vim modal editing (GtkSource.VimIMContext) ----------------------------
-
-  private createVim(view: SourceView, onClose?: () => void): VimContext {
-    // VimIMContext is a Gtk.IMContext that turns the view into a modal (vim)
-    // editor. It must be driven by a key controller in the CAPTURE phase so it
-    // sees keystrokes before the view inserts them as text.
-    const vim = new GtkSource.VimIMContext();
-    vim.setClientWidget(view);
-
-    const keys = new Gtk.EventControllerKey();
-    keys.setImContext(vim);
-    keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
-    view.addController(keys);
-
-    // `:e [path]` — open a file, or reload the current one when path is empty.
-    vim.on('edit', (_view: any, path: string) => {
-      const target = path || this._currentFile;
-      if (target) this.loadFile(target);
-    });
-    // `:w [path]` — save to the given path, or the current file.
-    vim.on('write', (_view: any, path: string) => {
-      const target = path || this._currentFile;
-      if (target) this.saveAs(target);
-    });
-    // Catch-all for ex commands; we only need to implement quit.
-    vim.on('execute-command', (command: string) => {
-      if (/^\s*(wq|x|q)a?!?\s*$/.test(command)) {
-        onClose?.();
-        return true;
-      }
-      return false;
-    });
-    return vim;
   }
 
   // --- Style scheme: follow the system light/dark preference -----------------
