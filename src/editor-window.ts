@@ -20,6 +20,8 @@ const DEFAULT_HEIGHT = 600;
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;
 const TOAST_TIMEOUT = 3;
+const SIDEBAR_WIDTH = 220;
+const SIDEBAR_ATTRS = 'standard::name,standard::type';
 
 export class EditorWindow {
   private readonly app: Application;
@@ -45,7 +47,7 @@ export class EditorWindow {
 
     const toolbarView = new Adw.ToolbarView();
     toolbarView.addTopBar(this.buildHeaderBar());
-    toolbarView.setContent(this.buildEditorArea());
+    toolbarView.setContent(this.buildContent());
     toolbarView.addBottomBar(this.buildStatusBar());
     this.toastOverlay.setChild(toolbarView);
 
@@ -101,6 +103,65 @@ export class EditorWindow {
     return box;
   }
 
+  private buildContent() {
+    const paned = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
+    paned.setStartChild(this.buildSidebar());
+    paned.setEndChild(this.buildEditorArea());
+    paned.setPosition(SIDEBAR_WIDTH);
+    paned.setResizeStartChild(false);
+    paned.setShrinkStartChild(false);
+    return paned;
+  }
+
+  // --- File tree sidebar (current working directory) -------------------------
+
+  private buildSidebar() {
+    // A lazily-expanding tree of the cwd: GtkDirectoryList feeds a
+    // GtkTreeListModel whose rows reveal a fresh DirectoryList per directory.
+    const root = new Gtk.DirectoryList({ attributes: SIDEBAR_ATTRS });
+    root.setFile(Gio.File.newForPath(process.cwd()));
+
+    const tree = Gtk.TreeListModel.new(root, false, false, (item: any) => {
+      if (item.getFileType() !== Gio.FileType.DIRECTORY) return null;
+      const children = new Gtk.DirectoryList({ attributes: SIDEBAR_ATTRS });
+      children.setFile(item.getAttributeObject('standard::file') as any);
+      return children;
+    });
+    const selection = new Gtk.SingleSelection({ model: tree });
+
+    // Each row is a TreeExpander (for the disclosure triangle) wrapping a label.
+    const factory = new Gtk.SignalListItemFactory();
+    factory.on('setup', (listItem: any) => {
+      const expander = new Gtk.TreeExpander();
+      expander.setChild(new Gtk.Label({ xalign: 0 }));
+      listItem.setChild(expander);
+    });
+    factory.on('bind', (listItem: any) => {
+      const row = listItem.getItem();
+      const expander = listItem.getChild();
+      expander.setListRow(row);
+      expander.getChild().setText(row.getItem().getName());
+    });
+
+    const list = new Gtk.ListView({ model: selection, factory });
+    list.on('activate', (position: number) => {
+      const row = tree.getRow(position);
+      if (!row) return;
+      const info: any = row.getItem();
+      if (info.getFileType() === Gio.FileType.DIRECTORY) {
+        row.setExpanded(!row.getExpanded());
+      } else {
+        const path = (info.getAttributeObject('standard::file') as any)?.getPath();
+        if (path) this.loadFile(path);
+      }
+    });
+
+    const scrolled = new Gtk.ScrolledWindow();
+    scrolled.setChild(list);
+    scrolled.setVexpand(true);
+    return scrolled;
+  }
+
   // --- Vim modal editing (GtkSource.VimIMContext) ----------------------------
 
   private createVim(view: SourceView): VimContext {
@@ -151,16 +212,6 @@ export class EditorWindow {
     saveButton.setTooltipText('Save (Ctrl+S)');
     saveButton.setActionName('app.save');
     header.packEnd(saveButton);
-
-    const styleManager = Adw.StyleManager.getDefault();
-    const darkToggle = new Gtk.ToggleButton({ iconName: 'weather-clear-night-symbolic' });
-    darkToggle.setTooltipText('Toggle dark mode');
-    darkToggle.setActive(styleManager.getDark());
-    darkToggle.on('toggled', () => {
-      styleManager.setColorScheme(
-        darkToggle.getActive() ? Adw.ColorScheme.FORCE_DARK : Adw.ColorScheme.FORCE_LIGHT);
-    });
-    header.packEnd(darkToggle);
     return header;
   }
 
