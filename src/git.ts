@@ -7,18 +7,36 @@
  * never settled; Gio-native / in-process APIs are required here.) Callers only
  * ever see the `GitRepo` interface, so the backend can still be swapped.
  *
- * `onChange` watches the repo's `HEAD` file (via a Gio file monitor) so a branch
- * switch / checkout pushes an update rather than the UI having to poll.
+ * `onChange` fires when the branch or working-tree line counts change. A branch
+ * switch is caught instantly via a Gio file monitor on `HEAD`; working-tree edits
+ * have no single file to watch, so they are picked up by a low-priority poll that
+ * only notifies when the computed (branch + insertions/deletions) signature moves.
  */
-import { Gio, Ggit } from './gi.ts';
+import * as Path from 'node:path';
+import { GLib, Gio, Ggit } from './gi.ts';
 
 type FileMonitor = InstanceType<typeof Gio.FileMonitor>;
 type GioFile = ReturnType<typeof Gio.File.newForPath>;
+type Repository = InstanceType<typeof Ggit.Repository>;
 
 // node-gtk quirk: Gio.File instance methods are undefined on the concrete
 // wrapper (and on GFiles handed back from Ggit), so we reach them through the
 // interface prototype. Same workaround as FileTree.
 const FileProto = (Gio.File as any).prototype;
+
+const POLL_INTERVAL_MS = 1500;
+
+/** Working-tree line delta vs HEAD, untracked files included as insertions. */
+export interface GitStatus {
+  added: number;
+  removed: number;
+}
+
+/** A single file's working-tree status: untracked, or tracked-and-modified
+ *  with its inserted/deleted line counts. */
+export type FileGitStatus =
+  | { kind: 'untracked' }
+  | { kind: 'modified'; added: number; removed: number };
 
 export interface GitRepo {
   /**
@@ -30,7 +48,19 @@ export interface GitRepo {
    * resolve synchronously (e.g. libgit2) or via GLib-native async, not node I/O.
    */
   getBranch(): string | null;
-  /** Subscribe to ref changes (checkout/branch switch). Returns an unsubscribe fn. */
+  /**
+   * Inserted/deleted line counts of the working tree vs HEAD — matching
+   * `git diff HEAD --numstat` plus untracked files (counted as insertions).
+   * Null outside a repo.
+   */
+  getStatus(): GitStatus | null;
+  /**
+   * Per-file working-tree status keyed by absolute path: untracked files, and
+   * tracked files with their insert/delete line counts (matching `git diff
+   * HEAD`). Empty map outside a repo or on error.
+   */
+  getFileStatuses(): Map<string, FileGitStatus>;
+  /** Subscribe to branch / working-tree changes. Returns an unsubscribe fn. */
   onChange(callback: () => void): () => void;
   /** Stop watching and release resources. */
   dispose(): void;
@@ -54,6 +84,9 @@ class GgitRepo implements GitRepo {
   private readonly gitDir: GioFile | null;
   private readonly listeners = new Set<() => void>();
   private monitor: FileMonitor | null = null;
+  private pollId = 0;
+  private watching = false;
+  private lastSignature = '';
 
   constructor(cwd: string) {
     ensureGgitInit();
@@ -61,22 +94,84 @@ class GgitRepo implements GitRepo {
   }
 
   getBranch(): string | null {
-    if (!this.gitDir) return null;
+    // Open fresh each read: libgit2 caches the ref db, so reusing a Repository
+    // could miss an external checkout that just rewrote HEAD.
+    const repo = this.openRepo();
+    if (!repo) return null;
     try {
-      // Open fresh each read: libgit2 caches the ref db, so reusing a Repository
-      // could miss an external checkout that just rewrote HEAD.
-      const repo = Ggit.Repository.open(this.gitDir);
-      const head = repo?.getHead();
-      return head?.getShorthand() ?? null;
+      return repo.getHead()?.getShorthand() ?? null;
     } catch {
-      // Unborn branch (empty repo), unreadable HEAD, etc.
+      return null; // unborn branch (empty repo), unreadable HEAD, etc.
+    }
+  }
+
+  getStatus(): GitStatus | null {
+    const repo = this.openRepo();
+    if (!repo) return null;
+    try {
+      const options = Ggit.DiffOptions.new();
+      const flags = Ggit.DiffOption.SHOW_UNTRACKED_CONTENT | Ggit.DiffOption.RECURSE_UNTRACKED_DIRS;
+      options.setFlags(flags as any);
+      // Tree → workdir compares HEAD directly to file contents (staged +
+      // unstaged combined), matching `git diff HEAD`. SHOW_UNTRACKED_CONTENT
+      // makes untracked files contribute their lines as insertions.
+      const diff = Ggit.Diff.newTreeToWorkdir(repo, headTree(repo), options);
+      let added = 0;
+      let removed = 0;
+      const count = Number(diff.getNumDeltas());
+      for (let i = 0; i < count; i++) {
+        // getLineStats(): [ok, context, insertions, deletions]
+        const stats = Ggit.Patch.newFromDiff(diff, i).getLineStats();
+        added += Number(stats[2]);
+        removed += Number(stats[3]);
+      }
+      return { added, removed };
+    } catch {
       return null;
     }
   }
 
+  getFileStatuses(): Map<string, FileGitStatus> {
+    const statuses = new Map<string, FileGitStatus>();
+    const repo = this.openRepo();
+    if (!repo) return statuses;
+    try {
+      const workdir = repo.getWorkdir();
+      const workdirPath = workdir ? (FileProto.getPath.call(workdir) as string | null) : null;
+      if (!workdirPath) return statuses;
+
+      const options = Ggit.DiffOptions.new();
+      const flags = Ggit.DiffOption.SHOW_UNTRACKED_CONTENT | Ggit.DiffOption.RECURSE_UNTRACKED_DIRS;
+      options.setFlags(flags as any);
+      const diff = Ggit.Diff.newTreeToWorkdir(repo, headTree(repo), options);
+
+      const count = Number(diff.getNumDeltas());
+      for (let i = 0; i < count; i++) {
+        const patch = Ggit.Patch.newFromDiff(diff, i);
+        const delta = patch.getDelta();
+        if (!delta) continue;
+        const file = delta.getNewFile() ?? delta.getOldFile();
+        const rel = file?.getPath();
+        if (!rel) continue;
+        const abs = Path.join(workdirPath, rel);
+
+        if (delta.getStatus() === Ggit.DeltaType.UNTRACKED) {
+          statuses.set(abs, { kind: 'untracked' });
+        } else {
+          // getLineStats(): [ok, context, insertions, deletions]
+          const stats = patch.getLineStats();
+          statuses.set(abs, { kind: 'modified', added: Number(stats[2]), removed: Number(stats[3]) });
+        }
+      }
+    } catch {
+      // return whatever was collected before the error
+    }
+    return statuses;
+  }
+
   onChange(callback: () => void): () => void {
     this.listeners.add(callback);
-    this.ensureMonitor();
+    this.ensureWatching();
     return () => this.listeners.delete(callback);
   }
 
@@ -84,20 +179,59 @@ class GgitRepo implements GitRepo {
     this.listeners.clear();
     this.monitor?.cancel();
     this.monitor = null;
+    if (this.pollId) {
+      GLib.sourceRemove(this.pollId);
+      this.pollId = 0;
+    }
   }
 
-  // Watch `<git-dir>/HEAD`; it is rewritten on checkout, which is exactly when
-  // the branch label needs to refresh.
-  private ensureMonitor(): void {
+  private openRepo(): Repository | null {
+    if (!this.gitDir) return null;
+    try {
+      return Ggit.Repository.open(this.gitDir);
+    } catch {
+      return null;
+    }
+  }
+
+  private ensureWatching(): void {
     const gitDir = this.gitDir;
-    if (this.monitor || !gitDir) return;
+    if (this.watching || !gitDir) return;
+    this.watching = true;
+    this.lastSignature = this.signature();
+
+    // Branch switches rewrite HEAD — watch it for instant updates.
     const head = FileProto.getChild.call(gitDir, 'HEAD');
     this.monitor = FileProto.monitorFile.call(head, Gio.FileMonitorFlags.WATCH_MOVES, null);
-    this.monitor!.on('changed', () => this.emit());
+    this.monitor!.on('changed', () => this.maybeEmit());
+
+    // Working-tree edits have no single file to watch; poll and diff the
+    // signature so listeners only fire when the visible numbers actually move.
+    this.pollId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, POLL_INTERVAL_MS, () => {
+      this.maybeEmit();
+      return true; // keep polling
+    });
   }
 
-  private emit(): void {
+  private signature(): string {
+    const status = this.getStatus();
+    return `${this.getBranch()}|${status?.added ?? 0}|${status?.removed ?? 0}`;
+  }
+
+  private maybeEmit(): void {
+    const signature = this.signature();
+    if (signature === this.lastSignature) return;
+    this.lastSignature = signature;
     for (const listener of this.listeners) listener();
+  }
+}
+
+/** The HEAD commit's tree, or null on an unborn branch (empty repo). */
+function headTree(repo: Repository): InstanceType<typeof Ggit.Tree> | null {
+  try {
+    return repo.revparse('HEAD^{tree}') as InstanceType<typeof Ggit.Tree>;
+  } catch {
+    return null;
   }
 }
 
