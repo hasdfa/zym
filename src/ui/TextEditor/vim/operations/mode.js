@@ -1,11 +1,10 @@
 /*
- * Mode operations — the minimal set that drives normal ⇄ insert transitions.
+ * Mode operations not yet covered by a vendored module.
  *
- * These are quilx-authored (vim-mode-plus splits them across misc-command.js and
- * operator-insert.js, which are vendored wholesale in later phases). Each extends
- * the vendored Base and self-registers on import, so the operation stack can run
- * it by name. They execute immediately (no motion target), simply asking the
- * VimState to change mode.
+ * `ActivateInsertMode` and `InsertAfter` come from the vendored
+ * `operator-insert.js`. `ActivateNormalMode` lives in upstream's
+ * `misc-command.js` (not vendored yet), so a minimal quilx version is provided
+ * here until that file lands; it self-registers on import.
  */
 import { Base } from '../base.js'
 
@@ -17,21 +16,24 @@ class ActivateNormalMode extends Base {
 }
 ActivateNormalMode.register()
 
-class ActivateInsertMode extends Base {
-  static operationKind = 'operator'
+// Visual-mode activation. Upstream registers these as plain command handlers in
+// main.js (not Base classes); here they are small operations so they flow through
+// the operation stack like the other mode changes. Re-activating the current wise
+// toggles back to normal (handled inside vimState.activate).
+class ActivateCharacterwiseVisualMode extends Base {
+  static operationKind = 'misc-command'
   execute() {
-    this.vimState.activate('insert')
+    this.vimState.activate('visual', 'characterwise')
   }
 }
-ActivateInsertMode.register()
+ActivateCharacterwiseVisualMode.register()
 
-class InsertAfter extends Base {
-  static operationKind = 'operator'
+class ActivateLinewiseVisualMode extends Base {
+  static operationKind = 'misc-command'
   execute() {
-    for (const cursor of this.editor.getCursors()) cursor.moveRight()
-    this.vimState.activate('insert')
+    this.vimState.activate('visual', 'linewise')
   }
 }
-InsertAfter.register()
+ActivateLinewiseVisualMode.register()
 
-export { ActivateNormalMode, ActivateInsertMode, InsertAfter }
+export { ActivateNormalMode, ActivateCharacterwiseVisualMode, ActivateLinewiseVisualMode }

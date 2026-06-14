@@ -16,6 +16,7 @@
     "generate-types": "node-gtk generate-types Gtk-4.0 Adw-1 GtkSource-5 Vte-3.91 Ggit-1.0"
   },
   "dependencies": {
+    "diff": "^9.0.0",
     "native-keymap": "^3.3.9",
     "node-gtk": "link:../node-gtk",
     "postcss-selector-parser": "^7.1.4"

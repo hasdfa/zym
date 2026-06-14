@@ -82,6 +82,11 @@ test('view surface: css classes, input gating, cursor type', () => {
   m.setInputEnabled(true);
   assert.equal(m.view.getEditable(), true);
 
-  m.setBlockCursor(true);
-  assert.equal(m.view.getOverwrite(), true);
+  // Block cursor (normal/visual) hides the native caret and paints a tag over the
+  // character; beam (insert) shows the native caret.
+  m.setCursorBufferPosition(new Point(0, 0)); // on 'a'
+  m.setCursorType('block');
+  assert.equal(m.view.getCursorVisible(), false);
+  m.setCursorType('beam');
+  assert.equal(m.view.getCursorVisible(), true);
 });

@@ -7,11 +7,14 @@
  * many) runs unchanged. `goalColumn` remembers the column an up/down motion is
  * aiming for across short lines; it is consumed by the movement layer (phase 3c).
  */
-import { Point } from '../../text/Point.ts';
+import { Point, type PointLike } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 import { unwrapIter, clamp } from './iter.ts';
+import { DEFAULT_NON_WORD_CHARACTERS } from './vim/utils.js';
 import type { EditorModel } from './EditorModel.ts';
 import type { Selection } from './Selection.ts';
+
+const escapeRegExp = (s: string): string => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
 
 export class Cursor {
   readonly editor: EditorModel;
@@ -31,10 +34,33 @@ export class Cursor {
   /**
    * Move the cursor to `point` (clamped), collapsing any selection. Clears the
    * vertical-motion `goalColumn` — an explicit/horizontal move resets the target.
+   * `options` (e.g. `autoscroll`) is accepted for API compatibility and ignored.
    */
-  setBufferPosition(point: Point): void {
+  setBufferPosition(point: PointLike, _options?: unknown): void {
     this.goalColumn = null;
-    this.editor.setCursorBufferPosition(point);
+    if (this.selection.modifying) {
+      // Extend: move only the head (insert) mark, keeping the tail anchored.
+      const { buffer } = this.editor;
+      buffer.moveMark(buffer.getInsert(), this.editor.iterAtPoint(point));
+    } else {
+      this.editor.setCursorBufferPosition(point);
+    }
+  }
+
+  /** The non-word characters for this cursor (used to build word regexes). */
+  getNonWordCharacters(): string {
+    return DEFAULT_NON_WORD_CHARACTERS;
+  }
+
+  /**
+   * A regex matching word/non-word runs from the cursor, mirroring Atom's
+   * `Cursor.wordRegExp`. Word motions (`w`/`b`/`e`) use it for boundaries.
+   */
+  wordRegExp({ includeNonWordCharacters = true }: { includeNonWordCharacters?: boolean } = {}): RegExp {
+    const nonWord = escapeRegExp(this.getNonWordCharacters());
+    let source = `^[\t ]*$|[^\\s${nonWord}]+`;
+    if (includeNonWordCharacters) source += `|[${nonWord}]+`;
+    return new RegExp(source, 'g');
   }
 
   getBufferRow(): number {
@@ -57,6 +83,11 @@ export class Cursor {
   /** With a single cursor there is only ever one, so it is always the last. */
   isLastCursor(): boolean {
     return true;
+  }
+
+  /** Scroll the view to keep the cursor visible. */
+  autoscroll(_options?: unknown): void {
+    this.editor.scrollCursorOnscreen();
   }
 
   /** The range of the line the cursor is on. */

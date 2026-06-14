@@ -26,7 +26,7 @@ import {
   type VimContext,
 } from '../../gi.ts';
 
-addStyles(`.quilx-editor { color: ${theme.ui.fg}; }`);
+addStyles(`.quilx-editor { color: ${theme.ui.fg}; caret-color: ${theme.ui.fg}; }`);
 
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;

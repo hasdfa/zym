@@ -68,20 +68,32 @@ type Handler = (value?: unknown) => void;
 
 export class Emitter {
   private readonly handlers = new Map<string, Set<Handler>>();
+  // Handlers registered via `preempt`, invoked before the regular handlers.
+  private readonly preemptHandlers = new Map<string, Set<Handler>>();
 
   on(eventName: string, handler: Handler): Disposable {
-    let set = this.handlers.get(eventName);
-    if (!set) {
-      set = new Set();
-      this.handlers.set(eventName, set);
-    }
-    set.add(handler);
-    return new Disposable(() => set!.delete(handler));
+    return this.register(this.handlers, eventName, handler);
+  }
+
+  /** Like `on`, but the handler runs before all `on` handlers for the event. */
+  preempt(eventName: string, handler: Handler): Disposable {
+    return this.register(this.preemptHandlers, eventName, handler);
   }
 
   emit(eventName: string, value?: unknown): void {
+    const preempt = this.preemptHandlers.get(eventName);
+    if (preempt) for (const handler of [...preempt]) handler(value);
     const set = this.handlers.get(eventName);
-    if (!set) return;
-    for (const handler of set) handler(value);
+    if (set) for (const handler of [...set]) handler(value);
+  }
+
+  private register(map: Map<string, Set<Handler>>, eventName: string, handler: Handler): Disposable {
+    let set = map.get(eventName);
+    if (!set) {
+      set = new Set();
+      map.set(eventName, set);
+    }
+    set.add(handler);
+    return new Disposable(() => set!.delete(handler));
   }
 }

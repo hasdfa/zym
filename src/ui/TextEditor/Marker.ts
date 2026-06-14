@@ -62,6 +62,11 @@ export class Marker {
     return new Range(this.getStartBufferPosition(), this.getEndBufferPosition());
   }
 
+  /** Atom-compatible alias for `getRange` (vendored code uses this name). */
+  getBufferRange(): Range {
+    return this.getRange();
+  }
+
   isDestroyed(): boolean {
     return this.destroyed;
   }

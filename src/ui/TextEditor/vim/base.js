@@ -151,7 +151,12 @@ export class Base {
   }
 
   instanceof (klassName) {
-    return this instanceof Base.getClass(klassName)
+    // Unlike upstream (which lazy-loads every class), quilx registers operations
+    // eagerly and only those that are ported. Treat an unregistered class name as
+    // "not an instance" rather than throwing, so checks against not-yet-ported
+    // operations (e.g. Search, Change) simply return false.
+    const klass = Base.classByName.get(klassName)
+    return klass ? this instanceof klass : false
   }
 
   isOperator () {

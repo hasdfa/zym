@@ -24,9 +24,28 @@ export class Selection {
   readonly cursor: Cursor;
   goalColumn: number | null = null;
 
+  // While true, moving the cursor extends the selection (moves the head mark
+  // only) instead of collapsing it. Set during `modifySelection`.
+  modifying = false;
+
   constructor(editor: EditorModel) {
     this.editor = editor;
     this.cursor = new Cursor(editor, this);
+  }
+
+  /**
+   * Run `fn` while extending the selection: cursor moves inside `fn` move the
+   * head (insert mark) and leave the tail (anchor) put. This is how a motion
+   * grows an operator's target range (e.g. the `w` in `dw`).
+   */
+  modifySelection(fn: () => void): void {
+    const wasModifying = this.modifying;
+    this.modifying = true;
+    try {
+      fn();
+    } finally {
+      this.modifying = wasModifying;
+    }
   }
 
   getHeadBufferPosition(): Point {
@@ -52,6 +71,18 @@ export class Selection {
   isEmpty(): boolean {
     return this.getHeadBufferPosition().isEqual(this.getTailBufferPosition());
   }
+
+  /** With a single selection, it is always the last one. */
+  isLastSelection(): boolean {
+    return true;
+  }
+
+  /**
+   * Atom destroys transient extra selections; GtkTextBuffer has only one, which
+   * persists, so this is a no-op. (The mutation manager only destroys selections
+   * created after the `will-select` checkpoint, which the lone selection isn't.)
+   */
+  destroy(): void {}
 
   /** True when the head is before the tail (the selection grew backward). */
   isReversed(): boolean {

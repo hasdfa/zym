@@ -9,13 +9,26 @@
 import { Emitter, Disposable, CompositeDisposable } from '../../../util/eventKit.ts'
 import settings from './settings.ts'
 import OperationStack from './operation-stack.js'
-import { CursorStyleManager, HoverManager } from './stubs.ts'
+import MarkManager from './mark-manager.js'
+import RegisterManager from './register-manager.js'
+import MutationManager from './mutation-manager.js'
+import swrap from './selection-wrapper.js'
+import globalState from './global-state.js'
+import { CursorStyleManager, HoverManager, FlashManager, OccurrenceManager, SequentialPasteManager } from './stubs.ts'
 import * as utils from './utils.js'
 
 const MANAGER_REGISTRY = {
   './operation-stack': OperationStack,
+  './mark-manager': MarkManager,
+  './register-manager': RegisterManager,
+  './mutation-manager': MutationManager,
+  './selection-wrapper': swrap,
+  './global-state': globalState,
   './cursor-style-manager': CursorStyleManager,
   './hover-manager': HoverManager,
+  './flash-manager': FlashManager,
+  './occurrence-manager': OccurrenceManager,
+  './sequential-paste-manager': SequentialPasteManager,
   './utils': utils,
 }
 

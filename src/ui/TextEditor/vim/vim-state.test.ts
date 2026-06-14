@@ -5,7 +5,9 @@ import { EditorModel } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
 import VimState from './vim-state.js';
 import { StatusBarManager } from './stubs.ts';
-import './operations/mode.js'; // registers ActivateNormalMode/ActivateInsertMode/InsertAfter
+import './operations/mode.js';
+import './operator-insert.js';
+import './text-object.js'; // registers ActivateNormalMode/ActivateInsertMode/InsertAfter
 
 Gtk.init();
 

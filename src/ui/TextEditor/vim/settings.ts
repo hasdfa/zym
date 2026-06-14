@@ -66,6 +66,72 @@ const schema: Record<string, ConfigSchema> = {
     default: false,
     description: 'Throw on internal assertion failures instead of logging.',
   },
+
+  // --- Operator behavior ---
+  blackholeRegisteredOperators: {
+    type: 'array',
+    default: [],
+    description: 'Operators (by command name) that write to the blackhole register.',
+  },
+  flashOnOperate: {
+    type: 'boolean',
+    default: false,
+    description: 'Flash the operated-on range after an operator runs.',
+  },
+  flashOnOperateBlacklist: {
+    type: 'array',
+    default: [],
+    description: 'Operators that never flash, even when flashOnOperate is on.',
+  },
+  autoSelectPersistentSelectionOnOperate: {
+    type: 'boolean',
+    default: false,
+    description: 'Include persistent selections as operator targets automatically.',
+  },
+  stayOnDelete: {
+    type: 'boolean',
+    default: false,
+    description: "Keep the cursor in place after delete instead of vim's default move.",
+  },
+  stayOnYank: {
+    type: 'boolean',
+    default: false,
+    description: 'Keep the cursor in place after yank.',
+  },
+  stayOnChange: {
+    type: 'boolean',
+    default: false,
+    description: 'Keep the cursor in place after change.',
+  },
+  stayOnOccurrence: {
+    type: 'boolean',
+    default: true,
+    description: 'Keep the cursor in place when operating on occurrences.',
+  },
+
+  // --- Motion behavior ---
+  stayOnVerticalMotion: {
+    type: 'boolean',
+    default: false,
+    description: 'Keep the column on j/k instead of moving to the first character.',
+  },
+  useLanguageIndependentNonWordCharacters: {
+    type: 'boolean',
+    default: false,
+    description: 'Use a fixed non-word character set for word motions, ignoring grammar.',
+  },
+
+  // --- Undo / redo ---
+  setCursorToStartOfChangeOnUndoRedo: {
+    type: 'boolean',
+    default: false,
+    description: 'Move the cursor to the start of the change after undo/redo.',
+  },
+  flashOnUndoRedo: {
+    type: 'boolean',
+    default: false,
+    description: 'Flash the changed range after undo/redo.',
+  },
 };
 
 export const settings = quilx.config.scope('vim-mode-plus').register(schema);

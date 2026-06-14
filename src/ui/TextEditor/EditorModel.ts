@@ -13,17 +13,22 @@
  * position/text foundation. Cursors/selections, mutation, scanning, and markers
  * build on the `Point`↔`TextIter` bridge established here.
  */
-import { Point } from '../../text/Point.ts';
-import { Range } from '../../text/Range.ts';
+import { Point, type PointLike } from '../../text/Point.ts';
+import { Range, type RangeLike } from '../../text/Range.ts';
 import { unwrapIter, clamp, type TextIter } from './iter.ts';
 import { Selection } from './Selection.ts';
 import { Cursor } from './Cursor.ts';
 import { MarkerLayer } from './MarkerLayer.ts';
 import { Emitter, Disposable } from '../../util/eventKit.ts';
-import { type SourceBuffer, type SourceView } from '../../gi.ts';
+import { theme } from '../../theme/theme.ts';
+import { Gtk, type SourceBuffer, type SourceView } from '../../gi.ts';
 
 /** Cursor shapes the vim layer switches between per mode. */
 export const CursorType = { BEAM: 'beam', BLOCK: 'block', UNDERLINE: 'underline' } as const;
+
+// Fraction of the visible area to keep as margin when scrolling the cursor into
+// view (a small vim-style `scrolloff`).
+const SCROLL_MARGIN = 0.1;
 
 export class EditorModel {
   // The vim layer reaches `editorElement.constructor.CursorType`; EditorModel is
@@ -40,10 +45,32 @@ export class EditorModel {
   private readonly emitter = new Emitter();
   private destroyed = false;
 
+  // Block-cursor rendering: GTK has no CSS for a block caret, so normal/visual
+  // mode hides the native beam and paints a reverse-video tag over the character
+  // under the cursor (cursor color as background, editor background as the glyph
+  // color) — the effect a terminal block cursor uses. `blockCursor` is the
+  // current mode's desired shape.
+  private blockCursor = false;
+  private readonly cursorTag: InstanceType<typeof Gtk.TextTag>;
+
   constructor(view: SourceView, buffer: SourceBuffer) {
     this.view = view;
     this.buffer = buffer;
     this.selection = new Selection(this);
+    this.cursorTag = this.createCursorTag();
+    this.view.setOverwrite(false); // the block look comes from the tag, not overwrite
+  }
+
+  private createCursorTag(): InstanceType<typeof Gtk.TextTag> {
+    // Reverse video: fill with the cursor color, draw the glyph in the editor
+    // background color so it stays legible on the solid block.
+    const tag = new Gtk.TextTag({
+      name: 'vim-block-cursor',
+      background: theme.ui.fg,
+      foreground: theme.ui.bg ?? '#000000',
+    });
+    this.buffer.getTagTable().add(tag);
+    return tag;
   }
 
   /** The vim layer treats the model as its own `editorElement`. */
@@ -92,13 +119,14 @@ export class EditorModel {
    * An iter at `point`, clamped into the buffer. Rows past the end land on the
    * last row; columns past a line's end land at its end (before the newline).
    */
-  iterAtPoint(point: Point): TextIter {
+  iterAtPoint(point: PointLike): TextIter {
+    const p = Point.fromObject(point);
     const lastRow = this.getLastBufferRow();
-    const row = clamp(point.row, 0, lastRow);
+    const row = clamp(p.row, 0, lastRow);
     const iter = this.iterAtLineStart(row);
 
     const maxColumn = this.maxColumnForLineStart(iter);
-    iter.setLineOffset(clamp(point.column, 0, maxColumn));
+    iter.setLineOffset(clamp(p.column, 0, maxColumn));
     return iter;
   }
 
@@ -139,8 +167,18 @@ export class EditorModel {
   }
 
   /** `point` clamped to a real position within the buffer. */
-  clipBufferPosition(point: Point): Point {
+  clipBufferPosition(point: PointLike): Point {
     return this.pointAtIter(this.iterAtPoint(point));
+  }
+
+  // Screen and buffer coordinates coincide (no soft-wrap; folds ignored for
+  // motion purposes), so these conversions are identity + clamp.
+  screenPositionForBufferPosition(point: PointLike, _options?: unknown): Point {
+    return this.clipBufferPosition(point);
+  }
+
+  bufferPositionForScreenPosition(point: PointLike, _options?: unknown): Point {
+    return this.clipBufferPosition(point);
   }
 
   /** True when `row` is empty or contains only whitespace. */
@@ -157,8 +195,9 @@ export class EditorModel {
   }
 
   /** The text within `range`. */
-  getTextInBufferRange(range: Range): string {
-    return this.buffer.getText(this.iterAtPoint(range.start), this.iterAtPoint(range.end), true);
+  getTextInBufferRange(range: RangeLike): string {
+    const r = Range.fromObject(range);
+    return this.buffer.getText(this.iterAtPoint(r.start), this.iterAtPoint(r.end), true);
   }
 
   /** The text of `row`, excluding its trailing newline. */
@@ -192,7 +231,7 @@ export class EditorModel {
   }
 
   /** Move the primary cursor to `point` (clamped), collapsing any selection. */
-  setCursorBufferPosition(point: Point): void {
+  setCursorBufferPosition(point: PointLike): void {
     this.buffer.placeCursor(this.iterAtPoint(point));
   }
 
@@ -206,11 +245,21 @@ export class EditorModel {
     return [this.selection];
   }
 
+  /** With one selection, ordering is trivial. */
+  getSelectionsOrderedByBufferPosition(): Selection[] {
+    return [this.selection];
+  }
+
   getLastCursor(): Cursor {
     return this.selection.cursor;
   }
 
   getCursors(): Cursor[] {
+    return [this.selection.cursor];
+  }
+
+  /** With one cursor, ordering is trivial. */
+  getCursorsOrderedByBufferPosition(): Cursor[] {
     return [this.selection.cursor];
   }
 
@@ -222,8 +271,8 @@ export class EditorModel {
     return this.selection.getBufferRange();
   }
 
-  setSelectedBufferRange(range: Range, options: { reversed?: boolean } = {}): void {
-    this.selection.setBufferRange(range, options);
+  setSelectedBufferRange(range: RangeLike, options: { reversed?: boolean } = {}): void {
+    this.selection.setBufferRange(Range.fromObject(range), options);
   }
 
   // --- Mutation --------------------------------------------------------------
@@ -237,15 +286,16 @@ export class EditorModel {
    * Replace the text in `range` with `text` as one undo step, and return the
    * range the new text occupies.
    */
-  setTextInBufferRange(range: Range, text: string): Range {
+  setTextInBufferRange(range: RangeLike, text: string): Range {
+    const r = Range.fromObject(range);
     return this.transact(() => {
-      const start = this.iterAtPoint(range.start);
-      const end = this.iterAtPoint(range.end);
+      const start = this.iterAtPoint(r.start);
+      const end = this.iterAtPoint(r.end);
       if (start.compare(end) !== 0) this.buffer.delete(start, end);
 
       // `insert` advances the iter to the end of the inserted text, giving us
       // the new range without a second position lookup.
-      const insertIter = this.iterAtPoint(range.start);
+      const insertIter = this.iterAtPoint(r.start);
       const startPoint = this.pointAtIter(insertIter);
       if (text.length > 0) this.buffer.insert(insertIter, text, -1);
       return new Range(startPoint, this.pointAtIter(insertIter));
@@ -277,12 +327,29 @@ export class EditorModel {
     return true;
   }
 
+  /**
+   * Revert edits made since `checkpoint`. GTK has no checkpoint API, so this is a
+   * no-op for now; only the cancel-input operator path (not basic edits) relies
+   * on it, and is revisited when that path is exercised.
+   */
+  revertToCheckpoint(_checkpoint: number): void {}
+
   undo(): void {
     this.buffer.undo();
   }
 
   redo(): void {
     this.buffer.redo();
+  }
+
+  /**
+   * A minimal Atom-`TextBuffer`-shaped handle. Only `onDidChangeText` is used so
+   * far (by Undo/Redo to collect changed ranges); GtkTextBuffer has no equivalent
+   * event here, so it is an inert subscription — fine while the undo/redo
+   * cursor-positioning and flash configs are off.
+   */
+  getBuffer(): { onDidChangeText(callback: (event: unknown) => void): Disposable } {
+    return { onDidChangeText: () => new Disposable(() => {}) };
   }
 
   // --- Scanning --------------------------------------------------------------
@@ -300,16 +367,17 @@ export class EditorModel {
    * ranges stay valid); this suits independent substitutions, not edits whose
    * result the scan must re-read.
    */
-  scanInBufferRange(regex: RegExp, range: Range, iterator: ScanIterator): void {
+  scanInBufferRange(regex: RegExp, range: RangeLike, iterator: ScanIterator): void {
     this.iterateMatches(this.collectMatches(regex, range), iterator);
   }
 
   /** Like `scanInBufferRange`, but visits matches back to front. */
-  backwardsScanInBufferRange(regex: RegExp, range: Range, iterator: ScanIterator): void {
+  backwardsScanInBufferRange(regex: RegExp, range: RangeLike, iterator: ScanIterator): void {
     this.iterateMatches(this.collectMatches(regex, range).reverse(), iterator);
   }
 
-  private collectMatches(regex: RegExp, range: Range): ScanMatch[] {
+  private collectMatches(regex: RegExp, rangeLike: RangeLike): ScanMatch[] {
+    const range = Range.fromObject(rangeLike);
     const text = this.getTextInBufferRange(range);
     const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
     const matches: ScanMatch[] = [];
@@ -357,6 +425,40 @@ export class EditorModel {
     return new MarkerLayer(this);
   }
 
+  // --- Folding (deferred) ----------------------------------------------------
+  // Real fold integration with SyntaxController lands in a later phase; motions
+  // treat the buffer as unfolded for now.
+
+  isFoldedAtBufferRow(_row: number): boolean {
+    return false;
+  }
+
+  unfoldBufferRow(_row: number): void {}
+
+  // --- Multi-cursor reconciliation (single cursor: no-ops) -------------------
+
+  mergeCursors(): void {}
+  mergeIntersectingSelections(): void {}
+
+  /** Whether soft tabs (spaces) are used; selects the column-based motion path. */
+  get softTabs(): boolean {
+    return true;
+  }
+
+  /** Atom's atomic-soft-tabs feature is not modeled. */
+  hasAtomicSoftTabs(): boolean {
+    return false;
+  }
+
+  /**
+   * Syntax scope at a position. Grammar-scope integration for the vim layer is
+   * not wired yet, so this reports no scopes (pair-finding falls back to plain
+   * text matching).
+   */
+  scopeDescriptorForBufferPosition(_point: PointLike): { getScopesArray(): string[] } {
+    return { getScopesArray: () => [] };
+  }
+
   // --- View surface (mode scoping, input gating, cursor) ---------------------
   //
   // EditorModel doubles as the ported code's `editorElement`: the vim layer
@@ -387,18 +489,68 @@ export class EditorModel {
     this.view.setEditable(enabled);
   }
 
-  /** Render a block cursor (normal/visual) or a beam (insert). */
-  setBlockCursor(block: boolean): void {
-    this.view.setOverwrite(block);
-  }
-
   /** Set the cursor shape from a `CursorType` value (vim switches per mode). */
   setCursorType(type: (typeof CursorType)[keyof typeof CursorType]): void {
-    this.setBlockCursor(type !== CursorType.BEAM);
+    this.blockCursor = type !== CursorType.BEAM;
+    this.refreshCursorStyle();
+  }
+
+  /**
+   * Re-paint the block cursor at the current cursor position. Called on every
+   * mode change and after every operation (the cursor moved). In beam mode (or
+   * when the cursor sits at end-of-line with no character to cover), the native
+   * caret is shown instead.
+   */
+  refreshCursorStyle(): void {
+    const [start, end] = this.buffer.getBounds();
+    this.buffer.removeTag(this.cursorTag, start, end);
+
+    if (!this.blockCursor) {
+      this.view.setCursorVisible(true);
+      return;
+    }
+
+    const iter = unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
+    if (iter.endsLine() || iter.isEnd()) {
+      // Nothing to cover (EOL / empty line / EOF) — fall back to the native caret.
+      this.view.setCursorVisible(true);
+      return;
+    }
+    const next = iter.copy();
+    next.forwardChar();
+    // Raise the cursor tag above any syntax tags so its reverse-video foreground
+    // wins (tag priority is creation order; syntax tags are created later).
+    this.cursorTag.setPriority(this.buffer.getTagTable().getSize() - 1);
+    this.buffer.applyTag(this.cursorTag, iter, next);
+    this.view.setCursorVisible(false); // the block stands in for the caret
   }
 
   focus(): void {
     this.view.grabFocus();
+  }
+
+  /**
+   * Scroll the view just enough to keep the cursor (insert mark) on screen. The
+   * vim layer drives the cursor with programmatic mark moves, which — unlike
+   * interactive editing — don't auto-scroll GtkTextView, so we do it explicitly
+   * after the cursor settles. No-op until the view is realized (e.g. in tests).
+   */
+  scrollCursorOnscreen(): void {
+    if (!this.view.getRealized()) return;
+    this.view.scrollToMark(this.buffer.getInsert(), SCROLL_MARGIN, false, 0, 0);
+  }
+
+  scrollToCursorPosition(_options?: unknown): void {
+    this.scrollCursorOnscreen();
+  }
+
+  scrollToBufferPosition(point: PointLike, _options?: unknown): void {
+    if (!this.view.getRealized()) return;
+    this.view.scrollToIter(this.iterAtPoint(point), SCROLL_MARGIN, false, 0, 0);
+  }
+
+  scrollToScreenPosition(point: PointLike, options?: unknown): void {
+    this.scrollToBufferPosition(point, options);
   }
 
   /** The buffer Point at character `offset` into `text`, which begins at `start`. */
