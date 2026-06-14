@@ -13,8 +13,10 @@ GTK 4 and [Adwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), running o
   toolbar toggle to force dark mode
 - Open / Save / Save-As through the native `Gtk.FileDialog`
 - A source-map (minimap) gutter on the right
-- Keyboard shortcuts: `Ctrl+O` open, `Ctrl+S` save, `Ctrl+Shift+S` save-as,
-  `Ctrl+Q` quit
+- A `Space`-leader keybinding scheme, plus `Ctrl+*` shortcuts and Vim-style
+  window splits — see [Keybindings](#keybindings)
+- Notifications surfaced as transient toasts and kept in a persistent log panel
+  — see [Notifications](#notifications)
 
 ## Requirements
 
@@ -45,12 +47,103 @@ pnpm install
 ```sh
 pnpm start [file]
 # or
-node src/editor.js [file]
+node src/index.ts [file]
 ```
 
 With no argument, quilx opens its own source. In the editor, normal mode is
 active by default — press `i` to insert, `Esc` to return to normal mode, and use
 `:w`, `:e <path>`, `:q`, `:wq` as you would in Vim.
+
+## Keybindings
+
+quilx is organized around a **`Space` leader**: press `Space`, then a mnemonic.
+The leader is available globally; in text-input contexts (entries, the terminal,
+the editor in insert mode) `Space` is released so it still types literally.
+
+| Keys                | Action                      |
+| ------------------- | --------------------------- |
+| `Space` `w`         | Save the current editor     |
+| `Space` `o`         | Open the file picker        |
+| `Space` `Space`     | Open the command picker     |
+| `Space` `q`         | Quit                        |
+| `Space` `t`         | New terminal                |
+| `Space` `a`         | New agent terminal          |
+| `Space` `n`         | Toggle the notification log |
+| `Space` `,`         | Open preferences            |
+| `Space` `g` `l`/`p` | Git pull / push             |
+
+Window splits (Vim-style, `Ctrl+W` prefix):
+
+| Keys                  | Action                              |
+| --------------------- | ----------------------------------- |
+| `Ctrl+W` `v` / `s`    | Split right / down                  |
+| `Ctrl+W` `h/j/k/l`    | Focus the split left/down/up/right  |
+| `Ctrl+W` `w`          | Cycle through splits                |
+| `Ctrl+W` `c`          | Close the active split              |
+
+Tabs: `Alt+,` / `Alt+.` switch to the previous / next tab; `Alt+1`…`Alt+8` jump
+to a tab, `Alt+9` to the last.
+
+File tree: `j` / `k` move, `l` / `h` expand / collapse, `,` toggles untracked
+files, `.` toggles hidden files.
+
+Notification log (while focused): `c` clears the history, `q` hides the panel.
+
+Bindings live in [`src/keymaps/default.ts`](src/keymaps/default.ts). To override
+them, drop a `~/.config/quilx/keymap.json` (the same
+`{ "selector": { "keystroke": "command" } }` shape) — user bindings take priority
+over the defaults.
+
+Selectors target a **quilx component** by name with an `#id` (e.g. `#AppWindow`,
+`#Panel`, `#FileTree`), and a raw GTK widget by its type tag (e.g. `GtkText`,
+`GtkSourceView.insert-mode`).
+
+A binding's value may also pass arguments to its command, using
+`{ "command": "...", "args": [...] }` instead of a bare string. For example,
+`Alt+1`…`Alt+8` are a single parameterized command:
+
+```json
+{ "#Panel": { "alt-3": { "command": "tab:go-to", "args": [2] } } }
+```
+
+Use the value `"unset!"` to release a keystroke for a selector so it falls
+through to the widget instead of triggering a binding. This is how `Space` is
+freed in text-input contexts even though it's the global leader prefix:
+
+```json
+{ "GtkText": { "space": "unset!" } }
+```
+
+## Notifications
+
+Modeled on Atom's `NotificationManager`, quilx separates *posting* a notification
+from *showing* it. Subsystems post through the global hub, `quilx.notifications`,
+which keeps every notification for the session; views render from it.
+
+```js
+quilx.notifications.addInfo('Saved');
+quilx.notifications.addWarning('Untracked files hidden');
+quilx.notifications.addError('Push failed', { detail: 'rejected: non-fast-forward' });
+```
+
+There are five severities — `addInfo`, `addSuccess`, `addWarning`, `addError`,
+and `addFatalError` — each taking a message and optional
+`{ detail, description, icon, dismissable, buttons }`. By default a notification
+auto-expires; pass `dismissable: true` to keep its toast until it's closed.
+
+Each posted notification shows up in two places:
+
+- a **transient toast** over the workbench (one action button is mapped from
+  `buttons`), and
+- the **notification log**, a panel in the bottom dock holding the full session
+  history (severity icon, message, optional detail, and the time it was posted).
+
+On a toast, `detail`/`description` and any buttons beyond the first are dropped —
+they belong to the log. The log is hidden until toggled with `Space` `n`; while it's focused, `c`
+clears the history and `q` hides it (commands `notifications:toggle-log` and
+`notifications:clear`, also reachable from the command picker). Window actions
+like saving and the git commands post through this hub, so their results land in
+the log too.
 
 ## Configuration
 
@@ -72,6 +165,12 @@ and validated against the schema (e.g. an out-of-range number is clamped, the
 string `"4"` becomes the integer `4`); a value that can't fit is ignored with a
 warning. The file is **watched live**: saving it applies the changes without a
 restart.
+
+Rather than edit the file by hand, open the **preferences window** (`Space` `,`,
+or `config:open` from the command picker). It's an Adwaita settings UI generated
+from the schema — a switch, spin, combo, or entry per parameter, grouped by
+namespace — and edits write back to `config.json`. Because both directions watch
+the same config, hand-edits and the window stay in sync while it's open.
 
 The application-wide schema is declared in [`src/quilx.ts`](src/quilx.ts);
 subsystems contribute their own namespaced keys at load time (e.g. the Vim layer
