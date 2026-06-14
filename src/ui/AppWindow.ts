@@ -138,6 +138,7 @@ export class AppWindow {
     this.registerPaneCommands();
     this.registerWindowCommands();
     this.registerTerminalCommands();
+    this.registerGitCommands();
 
     // Seed/load the user config and keep it in sync with on-disk edits. Done
     // before the first file opens so editors read live config values.
@@ -385,6 +386,21 @@ export class AppWindow {
         'ctrl-shift-t': 'terminal:new',
       },
     });
+  }
+
+  // Git network operations. They run through GitRepo.run (Gio.Subprocess, non-
+  // blocking), so the branch button's spinner reflects progress automatically;
+  // the result is surfaced as a toast.
+  private registerGitCommands() {
+    quilx.commands.add('AppWindow', {
+      'git:fetch': () => this.runGit(['fetch'], 'Fetch'),
+      'git:pull': () => this.runGit(['pull', '--ff-only'], 'Pull'),
+      'git:push': () => this.runGit(['push'], 'Push'),
+    });
+  }
+
+  private runGit(args: string[], label: string) {
+    this.git.run(args, (ok) => this.toast(ok ? `${label} succeeded` : `${label} failed`));
   }
 
   // Split the active center pane, opening the active editor's file in the new

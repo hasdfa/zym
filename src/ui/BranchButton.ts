@@ -3,8 +3,9 @@
  * branch (e.g. " master") plus a working-tree overview: "+N" inserted lines in
  * green and "-M" deleted lines in red (untracked files counted as insertions),
  * and the upstream delta "↑N"/"↓M" (commits ahead/behind). Each count is hidden
- * when zero. It reads from an injected `GitRepo` and refreshes on
- * `GitRepo.onChange`; outside a repo it hides itself.
+ * when zero. While a git operation is in flight (`GitRepo.isBusy`) the branch
+ * icon is replaced by a spinner. It reads from an injected `GitRepo` and
+ * refreshes on `GitRepo.onChange`; outside a repo it hides itself.
  *
  * It is a flat button so it can later grow into a branch switcher (open a popover
  * on click). The assembled widget is exposed via `root`.
@@ -35,6 +36,8 @@ export class BranchButton {
   readonly root: InstanceType<typeof Gtk.Button>;
 
   private readonly repo: GitRepo;
+  private readonly icon: InstanceType<typeof Gtk.Label>;
+  private readonly spinner: InstanceType<typeof Gtk.Spinner>;
   private readonly label: InstanceType<typeof Gtk.Label>;
   private readonly added: InstanceType<typeof Gtk.Label>;
   private readonly removed: InstanceType<typeof Gtk.Label>;
@@ -45,13 +48,16 @@ export class BranchButton {
   constructor(repo: GitRepo) {
     this.repo = repo;
 
-    // [icon, branch name, +added, -removed, ↑ahead, ↓behind]. The icon is a Nerd
-    // Font glyph in the bundled icon font; as plain label text it inherits the
-    // theme foreground, matching FileTree's monochrome, theme-following icons.
+    // [icon | spinner, branch name, +added, -removed, ↑ahead, ↓behind]. The icon
+    // is a Nerd Font glyph in the bundled icon font; as plain label text it
+    // inherits the theme foreground, matching FileTree's monochrome, theme-
+    // following icons. It is swapped for the spinner while an operation runs.
     const iconAttrs = Pango.AttrList.new();
     iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
-    const icon = new Gtk.Label({ label: BRANCH_GLYPH });
-    icon.setAttributes(iconAttrs);
+    this.icon = new Gtk.Label({ label: BRANCH_GLYPH });
+    this.icon.setAttributes(iconAttrs);
+    this.spinner = new Gtk.Spinner();
+    this.spinner.setVisible(false);
 
     this.label = new Gtk.Label();
     this.added = new Gtk.Label();
@@ -62,7 +68,8 @@ export class BranchButton {
     this.behind = new Gtk.Label();
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    box.append(icon);
+    box.append(this.icon);
+    box.append(this.spinner);
     box.append(this.label);
     box.append(this.added);
     box.append(this.removed);
@@ -88,6 +95,13 @@ export class BranchButton {
     }
     this.label.setText(branch);
     this.root.setVisible(true);
+
+    // Swap the branch icon for a spinner while a git operation is running.
+    const busy = this.repo.isBusy();
+    this.icon.setVisible(!busy);
+    this.spinner.setVisible(busy);
+    if (busy) this.spinner.start();
+    else this.spinner.stop();
 
     const status = this.repo.getStatus();
     this.setCount(this.added, '+', status?.added ?? 0);

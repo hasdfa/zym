@@ -76,7 +76,17 @@ export interface GitRepo {
    * or committed). Empty outside a repo or on error.
    */
   getTrackedPaths(): Set<string>;
-  /** Subscribe to branch / working-tree changes. Returns an unsubscribe fn. */
+  /** Whether a git operation (run via `run`) is currently in flight. */
+  isBusy(): boolean;
+  /**
+   * Run a git subcommand (e.g. `['fetch']`) asynchronously and report whether it
+   * exited cleanly. Mutating/network operations must go through here rather than
+   * the synchronous libgit2 reads: it shells out via Gio.Subprocess, which is
+   * GLib-native and so does not block the main loop. `isBusy()` is true for the
+   * duration and `onChange` fires on both the busy transition and completion.
+   */
+  run(args: string[], onDone?: (ok: boolean) => void): void;
+  /** Subscribe to branch / working-tree / busy changes. Returns an unsubscribe fn. */
   onChange(callback: () => void): () => void;
   /** Stop watching and release resources. */
   dispose(): void;
@@ -98,14 +108,17 @@ class GgitRepo implements GitRepo {
   // The repo's `.git` location, used both to (re)open for fresh reads and to
   // monitor HEAD. Null when `cwd` is not inside a git repository.
   private readonly gitDir: GioFile | null;
+  private readonly cwd: string;
   private readonly listeners = new Set<() => void>();
   private monitor: FileMonitor | null = null;
   private pollId = 0;
   private watching = false;
   private lastSignature = '';
+  private busyCount = 0;
 
   constructor(cwd: string) {
     ensureGgitInit();
+    this.cwd = cwd;
     this.gitDir = discoverGitDir(cwd);
   }
 
@@ -119,6 +132,35 @@ class GgitRepo implements GitRepo {
     } catch {
       return null; // unborn branch (empty repo), unreadable HEAD, etc.
     }
+  }
+
+  isBusy(): boolean {
+    return this.busyCount > 0;
+  }
+
+  run(args: string[], onDone?: (ok: boolean) => void): void {
+    if (!this.gitDir) {
+      onDone?.(false);
+      return;
+    }
+    let proc;
+    try {
+      const launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE);
+      launcher.setCwd(this.cwd);
+      proc = launcher.spawnv(['git', ...args]);
+    } catch {
+      onDone?.(false); // spawn failed (e.g. git not on PATH); never entered busy
+      return;
+    }
+    this.enterBusy();
+    proc.waitAsync(null, () => {
+      const ok = proc.getSuccessful();
+      // The operation may have moved HEAD / refs (fetch, pull, …); force the next
+      // signature to differ so the refresh on leaveBusy reflects the new state.
+      this.lastSignature = '';
+      this.leaveBusy();
+      onDone?.(ok);
+    });
   }
 
   getStatus(): GitStatus | null {
@@ -284,6 +326,20 @@ class GgitRepo implements GitRepo {
     const signature = this.signature();
     if (signature === this.lastSignature) return;
     this.lastSignature = signature;
+    this.notify();
+  }
+
+  // Busy is reference-counted so overlapping operations stay busy until the last
+  // one finishes; listeners fire on the 0↔1 transitions (spinner on/off).
+  private enterBusy(): void {
+    if (this.busyCount++ === 0) this.notify();
+  }
+
+  private leaveBusy(): void {
+    if (--this.busyCount === 0) this.notify();
+  }
+
+  private notify(): void {
     for (const listener of this.listeners) listener();
   }
 }
