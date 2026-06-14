@@ -77,3 +77,33 @@ export class Panel {
     return page ? page.getChild() : null;
   }
 }
+
+  /** Number of open tabs. */
+  get tabCount(): number {
+    return this.view.getNPages();
+  }
+
+  /** Select the next tab, wrapping from the last back to the first. */
+  selectNextTab(): void {
+    if (this.view.selectNextPage()) return;
+    if (this.view.getNPages() > 0) this.view.setSelectedPage(this.view.getNthPage(0));
+  }
+
+  /** Select the previous tab, wrapping from the first around to the last. */
+  selectPreviousTab(): void {
+    if (this.view.selectPreviousPage()) return;
+    const count = this.view.getNPages();
+    if (count > 0) this.view.setSelectedPage(this.view.getNthPage(count - 1));
+  }
+
+  /** Select the tab at `index` (0-based); a no-op if out of range. */
+  selectTab(index: number): void {
+    if (index < 0 || index >= this.view.getNPages()) return;
+    this.view.setSelectedPage(this.view.getNthPage(index));
+  }
+
+  /** Select the last tab; a no-op when there are none. */
+  selectLastTab(): void {
+    const count = this.view.getNPages();
+    if (count > 0) this.view.setSelectedPage(this.view.getNthPage(count - 1));
+  }

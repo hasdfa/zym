@@ -23,6 +23,7 @@ import {
 import { FileTree } from './FileTree.ts';
 import { Panel, type PanelChild } from './Panel.ts';
 import { TextEditor } from './TextEditor/index.ts';
+import { Terminal } from './Terminal.ts';
 import { Workbench } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
@@ -45,6 +46,9 @@ export class AppWindow {
   private readonly editors = new Map<Widget, TextEditor>();
 
   // The left dock (file tree), kept as fields so the pane-switching demo
+  // Terminal tabs share the center panel with editors; tracked separately so the
+  // active child can be resolved back to its Terminal (it has no vim state).
+  private readonly terminals = new Map<Widget, Terminal>();
   // commands can move focus between the docks.
   private readonly leftPanel: Panel;
   private readonly fileTree: FileTree;
@@ -68,8 +72,11 @@ export class AppWindow {
     this.commandPreview = new Gtk.Label({ xalign: 1 });
 
     this.centerPanel = new Panel({
-      onActiveChanged: () => this.onActiveEditorChanged(this.activeEditor),
-      onClosed: (widget) => this.editors.delete(widget),
+      onActiveChanged: () => this.onActiveTabChanged(),
+      onClosed: (widget) => {
+        this.editors.delete(widget);
+        this.terminals.delete(widget);
+      },
       onEmpty: () => this.onQuit(),
     });
 
@@ -110,6 +117,8 @@ export class AppWindow {
     this.window.on('close-request', () => {
       this.onQuit();
       return false;
+    this.registerTerminalCommands();
+    this.registerTabCommands();
     });
     this.window.present();
 
@@ -147,6 +156,26 @@ export class AppWindow {
 
   // Connect an editor's vim signals once, at creation. The handlers update the
   // shared status labels only while that editor is active, so no disconnect is
+  /** Open a new Terminal tab in the center panel and select it. */
+  private openTerminal(): Terminal {
+    let child: PanelChild;
+    const terminal = new Terminal({
+      cwd: process.cwd(),
+      // The shell exiting (`exit`/Ctrl-D) closes its tab.
+      onExit: () => child.close(),
+    });
+    // Register before adding: selecting the new tab fires onActiveChanged, which
+    // resolves the active terminal through this map.
+    this.terminals.set(terminal.root, terminal);
+    child = this.centerPanel.add(terminal.root, { title: terminal.title });
+    terminal.onTitleChange(() => {
+      child.setTitle(terminal.title);
+      if (this.centerPanel.activeChild === terminal.root) this.updateTerminalTitle(terminal);
+    });
+    terminal.focus();
+    return terminal;
+  }
+
   // needed when tabs switch. The active-switch path re-syncs the labels.
   private wireEditor(editor: TextEditor) {
     const vim = editor.vim as any;
@@ -165,6 +194,20 @@ export class AppWindow {
     const vim = editor?.vim as any;
     this.commandBar.setText(vim ? vim.getCommandBarText() : '');
     this.commandPreview.setText(vim ? vim.getCommandText() : '');
+  // Route a tab switch to the editor or terminal handler based on what the
+  // active child is. Terminals carry no vim state, so they take a separate path.
+  private onActiveTabChanged() {
+    const widget = this.centerPanel.activeChild;
+    const terminal = widget ? this.terminals.get(widget) ?? null : null;
+    if (terminal) {
+      this.commandBar.setText('');
+      this.commandPreview.setText('');
+      this.updateTerminalTitle(terminal);
+      return;
+    }
+    this.onActiveEditorChanged(this.activeEditor);
+  }
+
     this.updateTitle(editor);
   }
 
@@ -172,6 +215,11 @@ export class AppWindow {
     if (!editor) {
       this.windowTitle.setTitle(TITLE);
       this.windowTitle.setSubtitle('');
+  private updateTerminalTitle(terminal: Terminal) {
+    this.windowTitle.setTitle(terminal.title);
+    this.windowTitle.setSubtitle('Terminal');
+  }
+
       return;
     }
     this.windowTitle.setTitle(editor.title);
@@ -310,6 +358,48 @@ export class AppWindow {
     const dialog = new Gtk.FileDialog();
     dialog.setTitle('Open File');
     dialog.open(this.window, null, (self: any, result: any) => {
+  // Terminal commands: open a shell in a new center-panel tab. Registered on the
+  // window's widget class so the command is always available (command palette)
+  // and bound to ctrl-shift-t.
+  private registerTerminalCommands() {
+    quilx.commands.add('AdwApplicationWindow', {
+      'terminal:new': () => this.openTerminal(),
+    });
+    quilx.keymaps.add('AppWindow', {
+      AdwApplicationWindow: {
+        'ctrl-shift-t': 'terminal:new',
+      },
+    });
+  }
+
+  // Tab switching for whichever panel currently holds focus (defaults to the
+  // center editor group). Registered on the window's widget class so the
+  // commands are always available; bound to ctrl-PageUp/Down, alt-1..8, and
+  // alt-9 for the last tab (matching browser convention).
+  private registerTabCommands() {
+    const commands: Record<string, () => void> = {
+      'tab:next': () => this.currentPanel.selectNextTab(),
+      'tab:previous': () => this.currentPanel.selectPreviousTab(),
+      'tab:go-to-last': () => this.currentPanel.selectLastTab(),
+    };
+    const keymap: Record<string, string> = {
+      'ctrl-Page_Down': 'tab:next',
+      'ctrl-Page_Up': 'tab:previous',
+      'alt-9': 'tab:go-to-last',
+    };
+    for (let n = 1; n <= 8; n++) {
+      commands[`tab:go-to-${n}`] = () => this.currentPanel.selectTab(n - 1);
+      keymap[`alt-${n}`] = `tab:go-to-${n}`;
+    }
+    quilx.commands.add('AdwApplicationWindow', commands);
+    quilx.keymaps.add('AppWindow', { AdwApplicationWindow: keymap });
+  }
+
+  /** The panel that currently holds keyboard focus (defaults to the center). */
+  private get currentPanel(): Panel {
+    return this.isFocusWithin(this.leftPanel.root) ? this.leftPanel : this.centerPanel;
+  }
+
       try {
         const file = self.openFinish(result);
         if (file) this.openFile(file.getPath());

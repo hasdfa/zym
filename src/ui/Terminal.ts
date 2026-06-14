@@ -13,11 +13,10 @@
 import * as Os from 'node:os';
 import {
   GLib,
-  Gtk,
-  Pango,
   Vte,
   type VteTerminal,
 } from '../gi.ts';
+import { monospaceFontDescription } from '../fonts.ts';
 
 const SCROLLBACK_LINES = 10_000;
 const DEFAULT_SHELL = '/bin/bash';
@@ -56,7 +55,7 @@ export class Terminal {
     terminal.setScrollOnOutput(false);
     terminal.setScrollOnKeystroke(true);
     terminal.setMouseAutohide(true);
-    terminal.setFont(Pango.FontDescription.fromString('monospace 11'));
+    terminal.setFont(monospaceFontDescription());
 
     // OSC 0/2 title sequences — let a host mirror the shell's reported title.
     terminal.on('window-title-changed', () => {
@@ -82,10 +81,20 @@ export class Terminal {
       argv,
       envv,
       GLib.SpawnFlags.SEARCH_PATH,
-      () => {}, // child setup — nothing to do in the forked child
+      // child setup MUST be null: node-gtk would run a JS callback inside the
+      // forked child (between fork and exec), where re-entering V8 segfaults the
+      // child — VTE then fires `child-exited` immediately and the tab vanishes.
+      null as any,
       -1, // no spawn timeout
       null, // no cancellable
-      () => {}, // spawn-complete callback — failures surface via `child-exited`
+      (_terminal: unknown, pid: number, error: { message: string } | null) => {
+        // A spawn failure never starts a child, so `child-exited` won't fire;
+        // report it explicitly instead of leaving a silent, empty terminal.
+        if (error || pid === -1) {
+          this.onExit(127);
+          console.error(`Terminal: failed to spawn ${shell}: ${error?.message ?? 'unknown error'}`);
+        }
+      },
     );
   }
 

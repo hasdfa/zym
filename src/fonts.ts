@@ -42,8 +42,19 @@ export function fontDescriptionToCss(description: string): FontCss {
   return { family: `"${family}"`, weight, style, sizePt, declarations: decls.join(' ') };
 }
 
-/** The OS monospace font (org.gnome.desktop.interface monospace-font-name) as CSS. */
-export function monospaceFontCss(): FontCss {
+/** The OS monospace font-description string (org.gnome.desktop.interface monospace-font-name). */
+function monospaceFontName(): string {
   const settings = new Gio.Settings({ schemaId: 'org.gnome.desktop.interface' });
-  return fontDescriptionToCss((settings as any).getString('monospace-font-name'));
+  return (settings as any).getString('monospace-font-name');
+}
+
+/** The OS monospace font as CSS. */
+export function monospaceFontCss(): FontCss {
+  return fontDescriptionToCss(monospaceFontName());
+}
+
+/** The OS monospace font as a Pango.FontDescription, for widgets (e.g. VTE) that
+ *  take a font description rather than CSS. */
+export function monospaceFontDescription(): InstanceType<typeof Pango.FontDescription> {
+  return Pango.FontDescription.fromString(monospaceFontName());
 }
