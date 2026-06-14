@@ -2,9 +2,10 @@
  * AppWindow — the top-level application window. It owns the window chrome (the
  * Adwaita header bar and the vim status line, via Adw.ToolbarView), the toast
  * overlay, and the floating-picker overlay host. It composes the workbench
- * docks: the file tree in the left dock and the center editor Panel (one tab per
- * open file). Actions and accelerators are routed to the active tab's editor;
- * the window title and vim status line follow the active tab.
+ * docks: the file tree in the left dock and the splittable center PanelGroup (a
+ * tree of editor groups, one tab per open file). Actions and accelerators are
+ * routed to the active split's active tab; the window title and vim status line
+ * follow it.
  *
  * One window per application instance. It is given the Adw.Application (for
  * registering actions/accelerators) and an `onQuit` callback so it never has to
@@ -22,6 +23,7 @@ import {
 } from '../gi.ts';
 import { FileTree } from './FileTree.ts';
 import { Panel, type PanelChild } from './Panel.ts';
+import { PanelGroup, type Direction } from './PanelGroup.ts';
 import { TextEditor } from './TextEditor/index.ts';
 import { Terminal } from './Terminal.ts';
 import { BranchButton } from './BranchButton.ts';
@@ -45,9 +47,10 @@ export class AppWindow {
   private readonly app: Application;
   private readonly onQuit: () => void;
 
-  // The center editor group. Each tab hosts one TextEditor, mapped from its root
-  // widget so the active child can be resolved back to its editor.
-  private readonly centerPanel: Panel;
+  // The splittable center: a tree of editor groups. Each tab hosts one
+  // TextEditor, mapped from its root widget so the active child can be resolved
+  // back to its editor regardless of which split it lives in.
+  private readonly center: PanelGroup;
   private readonly editors = new Map<Widget, TextEditor>();
   // Terminal tabs share the center panel with editors; tracked separately so the
   // active child can be resolved back to its Terminal (it has no vim state).
@@ -83,7 +86,7 @@ export class AppWindow {
     this.git = openGitRepo(process.cwd());
     this.branchButton = new BranchButton(this.git);
 
-    this.centerPanel = new Panel({
+    this.center = new PanelGroup({
       onActiveChanged: () => this.onActiveTabChanged(),
       onClosed: (widget) => {
         this.editors.delete(widget);
@@ -101,7 +104,7 @@ export class AppWindow {
     this.leftPanel = new Panel();
     this.leftPanel.add(this.fileTree.root);
     workbench.setLeft(this.leftPanel);
-    workbench.setCenter(this.centerPanel);
+    workbench.setCenter(this.center);
 
     const toolbarView = new Adw.ToolbarView();
     toolbarView.addTopBar(this.buildHeaderBar());
@@ -143,9 +146,9 @@ export class AppWindow {
 
   // --- Editor lifecycle ------------------------------------------------------
 
-  /** The TextEditor backing the panel's active tab, if any. */
+  /** The TextEditor backing the active split's active tab, if any. */
   private get activeEditor(): TextEditor | null {
-    const widget = this.centerPanel.activeChild;
+    const widget = this.center.activePanel.activeChild;
     return widget ? this.editors.get(widget) ?? null : null;
   }
 
@@ -160,7 +163,7 @@ export class AppWindow {
     // resolves the active editor through this map.
     this.editors.set(editor.root, editor);
     this.wireEditor(editor);
-    child = this.centerPanel.add(editor.root, { title: editor.title });
+    child = this.center.add(editor.root, { title: editor.title });
     editor.onTitleChange(() => child.setTitle(editor.title));
 
     editor.loadFile(path);
@@ -179,7 +182,7 @@ export class AppWindow {
     // Register before adding: selecting the new tab fires onActiveChanged, which
     // resolves the active terminal through this map.
     this.terminals.set(terminal.root, terminal);
-    child = this.centerPanel.add(terminal.root, { title: terminal.title });
+    child = this.center.add(terminal.root, { title: terminal.title });
     terminal.onTitleChange(() => child.setTitle(terminal.title));
     terminal.focus();
     return terminal;
@@ -203,7 +206,7 @@ export class AppWindow {
   // Route a tab switch to the editor or terminal handler based on what the
   // active child is. Terminals carry no vim state, so they take a separate path.
   private onActiveTabChanged() {
-    const widget = this.centerPanel.activeChild;
+    const widget = this.center.activePanel.activeChild;
     const terminal = widget ? this.terminals.get(widget) ?? null : null;
     if (terminal) {
       this.commandBar.setText('');
@@ -306,24 +309,39 @@ export class AppWindow {
 
   // --- Pane switching (demo of the ported command/keymap managers) -----------
 
-  // Vim-style window navigation wired through the ported CommandManager +
-  // KeymapManager. The bindings target the `AppWindow` selector (the window's
+  // Vim-style window (split) management wired through the ported CommandManager
+  // + KeymapManager. The bindings target the `AppWindow` selector (the window's
   // widget name), which is always an ancestor of the focused widget, so the
   // CAPTURE-phase keymap controller matches them no matter what is focused:
   //
-  //   ctrl-w h        focus the left dock (file tree)
-  //   ctrl-w l        focus the center editor group
-  //   ctrl-w w        cycle between the two
-  //   ctrl-w ctrl-w   cycle between the two
+  //   ctrl-w v          split right (side by side)
+  //   ctrl-w s          split down (stacked)
+  //   ctrl-w c          close the active split
+  //   ctrl-w h/j/k/l    focus the split left/down/up/right
+  //   ctrl-w w          cycle through the splits
+  //   ctrl-w ctrl-w     cycle through the splits
+  //
+  // Directional focus stays within the center; at the left edge `ctrl-w h` falls
+  // back to the file-tree dock, and from the file tree `ctrl-w l` returns to it.
   private registerPaneCommands() {
     quilx.commands.add('AppWindow', {
-      'pane:focus-left': () => this.focusPane('left'),
-      'pane:focus-right': () => this.focusPane('center'),
-      'pane:focus-next': () => this.focusPane('next'),
+      'pane:split-right': () => this.splitPane('right'),
+      'pane:split-down': () => this.splitPane('down'),
+      'pane:close': () => this.closePane(),
+      'pane:focus-left': () => this.navPane('left'),
+      'pane:focus-right': () => this.navPane('right'),
+      'pane:focus-up': () => this.navPane('up'),
+      'pane:focus-down': () => this.navPane('down'),
+      'pane:focus-next': () => this.focusNextPane(),
     });
     quilx.keymaps.add('AppWindow', {
       AppWindow: {
+        'ctrl-w v': 'pane:split-right',
+        'ctrl-w s': 'pane:split-down',
+        'ctrl-w c': 'pane:close',
         'ctrl-w h': 'pane:focus-left',
+        'ctrl-w j': 'pane:focus-down',
+        'ctrl-w k': 'pane:focus-up',
         'ctrl-w l': 'pane:focus-right',
         'ctrl-w w': 'pane:focus-next',
         'ctrl-w ctrl-w': 'pane:focus-next',
@@ -358,18 +376,59 @@ export class AppWindow {
     });
   }
 
-  private focusPane(target: 'left' | 'center' | 'next') {
-    const dest =
-      target === 'next'
-        ? (this.isFocusWithin(this.leftPanel.root) ? 'center' : 'left')
-        : target;
-    if (dest === 'left') {
-      this.fileTree.focus();
-      this.toast('Pane: file tree');
-    } else {
-      this.activeEditor?.focus();
-      this.toast('Pane: editor');
+  // Split the active center pane, opening the active editor's file in the new
+  // pane (vim-style) when there is one; otherwise leave it empty and focused.
+  private splitPane(direction: Direction) {
+    const path = this.activeEditor?.currentFile ?? null;
+    this.center.split(direction); // the new empty pane becomes active
+    if (path) this.openFile(path); // opens into (and focuses) the new pane
+    else this.focusActivePane();
+  }
+
+  // Close the active center pane and focus whatever pane takes its place.
+  private closePane() {
+    this.center.closeActivePanel();
+    this.focusActivePane();
+  }
+
+  // Directional focus across center splits, with dock fallbacks at the edges:
+  // from the file tree, `l` enters the center; from the center's left edge, `h`
+  // returns to the file tree.
+  private navPane(direction: Direction) {
+    if (this.isFocusWithin(this.leftPanel.root)) {
+      if (direction === 'right') this.focusActivePane();
+      return;
     }
+    if (this.center.focusDirection(direction)) {
+      this.focusActivePane();
+    } else if (direction === 'left') {
+      this.fileTree.focus();
+    }
+  }
+
+  private focusNextPane() {
+    if (this.isFocusWithin(this.leftPanel.root)) {
+      this.focusActivePane();
+      return;
+    }
+    if (this.center.focusNext()) this.focusActivePane();
+    else this.fileTree.focus();
+  }
+
+  // Move keyboard focus to the content of the active center pane (its editor or
+  // terminal); fall back to the panel itself when it has no tabs.
+  private focusActivePane() {
+    const widget = this.center.activePanel.activeChild;
+    if (!widget) {
+      this.center.activePanel.root.grabFocus();
+      return;
+    }
+    const editor = this.editors.get(widget);
+    if (editor) {
+      editor.focus();
+      return;
+    }
+    this.terminals.get(widget)?.focus();
   }
 
   /** Whether keyboard focus currently sits inside `root`'s widget subtree. */

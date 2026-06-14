@@ -1,0 +1,371 @@
+/*
+ * PanelGroup — the splittable editor area at the center of the workbench. It is
+ * a binary tree whose leaves are `Panel`s (tab groups / editor groups) and whose
+ * branches are `Gtk.Paned` splits, each carrying an orientation and two child
+ * nodes. Any layout is expressible by nesting splits.
+ *
+ * New tabs open into the *active* leaf (the one that last held focus). Splitting
+ * the active leaf wraps it in a fresh Paned alongside a new empty leaf; closing a
+ * leaf's last tab collapses its split so the sibling reclaims the freed space;
+ * emptying the final remaining leaf bubbles `onEmpty` (the host quits).
+ *
+ * The assembled widget is `root`, a stable container whose single child is the
+ * current tree-root widget — swapped in place as the tree reshapes, so the host
+ * holds one unchanging widget.
+ */
+import { Gtk } from '../gi.ts';
+import { Panel, type PanelChild } from './Panel.ts';
+
+type Widget = InstanceType<typeof Gtk.Widget>;
+type Paned = InstanceType<typeof Gtk.Paned>;
+
+/** A direction to split toward or navigate toward. */
+export type Direction = 'left' | 'right' | 'up' | 'down';
+
+// --- Tree nodes -------------------------------------------------------------
+// Strip-only TS forbids constructor parameter properties, so fields are declared
+// and assigned explicitly.
+
+/** A leaf node: one editor group (a `Panel`). */
+class Leaf {
+  readonly panel: Panel;
+  parent: Split | null = null;
+
+  constructor(panel: Panel) {
+    this.panel = panel;
+  }
+
+  get widget(): Widget {
+    return this.panel.root;
+  }
+}
+
+/** A branch node: a `Gtk.Paned` split holding two child nodes. */
+class Split {
+  readonly paned: Paned;
+  parent: Split | null = null;
+  start: Node;
+  end: Node;
+
+  constructor(paned: Paned, start: Node, end: Node) {
+    this.paned = paned;
+    this.start = start;
+    this.end = end;
+  }
+
+  get widget(): Widget {
+    return this.paned;
+  }
+}
+
+type Node = Leaf | Split;
+
+export interface PanelGroupOptions {
+  /** Fired when the active leaf's selected tab changes (null when empty). */
+  onActiveChanged?: (child: Widget | null) => void;
+  /** Fired when any tab is closed, so the host can drop its bookkeeping. */
+  onClosed?: (child: Widget) => void;
+  /** Fired when the last tab of the last remaining leaf is removed. */
+  onEmpty?: () => void;
+}
+
+export class PanelGroup {
+  readonly root: InstanceType<typeof Gtk.Box>;
+
+  private readonly options: PanelGroupOptions;
+  private rootNode: Node;
+  private active: Leaf;
+
+  constructor(options: PanelGroupOptions = {}) {
+    this.options = options;
+
+    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    this.root.setName('PanelGroup'); // selector identity for command/keymap rules
+    this.root.setHexpand(true);
+    this.root.setVexpand(true);
+
+    const leaf = this.createLeaf();
+    this.rootNode = leaf;
+    this.active = leaf;
+    this.root.append(leaf.widget);
+  }
+
+  // --- Active leaf / tab access ---------------------------------------------
+
+  /** The `Panel` backing the active leaf — where new tabs are added. */
+  get activePanel(): Panel {
+    return this.active.panel;
+  }
+
+  /** Add `child` as a new tab in the active leaf and select it. */
+  add(child: Widget, options: { title?: string } = {}): PanelChild {
+    return this.active.panel.add(child, options);
+  }
+
+  // --- Splitting ------------------------------------------------------------
+
+  /**
+   * Split the active leaf, placing a fresh empty leaf on the given side, and
+   * make that new leaf active. Returns the new `Panel` so the host can populate
+   * it. `left`/`right` produce a side-by-side split; `up`/`down` a stacked one.
+   */
+  split(direction: Direction): Panel {
+    const horizontal = direction === 'left' || direction === 'right';
+    const orientation = horizontal
+      ? Gtk.Orientation.HORIZONTAL
+      : Gtk.Orientation.VERTICAL;
+
+    const target = this.active;
+    const parent = target.parent;
+    const wasStart = parent ? parent.start === target : false;
+
+    // Measure the freed space before detaching, to seat the divider midway.
+    const size = horizontal ? target.widget.getWidth() : target.widget.getHeight();
+
+    // Detach the target from its current slot so it can be reparented.
+    this.detach(target, parent, wasStart);
+
+    // Build the split: new leaf goes before the target for left/up, after for
+    // right/down.
+    const newLeaf = this.createLeaf();
+    const before = direction === 'left' || direction === 'up';
+    const startNode = before ? newLeaf : target;
+    const endNode = before ? target : newLeaf;
+
+    const paned = new Gtk.Paned({ orientation });
+    paned.setHexpand(true);
+    paned.setVexpand(true);
+    paned.setStartChild(startNode.widget);
+    paned.setEndChild(endNode.widget);
+
+    const split = new Split(paned, startNode, endNode);
+    startNode.parent = split;
+    endNode.parent = split;
+
+    // Drop the split into the slot the target used to occupy.
+    this.attach(split, parent, wasStart);
+    if (size > 0) paned.setPosition(Math.floor(size / 2));
+
+    this.setActive(newLeaf);
+    return newLeaf.panel;
+  }
+
+  // --- Closing / collapsing -------------------------------------------------
+
+  /** Close the active leaf entirely (all its tabs), collapsing its split. */
+  closeActivePanel(): void {
+    if (this.rootNode === this.active) {
+      this.options.onEmpty?.();
+      return;
+    }
+    // Closing each tab fires onClosed for host cleanup; emptying the leaf routes
+    // through onLeafEmpty -> collapse.
+    this.active.panel.closeAll();
+  }
+
+  // Called when a leaf's panel loses its last tab. The final leaf bubbles
+  // onEmpty (quit); any other leaf is collapsed away.
+  private onLeafEmpty(leaf: Leaf): void {
+    if (this.rootNode === leaf) {
+      this.options.onEmpty?.();
+      return;
+    }
+    this.collapse(leaf);
+  }
+
+  // Remove `leaf` and promote its sibling into the parent split's slot.
+  private collapse(leaf: Leaf): void {
+    const parent = leaf.parent;
+    if (!parent) return; // root leaf is handled by onLeafEmpty
+    const sibling = parent.start === leaf ? parent.end : parent.start;
+    const grand = parent.parent;
+    const parentWasStart = grand ? grand.start === parent : false;
+
+    // Detach both children from the dying parent paned.
+    parent.paned.setStartChild(null);
+    parent.paned.setEndChild(null);
+
+    // Replace the parent split with the surviving sibling.
+    this.attach(sibling, grand, parentWasStart);
+
+    if (this.active === leaf) {
+      const next = firstLeaf(sibling);
+      this.active = next;
+      this.options.onActiveChanged?.(next.panel.activeChild);
+    }
+  }
+
+  // --- Focus navigation -----------------------------------------------------
+
+  /**
+   * Move the active leaf to the nearest leaf in `direction`, using on-screen
+   * geometry so it works for any layout. Returns false when there is no leaf
+   * that way (the host can then fall back to a dock).
+   */
+  focusDirection(direction: Direction): boolean {
+    const leaves = this.leaves();
+    if (leaves.length < 2) return false;
+
+    const from = this.rectOf(this.active.widget);
+    if (!from) return false;
+    const fromCx = from.x + from.w / 2;
+    const fromCy = from.y + from.h / 2;
+
+    let best: Leaf | null = null;
+    let bestScore = Infinity;
+    for (const leaf of leaves) {
+      if (leaf === this.active) continue;
+      const r = this.rectOf(leaf.widget);
+      if (!r) continue;
+      const cx = r.x + r.w / 2;
+      const cy = r.y + r.h / 2;
+
+      let distance: number;
+      let overlap: number;
+      switch (direction) {
+        case 'left':
+          if (cx >= fromCx) continue;
+          distance = fromCx - cx;
+          overlap = span(from.y, from.h, r.y, r.h);
+          break;
+        case 'right':
+          if (cx <= fromCx) continue;
+          distance = cx - fromCx;
+          overlap = span(from.y, from.h, r.y, r.h);
+          break;
+        case 'up':
+          if (cy >= fromCy) continue;
+          distance = fromCy - cy;
+          overlap = span(from.x, from.w, r.x, r.w);
+          break;
+        case 'down':
+          if (cy <= fromCy) continue;
+          distance = cy - fromCy;
+          overlap = span(from.x, from.w, r.x, r.w);
+          break;
+      }
+      if (overlap <= 0) continue; // not aligned across the cross axis
+      // Prefer the closest leaf; break ties toward the most-overlapping one.
+      const score = distance - overlap * 0.001;
+      if (score < bestScore) {
+        bestScore = score;
+        best = leaf;
+      }
+    }
+
+    if (!best) return false;
+    this.setActive(best);
+    return true;
+  }
+
+  /** Cycle the active leaf to the next one in tree order. */
+  focusNext(): boolean {
+    const leaves = this.leaves();
+    if (leaves.length < 2) return false;
+    const i = leaves.indexOf(this.active);
+    this.setActive(leaves[(i + 1) % leaves.length]);
+    return true;
+  }
+
+  /** Number of leaves (editor groups) currently in the tree. */
+  get paneCount(): number {
+    return this.leaves().length;
+  }
+
+  // --- Internals ------------------------------------------------------------
+
+  // Create a leaf whose panel routes its lifecycle signals back into the tree.
+  // `leaf` is captured by the closures, which only run after it is assigned.
+  private createLeaf(): Leaf {
+    let leaf!: Leaf;
+    const panel = new Panel({
+      onActiveChanged: (child) => {
+        if (this.active === leaf) this.options.onActiveChanged?.(child);
+      },
+      onClosed: (child) => this.options.onClosed?.(child),
+      onEmpty: () => this.onLeafEmpty(leaf),
+    });
+    leaf = new Leaf(panel);
+
+    // Fill its slot whether it sits in the root Box or a Paned.
+    panel.root.setHexpand(true);
+    panel.root.setVexpand(true);
+
+    // A click into any pane makes it active (focus enters the panel subtree).
+    const focus = new Gtk.EventControllerFocus();
+    focus.on('enter', () => this.setActive(leaf));
+    panel.root.addController(focus);
+
+    return leaf;
+  }
+
+  private setActive(leaf: Leaf): void {
+    if (this.active === leaf) return;
+    this.active = leaf;
+    this.options.onActiveChanged?.(leaf.panel.activeChild);
+  }
+
+  // Remove `node` from its slot (a parent paned, or the root container).
+  private detach(node: Node, parent: Split | null, wasStart: boolean): void {
+    if (!parent) {
+      this.root.remove(node.widget);
+    } else if (wasStart) {
+      parent.paned.setStartChild(null);
+    } else {
+      parent.paned.setEndChild(null);
+    }
+  }
+
+  // Place `node` into a slot (a parent paned, or the root container), updating
+  // the tree links to match.
+  private attach(node: Node, parent: Split | null, asStart: boolean): void {
+    node.parent = parent;
+    if (!parent) {
+      // The root container holds exactly one child; drop it before re-seating so
+      // a collapsed split's emptied paned doesn't linger alongside the survivor.
+      const current = this.root.getFirstChild();
+      if (current) this.root.remove(current);
+      this.rootNode = node;
+      this.root.append(node.widget);
+    } else if (asStart) {
+      parent.start = node;
+      parent.paned.setStartChild(node.widget);
+    } else {
+      parent.end = node;
+      parent.paned.setEndChild(node.widget);
+    }
+  }
+
+  private leaves(node: Node = this.rootNode, out: Leaf[] = []): Leaf[] {
+    if (node instanceof Leaf) out.push(node);
+    else {
+      this.leaves(node.start, out);
+      this.leaves(node.end, out);
+    }
+    return out;
+  }
+
+  // The widget's bounds relative to the group root, or null if unavailable.
+  private rectOf(widget: Widget): { x: number; y: number; w: number; h: number } | null {
+    try {
+      const result: any = (widget as any).computeBounds(this.root);
+      const rect = Array.isArray(result) ? result[1] : result;
+      if (!rect) return null;
+      return { x: rect.getX(), y: rect.getY(), w: rect.getWidth(), h: rect.getHeight() };
+    } catch {
+      return null;
+    }
+  }
+}
+
+// Walk to the first leaf of a subtree (the start side all the way down).
+function firstLeaf(node: Node): Leaf {
+  let n = node;
+  while (!(n instanceof Leaf)) n = n.start;
+  return n;
+}
+
+// Overlap length of two 1-D segments [a0, a0+aLen] and [b0, b0+bLen].
+function span(a0: number, aLen: number, b0: number, bLen: number): number {
+  return Math.min(a0 + aLen, b0 + bLen) - Math.max(a0, b0);
+}

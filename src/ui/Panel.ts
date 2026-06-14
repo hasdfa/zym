@@ -118,6 +118,13 @@ export class Panel {
     return page ? page.getChild() : null;
   }
 
+  /** Close every tab. Each closure fires `onClosed`; the last fires `onEmpty`. */
+  closeAll(): void {
+    const pages: any[] = [];
+    for (let i = 0; i < this.view.getNPages(); i++) pages.push(this.view.getNthPage(i));
+    for (const page of pages) this.view.closePage(page);
+  }
+
   /** Number of open tabs. */
   get tabCount(): number {
     return this.view.getNPages();
