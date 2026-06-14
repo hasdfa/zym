@@ -1,28 +1,36 @@
 {
-  "name": "kyntell",
-  "ui": {
-    "fg": "#C9D2E1"
-  },
-  "syntax": {
-    "comment": "#777777",
-    "operator": "#10b1fe",
-    "punctuation": "#10b1fe",
-    "punctuation.special": "#f9c859",
-    "string": "#f9c859",
-    "string.regex": "#dd0093",
-    "string.escape": "#EB05AA",
-    "number": "#da8548",
-    "boolean": "#da8548",
-    "constant.builtin": "#da8548",
-    "constant": "#91B6FF",
-    "variable.special": "#91B6FF",
-    "variable.parameter": "#ABB7E0",
-    "attribute": "#ECCC7B",
-    "tag": "#10b1fe",
-    "keyword": "#10b1fe",
-    "property": "#ECCC7B",
-    "type": "#e5ce5c",
-    "constructor": "#DFD9A3",
-    "function": "#DFD9A3"
-  }
+  "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
+  "name": "Kyntell",
+  "author": "quilx",
+  "themes": [
+    {
+      "name": "kyntell",
+      "appearance": "dark",
+      "style": {
+        "editor.foreground": "#C9D2E1",
+        "syntax": {
+          "comment": { "color": "#777777" },
+          "operator": { "color": "#10b1fe" },
+          "punctuation": { "color": "#10b1fe" },
+          "punctuation.special": { "color": "#f9c859" },
+          "string": { "color": "#f9c859" },
+          "string.regex": { "color": "#dd0093" },
+          "string.escape": { "color": "#EB05AA" },
+          "number": { "color": "#da8548" },
+          "boolean": { "color": "#da8548" },
+          "constant.builtin": { "color": "#da8548" },
+          "constant": { "color": "#91B6FF" },
+          "variable.special": { "color": "#91B6FF" },
+          "variable.parameter": { "color": "#ABB7E0" },
+          "attribute": { "color": "#ECCC7B" },
+          "tag": { "color": "#10b1fe" },
+          "keyword": { "color": "#10b1fe" },
+          "property": { "color": "#ECCC7B" },
+          "type": { "color": "#e5ce5c" },
+          "constructor": { "color": "#DFD9A3" },
+          "function": { "color": "#DFD9A3" }
+        }
+      }
+    }
+  ]
 }

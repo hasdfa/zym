@@ -1,30 +1,41 @@
 {
-  "name": "doom-one",
-  "ui": {
-    "fg": "#bbc2cf",
-    "bg": "#2d2d2d",
-    "lineNumber": "#888888"
-  },
-  "syntax": {
-    "comment": "#73797e",
-    "operator": "#51afef",
-    "punctuation": "#51afef",
-    "punctuation.special": "#da8548",
-    "string": "#98be65",
-    "string.regex": "#4db5bd",
-    "string.escape": "#c678dd",
-    "number": "#ff6c6b",
-    "boolean": "#ff6c6b",
-    "constant.builtin": "#da8548",
-    "constant": "#a9a1e1",
-    "variable.special": "#a9a1e1",
-    "variable.parameter": "#5699AF",
-    "attribute": "#ECBE7B",
-    "tag": "#51afef",
-    "keyword": "#51afef",
-    "property": "#c678dd",
-    "type": "#ECBE7B",
-    "constructor": "#ECBE7B",
-    "function": "#ECBE7B"
-  }
+  "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
+  "name": "Doom One",
+  "author": "quilx",
+  "themes": [
+    {
+      "name": "doom-one",
+      "appearance": "dark",
+      "style": {
+        "background": "#2d2d2d",
+        "foreground": "#bbc2cf",
+        "editor.background": "#2d2d2d",
+        "editor.foreground": "#bbc2cf",
+        "editor.line_number": "#888888",
+        "editor.active_line_number": "#bbc2cf",
+        "syntax": {
+          "comment": { "color": "#73797e" },
+          "operator": { "color": "#51afef" },
+          "punctuation": { "color": "#51afef" },
+          "punctuation.special": { "color": "#da8548" },
+          "string": { "color": "#98be65" },
+          "string.regex": { "color": "#4db5bd" },
+          "string.escape": { "color": "#c678dd" },
+          "number": { "color": "#ff6c6b" },
+          "boolean": { "color": "#ff6c6b" },
+          "constant.builtin": { "color": "#da8548" },
+          "constant": { "color": "#a9a1e1" },
+          "variable.special": { "color": "#a9a1e1" },
+          "variable.parameter": { "color": "#5699AF" },
+          "attribute": { "color": "#ECBE7B" },
+          "tag": { "color": "#51afef" },
+          "keyword": { "color": "#51afef" },
+          "property": { "color": "#c678dd" },
+          "type": { "color": "#ECBE7B" },
+          "constructor": { "color": "#ECBE7B" },
+          "function": { "color": "#ECBE7B" }
+        }
+      }
+    }
+  ]
 }
