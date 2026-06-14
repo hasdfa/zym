@@ -11,9 +11,10 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { SyntaxController } from '../syntax/syntax-controller.ts';
-import { theme } from '../theme/theme.ts';
-import { addStyles } from '../styles.ts';
+import { SyntaxController } from '../../syntax/syntax-controller.ts';
+import { theme } from '../../theme/theme.ts';
+import { createSourceScheme } from '../../theme/createSourceScheme.ts';
+import { addStyles } from '../../styles.ts';
 import {
   Adw,
   Gtk,
@@ -21,7 +22,7 @@ import {
   type SourceBuffer,
   type SourceView,
   type VimContext,
-} from '../gi.ts';
+} from '../../gi.ts';
 
 addStyles(`.quilx-editor { color: ${theme.ui.fg}; }`);
 
@@ -158,9 +159,14 @@ export class TextEditor {
   private followSystemColorScheme() {
     const styleManager = Adw.StyleManager.getDefault();
     const schemeManager = GtkSource.StyleSchemeManager.getDefault();
+    // A theme that defines its own background owns the whole editor scheme
+    // (background + line numbers); built once since it doesn't vary by system
+    // light/dark. Otherwise we follow the Adwaita light/dark scheme.
+    const themeScheme = theme.ui.bg ? createSourceScheme(theme) : null;
     const apply = () => {
-      const id = styleManager.getDark() ? 'Adwaita-dark' : 'Adwaita';
-      this.buffer.setStyleScheme(schemeManager.getScheme(id));
+      const scheme =
+        themeScheme ?? schemeManager.getScheme(styleManager.getDark() ? 'Adwaita-dark' : 'Adwaita');
+      this.buffer.setStyleScheme(scheme);
       this.syntax.restyle(); // keep tree-sitter tag colors in sync with the scheme
     };
     apply();

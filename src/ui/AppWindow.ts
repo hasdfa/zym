@@ -22,9 +22,10 @@ import {
 } from '../gi.ts';
 import { FileTree } from './FileTree.ts';
 import { Panel, type PanelChild } from './Panel.ts';
-import { TextEditor } from './TextEditor.ts';
+import { TextEditor } from './TextEditor/index.ts';
 import { Workbench } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
+import { openCommandPicker } from './CommandPicker.ts';
 import { quilx } from '../quilx.ts';
 
 const TITLE = 'quilx';
@@ -104,6 +105,7 @@ export class AppWindow {
     quilx.window = this.window;
     quilx.keymaps.initialize();
     this.registerPaneCommands();
+    this.registerWindowCommands();
 
     this.window.on('close-request', () => {
       this.onQuit();
@@ -218,6 +220,9 @@ export class AppWindow {
     this.addAction('save', '<Control>s', () => this.saveActive());
     this.addAction('save-as', '<Control><Shift>s', () => this.saveAsDialog());
     this.addAction('quit', '<Control>q', () => this.onQuit());
+    this.addAction('command-palette', '<Control><Shift>p', () =>
+      openCommandPicker(this.overlay),
+    );
   }
 
   private addAction(name: string, accel: string, callback: (...args: any[]) => any) {
@@ -252,6 +257,19 @@ export class AppWindow {
         'ctrl-w w': 'pane:focus-next',
         'ctrl-w ctrl-w': 'pane:focus-next',
       },
+    });
+  }
+
+  // Window-level file/edit operations registered as commands so they appear in
+  // the command palette (Ctrl+Shift+P). They share the same handlers as the Gio
+  // actions/accelerators above, so both entry points stay in sync.
+  private registerWindowCommands() {
+    quilx.commands.add('AdwApplicationWindow', {
+      'file:open': () => this.openDialog(),
+      'file:find': () => openFilePicker(this.overlay, (path) => this.openFile(path)),
+      'file:save': () => this.saveActive(),
+      'file:save-as': () => this.saveAsDialog(),
+      'app:quit': () => this.onQuit(),
     });
   }
 

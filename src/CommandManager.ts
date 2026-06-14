@@ -53,6 +53,36 @@ export class CommandManager {
     return undefined;
   }
 
+  /**
+   * Enumerate every command available along a focus chain (as returned by
+   * `getActiveElements`), in resolution order: the first element to offer a
+   * given name wins, mirroring `get`. Each entry carries the element to dispatch
+   * the command back to. Used to populate the command palette.
+   */
+  getAvailableCommands(elements: Widget[]): Array<{ name: string; element: Widget }> {
+    const seen = new Set<string>();
+    const result: Array<{ name: string; element: Widget }> = [];
+
+    for (const element of elements) {
+      const commandBundles =
+        (this.commandsByName[element.constructor.name] || [])
+          .concat(this.commandsByElement.get(element) || []);
+
+      for (const bundle of commandBundles) {
+        if (bundle.rule !== true && !matchesRule(element, bundle.rule))
+          continue;
+        for (const name in bundle.commands) {
+          if (seen.has(name))
+            continue;
+          seen.add(name);
+          result.push({ name, element });
+        }
+      }
+    }
+
+    return result;
+  }
+
   add(element: string | Widget, commands: CommandMap): Disposable {
     const source = getSource();
 

@@ -1,12 +1,19 @@
 /*
- * eventKit.ts — a tiny subset of the `event-kit` package.
+ * eventKit.ts — quilx's event/lifecycle primitives.
  *
- * xedel's command/keymap managers return `Disposable`s from registration calls
- * and use an `Emitter` for the `did-dispatch` hook. Rather than pull in the full
- * dependency we provide just those two primitives, with the same shape.
+ * A small, self-contained equivalent of the `event-kit` package: a `Disposable`
+ * (an undoable action), a `CompositeDisposable` (a bag of them disposed
+ * together), and an `Emitter` (named-event pub/sub returning Disposables). The
+ * command/keymap managers and the vim layer all lean on these for subscription
+ * cleanup, so they carry the same shape ported code expects.
  */
 
-export class Disposable {
+/** Anything that can be torn down once. */
+export interface DisposableLike {
+  dispose(): void;
+}
+
+export class Disposable implements DisposableLike {
   private disposed = false;
   private readonly action: () => void;
 
@@ -18,6 +25,42 @@ export class Disposable {
     if (this.disposed) return;
     this.disposed = true;
     this.action();
+  }
+}
+
+/**
+ * A collection of disposables disposed as a unit. Adding to an already-disposed
+ * composite disposes the newcomer immediately, so late subscriptions can't leak.
+ */
+export class CompositeDisposable implements DisposableLike {
+  private disposed = false;
+  private readonly disposables = new Set<DisposableLike>();
+
+  constructor(...disposables: DisposableLike[]) {
+    for (const disposable of disposables) this.add(disposable);
+  }
+
+  add(...disposables: DisposableLike[]): void {
+    for (const disposable of disposables) {
+      if (this.disposed) disposable.dispose();
+      else this.disposables.add(disposable);
+    }
+  }
+
+  remove(disposable: DisposableLike): void {
+    this.disposables.delete(disposable);
+  }
+
+  /** Dispose and drop every member, but keep the composite itself usable. */
+  clear(): void {
+    for (const disposable of this.disposables) disposable.dispose();
+    this.disposables.clear();
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clear();
   }
 }
 

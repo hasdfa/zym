@@ -12,6 +12,15 @@ import * as Path from 'node:path';
 export interface UiColors {
   /** Default editor text foreground. */
   fg: string;
+  /**
+   * Editor background. When set, the theme owns the full GtkSourceView style
+   * scheme (background + line numbers, which GtkSourceView reads only from the
+   * scheme); when omitted, the editor follows the system light/dark Adwaita
+   * scheme. See createSourceScheme / TextEditor.followSystemColorScheme.
+   */
+  bg?: string;
+  /** Line-number gutter foreground. Defaults to `fg` when omitted. */
+  lineNumber?: string;
 }
 
 /*
@@ -48,4 +57,4 @@ export function loadTheme(name: string): Theme {
 }
 
 /** The active theme. */
-export const theme = loadTheme('kyntell');
+export const theme = loadTheme('doom-one');

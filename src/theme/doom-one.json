@@ -1,0 +1,30 @@
+{
+  "name": "doom-one",
+  "ui": {
+    "fg": "#bbc2cf",
+    "bg": "#2d2d2d",
+    "lineNumber": "#888888"
+  },
+  "syntax": {
+    "comment": "#73797e",
+    "operator": "#51afef",
+    "punctuation": "#51afef",
+    "punctuation.special": "#da8548",
+    "string": "#98be65",
+    "string.regex": "#4db5bd",
+    "string.escape": "#c678dd",
+    "number": "#ff6c6b",
+    "boolean": "#ff6c6b",
+    "constant.builtin": "#da8548",
+    "constant": "#a9a1e1",
+    "variable.special": "#a9a1e1",
+    "variable.parameter": "#5699AF",
+    "attribute": "#ECBE7B",
+    "tag": "#51afef",
+    "keyword": "#51afef",
+    "property": "#c678dd",
+    "type": "#ECBE7B",
+    "constructor": "#ECBE7B",
+    "function": "#ECBE7B"
+  }
+}
