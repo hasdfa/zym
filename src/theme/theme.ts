@@ -32,6 +32,10 @@ export interface UiColors {
   lineNumber?: string;
   /** Separator/border color for chrome (e.g. the header bar's bottom edge). */
   border?: string;
+  /** Background of elevated surfaces: pickers, popovers, autocomplete, menus. */
+  popoverBg?: string;
+  /** Background of a selected entry (file tree row, picker result, list item). */
+  selectedBg?: string;
   /** De-emphasized text (secondary labels, subtitles). */
   textMuted?: string;
   /** Semantic text colors for status/feedback (Zed's status keys). */
@@ -128,6 +132,8 @@ function adaptZedTheme(zed: ZedTheme): Theme {
       bg: pick('editor.background', 'background'),
       lineNumber: pick('editor.line_number', 'editor.gutter.foreground'),
       border: pick('border', 'border.variant'),
+      popoverBg: pick('elevated_surface.background', 'surface.background', 'background'),
+      selectedBg: pick('element.selected', 'ghost_element.selected'),
       textMuted: pick('text.muted'),
       success: pick('success'),
       warning: pick('warning'),
