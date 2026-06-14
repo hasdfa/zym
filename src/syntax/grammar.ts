@@ -39,55 +39,46 @@ export interface Grammar {
 interface GrammarSpec {
   wasm: string;          // resolvable module path to the grammar .wasm
   extensions: string[];  // file extensions that select this grammar
-  queries: string[];     // queries/<name>/highlights.scm files, concatenated in order
+  query: string;         // queries/<name>/highlights.scm to load for this grammar
   foldTypes: string[];   // node types that fold when they span >1 line
 }
 
-// Highlights queries are vendored grammar-own .scm files under
-// queries/<lang>/highlights.scm, pinned to the bundled grammar versions (see the
-// header in each file). They use the tree-sitter standard capture names; the
-// highlighter maps those to colors with longest-prefix fallback — e.g.
-// @function.method falls back to @function — so the dotted names need no special
-// handling here (see colors.ts and syntax-controller's resolveTag).
+// Highlights queries are vendored verbatim from Zed (GPL-3.0; see /LICENSE and the
+// header in each .scm) under queries/<name>/highlights.scm. They use Zed's capture
+// names; the highlighter maps those to colors with longest-prefix fallback — e.g.
+// @function.method → @function — so dotted names need no special handling here
+// (see colors.ts and syntax-controller's resolveTag).
 //
-// TS/TSX reuse the JavaScript query (their grammars are supersets) and append the
-// TypeScript-only additions, mirroring how the upstream grammar ships them.
+// We DON'T use the stock tree-sitter-javascript grammar: Zed's javascript query is
+// written for Zed's TS-aware JS grammar and references TS-only nodes/tokens that
+// the pinned v0.20.3 wasm lacks (it won't compile). Instead .js/.jsx route to the
+// tsx grammar — a superset that parses plain JS, JSX and TS — so Zed's tsx query
+// applies verbatim. Plain .ts uses the typescript grammar (the tsx grammar would
+// misread `<T>` casts as JSX).
 const QUERIES_DIR = Path.join(Path.dirname(fileURLToPath(import.meta.url)), 'queries');
 
-function loadHighlights(langs: string[]): string {
-  return langs
-    .map((lang) => Fs.readFileSync(Path.join(QUERIES_DIR, lang, 'highlights.scm'), 'utf8'))
-    .join('\n');
+function loadHighlights(name: string): string {
+  return Fs.readFileSync(Path.join(QUERIES_DIR, name, 'highlights.scm'), 'utf8');
 }
 
-const JS_FOLD_TYPES = [
+const FOLD_TYPES = [
   'statement_block', 'object', 'array', 'class_body', 'switch_body',
-  'named_imports', 'arguments',
-];
-
-// TS adds type-level containers.
-const TS_FOLD_TYPES = [
-  ...JS_FOLD_TYPES, 'interface_body', 'enum_body', 'object_type',
+  'named_imports', 'arguments', 'interface_body', 'enum_body', 'object_type',
 ];
 
 const SPECS: Record<string, GrammarSpec> = {
-  javascript: {
-    wasm: 'tree-sitter-wasms/out/tree-sitter-javascript.wasm',
-    extensions: ['.js', '.jsx', '.mjs', '.cjs'],
-    queries: ['javascript'],
-    foldTypes: JS_FOLD_TYPES,
-  },
   typescript: {
     wasm: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
     extensions: ['.ts', '.mts', '.cts'],
-    queries: ['javascript', 'typescript'],
-    foldTypes: TS_FOLD_TYPES,
+    query: 'typescript',
+    foldTypes: FOLD_TYPES,
   },
+  // tsx grammar is the superset that backs TSX, JSX and plain JS.
   tsx: {
     wasm: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
-    extensions: ['.tsx'],
-    queries: ['javascript', 'typescript'],
-    foldTypes: TS_FOLD_TYPES,
+    extensions: ['.tsx', '.jsx', '.js', '.mjs', '.cjs'],
+    query: 'tsx',
+    foldTypes: FOLD_TYPES,
   },
 };
 
@@ -113,7 +104,7 @@ export async function loadGrammar(langId: string): Promise<Grammar | null> {
   const language = await Parser.Language.load(require_.resolve(spec.wasm));
   const grammar: Grammar = {
     language,
-    query: language.query(loadHighlights(spec.queries)),
+    query: language.query(loadHighlights(spec.query)),
     foldTypes: new Set(spec.foldTypes),
   };
   cache.set(langId, grammar);

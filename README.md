@@ -54,4 +54,9 @@ active by default — press `i` to insert, `Esc` to return to normal mode, and u
 
 ## License
 
-MIT
+[GPL-3.0-or-later](LICENSE).
+
+The tree-sitter highlight queries under `src/syntax/queries/` are vendored from
+[Zed](https://github.com/zed-industries/zed) (`crates/grammars/src/`), which are
+licensed GPL-3.0. Bundling them is why quilx as a whole is distributed under the
+GPL.

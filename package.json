@@ -2,7 +2,7 @@
   "name": "quilx",
   "version": "0.1.0",
   "description": "A modal source-code editor built with GTK 4, Adwaita and GtkSourceView 5, on node-gtk",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "src/editor.ts",
   "bin": {
