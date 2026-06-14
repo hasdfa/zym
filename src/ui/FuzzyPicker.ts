@@ -9,9 +9,9 @@
  * the candidate strings and an `onSelect` callback. Items may arrive
  * asynchronously via the returned handle's `setItems`.
  */
-import { Gdk, Gtk } from './gi.ts';
-import { addStyles } from './styles.ts';
-import { monospaceFontCss } from './fonts.ts';
+import { Gdk, Gtk } from '../gi.ts';
+import { addStyles } from '../styles.ts';
+import { monospaceFontCss } from '../fonts.ts';
 
 const MONOSPACE = monospaceFontCss();
 

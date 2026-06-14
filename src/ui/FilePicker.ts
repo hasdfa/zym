@@ -11,8 +11,8 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { openFuzzyPicker } from './fuzzy-picker.ts';
-import { GLib, Gtk } from './gi.ts';
+import { openFuzzyPicker } from './FuzzyPicker.ts';
+import { GLib, Gtk } from '../gi.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 

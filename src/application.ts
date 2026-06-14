@@ -12,7 +12,7 @@
  * forwarding to a primary instance, so single-instance has no upside here.
  */
 import { Adw, Gio, GLib, startLoop } from './gi.ts';
-import { EditorWindow } from './editor-window.ts';
+import { AppWindow } from './ui/AppWindow.ts';
 import { installStyles } from './styles.ts';
 
 const APP_ID = 'com.github.romgrk.quilx';
@@ -37,7 +37,7 @@ export class Application {
 
   private onActivate() {
     installStyles();
-    new EditorWindow(this.app, () => this.quit(), this.initialFile);
+    new AppWindow(this.app, () => this.quit(), this.initialFile);
     startLoop();
     this.loop.run();
   }
