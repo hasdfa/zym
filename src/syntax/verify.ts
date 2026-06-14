@@ -55,6 +55,7 @@ app.on('activate', () => {
     GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
       const before = natHeight();
       const regions = syntax.foldsByHeaderLine.size;
+      const captureBefore = syntax.captureCounts();
 
       // Exercise the vim path: cursor into loadDocument's body, then `za`.
       (buffer as any).placeCursor((buffer as any).getIterAtLine(3)[1]);
@@ -63,8 +64,14 @@ app.on('activate', () => {
       // Insert-mode gating: `z` must NOT be consumed when not in normal mode.
       const insertModePassthrough = syntax.handleFoldKey(Gdk.KEY_z, false) === false;
 
+      // Live edit: insert a line. This fires insert-text → the controller records
+      // a tree edit → 'changed' → a debounced incremental reparse. The new
+      // `42` literal should appear as an extra @number capture.
+      (buffer as any).insert((buffer as any).getEndIter(), '\nconst answer = 42;\n', -1);
+
       GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
         const afterZa = natHeight();
+        const captureAfterEdit = syntax.captureCounts();
         syntax.foldAll();
         GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
           const afterAll = natHeight();
@@ -73,6 +80,10 @@ app.on('activate', () => {
             foldRegions: regions,
             zaConsumed: consumedZ && consumedA,
             insertModePassthrough,
+            captureBefore,
+            captureAfterEdit,
+            incrementalEditPickedUpNumber:
+              (captureAfterEdit.number ?? 0) > (captureBefore.number ?? 0),
             zaShrankHeight: afterZa < before,
             foldAllShrankHeight: afterAll < afterZa,
             heights: { before, afterZa, afterAll },

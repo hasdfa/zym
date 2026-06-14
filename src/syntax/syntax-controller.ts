@@ -22,14 +22,27 @@ const HIGHLIGHT_DEBOUNCE_MS = 60;
 
 // Capture name → candidate GtkSource style ids (first that resolves wins), plus
 // a hardcoded fallback color if the scheme defines none of them.
+// Capture name → candidate GtkSource style ids (first that resolves wins), plus
+// a hardcoded fallback color if the scheme defines none. The ids favor styles
+// the Adwaita schemes actually theme (e.g. keyword→def:statement, since
+// def:keyword is not themed there).
+//
+// KEY ORDER MATTERS: tags are created in this order and GtkTextTag priority
+// follows creation order (later = higher). Overlapping captures resolve by
+// priority, so more-specific categories come last: escape > string, and
+// function/type > property (so method calls and constructors win over the bare
+// property/identifier capture).
 const STYLE_MAP: Record<string, { ids: string[]; fallback: string }> = {
   comment: { ids: ['def:comment'], fallback: '#6a9955' },
   string: { ids: ['def:string'], fallback: '#ce9178' },
-  number: { ids: ['def:number', 'def:decimal', 'def:constant'], fallback: '#b5cea8' },
-  keyword: { ids: ['def:keyword'], fallback: '#569cd6' },
-  constant: { ids: ['def:special-constant', 'def:constant'], fallback: '#569cd6' },
-  function: { ids: ['def:function'], fallback: '#dcdcaa' },
+  number: { ids: ['def:number', 'def:decimal'], fallback: '#b5cea8' },
+  boolean: { ids: ['def:boolean', 'def:constant'], fallback: '#569cd6' },
+  constant: { ids: ['def:constant', 'def:special-constant'], fallback: '#569cd6' },
+  keyword: { ids: ['def:statement', 'def:keyword'], fallback: '#569cd6' },
   property: { ids: ['def:identifier'], fallback: '#9cdcfe' },
+  type: { ids: ['def:type'], fallback: '#4ec9b0' },
+  function: { ids: ['def:function'], fallback: '#dcdcaa' },
+  escape: { ids: ['def:special-char'], fallback: '#d7ba7d' },
 };
 
 interface FoldRegion {
@@ -50,6 +63,7 @@ export class SyntaxController {
 
   private grammar: Grammar | null = null;
   private parser: any = null;
+  private tree: any = null; // last parse tree, kept for incremental reparsing
 
   private readonly tags = new Map<string, any>();
   private readonly invisibleTag: any;
@@ -81,7 +95,55 @@ export class SyntaxController {
     renderer.setXpad(4);
     (view as any).getGutter(Gtk.TextWindowType.LEFT).insert(renderer, 0);
 
+    // Feed edits into the current tree for incremental reparsing. insert-text /
+    // delete-range run before the buffer is modified (the default handlers are
+    // RUN_LAST), so the iters still reflect the pre-edit state. 'changed' (which
+    // schedules the reparse) fires after, so the edit is recorded first.
+    (buffer as any).on('insert-text', (location: any, text: string) => this.onInsert(location, text));
+    (buffer as any).on('delete-range', (start: any, end: any) => this.onDelete(start, end));
     (buffer as any).on('changed', () => this.scheduleRefresh());
+  }
+
+  // --- incremental-parse edit tracking ---------------------------------------
+
+  private onInsert(location: any, text: string): void {
+    if (!this.tree) return;
+    const startIndex = location.getOffset();
+    const startRow = location.getLine();
+    const startCol = location.getLineOffset();
+    const newlines = text.split('\n').length - 1;
+    const lastNl = text.lastIndexOf('\n');
+    this.tree.edit({
+      startIndex,
+      oldEndIndex: startIndex,
+      newEndIndex: startIndex + text.length,
+      startPosition: { row: startRow, column: startCol },
+      oldEndPosition: { row: startRow, column: startCol },
+      newEndPosition: {
+        row: startRow + newlines,
+        column: newlines === 0 ? startCol + text.length : text.length - lastNl - 1,
+      },
+    });
+  }
+
+  private onDelete(start: any, end: any): void {
+    if (!this.tree) return;
+    const startIndex = start.getOffset();
+    this.tree.edit({
+      startIndex,
+      oldEndIndex: end.getOffset(),
+      newEndIndex: startIndex,
+      startPosition: { row: start.getLine(), column: start.getLineOffset() },
+      oldEndPosition: { row: end.getLine(), column: end.getLineOffset() },
+      newEndPosition: { row: start.getLine(), column: start.getLineOffset() },
+    });
+  }
+
+  private resetTree(): void {
+    if (this.tree) {
+      this.tree.delete();
+      this.tree = null;
+    }
   }
 
   /**
@@ -95,6 +157,10 @@ export class SyntaxController {
   setLanguageForPath(path: string): boolean {
     const langId = langIdForPath(path);
     const grammar = langId ? getGrammar(langId) : null;
+
+    // New document content: drop any prior tree so the next parse is full, not
+    // an incremental reparse against the previous file.
+    this.resetTree();
 
     if (!grammar) {
       this.grammar = null;
@@ -111,6 +177,16 @@ export class SyntaxController {
     this.restyle();
     this.refresh();
     return true;
+  }
+
+  /** Diagnostic: capture-name counts from the current parse tree (for tests). */
+  captureCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    if (!this.grammar || !this.tree) return counts;
+    for (const cap of this.grammar.query.captures(this.tree.rootNode)) {
+      counts[cap.name] = (counts[cap.name] ?? 0) + 1;
+    }
+    return counts;
   }
 
   /** Re-resolve highlight tag styles from the buffer's current style scheme. */
@@ -145,9 +221,14 @@ export class SyntaxController {
     const start = buffer.getStartIter();
     const end = buffer.getEndIter();
 
-    // include_hidden_chars = true so folded (invisible) text still reaches the parser.
-    const tree = this.parser.parse(buffer.getText(start, end, true));
+    // include_hidden_chars = true so folded (invisible) text still reaches the
+    // parser. Pass the prior (edited) tree for an incremental reparse, then
+    // delete the old one to free its wasm allocation.
+    const text = buffer.getText(start, end, true);
+    const tree = this.parser.parse(text, this.tree ?? undefined);
     if (!tree) return;
+    if (this.tree && this.tree !== tree) this.tree.delete();
+    this.tree = tree;
     const root = tree.rootNode;
 
     // Highlighting: clear our tags, re-apply from the query. (Other tags — the

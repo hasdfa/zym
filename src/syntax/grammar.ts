@@ -41,29 +41,46 @@ interface GrammarSpec {
   foldTypes: string[];   // node types that fold when they span >1 line
 }
 
-// A compact JS highlights query. Capture names map to GtkSource style ids in
-// the highlighter. Kept to node types that exist in tree-sitter-javascript so
-// the query compiles cleanly.
+// JS highlights query. Capture names map to GtkSource style ids in the
+// highlighter (see STYLE_MAP). Patterns are ordered general → specific; tag
+// priority (not query order) resolves overlaps — e.g. a method-call identifier
+// gets both @property and @function, and the higher-priority @function wins.
+// All node types/fields are valid in tree-sitter-javascript 0.20.x.
 const JS_HIGHLIGHTS = `
 (comment) @comment
+
 (string) @string
 (template_string) @string
 (regex) @string
+(escape_sequence) @escape
+
 (number) @number
+(true) @boolean
+(false) @boolean
+(null) @constant
+
 [
   "const" "let" "var" "function" "return" "if" "else" "for" "while" "do"
   "switch" "case" "break" "continue" "new" "class" "extends" "import" "export"
-  "from" "default" "async" "await" "yield" "typeof" "instanceof" "throw"
-  "try" "catch" "finally"
+  "from" "default" "async" "await" "yield" "typeof" "instanceof" "in" "of"
+  "delete" "void" "throw" "try" "catch" "finally" "static" "get" "set"
 ] @keyword
+
+; properties and object keys
+(property_identifier) @property
+(shorthand_property_identifier) @property
+(pair key: (property_identifier) @property)
+
+; types: class names and constructors
+(class_declaration name: (identifier) @type)
+(new_expression constructor: (identifier) @type)
+
+; functions: declarations, methods, and call sites
 (function_declaration name: (identifier) @function)
+(generator_function_declaration name: (identifier) @function)
 (method_definition name: (property_identifier) @function)
 (call_expression function: (identifier) @function)
 (call_expression function: (member_expression property: (property_identifier) @function))
-(property_identifier) @property
-(true) @constant
-(false) @constant
-(null) @constant
 `;
 
 const JS_FOLD_TYPES = [
