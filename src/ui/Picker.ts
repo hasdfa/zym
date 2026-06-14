@@ -96,12 +96,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
   const listBox = new Gtk.ListBox();
   listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
 
-  // Shown by the list box whenever it has no rows; its text is updated in
-  // `rebuild` to distinguish "nothing to pick from" from "nothing matched".
-  const empty = new Gtk.Label({ xalign: 0 });
-  empty.setName('PickerEmpty');
-  listBox.setPlaceholder(empty);
-
   const scrolled = new Gtk.ScrolledWindow();
   scrolled.setChild(listBox);
   scrolled.setPropagateNaturalHeight(true);
@@ -155,7 +149,17 @@ export function openPicker(options: PickerOptions): PickerHandle {
       listBox.append(row);
     }
     if (results.length === 0) {
-      empty.setText(items.length === 0 ? 'No entries' : 'No matches');
+      // No rows to select — show a non-interactive message row instead so the
+      // card doesn't collapse to just the entry.
+      const label = new Gtk.Label({ xalign: 0 });
+      label.setText(items.length === 0 ? 'No entries' : 'No matches');
+      label.setName('PickerEmpty');
+      const row = new Gtk.ListBoxRow();
+      row.setChild(label);
+      row.setActivatable(false);
+      row.setSelectable(false);
+      listBox.append(row);
+      return;
     }
     const first = listBox.getRowAtIndex(0);
     if (first) listBox.selectRow(first);

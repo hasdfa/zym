@@ -410,9 +410,21 @@ export class AppWindow {
       `#Panel tabbar .box,
        #Panel tabbar tabbox,
        #Panel tabbar tab { background-color: ${bg}; }`,
-      `#Panel tabbar .box { box-shadow: none; padding: 0; min-height: 0; }`,
+      `#Panel tabbar .box {
+        box-shadow: none;
+        padding: 0;
+        min-height: 0;
+        border-bottom: 1px solid ${border};
+      }`,
       `#Panel tabbar tabbox { padding: 0; min-height: 0; }`,
-      `#Panel tabbar tab { min-height: 0; padding: 2px 12px; }`,
+      // Square (un-rounded) tabs, separated by vertical borders.
+      `#Panel tabbar tab {
+        min-height: 0;
+        padding: 2px 12px;
+        border-radius: 0;
+        border-right: 1px solid ${border};
+      }`,
+      `#Panel tabbar tab:first-child { border-left: 1px solid ${border}; }`,
       `#Panel tabbar tab:hover { background-color: shade(${bg}, 1.2); }`,
       `#Panel tabbar tab:selected {
         background-color: shade(${bg}, 1.6);
@@ -423,7 +435,7 @@ export class AppWindow {
       // color when this is the active panel.
       `#PanelEmptyState { background-color: ${bg}; }`,
       `#PanelEmptyText, #PanelEmptyEmoticon { color: ${muted}; }`,
-      `#PanelEmptyEmoticon.is-active { color: ${theme.ui.fg}; }`,
+      `#PanelEmptyText.is-active, #PanelEmptyEmoticon.is-active { color: ${theme.ui.fg}; }`,
     ];
 
     // Popover surfaces: the picker card, its search entry, and result list.

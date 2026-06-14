@@ -19,14 +19,18 @@ import type { AgentTerminal } from './AgentTerminal.ts';
 
 // nf-md-robot from the bundled "Symbols Nerd Font Mono" (see fonts.ts).
 const AGENT_GLYPH = String.fromCodePoint(0xf06a9);
-// A round status dot (U+25CF), colored by the agent's running/exited state.
+// The per-row status indicator: a round dot (U+25CF) for idle/waiting/exited, and
+// nf-md-cog-sync (U+F1978, in the icon font) while working.
 const STATUS_DOT = '●';
+const WORKING_GLYPH = String.fromCodePoint(0xf1978);
 
-// Header styled like FileTree's; status dots in success/green (running) and muted
-// (exited); the empty-state filler muted and centered.
+// Header styled like FileTree's; the empty-state filler muted; and the status
+// indicator colored by the agent's state: working (grey cog), waiting on the user
+// (warning/amber), idle/ready (success/green), exited (muted).
+const DOT_CLASSES = ['quilx-agent-working', 'quilx-agent-waiting', 'quilx-agent-idle', 'quilx-agent-exited'];
 addStyles(`
   #AgentList .agentlist-header {
-    color: ${theme.ui.fg};
+    color: ${theme.ui.textMuted ?? '#9a9996'};
     font-weight: bold;
     padding: 6px 8px;
   }
@@ -34,7 +38,9 @@ addStyles(`
     color: ${theme.ui.textMuted ?? '#9a9996'};
     padding: 12px;
   }
-  .quilx-agent-running { color: ${theme.ui.success ?? '#2ec27e'}; }
+  .quilx-agent-working { color: ${theme.ui.textMuted ?? '#9a9996'}; }
+  .quilx-agent-waiting { color: ${theme.ui.warning ?? '#e5a50a'}; }
+  .quilx-agent-idle    { color: ${theme.ui.success ?? '#2ec27e'}; }
   .quilx-agent-exited  { color: ${theme.ui.textMuted ?? '#9a9996'}; }
 `);
 
@@ -50,6 +56,8 @@ export class AgentList {
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly empty: InstanceType<typeof Gtk.Label>;
   private readonly options: AgentListOptions;
+  // Renders nerd-font glyphs (header robot, working cog) in the bundled icon font.
+  private readonly iconAttrs: InstanceType<typeof Pango.AttrList>;
   // Agents parallel to the list rows, mapping a row index back to its agent.
   private agents: AgentTerminal[] = [];
   // Per-row unsubscribes (title + status), cleared on every rebuild.
@@ -58,6 +66,9 @@ export class AgentList {
 
   constructor(options: AgentListOptions = {}) {
     this.options = options;
+
+    this.iconAttrs = Pango.AttrList.new();
+    this.iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
 
     this.listBox = new Gtk.ListBox();
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
@@ -89,10 +100,8 @@ export class AgentList {
 
   /** The "Agents" header: a robot glyph (bundled icon font) + label. */
   private buildHeader(): InstanceType<typeof Gtk.Box> {
-    const iconAttrs = Pango.AttrList.new();
-    iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
     const icon = new Gtk.Label({ label: AGENT_GLYPH });
-    icon.setAttributes(iconAttrs);
+    icon.setAttributes(this.iconAttrs);
 
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     header.addCssClass('agentlist-header');
@@ -142,9 +151,16 @@ export class AgentList {
   }
 
   private applyStatus(dot: InstanceType<typeof Gtk.Label>, agent: AgentTerminal): void {
-    dot.removeCssClass('quilx-agent-running');
-    dot.removeCssClass('quilx-agent-exited');
-    dot.addCssClass(agent.exited ? 'quilx-agent-exited' : 'quilx-agent-running');
+    for (const cls of DOT_CLASSES) dot.removeCssClass(cls);
+    dot.addCssClass(`quilx-agent-${agent.status}`); // idle | working | waiting | exited
+    // Working shows the cog glyph (icon font); the rest show the plain dot.
+    if (agent.status === 'working') {
+      dot.setText(WORKING_GLYPH);
+      dot.setAttributes(this.iconAttrs);
+    } else {
+      dot.setText(STATUS_DOT);
+      dot.setAttributes(null);
+    }
   }
 
   dispose(): void {

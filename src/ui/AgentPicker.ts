@@ -36,9 +36,13 @@ export function openAgentPicker(host: Overlay, onActivate: (agent: AgentTerminal
   });
 }
 
-/** An agent's display label: its title, marked when the process has exited. */
+/** An agent's display label: its title, with a marker for notable states. */
 function agentLabel(agent: AgentTerminal): string {
-  return agent.exited ? `${agent.title} (exited)` : agent.title;
+  const marker =
+    agent.status === 'exited' ? ' (exited)' :
+    agent.status === 'waiting' ? ' (waiting)' :
+    agent.status === 'working' ? ' (working)' : '';
+  return `${agent.title}${marker}`;
 }
 
 /** Make `label` unique against already-used labels by appending " (2)", " (3)", … */

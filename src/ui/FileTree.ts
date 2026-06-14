@@ -70,7 +70,7 @@ function statusMarkup(status: FileGitStatus | undefined): string {
 // keeps its own contrast.
 addStyles(`
   #FileTree .filetree-header {
-    color: ${theme.ui.fg};
+    color: ${theme.ui.textMuted ?? '#9a9996'};
     font-weight: bold;
     padding: 6px 8px;
   }

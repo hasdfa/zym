@@ -13,9 +13,20 @@
  * whatever is focused. This is the building block of the future splittable
  * panel tree (VS Code-style editor groups).
  */
-import { Adw, Gtk, Pango } from '../gi.ts';
+import { Adw, GLib, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
+import { addStyles } from '../styles.ts';
 import { quilx } from '../quilx.ts';
+
+// Square off the tab buttons (Adwaita rounds them by default) and strip the gaps
+// Adwaita puts around and between them. Structural, not color-derived, so it's
+// installed unconditionally here rather than with the theme chrome (which only
+// applies when the theme defines its own background).
+addStyles(`
+  #Panel tabbar tab { border-radius: 0; margin: 0; }
+  #Panel tabbar tabbox { padding: 0; }
+  #Panel tabbar > revealer > box { padding: 0; }
+`);
 
 // Nerd Font emoticons for the empty-state face (bundled icon font). Neutral while
 // the panel is idle, smiling when it is the active panel — see Panel.setActive.
@@ -143,11 +154,21 @@ export class Panel {
   }
 
   /** Move keyboard focus into the panel's empty-state placeholder, so an empty
-   *  pane can steal focus from whatever held it (e.g. after a split). A no-op
-   *  returning false when the panel has tabs — its active child owns focus then. */
+   *  pane can steal focus from whatever held it (e.g. after a split). Without
+   *  focus here, key bindings scoped to the panel/window (the space leader, pane
+   *  commands) wouldn't reach an empty pane. A no-op returning false when the
+   *  panel has tabs — its active child owns focus then. */
   focusEmptyState(): boolean {
     if (this.view.getNPages() > 0) return false;
-    return this.emptyState.grabFocus();
+    if (this.emptyState.grabFocus()) return true;
+    // The empty page may have only just become the stack's visible child (e.g.
+    // the last tab was closed); GtkStack maps it on the next layout pass, and a
+    // widget can't take focus until mapped. Retry once it is.
+    GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+      if (this.view.getNPages() === 0) this.emptyState.grabFocus();
+      return GLib.SOURCE_REMOVE;
+    });
+    return true;
   }
 
   /** Reflect whether this is the active panel: the empty-state face smiles in the
@@ -155,8 +176,10 @@ export class Panel {
   setActive(active: boolean): void {
     this.emoticon.setLabel(active ? EMOTICON_HAPPY : EMOTICON_NEUTRAL);
     this.emptyText.setLabel(active ? EMPTY_TEXT_ACTIVE : EMPTY_TEXT_IDLE);
-    if (active) this.emoticon.addCssClass('is-active');
-    else this.emoticon.removeCssClass('is-active');
+    for (const label of [this.emoticon, this.emptyText]) {
+      if (active) label.addCssClass('is-active');
+      else label.removeCssClass('is-active');
+    }
   }
 
   // Show the empty-state placeholder when there are no tabs, the tab content
