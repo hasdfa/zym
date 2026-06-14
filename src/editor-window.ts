@@ -10,6 +10,8 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { openFilePicker } from './file-picker.ts';
 import { SyntaxController } from './syntax/syntax-controller.ts';
+import { THEME } from './colors.ts';
+import { addStyles } from './styles.ts';
 import {
   Adw,
   Gio,
@@ -23,6 +25,8 @@ import {
   type VimContext,
   type WindowTitle,
 } from './gi.ts';
+
+addStyles(`.quilx-editor { color: ${THEME.fg}; }`);
 
 const TITLE = 'quilx';
 const DEFAULT_WIDTH = 1000;
@@ -97,6 +101,7 @@ export class EditorWindow {
 
   private createView(buffer: SourceBuffer): SourceView {
     const view = new GtkSource.View({ buffer });
+    view.addCssClass('quilx-editor');
     view.setMonospace(true);
     view.setShowLineNumbers(true);
     view.setHighlightCurrentLine(true);

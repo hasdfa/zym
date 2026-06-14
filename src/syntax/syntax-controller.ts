@@ -17,32 +17,10 @@
  */
 import { Gdk, Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
+import { COLORS } from '../colors.ts';
 
 const HIGHLIGHT_DEBOUNCE_MS = 60;
 
-// Capture name → candidate GtkSource style ids (first that resolves wins), plus
-// Capture name → foreground color, using the VS Code "Dark+" palette directly
-// rather than the GtkSource style scheme, so highlighting looks like VS Code
-// regardless of the Adwaita light/dark chrome.
-//
-// KEY ORDER MATTERS: tags are created in this order and GtkTextTag priority
-// follows creation order (later = higher). Overlapping captures resolve by
-// priority, so more-specific categories come last: escape > string, and
-// function/type > property (so method calls and constructors win over the bare
-// property/identifier capture).
-const COLORS: Record<string, string> = {
-  comment: '#6A9955',
-  string: '#CE9178',
-  number: '#B5CEA8',
-  boolean: '#569CD6',
-  constant: '#569CD6',
-  keyword: '#569CD6',          // declaration/storage keywords (blue)
-  'keyword.control': '#C586C0', // control-flow + import/export (purple)
-  property: '#9CDCFE',
-  type: '#4EC9B0',
-  function: '#DCDCAA',
-  escape: '#D7BA7D',
-};
 
 interface FoldRegion {
   startLine: number; // line the block opens on (stays visible)
@@ -190,9 +168,9 @@ export class SyntaxController {
   }
 
   /**
-   * Re-apply the VS Code token colors. Colors are fixed (not scheme-derived),
-   * so this is independent of the Adwaita light/dark chrome; kept as a method
-   * because the window calls it when the system scheme changes.
+   * Re-apply token colors from the kyntell palette. Colors are fixed (not
+   * scheme-derived), so this is independent of the Adwaita light/dark chrome;
+   * kept as a method because the window calls it when the system scheme changes.
    */
   restyle(): void {
     for (const [name, color] of Object.entries(COLORS)) {

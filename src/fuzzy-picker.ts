@@ -11,6 +11,9 @@
  */
 import { Gdk, Gtk } from './gi.ts';
 import { addStyles } from './styles.ts';
+import { monospaceFontCss } from './fonts.ts';
+
+const MONOSPACE = monospaceFontCss();
 
 const PICKER_WIDTH = 640;
 const PICKER_MAX_HEIGHT = 360;
@@ -28,15 +31,35 @@ addStyles(`
     border: 1px solid var(--border-color);
     border-radius: var(--window-radius);
     background-color: var(--window-bg-color);
-    box-shadow: 0 4px 22px rgba(0, 0, 0, 0.15);
+    box-shadow: 0px 10px 33px 28px rgba(0,0,0,0.15);
+    ${MONOSPACE.declarations}
   }
   .quilx-picker-entry {
-    padding: 0.75em 1em;
+    padding: 0.5em 0.5em;
+    border-radius: var(--window-radius);
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
   }
+  /* Collapse the leading search icon (it has no .left class — it's just the
+     first image child) so the entry text starts at the entry's 1em padding,
+     matching the row text inset below. */
+  .quilx-picker-entry > image:first-child {
+    -gtk-icon-size: 0;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+  }
+  .quilx-picker-entry > text {
+    margin: 0;
+    padding: 0;
+  }
   .quilx-picker-row-scrolled-window {
     border-radius: var(--window-radius);
+  }
+  /* Drop Adwaita's built-in row padding so only the label's inset applies. */
+  .quilx-picker-row-scrolled-window row {
+    padding: 0;
   }
   .quilx-picker-row {
     padding: 0.5em 1em;
