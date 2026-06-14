@@ -23,9 +23,14 @@
  */
 import * as Path from 'node:path';
 import { Application } from './application.ts';
+import { preloadGrammars } from './syntax/grammar.ts';
 
 // With no file argument, open the editor's own source.
 const arg = process.argv[2];
 const initialFile = arg ? Path.resolve(arg) : import.meta.filename;
+
+// Load tree-sitter grammars before the GLib main loop starts — emscripten's
+// async wasm init doesn't resolve once the loop is running.
+await preloadGrammars();
 
 process.exit(new Application(initialFile).run());

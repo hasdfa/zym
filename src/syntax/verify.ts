@@ -1,0 +1,96 @@
+/*
+ * Headless check for the SyntaxController integration: parse a JS buffer,
+ * confirm highlighting captures + fold regions, exercise the vim `za` key path,
+ * and prove folding shrinks the rendered height. Uses a unique app id so it
+ * isn't deduped into an already-running quilx instance.
+ *
+ *   node src/syntax/verify.ts
+ */
+import { createRequire } from 'node:module';
+import { Adw, Gdk, GLib, Gtk, GtkSource } from '../gi.ts';
+import { SyntaxController } from './syntax-controller.ts';
+import { preloadGrammars } from './grammar.ts';
+
+await preloadGrammars(); // before the GLib loop, like the real entry point
+
+const SAMPLE = `import { readFile } from 'node:fs/promises';
+const CONFIG = { name: 'quilx', features: ['highlight', 'fold'] };
+async function loadDocument(path) {
+  const text = await readFile(path, 'utf8');
+  if (text.length === 0) {
+    throw new Error('empty');
+  }
+  return { path, text };
+}
+class Editor {
+  constructor(config) {
+    this.config = config;
+    this.docs = new Map();
+  }
+}
+`;
+
+const loop = GLib.MainLoop.new(null, false);
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.verify' });
+
+app.on('activate', () => {
+  const buffer = new GtkSource.Buffer();
+  const view = new GtkSource.View({ buffer });
+  const syntax = new SyntaxController(view, buffer);
+
+  const win = new Adw.ApplicationWindow({ application: app });
+  win.setDefaultSize(600, 500);
+  const scrolled = new Gtk.ScrolledWindow();
+  scrolled.setChild(view);
+  win.setContent(scrolled);
+  win.present();
+
+  (buffer as any).setText(SAMPLE, -1);
+  (buffer as any).placeCursor((buffer as any).getStartIter());
+
+  const handled = syntax.setLanguageForPath('/tmp/sample.js');
+  const natHeight = () => (view as any).measure(Gtk.Orientation.VERTICAL, -1)[1];
+
+  {
+    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+      const before = natHeight();
+      const regions = syntax.foldsByHeaderLine.size;
+
+      // Exercise the vim path: cursor into loadDocument's body, then `za`.
+      (buffer as any).placeCursor((buffer as any).getIterAtLine(3)[1]);
+      const consumedZ = syntax.handleFoldKey(Gdk.KEY_z, true);
+      const consumedA = syntax.handleFoldKey(Gdk.KEY_a, true);
+      // Insert-mode gating: `z` must NOT be consumed when not in normal mode.
+      const insertModePassthrough = syntax.handleFoldKey(Gdk.KEY_z, false) === false;
+
+      GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+        const afterZa = natHeight();
+        syntax.foldAll();
+        GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+          const afterAll = natHeight();
+          console.log(JSON.stringify({
+            grammarHandled: handled,
+            foldRegions: regions,
+            zaConsumed: consumedZ && consumedA,
+            insertModePassthrough,
+            zaShrankHeight: afterZa < before,
+            foldAllShrankHeight: afterAll < afterZa,
+            heights: { before, afterZa, afterAll },
+          }, null, 2));
+          loop.quit();
+          app.quit();
+          return false;
+        });
+        return false;
+      });
+      return false;
+    });
+  }
+
+  GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 5000, () => { loop.quit(); app.quit(); return false; });
+
+  createRequire(import.meta.url)('node-gtk').startLoop();
+  loop.run();
+});
+
+process.exit(app.run([]));

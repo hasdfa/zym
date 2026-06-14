@@ -9,6 +9,7 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { openFilePicker } from './file-picker.ts';
+import { SyntaxController } from './syntax/syntax-controller.ts';
 import {
   Adw, Gio, Gtk, GtkSource,
   type Application, type ApplicationWindow, type SourceBuffer,
@@ -31,9 +32,11 @@ export class EditorWindow {
 
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
+  private readonly syntax: SyntaxController;
   private readonly vim: VimContext;
   private readonly windowTitle: WindowTitle;
   private readonly toastOverlay: ToastOverlay;
+  private readonly overlay: InstanceType<typeof Gtk.Overlay>;
   private readonly window: ApplicationWindow;
 
   constructor(app: Application, onQuit: () => void, initialFile: string) {
@@ -42,13 +45,21 @@ export class EditorWindow {
 
     this.buffer = this.createBuffer();
     this.view = this.createView(this.buffer);
+    // Tree-sitter highlighting + folding for the view/buffer. The fold-key
+    // bindings are installed later (installFoldKeys) on the window.
+    this.syntax = new SyntaxController(this.view, this.buffer);
     this.vim = this.createVim(this.view);
     this.windowTitle = new Adw.WindowTitle({ title: TITLE });
     this.toastOverlay = new Adw.ToastOverlay();
 
     const toolbarView = new Adw.ToolbarView();
     toolbarView.addTopBar(this.buildHeaderBar());
-    toolbarView.setContent(this.buildContent());
+    // Overlay host for transient widgets (e.g. the fuzzy file picker). It wraps
+    // only the content, so the picker floats over the editor below the header
+    // bar rather than over the whole window.
+    this.overlay = new Gtk.Overlay();
+    this.overlay.setChild(this.buildContent());
+    toolbarView.setContent(this.overlay);
     toolbarView.addBottomBar(this.buildStatusBar());
     this.toastOverlay.setChild(toolbarView);
 
@@ -64,6 +75,7 @@ export class EditorWindow {
     });
     this.window.present();
 
+    this.installFoldKeys();
     this.loadFile(initialFile);
   }
 
@@ -163,6 +175,27 @@ export class EditorWindow {
     return scrolled;
   }
 
+  // --- Folding key bindings (vim za/zo/zc/zR/zM) -----------------------------
+
+  private installFoldKeys() {
+    // Attached to the WINDOW in the CAPTURE phase: capture propagates from the
+    // toplevel down to the focused widget, so this fires before the view's
+    // VimIMContext controller and can claim the `z` fold prefix before vim sees
+    // it — independent of controller add-order. Gated to only act while the
+    // editor view is focused and in normal mode (overwrite == not insert).
+    const keys = new Gtk.EventControllerKey();
+    keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
+    // node-gtk signal handlers do NOT receive the emitter; the first arg is the
+    // first real signal param. key-pressed → (keyval, keycode, state).
+    keys.on('key-pressed', (keyval: number) => {
+      // hasFocus() is typed as a property in the generated bindings; the runtime
+      // method exists, so call through `any`.
+      if (!(this.view as any).hasFocus()) return false;
+      return this.syntax.handleFoldKey(keyval, this.view.getOverwrite());
+    });
+    this.window.addController(keys);
+  }
+
   // --- Vim modal editing (GtkSource.VimIMContext) ----------------------------
 
   private createVim(view: SourceView): VimContext {
@@ -244,6 +277,7 @@ export class EditorWindow {
     const apply = () => {
       const id = styleManager.getDark() ? 'Adwaita-dark' : 'Adwaita';
       this.buffer.setStyleScheme(schemeManager.getScheme(id));
+      this.syntax.restyle(); // keep tree-sitter tag colors in sync with the scheme
     };
     apply();
     styleManager.on('notify::dark', apply);
@@ -254,7 +288,7 @@ export class EditorWindow {
   private registerActions() {
     this.addAction('open', '<Control>o', () => this.openDialog());
     this.addAction('find-file', '<Alt>o', () =>
-      openFilePicker(this.window, (path) => this.loadFile(path)));
+      openFilePicker(this.overlay, (path) => this.loadFile(path)));
     this.addAction('save', '<Control>s', () =>
       this.currentFile ? this.saveTo(this.currentFile) : this.saveAsDialog());
     this.addAction('save-as', '<Control><Shift>s', () => this.saveAsDialog());
@@ -271,15 +305,24 @@ export class EditorWindow {
   // --- File operations -------------------------------------------------------
 
   loadFile(path: string) {
-    const langManager = GtkSource.LanguageManager.getDefault();
     try {
       const content = Fs.readFileSync(path, 'utf8');
-      this.buffer.setLanguage(langManager.guessLanguage(path, null));
       this.buffer.setText(content, -1);
       this.buffer.placeCursor(this.buffer.getStartIter());
       this.currentFile = path;
       this.setTitle(Path.basename(path));
       this.view.grabFocus();
+
+      // Prefer tree-sitter; fall back to GtkSourceView's `.lang` engine for
+      // languages we don't have a grammar for.
+      const handled = this.syntax.setLanguageForPath(path);
+      if (handled) {
+        this.buffer.setLanguage(null); // ensure the .lang engine stays off
+      } else {
+        const langManager = GtkSource.LanguageManager.getDefault();
+        this.buffer.setHighlightSyntax(true);
+        this.buffer.setLanguage(langManager.guessLanguage(path, null));
+      }
     } catch (error) {
       this.toast(`Could not open ${Path.basename(path)}: ${(error as Error).message}`);
     }

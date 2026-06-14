@@ -154,7 +154,8 @@ function buildEditor() {
   // Keyboard: Ctrl+Space toggles the innermost fold at the cursor. (A bare `za`
   // can't work here because this view is non-modal — it would just type "za".)
   const keys = new Gtk.EventControllerKey();
-  keys.on('key-pressed', (_ctrl: any, keyval: number, _keycode: number, state: number) => {
+  // node-gtk drops the emitter arg: key-pressed → (keyval, keycode, state).
+  keys.on('key-pressed', (keyval: number, _keycode: number, state: number) => {
     const ctrl = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
     if (ctrl && keyval === Gdk.KEY_space) {
       toggleFoldAtCursor();

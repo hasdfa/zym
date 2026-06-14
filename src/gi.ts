@@ -25,6 +25,11 @@ export function startLoop(): void {
   gi.startLoop();
 }
 
+/** Register a JS subclass of a GObject type so its vfunc overrides take effect. */
+export function registerClass(klass: unknown): void {
+  (gi as any).registerClass(klass);
+}
+
 // Instance-type aliases for the widgets we hold references to across methods.
 // (The namespaces above are runtime values; these recover the matching types.)
 export type Application = InstanceType<typeof Adw.Application>;
