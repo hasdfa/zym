@@ -1,5 +1,5 @@
 /*
- * FuzzyPicker — a generic "quick open" overlay: a search entry over a
+ * Picker — a generic "quick open" overlay: a search entry over a
  * fuzzy-filtered, rank-sorted list with the matched characters highlighted.
  * Type to narrow, Up/Down (or Tab) to move, Enter to choose, Escape to dismiss.
  *
@@ -66,20 +66,20 @@ addStyles(`
   }
 `);
 
-export interface FuzzyPickerOptions {
+export interface PickerOptions {
   host: Overlay;
   placeholder?: string;
   items?: string[];
   onSelect: (item: string) => void;
 }
 
-export interface FuzzyPickerHandle {
+export interface PickerHandle {
   /** Replace the candidate list (e.g. once an async scan completes). */
   setItems(items: string[]): void;
   close(): void;
 }
 
-export function openFuzzyPicker(options: FuzzyPickerOptions): FuzzyPickerHandle {
+export function openPicker(options: PickerOptions): PickerHandle {
   const { host } = options;
 
   const entry = new Gtk.SearchEntry({

@@ -12,7 +12,7 @@
     "strict": true,
 
     // The app runs straight from source via Node's TypeScript type-stripping
-    // (`node src/editor.ts`), so relative imports keep their `.ts` extension.
+    // (`node src/index.ts`), so relative imports keep their `.ts` extension.
     "allowImportingTsExtensions": true,
 
     // Generated GIR types rely on this (tolerates GObject override conflicts).

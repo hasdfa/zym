@@ -1,2 +1,4 @@
+allowBuilds:
+  native-keymap: true
 overrides:
   node-gtk: link:../node-gtk

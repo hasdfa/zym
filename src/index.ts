@@ -13,13 +13,13 @@
  *   - Keyboard shortcuts: Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save-as,
  *     Ctrl+Q quit
  *
- * Run with:  pnpm start [file]   (or: node src/editor.ts [file])
+ * Run with:  pnpm start [file]   (or: node src/index.ts [file])
  *
  * Structure:
  *   gi.ts             node-gtk bootstrap + typed namespace exports
  *   application.ts    Adw.Application + main-loop lifecycle
  *   editor-window.ts  the editor window UI and file operations
- *   editor.ts         this entry point
+ *   index.ts          this entry point
  */
 import * as Path from 'node:path';
 import { Application } from './application.ts';

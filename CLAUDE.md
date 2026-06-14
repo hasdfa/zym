@@ -1,5 +1,6 @@
 # General
 
+- This project uses `node-gtk`. In development, it's checked out at `../node-gtk` and linked using `pnpm link`.
 - Filenames use camel case:
   - if the file is a component, it should be named after the component, so `ChatMessage.ts` for a `ChatMessage` component.
   - if the file is a utility, it should be named after the utility, so `createChatMessage.ts` for a `createChatMessage` function.

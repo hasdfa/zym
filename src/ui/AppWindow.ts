@@ -25,6 +25,7 @@ import { Panel, type PanelChild } from './Panel.ts';
 import { TextEditor } from './TextEditor.ts';
 import { Workbench } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
+import { quilx } from '../quilx.ts';
 
 const TITLE = 'quilx';
 const DEFAULT_WIDTH = 1000;
@@ -41,6 +42,11 @@ export class AppWindow {
   // widget so the active child can be resolved back to its editor.
   private readonly centerPanel: Panel;
   private readonly editors = new Map<Widget, TextEditor>();
+
+  // The left dock (file tree), kept as fields so the pane-switching demo
+  // commands can move focus between the docks.
+  private readonly leftPanel: Panel;
+  private readonly fileTree: FileTree;
   private readonly windowTitle: WindowTitle;
   private readonly toastOverlay: ToastOverlay;
   private readonly overlay: InstanceType<typeof Gtk.Overlay>;
@@ -67,13 +73,13 @@ export class AppWindow {
     });
 
     const workbench = new Workbench();
-    const fileTree = new FileTree({
+    this.fileTree = new FileTree({
       rootPath: process.cwd(),
       onOpenFile: (path) => this.openFile(path),
     });
-    const leftPanel = new Panel();
-    leftPanel.add(fileTree.root);
-    workbench.setLeft(leftPanel);
+    this.leftPanel = new Panel();
+    this.leftPanel.add(this.fileTree.root);
+    workbench.setLeft(this.leftPanel);
     workbench.setCenter(this.centerPanel);
 
     const toolbarView = new Adw.ToolbarView();
@@ -92,6 +98,13 @@ export class AppWindow {
     this.window = new Adw.ApplicationWindow({ application: app });
     this.window.setDefaultSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
     this.window.setContent(this.toastOverlay);
+
+    // Publish the window on the global registry and start the keymap manager's
+    // CAPTURE-phase key controller.
+    quilx.window = this.window;
+    quilx.keymaps.initialize();
+    this.registerPaneCommands();
+
     this.window.on('close-request', () => {
       this.onQuit();
       return false;
@@ -212,6 +225,58 @@ export class AppWindow {
     action.on('activate', callback);
     this.app.addAction(action);
     this.app.setAccelsForAction(`app.${name}`, [accel]);
+  }
+
+  // --- Pane switching (demo of the ported command/keymap managers) -----------
+
+  // Vim-style window navigation wired through the ported CommandManager +
+  // KeymapManager. The bindings are registered on the window's widget class
+  // (AdwApplicationWindow — node-gtk's `constructor.name`), which is always an
+  // ancestor of the focused widget, so the CAPTURE-phase keymap controller
+  // matches them no matter what is focused:
+  //
+  //   ctrl-w h        focus the left dock (file tree)
+  //   ctrl-w l        focus the center editor group
+  //   ctrl-w w        cycle between the two
+  //   ctrl-w ctrl-w   cycle between the two
+  private registerPaneCommands() {
+    quilx.commands.add('AdwApplicationWindow', {
+      'pane:focus-left': () => this.focusPane('left'),
+      'pane:focus-right': () => this.focusPane('center'),
+      'pane:focus-next': () => this.focusPane('next'),
+    });
+    quilx.keymaps.add('AppWindow', {
+      AdwApplicationWindow: {
+        'ctrl-w h': 'pane:focus-left',
+        'ctrl-w l': 'pane:focus-right',
+        'ctrl-w w': 'pane:focus-next',
+        'ctrl-w ctrl-w': 'pane:focus-next',
+      },
+    });
+  }
+
+  private focusPane(target: 'left' | 'center' | 'next') {
+    const dest =
+      target === 'next'
+        ? (this.isFocusWithin(this.leftPanel.root) ? 'center' : 'left')
+        : target;
+    if (dest === 'left') {
+      this.fileTree.focus();
+      this.toast('Pane: file tree');
+    } else {
+      this.activeEditor?.focus();
+      this.toast('Pane: editor');
+    }
+  }
+
+  /** Whether keyboard focus currently sits inside `root`'s widget subtree. */
+  private isFocusWithin(root: Widget): boolean {
+    let current: Widget | null = this.window.getFocus();
+    while (current) {
+      if (current === root) return true;
+      current = current.getParent();
+    }
+    return false;
   }
 
   // --- File operations (routed to the active editor) -------------------------

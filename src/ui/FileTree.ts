@@ -17,6 +17,8 @@ export interface FileTreeOptions {
 export class FileTree {
   readonly root: InstanceType<typeof Gtk.ScrolledWindow>;
 
+  private readonly list: InstanceType<typeof Gtk.ListView>;
+
   constructor(options: FileTreeOptions) {
     const dirList = new Gtk.DirectoryList({ attributes: SIDEBAR_ATTRS });
     dirList.setFile(Gio.File.newForPath(options.rootPath));
@@ -60,5 +62,11 @@ export class FileTree {
     scrolled.setChild(list);
     scrolled.setVexpand(true);
     this.root = scrolled;
+    this.list = list;
+  }
+
+  /** Move keyboard focus into the tree. */
+  focus() {
+    this.list.grabFocus();
   }
 }

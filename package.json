@@ -4,18 +4,20 @@
   "description": "A modal source-code editor built with GTK 4, Adwaita and GtkSourceView 5, on node-gtk",
   "license": "GPL-3.0-or-later",
   "type": "module",
-  "main": "src/editor.ts",
+  "main": "src/index.ts",
   "bin": {
-    "quilx": "src/editor.ts"
+    "quilx": "src/index.ts"
   },
   "scripts": {
-    "start": "node src/editor.ts",
+    "start": "node src/index.ts",
     "poc": "node src/poc/fold-highlight.ts",
     "typecheck": "tsc --noEmit",
     "generate-types": "node-gtk generate-types Gtk-4.0 Adw-1 GtkSource-5 Vte-3.91"
   },
   "dependencies": {
-    "node-gtk": "link:../node-gtk"
+    "native-keymap": "^3.3.9",
+    "node-gtk": "link:../node-gtk",
+    "postcss-selector-parser": "^7.1.4"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

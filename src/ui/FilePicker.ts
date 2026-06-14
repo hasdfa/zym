@@ -11,7 +11,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { openFuzzyPicker } from './FuzzyPicker.ts';
+import { openPicker } from './Picker.ts';
 import { GLib, Gtk } from '../gi.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -27,7 +27,7 @@ export function openFilePicker(host: Overlay, onSelect: (path: string) => void):
   const cwd = process.cwd();
   // Open immediately with an empty list; fill it as the background walk streams
   // results, so a large tree never blocks the UI.
-  const picker = openFuzzyPicker({
+  const picker = openPicker({
     host,
     placeholder: 'Search files…',
     onSelect: (relative) => onSelect(Path.join(cwd, relative)),
