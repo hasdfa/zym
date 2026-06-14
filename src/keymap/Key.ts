@@ -73,6 +73,15 @@ export class Key {
     if (keymapEntry) {
       name = keymapEntry.value;
       shift = true;
+      // Normalize a single-symbol value (e.g. the backtick behind `~`) to its
+      // keyval name (e.g. "grave"), matching how `fromDescription` names it.
+      // Without this, shift+symbol keys whose base is itself a symbol would
+      // never match a binding parsed from a description string. Letters/digits
+      // (e.g. shift-4 ⇒ "4") are already symmetric, so leave them as-is.
+      const code = name.charCodeAt(0);
+      if (name.length === 1 && !isLetter(code) && !isDigit(code)) {
+        name = getKeyvalNameFromChar(name);
+      }
     }
     // eg "Escape", "BackSpace"
     else {

@@ -20,6 +20,7 @@ import './operations/mode.js'; // ActivateNormalMode
 import './motion.js'; // self-registers the motion operations
 import './operator.js'; // Delete/Yank and operator base
 import './operator-insert.js'; // ActivateInsertMode/InsertAfter/Change/…
+import './operator-transform-string.js'; // gU/gu/g~, r, surround
 import './text-object.js'; // iw/aw/i(/a"/… (operator + visual targets)
 import './misc-command.js'; // Undo/Redo/Mark/…
 
@@ -68,6 +69,30 @@ const SEQUENCE_BINDINGS: Record<string, string> = {
   'g g': 'MoveToFirstLine',
 };
 
+// Find-char motions. These `requireInput`: the operation reads the next
+// keystroke (captured via VimState.readChar) as its target character, then
+// jumps to it on the cursor's line. f/F land on the char; t/T stop next to it.
+const FIND_BINDINGS: Record<string, string> = {
+  f: 'Find',
+  F: 'FindBackwards',
+  t: 'Till',
+  T: 'TillBackwards',
+};
+
+// `;`/`,` repeat the last find (same / reversed direction). These don't map to
+// an operation class — they replay the recorded find via the operation stack —
+// so they're wired as commands in `attachVim`, not through the class tables.
+const REPEAT_FIND_COMMANDS: Record<string, string> = {
+  ';': 'vim-mode-plus:repeat-find',
+  ',': 'vim-mode-plus:repeat-find-reverse',
+};
+
+// `.` repeats the last change. Like the repeat-find keys, it replays a recorded
+// operation through the stack rather than mapping to an operation class.
+const REPEAT_COMMANDS: Record<string, string> = {
+  '.': 'vim-mode-plus:repeat',
+};
+
 // Operators (await a motion/text-object target), available while NOT in insert mode.
 // d/y/c await a target in normal mode but operate on the selection in visual mode.
 // x/p have preset targets / no target, so they execute immediately.
@@ -99,6 +124,41 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   "a '": 'ASingleQuote',
 };
 
+// Case operators (await a motion/text-object target, like d/y). Sequences under
+// the `g` prefix — no bare `g` binding exists, so they don't conflict.
+const CASE_BINDINGS: Record<string, string> = {
+  'g U': 'UpperCase',
+  'g u': 'LowerCase',
+  'g ~': 'ToggleCase',
+};
+
+// Replace-character (r): selects `count` chars to the right and reads a single
+// replacement character. Operates on the selection in visual mode.
+const REPLACE_BINDINGS: Record<string, string> = {
+  r: 'ReplaceCharacter',
+};
+
+// Marks: `m{a}` records the cursor position under letter `a`; `` `{a} `` /
+// `'{a}` jump to it (the latter to the line's first character). The jumps are
+// motions (so `` d`a `` works); `m` is a misc command.
+const MARK_BINDINGS: Record<string, string> = {
+  m: 'Mark',
+  '`': 'MoveToMark',
+  "'": 'MoveToMarkLine',
+};
+
+// Surround (vim-surround style), bound in normal mode:
+//   `ys{motion}{char}` wrap the motion's range, `ds{char}` delete a pair,
+//   `cs{from}{to}` change one pair into another.
+// Their `y`/`d`/`c` prefixes collide with the Yank/Delete/Change operators; the
+// KeymapManager's longest-match deferral resolves it (it waits one key to see if
+// `s` follows, falling back to the bare operator otherwise).
+const SURROUND_BINDINGS: Record<string, string> = {
+  'y s': 'Surround',
+  'd s': 'DeleteSurround',
+  'c s': 'ChangeSurround',
+};
+
 // Misc commands (undo/redo), available while NOT in insert mode.
 const MISC_BINDINGS: Record<string, string> = {
   u: 'Undo',
@@ -110,6 +170,10 @@ const MISC_BINDINGS: Record<string, string> = {
 const NON_INSERT_BINDINGS: Record<string, string> = {
   ...MOTION_BINDINGS,
   ...SEQUENCE_BINDINGS,
+  ...FIND_BINDINGS,
+  ...CASE_BINDINGS,
+  ...REPLACE_BINDINGS,
+  ...MARK_BINDINGS,
   ...OPERATOR_BINDINGS,
   ...MISC_BINDINGS,
 };
@@ -120,6 +184,7 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   ...VISUAL_BINDINGS,
   ...NON_INSERT_BINDINGS,
   ...TEXT_OBJECT_BINDINGS,
+  ...SURROUND_BINDINGS,
 };
 
 let keymapsRegistered = false;
@@ -136,9 +201,19 @@ function registerKeymapsOnce(): void {
 
   quilx.keymaps.add('vim-mode-plus', {
     // Mode-entry keys (i/a) are normal-only; v/V activate visual from normal too.
-    'GtkSourceView.normal-mode': { ...toKeymap(MODE_BINDINGS), ...toKeymap(VISUAL_BINDINGS) },
+    // Surround sequences (ys/ds/cs) start here; their operator targets resolve
+    // through the operator-pending text-object bindings below.
+    'GtkSourceView.normal-mode': {
+      ...toKeymap(MODE_BINDINGS),
+      ...toKeymap(VISUAL_BINDINGS),
+      ...toKeymap(SURROUND_BINDINGS),
+    },
     // Motions and operators apply in normal, operator-pending, and visual modes.
-    'GtkSourceView:not(.insert-mode)': toKeymap(NON_INSERT_BINDINGS),
+    'GtkSourceView:not(.insert-mode)': {
+      ...toKeymap(NON_INSERT_BINDINGS),
+      ...REPEAT_FIND_COMMANDS,
+      ...REPEAT_COMMANDS,
+    },
     // In visual mode: v/V switch wise (or toggle off) and text objects select.
     'GtkSourceView.visual-mode': { ...toKeymap(VISUAL_BINDINGS), ...toKeymap(TEXT_OBJECT_BINDINGS) },
     // Text objects are also operator targets in operator-pending mode.
@@ -159,6 +234,17 @@ export function attachVim(editor: EditorModel): VimState {
   const commands: Record<string, () => void> = {
     'vim-mode-plus:activate-normal-mode': () => {
       vimState.operationStack.run('ActivateNormalMode');
+    },
+    // `;`/`,` replay the recorded find rather than running an operation class.
+    'vim-mode-plus:repeat-find': () => {
+      vimState.operationStack.runCurrentFind();
+    },
+    'vim-mode-plus:repeat-find-reverse': () => {
+      vimState.operationStack.runCurrentFind({ reverse: true });
+    },
+    // `.` — replay the last recorded change.
+    'vim-mode-plus:repeat': () => {
+      vimState.operationStack.runRecorded();
     },
   };
   for (const klass of Object.values(NORMAL_OPERATIONS)) {

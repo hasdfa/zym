@@ -1,0 +1,82 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Gtk, GtkSource } from '../../../gi.ts';
+import { EditorModel } from '../EditorModel.ts';
+import { Point } from '../../../text/Point.ts';
+import VimState from './vim-state.js';
+import { StatusBarManager } from './stubs.ts';
+import './operations/mode.js';
+import './operator.js';
+import './operator-insert.js';
+import './text-object.js';
+import './motion.js';
+
+Gtk.init();
+
+function setup(text: string) {
+  const buffer = new GtkSource.Buffer();
+  buffer.setText(text, -1);
+  const view = new GtkSource.View({ buffer });
+  const editor = new EditorModel(view, buffer);
+  const vimState = new VimState(editor, new StatusBarManager());
+  // Drive a find: run the motion (which arms input capture), then inject the
+  // target character the way the key grab would.
+  const find = (klass: string, char: string) => {
+    vimState.operationStack.run(klass);
+    vimState.setInputChar(char);
+  };
+  const run = (klass: string) => vimState.operationStack.run(klass);
+  const at = (row: number, col: number) => editor.setCursorBufferPosition(new Point(row, col));
+  const pos = () => editor.getCursorBufferPosition().toArray();
+  return { editor, vimState, find, run, at, pos };
+}
+
+test('f / F jump onto the target character on the cursor line', () => {
+  const { find, at, pos } = setup('foo bar foo\n'); // f0 o1 o2 _3 b4 a5 r6 _7 f8 o9 o10
+  at(0, 0);
+  find('Find', 'o');
+  assert.deepEqual(pos(), [0, 1]); // first 'o' after the cursor
+  find('Find', 'o');
+  assert.deepEqual(pos(), [0, 2]); // next 'o'
+  find('FindBackwards', 'f');
+  assert.deepEqual(pos(), [0, 0]); // back to the first 'f'
+});
+
+test('t / T stop next to the target character', () => {
+  const { find, at, pos } = setup('foo bar baz\n'); // r at 6, b at 8
+  at(0, 0);
+  find('Till', 'r');
+  assert.deepEqual(pos(), [0, 5]); // one before 'r'
+  at(0, 10);
+  find('TillBackwards', 'b');
+  assert.deepEqual(pos(), [0, 9]); // one after 'b'
+});
+
+test('a find that fails leaves the cursor put', () => {
+  const { find, at, pos } = setup('hello\n');
+  at(0, 1);
+  find('Find', 'z'); // no 'z' on the line
+  assert.deepEqual(pos(), [0, 1]);
+});
+
+test('; and , repeat the last find forwards and backwards', () => {
+  const { find, vimState, at, pos } = setup('a.b.c.d\n'); // dots at 1,3,5
+  at(0, 0);
+  find('Find', '.');
+  assert.deepEqual(pos(), [0, 1]);
+  vimState.operationStack.runCurrentFind();
+  assert.deepEqual(pos(), [0, 3]);
+  vimState.operationStack.runCurrentFind();
+  assert.deepEqual(pos(), [0, 5]);
+  vimState.operationStack.runCurrentFind({ reverse: true });
+  assert.deepEqual(pos(), [0, 3]);
+});
+
+test('df<char> deletes inclusively up to the found character', () => {
+  const { vimState, editor, at } = setup('abcXdef\n'); // X at col 3
+  at(0, 0);
+  vimState.operationStack.run('Delete');
+  vimState.operationStack.run('Find');
+  vimState.setInputChar('X');
+  assert.equal(editor.lineTextForBufferRow(0), 'def');
+});

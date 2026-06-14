@@ -16,6 +16,8 @@ import swrap from './selection-wrapper.js'
 import globalState from './global-state.js'
 import { CursorStyleManager, HoverManager, FlashManager, OccurrenceManager, SequentialPasteManager } from './stubs.ts'
 import * as utils from './utils.js'
+import underscorePlus from './underscorePlus.ts'
+import { quilx } from '../../../quilx.ts'
 
 const MANAGER_REGISTRY = {
   './operation-stack': OperationStack,
@@ -85,7 +87,7 @@ export default class VimState {
   get utils () { return this.__utils || (this.__utils = this.load('./utils', false)) } // prettier-ignore
   get globalState () { return this.__globalState || (this.__globalState = this.load('./global-state', false)) } // prettier-ignore
   get _ () { return this.constructor._ } // prettier-ignore
-  static get _ () { throw new Error('vim: underscore-plus not yet ported') } // prettier-ignore
+  static get _ () { return underscorePlus } // prettier-ignore
 
   // Atom command-registration statics removed: quilx registers vim commands and
   // keymaps through `quilx.commands`/`quilx.keymaps` (see the vim wiring module).
@@ -565,9 +567,62 @@ export default class VimState {
     return this.editorElement.hasCssClass('is-narrowed')
   }
 
-  // Other
+  // Single-character input (f/t/r/`/… )
   // -------------------------
-  focusInput () { throw new Error('vim: focusInput not yet ported') }
+  // Operations that `requireInput` (find-char, replace-char, move-to-mark) ask
+  // for the next keystroke. Upstream pops a mini-editor overlay (focus-input.js)
+  // or routes keys through per-char commands (read-char.js); both assume Atom's
+  // DOM. quilx instead grabs the next key straight off the KeymapManager: a
+  // one-shot listener runs *before* keymap dispatch (so `fi` lands on the next
+  // `i` rather than entering insert mode) and feeds the char to the operation.
+  //
+  // Only single-char input is supported — enough for f/t. Multi-char input
+  // (search's `/`) lands with the custom search box.
 
-  readChar () { throw new Error('vim: readChar not yet ported') }
+  focusInput ({ charsMax = 1, onConfirm, onCancel } = {}) {
+    if (charsMax !== 1) {
+      throw new Error('vim: multi-char focusInput (search) not yet ported')
+    }
+    this.readChar({ onConfirm, onCancel })
+  }
+
+  readChar ({ onConfirm, onCancel } = {}) {
+    this.__inputHandler = { onConfirm, onCancel }
+    this.editorElement.addCssClass('input-char-waiting')
+
+    const listener = key => {
+      // Modifiers alone don't resolve the input — keep waiting (and let them
+      // fall through; KeymapManager ignores modifier-only keys anyway).
+      if (key.isModifier()) return false
+      if (key.name === 'escape' || (key.ctrl && key.name === '[')) this.cancelInput()
+      else if (key.string && key.string.charCodeAt(0) >= 0x20) this.setInputChar(key.string)
+      else this.cancelInput()
+      return true // claim the key; never dispatch it as a command
+    }
+    this.__inputGrabListener = listener
+    quilx.keymaps.addListener(listener)
+  }
+
+  // Resolve a pending readChar/focusInput. Called by the key grab, or directly
+  // (e.g. from tests) to inject input without a real keystroke.
+  setInputChar (char) {
+    const handler = this.__clearInput()
+    if (handler) handler.onConfirm(char)
+  }
+
+  cancelInput () {
+    const handler = this.__clearInput()
+    if (handler) handler.onCancel()
+  }
+
+  __clearInput () {
+    if (this.__inputGrabListener) {
+      quilx.keymaps.removeListener(this.__inputGrabListener)
+      this.__inputGrabListener = null
+    }
+    this.editorElement.removeCssClass('input-char-waiting')
+    const handler = this.__inputHandler
+    this.__inputHandler = null
+    return handler
+  }
 }

@@ -445,6 +445,26 @@ export class EditorModel {
     return true;
   }
 
+  /** Display width of a tab stop (used to build/measure indentation). */
+  getTabLength(): number {
+    return this.view.getTabWidth() || 4;
+  }
+
+  /** The indent level of `row` (leading whitespace width ÷ tab length). */
+  indentationForBufferRow(row: number): number {
+    const leading = this.lineTextForBufferRow(row).match(/^\s*/)![0];
+    const tabLength = this.getTabLength();
+    let width = 0;
+    for (const ch of leading) width += ch === '\t' ? tabLength : 1;
+    return width / tabLength;
+  }
+
+  /** Whitespace for `level` indent steps (spaces with soft tabs, else tabs). */
+  buildIndentString(level: number): string {
+    if (this.softTabs) return ' '.repeat(Math.max(0, Math.round(level * this.getTabLength())));
+    return '\t'.repeat(Math.max(0, Math.round(level)));
+  }
+
   /** Atom's atomic-soft-tabs feature is not modeled. */
   hasAtomicSoftTabs(): boolean {
     return false;
@@ -487,6 +507,10 @@ export class EditorModel {
   /** Enable or disable user text input (normal/visual disable it; insert enables). */
   setInputEnabled(enabled: boolean): void {
     this.view.setEditable(enabled);
+    // Mark the view as taking text input while editable, so the keymap releases
+    // `space` (the leader prefix) in insert mode but keeps it as a leader in
+    // normal/visual mode. See the `.has-text-input` rule in the default keymap.
+    this.toggleCssClass('has-text-input', enabled);
   }
 
   /** Set the cursor shape from a `CursorType` value (vim switches per mode). */
@@ -527,6 +551,19 @@ export class EditorModel {
 
   focus(): void {
     this.view.grabFocus();
+  }
+
+  /**
+   * Atom's editor `component` (the rendering layer). The vim layer only reaches
+   * for it to await the next render frame (e.g. find highlighting after a jump)
+   * or force a synchronous redraw; GtkTextView paints on its own, so these are
+   * inert here — `getNextUpdatePromise` resolves immediately.
+   */
+  get component(): { getNextUpdatePromise(): Promise<void>; updateSync(): void } {
+    return {
+      getNextUpdatePromise: () => Promise.resolve(),
+      updateSync: () => {},
+    };
   }
 
   /**

@@ -53,8 +53,8 @@ const schema: Record<string, ConfigSchema> = {
   },
   useClipboardAsDefaultRegister: {
     type: 'boolean',
-    default: false,
-    description: 'Yank/paste through the system clipboard by default.',
+    default: true,
+    description: 'Yank/paste through the system clipboard by default (like vim clipboard=unnamedplus). Set false for vim-classic separate registers.',
   },
   numberRegex: {
     type: 'string',
@@ -119,6 +119,60 @@ const schema: Record<string, ConfigSchema> = {
     type: 'boolean',
     default: false,
     description: 'Use a fixed non-word character set for word motions, ignoring grammar.',
+  },
+
+  // --- Find motions (f/F/t/T) ---
+  findCharsMax: {
+    type: 'integer',
+    default: 1,
+    description: 'How many characters f/F/t/T read before jumping (1 = classic vim).',
+  },
+  findAcrossLines: {
+    type: 'boolean',
+    default: false,
+    description: 'Let f/F/t/T search beyond the cursor line (off = single-line, like vim).',
+  },
+  reuseFindForRepeatFind: {
+    type: 'boolean',
+    default: false,
+    description: 'Pressing the same find key again repeats the last find instead of re-reading input.',
+  },
+  highlightFindChar: {
+    type: 'boolean',
+    default: false,
+    description: 'Highlight matches of the find character on the cursor rows.',
+  },
+  ignoreCaseForFind: {
+    type: 'boolean',
+    default: false,
+    description: 'Make f/F/t/T case-insensitive.',
+  },
+  useSmartcaseForFind: {
+    type: 'boolean',
+    default: false,
+    description: 'Case-insensitive find unless the input has an uppercase character.',
+  },
+
+  // --- Transform-string operators (case, replace-char, surround) ---
+  stayOnTransformString: {
+    type: 'boolean',
+    default: false,
+    description: 'Keep the cursor in place after a transform-string operator (gU/gu/g~/surround).',
+  },
+  replaceByDiffOnSurround: {
+    type: 'boolean',
+    default: false,
+    description: 'Apply surround edits as a minimal diff (preserves markers) instead of whole-range replace.',
+  },
+  customSurroundPairs: {
+    type: 'string',
+    default: '{}',
+    description: 'JSON map of surround alias → [open, close] pairs, layered over the built-ins.',
+  },
+  charactersToAddSpaceOnSurround: {
+    type: 'array',
+    default: [],
+    description: 'Surround characters that wrap the text in spaces (e.g. add a space inside brackets).',
   },
 
   // --- Undo / redo ---

@@ -1,13 +1,8 @@
 // Vendored from xedel/vim-mode-plus's lib/register-manager.js — ESM conversion.
-// `atom.clipboard` is replaced by an in-memory clipboard for now (system
-// clipboard integration via Gdk lands later); register logic is unchanged.
+// `atom.clipboard` is replaced by quilx's GTK-backed `clipboard` (see
+// ./clipboard.ts); register logic is otherwise unchanged.
 import { normalizeIndent } from './utils.js'
-
-const clipboard = {
-  _text: '',
-  read () { return this._text },
-  write (text) { this._text = text },
-}
+import clipboard from './clipboard.ts'
 
 const REGISTERS_REGEX = /[-0-9a-zA-Z*+%_".]/
 const READ_ONLY_REGISTERS_REGEX = /[%_]/
