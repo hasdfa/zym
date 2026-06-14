@@ -106,6 +106,14 @@ const REPEAT_COMMANDS: Record<string, string> = {
   '.': 'vim-mode-plus:repeat',
 };
 
+// `"{reg}` selects the register the next yank/delete/paste uses (e.g. `"ayy`,
+// `"+p`). Reads the register letter via VimState.readChar and sets it on the
+// register manager; it clears itself after the next operation. Not an operation
+// class — it sets pending state directly rather than running through the stack.
+const REGISTER_COMMANDS: Record<string, string> = {
+  '"': 'vim-mode-plus:set-register-name',
+};
+
 // Operators (await a motion/text-object target), available while NOT in insert mode.
 // d/y/c await a target in normal mode but operate on the selection in visual mode.
 // x/p have preset targets / no target, so they execute immediately.
@@ -249,6 +257,7 @@ function registerKeymapsOnce(): void {
       ...toKeymap(NON_INSERT_BINDINGS),
       ...REPEAT_FIND_COMMANDS,
       ...REPEAT_COMMANDS,
+      ...REGISTER_COMMANDS,
     },
     // In visual mode: v/V switch wise (or toggle off) and text objects select.
     'GtkSourceView.visual-mode': { ...toKeymap(VISUAL_BINDINGS), ...toKeymap(TEXT_OBJECT_BINDINGS) },
@@ -281,6 +290,10 @@ export function attachVim(editor: EditorModel): VimState {
     // `.` — replay the last recorded change.
     'vim-mode-plus:repeat': () => {
       vimState.operationStack.runRecorded();
+    },
+    // `"` — read a register letter and target it for the next operation.
+    'vim-mode-plus:set-register-name': () => {
+      vimState.register.setName();
     },
   };
   for (const klass of Object.values(NORMAL_OPERATIONS)) {

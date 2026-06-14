@@ -141,3 +141,11 @@ test('J joins lines via the keymap', () => {
   type('J');
   assert.equal(line(0), 'hello world');
 });
+
+test('"ayy then "ap round-trips a named register through the keymap', () => {
+  const { editor, type } = focusedEditor('hello\nworld\n');
+  type('"ayy'); // select register a, yank the line
+  editor.setCursorBufferPosition({ row: 1, column: 0 });
+  type('"ap'); // select register a, put after
+  assert.equal(editor.getText(), 'hello\nworld\nhello\n');
+});
