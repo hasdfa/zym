@@ -30,6 +30,7 @@ import { Gdk, Gio, Gtk } from '../gi.ts';
 import { Terminal, type TerminalOptions } from './Terminal.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
+import type { TabState } from '../SessionManager.ts';
 
 /** Live status of an agent session. */
 export type AgentStatus = 'idle' | 'working' | 'waiting' | 'exited';
@@ -57,6 +58,10 @@ export class AgentTerminal extends Terminal {
   private readonly onCloseRequest?: () => void;
   private readonly statusFile: string | null;
   private statusMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  // The agent's argv as the user requested it (before `--settings` injection) and
+  // its launch prompt — retained so a session can relaunch the agent verbatim.
+  private readonly baseCommand: string[];
+  private readonly launchPrompt?: string;
 
   constructor(options: AgentTerminalOptions = {}) {
     const baseCommand = options.command ?? resolveAgentCommand();
@@ -69,6 +74,8 @@ export class AgentTerminal extends Terminal {
     super({ ...options, command, title: options.title ?? agentName(baseCommand) });
     this.onCloseRequest = options.onCloseRequest;
     this.statusFile = integration.statusFile;
+    this.baseCommand = baseCommand;
+    this.launchPrompt = options.prompt;
     this.root.setName('AgentTerminal'); // distinct identity from a plain Terminal
     this.applyThemeColors();
 
@@ -89,6 +96,23 @@ export class AgentTerminal extends Terminal {
   /** Whether the agent process has exited (the widget lingers afterward). */
   get exited(): boolean {
     return this._status === 'exited';
+  }
+
+  // --- Session integration ----------------------------------------------------
+
+  /** Session state: the base argv + cwd + prompt, for a later relaunch. */
+  serialize(): TabState | null {
+    return { kind: 'agent', command: this.baseCommand, cwd: this.cwd, prompt: this.launchPrompt };
+  }
+
+  /** A running agent is live work — it blocks exit until confirmed. */
+  isModified(): boolean {
+    return !this.exited;
+  }
+
+  /** Exit-prompt label, e.g. "claude (running)". */
+  getModifiedLabel(): string {
+    return `${this.title} (running)`;
   }
 
   /** Subscribe to status changes (idle/working/waiting/exited). Returns unsub. */

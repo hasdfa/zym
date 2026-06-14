@@ -230,7 +230,7 @@ Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
 
 - [x] `SessionManager` (`quilx.session`): XDG path resolution, versioned read/write
       (atomic), `session.*` config schema, the deserializer registry.
-- [ ] Serialize seam: `Serializable` on `TextEditor`/`Terminal`/`AgentTerminal`;
+- [x] Serialize seam: `Serializable` on `TextEditor`/`Terminal`/`AgentTerminal`;
       `PanelGroup.serializeLayout`/`restoreLayout`; `FileTree` expansion state.
 - [ ] Modified-status seam: `SessionParticipant` hook + `collectModified()`; the
       exit-prompt `Adw.AlertDialog` (Save all / Discard / Cancel) replacing the

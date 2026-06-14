@@ -228,6 +228,13 @@ export class Panel {
     return page ? page.getChild() : null;
   }
 
+  /** The child widgets in tab order — the hook session serialization walks. */
+  getChildren(): Widget[] {
+    const out: Widget[] = [];
+    for (let i = 0; i < this.view.getNPages(); i++) out.push(this.view.getNthPage(i).getChild());
+    return out;
+  }
+
   /** Close the selected tab (the active panel child); a no-op when empty. */
   closeActiveTab(): void {
     const page = this.view.getSelectedPage();

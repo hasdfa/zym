@@ -17,6 +17,7 @@ import { createSourceScheme } from '../../theme/createSourceScheme.ts';
 import { addStyles } from '../../styles.ts';
 import { EditorModel } from './EditorModel.ts';
 import { attachVim } from './vim/index.ts';
+import type { TabState } from '../../SessionManager.ts';
 import {
   Adw,
   Gtk,
@@ -206,6 +207,9 @@ export class TextEditor {
       const content = Fs.readFileSync(path, 'utf8');
       this.buffer.setText(content, -1);
       this.buffer.placeCursor(this.buffer.getStartIter());
+      // setText marks the buffer modified; the freshly-loaded content matches
+      // disk, so clear the flag — `isModified()` then tracks genuine edits.
+      this.buffer.setModified(false);
       this._currentFile = path;
       this.view.grabFocus();
 
@@ -238,6 +242,7 @@ export class TextEditor {
     );
     try {
       Fs.writeFileSync(path, content);
+      this.buffer.setModified(false);
       this._currentFile = path;
       this.emitTitleChange();
       this.onToast(`Saved ${Path.basename(path)}`);
@@ -259,6 +264,36 @@ export class TextEditor {
 
   focus() {
     this.view.grabFocus();
+  }
+
+  // --- Session integration ---------------------------------------------------
+
+  /** Session state for this tab, or `null` for an unsaved/empty editor. */
+  serialize(): TabState | null {
+    if (!this._currentFile) return null;
+    const cursor = this.editorModel.getCursorBufferPosition();
+    return { kind: 'file', path: this._currentFile, cursor: [cursor.row, cursor.column] };
+  }
+
+  /** Restore a saved cursor position (clamped to the buffer) and reveal it. */
+  restoreCursor(cursor: [number, number]) {
+    this.editorModel.setCursorBufferPosition({ row: cursor[0], column: cursor[1] });
+    this.view.scrollToMark(this.buffer.getInsert(), 0, true, 0.5, 0.5);
+  }
+
+  /** True while the buffer holds unsaved edits — drives the exit prompt. */
+  isModified(): boolean {
+    return this.buffer.getModified();
+  }
+
+  /** Exit-prompt label, e.g. "foo.ts (unsaved)". */
+  getModifiedLabel(): string {
+    return `${this.title} (unsaved)`;
+  }
+
+  /** Flush unsaved edits to the current file (no-op for an untitled buffer). */
+  saveModified(): void {
+    this.save();
   }
 
   /** Subscribe to title changes (fired when the editor's file changes). */

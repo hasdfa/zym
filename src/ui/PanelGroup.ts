@@ -16,6 +16,19 @@
  */
 import { Gtk } from '../gi.ts';
 import { Panel, type PanelChild } from './Panel.ts';
+import type { PanelNode, TabState } from '../SessionManager.ts';
+
+/**
+ * What a host returns to rebuild one tab during `restoreLayout`: the widget to
+ * host, an optional title, and an `onAttached` callback handed the tab handle so
+ * the host can wire title-change bindings and its own bookkeeping. `null` skips
+ * the tab (e.g. a file that no longer exists).
+ */
+export interface RestoredChild {
+  widget: InstanceType<typeof Gtk.Widget>;
+  title?: string;
+  onAttached?: (child: PanelChild) => void;
+}
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 type Paned = InstanceType<typeof Gtk.Paned>;
@@ -190,6 +203,97 @@ export class PanelGroup {
       next.panel.setActive(true);
       this.options.onActiveChanged?.(next.panel.activeChild);
     }
+  }
+
+  // --- Session serialization -------------------------------------------------
+
+  /**
+   * Snapshot the layout tree as a `PanelNode`, serializing each tab through
+   * `serializeChild` (which returns `null` for tabs that shouldn't persist).
+   * The active tab of each leaf is recorded by its index among the kept tabs.
+   */
+  serializeLayout(serializeChild: (child: Widget) => TabState | null): PanelNode {
+    return this.serializeNode(this.rootNode, serializeChild);
+  }
+
+  private serializeNode(node: Node, serializeChild: (child: Widget) => TabState | null): PanelNode {
+    if (node instanceof Leaf) {
+      const activeWidget = node.panel.activeChild;
+      const tabs: TabState[] = [];
+      let activeIndex = 0;
+      for (const child of node.panel.getChildren()) {
+        const state = serializeChild(child);
+        if (!state) continue; // dropped tabs don't shift the recorded active index
+        if (child === activeWidget) activeIndex = tabs.length;
+        tabs.push(state);
+      }
+      return { type: 'leaf', tabs, activeIndex };
+    }
+    const orientation =
+      node.paned.getOrientation() === Gtk.Orientation.HORIZONTAL ? 'horizontal' : 'vertical';
+    return {
+      type: 'split',
+      orientation,
+      position: node.paned.getPosition(),
+      start: this.serializeNode(node.start, serializeChild),
+      end: this.serializeNode(node.end, serializeChild),
+    };
+  }
+
+  /**
+   * Replace the whole tree with one rebuilt from `node`, building each tab
+   * through `buildChild`. Intended for a fresh group (at restore time); the prior
+   * tree is discarded. The first leaf becomes active.
+   */
+  restoreLayout(node: PanelNode, buildChild: (state: TabState) => RestoredChild | null): void {
+    const newRoot = this.buildNode(node, buildChild);
+    const current = this.root.getFirstChild();
+    if (current) this.root.remove(current);
+    newRoot.parent = null;
+    this.rootNode = newRoot;
+    this.root.append(newRoot.widget);
+
+    const first = firstLeaf(newRoot);
+    this.active = first;
+    first.panel.setActive(true);
+    this.options.onActiveChanged?.(first.panel.activeChild);
+  }
+
+  private buildNode(node: PanelNode, buildChild: (state: TabState) => RestoredChild | null): Node {
+    if (node.type === 'leaf') {
+      const leaf = this.createLeaf();
+      const handles: PanelChild[] = [];
+      let activeHandleIndex = -1;
+      node.tabs.forEach((state, index) => {
+        const built = buildChild(state);
+        if (!built) return;
+        const child = leaf.panel.add(built.widget, { title: built.title });
+        built.onAttached?.(child);
+        if (index === node.activeIndex) activeHandleIndex = handles.length;
+        handles.push(child);
+      });
+      // Reselect the intended active tab; if it was dropped, the last-added tab
+      // (already selected by `add`) stands in.
+      if (activeHandleIndex >= 0) handles[activeHandleIndex].select();
+      return leaf;
+    }
+
+    const orientation =
+      node.orientation === 'horizontal' ? Gtk.Orientation.HORIZONTAL : Gtk.Orientation.VERTICAL;
+    const paned = new Gtk.Paned({ orientation });
+    paned.setHexpand(true);
+    paned.setVexpand(true);
+
+    const start = this.buildNode(node.start, buildChild);
+    const end = this.buildNode(node.end, buildChild);
+    paned.setStartChild(start.widget);
+    paned.setEndChild(end.widget);
+    paned.setPosition(node.position);
+
+    const split = new Split(paned, start, end);
+    start.parent = split;
+    end.parent = split;
+    return split;
   }
 
   // --- Focus navigation -----------------------------------------------------

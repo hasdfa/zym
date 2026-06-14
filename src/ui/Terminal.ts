@@ -17,6 +17,7 @@ import {
   type VteTerminal,
 } from '../gi.ts';
 import { monospaceFontDescription } from '../fonts.ts';
+import type { TabState } from '../SessionManager.ts';
 
 const SCROLLBACK_LINES = 10_000;
 const DEFAULT_SHELL = '/bin/bash';
@@ -43,12 +44,16 @@ export class Terminal {
   readonly root: VteTerminal;
 
   private readonly onExit: (status: number) => void;
+  // The launch directory, retained for session serialization. (The shell may cd
+  // elsewhere; tracking the live cwd would need OSC 7 — out of scope for now.)
+  protected readonly cwd: string;
   private _title: string;
   private _pid: number | null = null;
   private readonly titleHandlers: Array<() => void> = [];
 
   constructor(options: TerminalOptions = {}) {
     this.onExit = options.onExit ?? (() => {});
+    this.cwd = options.cwd ?? Os.homedir();
     this._title = options.title ?? 'Terminal';
 
     this.root = this.createTerminal();
@@ -86,7 +91,6 @@ export class Terminal {
   // --- Shell process ---------------------------------------------------------
 
   private spawnShell(options: TerminalOptions) {
-    const cwd = options.cwd ?? Os.homedir();
     // A custom command (e.g. an agent CLI) runs verbatim; otherwise a login
     // shell, so the user's profile (PATH, prompt, aliases) is sourced.
     const shell = options.shell ?? process.env.SHELL ?? DEFAULT_SHELL;
@@ -95,7 +99,7 @@ export class Terminal {
 
     this.root.spawnAsync(
       Vte.PtyFlags.DEFAULT,
-      cwd,
+      this.cwd,
       argv,
       envv,
       GLib.SpawnFlags.SEARCH_PATH,
@@ -136,6 +140,13 @@ export class Terminal {
 
   focus() {
     this.root.grabFocus();
+  }
+
+  // --- Session integration ---------------------------------------------------
+
+  /** Session state for this tab. Overridden by AgentTerminal for `kind: 'agent'`. */
+  serialize(): TabState | null {
+    return { kind: 'terminal', cwd: this.cwd };
   }
 
   /**

@@ -296,6 +296,46 @@ export class FileTree {
     for (const d of this.configDisposables) d.dispose();
   }
 
+  // --- Session integration -------------------------------------------------
+
+  /** The absolute paths of every currently-expanded directory, for the session. */
+  serializeExpanded(): string[] {
+    const out: string[] = [];
+    const n = this.tree.getNItems();
+    for (let i = 0; i < n; i++) {
+      const row = this.tree.getRow(i);
+      if (!row || !this.isDirectory(row) || !row.getExpanded()) continue;
+      const path = pathOf((row.getItem() as any).getAttributeObject('standard::file'));
+      if (path) out.push(path);
+    }
+    return out;
+  }
+
+  /**
+   * Re-expand the saved directories. Expansion is lazy — opening a directory
+   * appends its children to the flat model — so this sweeps repeatedly, expanding
+   * any wanted directory it finds unopened, until a pass reveals nothing new.
+   */
+  restoreExpanded(paths: string[]): void {
+    if (paths.length === 0) return;
+    const want = new Set(paths);
+    // Bounded against a pathological model; each productive pass expands ≥1 row.
+    for (let guard = 0; guard < 10_000; guard++) {
+      let changed = false;
+      const n = this.tree.getNItems();
+      for (let i = 0; i < n; i++) {
+        const row = this.tree.getRow(i);
+        if (!row || !this.isDirectory(row) || row.getExpanded()) continue;
+        const path = pathOf((row.getItem() as any).getAttributeObject('standard::file'));
+        if (path && want.has(path)) {
+          row.setExpanded(true);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+  }
+
   // --- Filters -------------------------------------------------------------
 
   /** Apply a new value for the dotfiles filter (driven by `tree.hideHidden`). */
