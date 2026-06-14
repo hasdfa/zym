@@ -1,10 +1,12 @@
 /*
- * FuzzyPicker — a generic modal "quick open" overlay: a search entry over a
- * fuzzy-filtered, rank-sorted list. Type to narrow, Up/Down (or Tab) to move,
- * Enter to choose, Escape to dismiss.
+ * FuzzyPicker — a generic, chromeless modal "quick open" overlay: a search
+ * entry over a fuzzy-filtered, rank-sorted list with the matched characters
+ * highlighted. Type to narrow, Up/Down (or Tab) to move, Enter to choose,
+ * Escape to dismiss.
  *
  * It knows nothing about files; callers supply the candidate strings and an
- * `onSelect` callback. The file picker (see file-picker.ts) is the first user.
+ * `onSelect` callback. Items may arrive asynchronously via the returned
+ * handle's `setItems` (the file picker collects its list in the background).
  */
 import { Gdk, Gtk, type ApplicationWindow } from './gi.ts';
 
@@ -16,13 +18,21 @@ export interface FuzzyPickerOptions {
   parent: ApplicationWindow;
   title?: string;
   placeholder?: string;
-  items: string[];
+  items?: string[];
   onSelect: (item: string) => void;
 }
 
-export function openFuzzyPicker(options: FuzzyPickerOptions): void {
+export interface FuzzyPickerHandle {
+  /** Replace the candidate list (e.g. once an async scan completes). */
+  setItems(items: string[]): void;
+  close(): void;
+}
+
+export function openFuzzyPicker(options: FuzzyPickerOptions): FuzzyPickerHandle {
+  // Chromeless: no header bar, no close button — Escape dismisses it.
   const window = new Gtk.Window();
   window.setTitle(options.title ?? 'Pick');
+  window.setDecorated(false);
   window.setModal(true);
   window.setTransientFor(options.parent);
   window.setDefaultSize(PICKER_WIDTH, PICKER_HEIGHT);
@@ -46,6 +56,7 @@ export function openFuzzyPicker(options: FuzzyPickerOptions): void {
   box.append(scrolled);
   window.setChild(box);
 
+  let items = options.items ?? [];
   // The currently displayed matches, parallel to the rows in the list box, so a
   // row can be mapped back to its item by index.
   let results: string[] = [];
@@ -57,9 +68,11 @@ export function openFuzzyPicker(options: FuzzyPickerOptions): void {
       listBox.remove(child);
       child = next;
     }
-    results = rank(entry.getText(), options.items).slice(0, MAX_RESULTS);
-    for (const item of results) {
-      const label = new Gtk.Label({ label: item, xalign: 0 });
+    const ranked = rank(entry.getText(), items).slice(0, MAX_RESULTS);
+    results = ranked.map((match) => match.item);
+    for (const match of ranked) {
+      const label = new Gtk.Label({ xalign: 0, useMarkup: true });
+      label.setMarkup(highlightMarkup(match.item, match.positions));
       label.setMarginTop(2);
       label.setMarginBottom(2);
       label.setMarginStart(6);
@@ -122,18 +135,36 @@ export function openFuzzyPicker(options: FuzzyPickerOptions): void {
   rebuild();
   window.present();
   entry.grabFocus();
+
+  return {
+    setItems(next: string[]) {
+      items = next;
+      rebuild();
+    },
+    close() {
+      window.close();
+    },
+  };
+}
+
+export interface FuzzyMatch {
+  /** Higher is a better match. */
+  score: number;
+  /** Indices in the text that the query matched, in order. */
+  positions: number[];
 }
 
 /**
- * Score `text` against `query` as a fuzzy (subsequence) match. Returns a score
- * where higher is better, or `null` when `query` is not a subsequence of `text`.
- * An empty query matches everything with a neutral score.
+ * Score `text` against `query` as a fuzzy (subsequence) match, recording which
+ * characters matched. Returns `null` when `query` is not a subsequence of
+ * `text`. An empty query matches everything with a neutral score.
  */
-export function fuzzyMatch(query: string, text: string): number | null {
-  if (query.length === 0) return 0;
+export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
+  if (query.length === 0) return { score: 0, positions: [] };
   const needle = query.toLowerCase();
   const haystack = text.toLowerCase();
 
+  const positions: number[] = [];
   let score = 0;
   let from = 0;
   let previous = -2;
@@ -147,10 +178,11 @@ export function fuzzyMatch(query: string, text: string): number | null {
     if (pos === previous + 1) score += 8;                  // consecutive run
     if (pos === 0 || isBoundary(text, pos)) score += 12;   // word / path boundary
     score -= pos - from;                                   // penalise skipped chars
+    positions.push(pos);
     previous = pos;
     from = pos + 1;
   }
-  return score - text.length * 0.05;                       // prefer shorter, denser hits
+  return { score: score - text.length * 0.05, positions }; // prefer shorter, denser hits
 }
 
 function isBoundary(text: string, pos: number): boolean {
@@ -163,13 +195,40 @@ function isBoundary(text: string, pos: number): boolean {
   return /[a-z0-9]/.test(before) && /[A-Z]/.test(text[pos]);
 }
 
-function rank(query: string, items: string[]): string[] {
-  if (query.length === 0) return items;
-  const scored: Array<{ item: string; score: number }> = [];
+interface RankedItem {
+  item: string;
+  positions: number[];
+}
+
+function rank(query: string, items: string[]): RankedItem[] {
+  if (query.length === 0) return items.map((item) => ({ item, positions: [] }));
+  const scored: Array<RankedItem & { score: number }> = [];
   for (const item of items) {
-    const score = fuzzyMatch(query, item);
-    if (score !== null) scored.push({ item, score });
+    const match = fuzzyMatch(query, item);
+    if (match) scored.push({ item, positions: match.positions, score: match.score });
   }
   scored.sort((a, b) => b.score - a.score);
-  return scored.map((entry) => entry.item);
+  return scored;
+}
+
+/** Render `text` as Pango markup with the matched characters bolded. */
+function highlightMarkup(text: string, positions: number[]): string {
+  const matched = new Set(positions);
+  let out = '';
+  let bold = false;
+  for (let i = 0; i < text.length; i++) {
+    const isMatch = matched.has(i);
+    if (isMatch && !bold) { out += '<b>'; bold = true; }
+    else if (!isMatch && bold) { out += '</b>'; bold = false; }
+    out += escapeMarkup(text[i]);
+  }
+  if (bold) out += '</b>';
+  return out;
+}
+
+function escapeMarkup(ch: string): string {
+  if (ch === '&') return '&amp;';
+  if (ch === '<') return '&lt;';
+  if (ch === '>') return '&gt;';
+  return ch;
 }
