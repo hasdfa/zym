@@ -30,7 +30,7 @@ GTK 4 and [Adwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), running o
 checkout of [node-gtk](https://github.com/romgrk/node-gtk) must sit alongside
 this project:
 
-```
+```text
 src/
 ├── node-gtk/
 └── quilx/
@@ -107,11 +107,13 @@ A binding's value may also pass arguments to its command, using
 ```
 
 Use the value `"unset!"` to release a keystroke for a selector so it falls
-through to the widget instead of triggering a binding. This is how `Space` is
-freed in text-input contexts even though it's the global leader prefix:
+through to the widget instead of triggering a binding. Widgets that take literal
+text input (entries, the terminal, the editor in insert mode) carry a
+`.has-text-input` class, and a single rule frees `Space` there even though it's
+the global leader prefix:
 
 ```json
-{ "GtkText": { "space": "unset!" } }
+{ ".has-text-input": { "space": "unset!" } }
 ```
 
 ## Notifications
@@ -139,9 +141,10 @@ Each posted notification shows up in two places:
   history (severity icon, message, optional detail, and the time it was posted).
 
 On a toast, `detail`/`description` and any buttons beyond the first are dropped —
-they belong to the log. The log is hidden until toggled with `Space` `n`; while it's focused, `c`
-clears the history and `q` hides it (commands `notifications:toggle-log` and
-`notifications:clear`, also reachable from the command picker). Window actions
+they belong to the log. The log is hidden until toggled with `Space` `n`; while
+it's focused, `c` clears the history and `q` hides it (commands
+`notifications:toggle-log` and `notifications:clear`, also reachable from the
+command picker). Window actions
 like saving and the git commands post through this hub, so their results land in
 the log too.
 
@@ -170,11 +173,18 @@ Rather than edit the file by hand, open the **preferences window** (`Space` `,`,
 or `config:open` from the command picker). It's an Adwaita settings UI generated
 from the schema — a switch, spin, combo, or entry per parameter, grouped by
 namespace — and edits write back to `config.json`. Because both directions watch
-the same config, hand-edits and the window stay in sync while it's open.
+the same config, hand-edits and the window stay in sync while it's open. The
+`config:open-as-text` command opens `config.json` itself in an editor tab.
+
+Its group and row labels are the **raw config keys** (e.g. the `fileTree` group,
+the `hideHidden` row), not prettified display names. This is deliberate: we value
+transparency over "perfect" UI labels, so what the preferences window shows is
+exactly what you write in `config.json` — no mental mapping between a polished
+label and the underlying key.
 
 The application-wide schema is declared in [`src/quilx.ts`](src/quilx.ts);
-subsystems contribute their own namespaced keys at load time (e.g. the Vim layer
-registers under `vim-mode-plus.*` — see
+subsystems contribute their own namespaced keys at load time (e.g. the file tree
+registers `fileTree.*` and the Vim layer registers under `vim-mode-plus.*` — see
 [`src/ui/TextEditor/vim/settings.ts`](src/ui/TextEditor/vim/settings.ts)). The
 baseline keys:
 

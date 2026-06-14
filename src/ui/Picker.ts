@@ -26,7 +26,7 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 // sit on a window, not float over editor content. Override it with the opaque
 // popover background so the editor doesn't show through.
 addStyles(`
-  .quilx-picker-panel {
+  #Picker {
     padding: 0;
     border: 1px solid var(--border-color);
     border-radius: var(--window-radius);
@@ -34,7 +34,7 @@ addStyles(`
     box-shadow: 0px 10px 33px 28px rgba(0,0,0,0.15);
     ${MONOSPACE.declarations}
   }
-  .quilx-picker-entry {
+  #PickerEntry {
     padding: 0.5em 0.5em;
     border-radius: var(--window-radius);
     border-bottom-left-radius: 0;
@@ -43,26 +43,30 @@ addStyles(`
   /* Collapse the leading search icon (it has no .left class — it's just the
      first image child) so the entry text starts at the entry's 1em padding,
      matching the row text inset below. */
-  .quilx-picker-entry > image:first-child {
+  #PickerEntry > image:first-child {
     -gtk-icon-size: 0;
     min-width: 0;
     min-height: 0;
     padding: 0;
     margin: 0;
   }
-  .quilx-picker-entry > text {
+  #PickerEntry > text {
     margin: 0;
     padding: 0;
   }
-  .quilx-picker-row-scrolled-window {
+  #PickerList {
     border-radius: var(--window-radius);
   }
   /* Drop Adwaita's built-in row padding so only the label's inset applies. */
-  .quilx-picker-row-scrolled-window row {
+  #PickerList row {
     padding: 0;
   }
-  .quilx-picker-row {
+  #PickerRow {
     padding: 0.5em 1em;
+  }
+  #PickerEmpty {
+    padding: 0.5em 1em;
+    opacity: 0.55;
   }
 `);
 
@@ -86,22 +90,30 @@ export function openPicker(options: PickerOptions): PickerHandle {
     placeholderText: options.placeholder ?? 'Search…',
   });
   entry.setHexpand(true);
-  entry.addCssClass('quilx-picker-entry');
+  entry.setName('PickerEntry');
+  entry.addCssClass('has-text-input'); // release the `space` leader so it types
 
   const listBox = new Gtk.ListBox();
   listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
+
+  // Shown by the list box whenever it has no rows; its text is updated in
+  // `rebuild` to distinguish "nothing to pick from" from "nothing matched".
+  const empty = new Gtk.Label({ xalign: 0 });
+  empty.setName('PickerEmpty');
+  listBox.setPlaceholder(empty);
 
   const scrolled = new Gtk.ScrolledWindow();
   scrolled.setChild(listBox);
   scrolled.setPropagateNaturalHeight(true);
   scrolled.setMaxContentHeight(PICKER_MAX_HEIGHT);
-  scrolled.addCssClass('quilx-picker-row-scrolled-window');
+  scrolled.setName('PickerList');
 
   // A floating, opaque "card" placed at the top-centre of the overlay.
-  const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-  panel.addCssClass('quilx-picker-panel');
+  const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
+  panel.setName('Picker');
   panel.setHalign(Gtk.Align.CENTER);
   panel.setValign(Gtk.Align.START);
+  panel.setMarginTop(48);
   panel.setSizeRequest(PICKER_WIDTH, -1);
   panel.append(entry);
   panel.append(scrolled);
@@ -113,10 +125,16 @@ export function openPicker(options: PickerOptions): PickerHandle {
   let results: string[] = [];
   let closed = false;
 
-  const close = () => {
+  // Remember whatever held focus before the picker grabbed it, so that
+  // dismissing without a selection returns focus there (e.g. back to the editor)
+  // instead of leaving it stranded on the now-removed overlay.
+  const previousFocus = host.getRoot()?.getFocus() ?? null;
+
+  const close = (restoreFocus = true) => {
     if (closed) return;
     closed = true;
     host.removeOverlay(panel);
+    if (restoreFocus) previousFocus?.grabFocus();
   };
 
   const rebuild = () => {
@@ -131,10 +149,13 @@ export function openPicker(options: PickerOptions): PickerHandle {
     for (const match of ranked) {
       const label = new Gtk.Label({ xalign: 0, useMarkup: true });
       label.setMarkup(highlightMarkup(match.item, match.positions));
-      label.addCssClass('quilx-picker-row');
+      label.setName('PickerRow');
       const row = new Gtk.ListBoxRow();
       row.setChild(label);
       listBox.append(row);
+    }
+    if (results.length === 0) {
+      empty.setText(items.length === 0 ? 'No entries' : 'No matches');
     }
     const first = listBox.getRowAtIndex(0);
     if (first) listBox.selectRow(first);
@@ -145,7 +166,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     if (!target) return;
     const item = results[target.getIndex()];
     if (item === undefined) return;
-    close();
+    close(false);
     options.onSelect(item);
   };
 

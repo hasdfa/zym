@@ -6,12 +6,13 @@
  * then walks a focused widget's ancestor chain to decide whether a rule applies.
  *
  * Adaptations for quilx:
- *   - a selector's element/tag is matched against the widget's GTK name
- *     (`getName()`), and `:not()`/class fragments against its CSS classes
+ *   - both an `#id` selector and a bare tag are matched against the widget's GTK
+ *     name (`getName()`); `:not()`/class fragments match its CSS classes
  *     (`getCssClasses()`). A widget's name defaults to its node-gtk type name
- *     (e.g. "GtkBox", "AdwApplicationWindow"), but components override it with
- *     their JS class name (`widget.setName('Panel')`), so a friendly tag
- *     selector like `Panel` targets them without needing a class selector;
+ *     (e.g. "GtkText", "GtkSourceView"), but quilx components override it with
+ *     their JS class name (`widget.setName('Panel')`). The convention is to
+ *     target a quilx component with `#Panel` and a raw GTK widget by its type
+ *     tag (e.g. `GtkText`, `GtkSourceView.insert-mode`);
  *   - the debug `console.log` at module load was removed and `translateTag`
  *     reduced to an identity passthrough (the Atom `atom-*` tag aliases don't
  *     map onto GTK widget names) — it stays as the extension point for aliases.
@@ -29,6 +30,7 @@ type Widget = InstanceType<typeof Gtk.Widget>;
 
 export interface RuleNode {
   element?: string;
+  id?: string;
   has: string[];
   not: string[];
   combinator?: string;
@@ -36,10 +38,12 @@ export interface RuleNode {
 
 export interface Rule {
   element: string | undefined;
+  /** The subject's `#id` (matched, like a tag, against the widget's name). */
+  id?: string;
   /**
-   * The single bucket this rule is indexed under: its subject's tag if it has
-   * one, else its subject's first CSS class, else `*` (the wildcard bucket). See
-   * `elementMatchKeys` for the lookup side.
+   * The single bucket this rule is indexed under: its subject's tag or `#id` if
+   * it has one, else its subject's first CSS class, else `*` (the wildcard
+   * bucket). See `elementMatchKeys` for the lookup side.
    */
   key: string;
   description: RuleNode[];
@@ -92,6 +96,10 @@ function parseRule(selector: any): Rule {
         current.element = translateTag(node.value);
         break;
       }
+      case 'id': {
+        current.id = node.value;
+        break;
+      }
       case 'pseudo': {
         if (node.value === ':not')
           current.not.push(getValue(node.nodes[0].nodes[0]));
@@ -123,13 +131,14 @@ function parseRule(selector: any): Rule {
   // `.Panel` — its first class; `*` is the catch-all for selectors with neither.
   const subject = elements[elements.length - 1];
   const element = subject.element;
-  const key = subject.element ?? subject.has[0] ?? '*';
+  const key = subject.element ?? subject.id ?? subject.has[0] ?? '*';
 
   if (key === '*')
-    console.warn('Rule with no element or class: ' + selector.toString());
+    console.warn('Rule with no element, id, or class: ' + selector.toString());
 
   return {
     element,
+    id: subject.id,
     key,
     description: elements,
   };
@@ -148,6 +157,8 @@ export function elementMatchKeys(element: Widget): string[] {
 
 export function matchesRule(element: Widget, rule: Rule): boolean {
   if (rule.element && rule.element !== element.getName())
+    return false;
+  if (rule.id && rule.id !== element.getName())
     return false;
 
   let current: Widget | null = element;
@@ -189,6 +200,8 @@ export function matchesRule(element: Widget, rule: Rule): boolean {
 function matchesNode(element: Widget, node: RuleNode): boolean {
   if (node.element && element.getName() !== node.element)
     return false;
+  if (node.id && element.getName() !== node.id)
+    return false;
   if (node.has.length === 0 && node.not.length === 0)
     return true;
   const classNames = element.getCssClasses();
@@ -202,7 +215,12 @@ function matchesNode(element: Widget, node: RuleNode): boolean {
 function descriptionToString(d: RuleNode): string {
   if (d.combinator)
     return d.combinator;
-  return [d.element, ...d.has.map(c => `.${c}`), ...d.not.map(c => `:not(.${c})`)].join('');
+  return [
+    d.element,
+    d.id ? `#${d.id}` : '',
+    ...d.has.map(c => `.${c}`),
+    ...d.not.map(c => `:not(.${c})`),
+  ].join('');
 }
 
 function getValue(node: any): string {

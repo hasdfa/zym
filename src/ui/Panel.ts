@@ -1,9 +1,11 @@
 /*
- * Panel — a content host holding one or more child widgets. With a single child
+ * Panel — a content host holding zero or more child widgets. With a single child
  * it shows just that child; with several it shows an Adw.TabBar above an
  * Adw.TabView, turning the children into switchable tabs. The tab bar auto-hides
  * down to one child, so the single-child case is chromeless ("just its only
- * child"). The assembled widget is `root`.
+ * child"). With no children it shows a friendly empty-state placeholder — a panel
+ * is allowed to sit empty (e.g. a fresh split whose source widget can't be
+ * duplicated). The assembled widget is `root`.
  *
  * Children are added with `add()`, which returns a handle for renaming or
  * closing the child's tab. The panel tracks the active child and fires
@@ -11,30 +13,20 @@
  * whatever is focused. This is the building block of the future splittable
  * panel tree (VS Code-style editor groups).
  */
-import { Adw, Gtk } from '../gi.ts';
+import { Adw, Gtk, Pango } from '../gi.ts';
+import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { quilx } from '../quilx.ts';
 
+// Nerd Font emoticons for the empty-state face (bundled icon font). Neutral while
+// the panel is idle, smiling when it is the active panel — see Panel.setActive.
+const EMOTICON_NEUTRAL = String.fromCodePoint(0xf11a); // nf-fa-meh_o
+const EMOTICON_HAPPY = String.fromCodePoint(0xf118); // nf-fa-smile_o
+
+// Empty-state caption: cheerier once the panel is focused (active).
+const EMPTY_TEXT_IDLE = 'This panel is feeling a little lonely.';
+const EMPTY_TEXT_ACTIVE = 'This panel is feeling ok.';
+
 type Widget = InstanceType<typeof Gtk.Widget>;
-
-// Tab-navigation key bindings, shared by every panel and registered once. They
-// target the `Panel` selector (each panel sets its widget name to "Panel"), so
-// the CAPTURE-phase keymap controller routes a keystroke to whichever panel
-// currently holds focus (its root is in the focus chain). The matching commands
-// are registered per-instance (see `registerTabCommands`), so dispatch lands on
-// the focused panel and the host needs no "which panel has focus?" bookkeeping.
-const TAB_KEYMAP: Record<string, string> = {
-  'ctrl-Page_Down': 'tab:next',
-  'ctrl-Page_Up': 'tab:previous',
-  'alt-9': 'tab:go-to-last',
-};
-for (let n = 1; n <= 8; n++) TAB_KEYMAP[`alt-${n}`] = `tab:go-to-${n}`;
-
-let tabKeymapRegistered = false;
-function ensureTabKeymap(): void {
-  if (tabKeymapRegistered) return;
-  tabKeymapRegistered = true;
-  quilx.keymaps.add('Panel', { Panel: TAB_KEYMAP });
-}
 
 export interface PanelOptions {
   /** Fired when the active child changes (null when the panel is empty). */
@@ -45,10 +37,12 @@ export interface PanelOptions {
   onEmpty?: () => void;
 }
 
-/** A handle to a child hosted in a panel, for renaming or closing its tab. */
+/** A handle to a child hosted in a panel, for renaming, selecting, or closing its tab. */
 export interface PanelChild {
   readonly widget: Widget;
   setTitle(title: string): void;
+  /** Make this child's tab the selected one in its panel. */
+  select(): void;
   close(): void;
 }
 
@@ -57,6 +51,15 @@ export class Panel {
 
   private readonly options: PanelOptions;
   private readonly view: InstanceType<typeof Adw.TabView>;
+  // A two-page stack: the tab content when populated, the empty-state placeholder
+  // when the panel holds no tabs. `updateEmptyState` swaps between them.
+  private readonly stack: InstanceType<typeof Gtk.Stack>;
+  // The empty-state placeholder (shown when the panel has no tabs), its face, and
+  // its caption; the face's glyph/color and the caption text follow the panel's
+  // active state.
+  private emptyState!: InstanceType<typeof Gtk.Box>;
+  private emoticon!: InstanceType<typeof Gtk.Label>;
+  private emptyText!: InstanceType<typeof Gtk.Label>;
 
   constructor(options: PanelOptions = {}) {
     this.options = options;
@@ -68,47 +71,128 @@ export class Panel {
     bar.setView(this.view);
     bar.setAutohide(true); // a lone child is shown chromeless, with no tab bar
 
+    const content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    content.append(bar);
+    content.append(this.view);
+
+    this.stack = new Gtk.Stack();
+    this.stack.setHexpand(true);
+    this.stack.setVexpand(true);
+    this.stack.addNamed(this.buildEmptyState(), 'empty');
+    this.stack.addNamed(content, 'content');
+
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('Panel'); // selector identity for command/keymap rules
-    this.root.addCssClass('quilx-panel'); // hook for theme-chrome tab-bar styling
-    this.root.append(bar);
-    this.root.append(this.view);
+    this.root.setName('Panel'); // selector identity for command/keymap + CSS (#Panel)
+    this.root.append(this.stack);
 
     this.view.on('notify::selected-page', () => {
       this.options.onActiveChanged?.(this.activeChild);
     });
     this.view.on('page-detached', (page: any) => {
       this.options.onClosed?.(page.getChild());
+      this.updateEmptyState();
       if (this.view.getNPages() === 0) this.options.onEmpty?.();
     });
 
-    ensureTabKeymap();
+    this.updateEmptyState();
     this.registerTabCommands();
   }
 
+  // The placeholder shown when the panel has no tabs: a centered Nerd Font
+  // emoticon above a single muted line. The outer box fills the panel (so its
+  // background covers the whole area), with the content centered inside it. The
+  // face tracks the active state.
+  private buildEmptyState(): Widget {
+    const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    outer.setName('PanelEmptyState'); // CSS identity (#PanelEmptyState) — paints the fill
+    outer.setHexpand(true);
+    outer.setVexpand(true);
+    // Focusable so an empty pane can take keyboard focus after a split (the host
+    // grabs focus on the panel root when it has no active tab to focus instead).
+    outer.setFocusable(true);
+
+    // Centered content group: expands to claim the area, then centers within it.
+    const inner = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    inner.setHexpand(true);
+    inner.setVexpand(true);
+    inner.setHalign(Gtk.Align.CENTER);
+    inner.setValign(Gtk.Align.CENTER);
+
+    // The emoticon is a Nerd Font glyph rendered in the bundled icon font (like
+    // the file-tree icons); its color is left to CSS so it follows the theme.
+    const faceAttrs = Pango.AttrList.new();
+    faceAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(`${ICON_FONT_FAMILY} 32`)));
+    this.emoticon = new Gtk.Label({ label: EMOTICON_NEUTRAL });
+    this.emoticon.setName('PanelEmptyEmoticon'); // CSS identity (#PanelEmptyEmoticon)
+    this.emoticon.setAttributes(faceAttrs);
+    this.emoticon.setMarginBottom(12);
+
+    // Bold, slightly enlarged caption; color stays muted via CSS.
+    const textAttrs = Pango.AttrList.new();
+    textAttrs.insert(Pango.attrWeightNew(Pango.Weight.BOLD));
+    textAttrs.insert(Pango.attrScaleNew(1.1));
+    this.emptyText = new Gtk.Label({ label: EMPTY_TEXT_IDLE });
+    this.emptyText.setName('PanelEmptyText'); // CSS identity (#PanelEmptyText)
+    this.emptyText.setAttributes(textAttrs);
+
+    inner.append(this.emoticon);
+    inner.append(this.emptyText);
+    outer.append(inner);
+    this.emptyState = outer;
+    return outer;
+  }
+
+  /** Move keyboard focus into the panel's empty-state placeholder, so an empty
+   *  pane can steal focus from whatever held it (e.g. after a split). A no-op
+   *  returning false when the panel has tabs — its active child owns focus then. */
+  focusEmptyState(): boolean {
+    if (this.view.getNPages() > 0) return false;
+    return this.emptyState.grabFocus();
+  }
+
+  /** Reflect whether this is the active panel: the empty-state face smiles in the
+   *  foreground color when active, and sits neutral and muted otherwise. */
+  setActive(active: boolean): void {
+    this.emoticon.setLabel(active ? EMOTICON_HAPPY : EMOTICON_NEUTRAL);
+    this.emptyText.setLabel(active ? EMPTY_TEXT_ACTIVE : EMPTY_TEXT_IDLE);
+    if (active) this.emoticon.addCssClass('is-active');
+    else this.emoticon.removeCssClass('is-active');
+  }
+
+  // Show the empty-state placeholder when there are no tabs, the tab content
+  // otherwise. Called after every add/close so the panel never shows a blank
+  // Adw.TabView.
+  private updateEmptyState(): void {
+    this.stack.setVisibleChildName(this.view.getNPages() === 0 ? 'empty' : 'content');
+  }
+
   // Each panel owns the commands that switch *its own* tabs, registered against
-  // its root widget instance. The shared `TAB_KEYMAP` (above) routes keystrokes
-  // to the focused panel, which dispatches them back here.
+  // its root widget instance. The shared `Panel` key bindings (central keymap)
+  // route keystrokes to the focused panel, which dispatches them back here.
   private registerTabCommands(): void {
-    const commands: Record<string, () => void> = {
+    quilx.commands.add(this.root, {
       'tab:next': () => this.selectNextTab(),
       'tab:previous': () => this.selectPreviousTab(),
       'tab:go-to-last': () => this.selectLastTab(),
-    };
-    for (let n = 1; n <= 8; n++) {
-      commands[`tab:go-to-${n}`] = () => this.selectTab(n - 1);
-    }
-    quilx.commands.add(this.root, commands);
+      // Parameterized: the first argument is the 0-based tab index (the central
+      // keymap binds alt-1..8 to `{ command: 'tab:go-to', args: [n] }`).
+      'tab:go-to': (_event, _element, index) => this.selectTab(index),
+      'tab:close': () => this.closeActiveTab(),
+    });
   }
 
   /** Add `child` as a new tab and select it. */
   add(child: Widget, options: { title?: string } = {}): PanelChild {
     const page = this.view.append(child);
+    // A direct child of a Panel — a styling hook for whatever lives in a tab.
+    child.addCssClass('is-panel-child');
     if (options.title) page.setTitle(options.title);
     this.view.setSelectedPage(page);
+    this.updateEmptyState();
     return {
       widget: child,
       setTitle: (title: string) => page.setTitle(title),
+      select: () => this.view.setSelectedPage(page),
       close: () => this.view.closePage(page),
     };
   }
@@ -116,6 +200,12 @@ export class Panel {
   get activeChild(): Widget | null {
     const page = this.view.getSelectedPage();
     return page ? page.getChild() : null;
+  }
+
+  /** Close the selected tab (the active panel child); a no-op when empty. */
+  closeActiveTab(): void {
+    const page = this.view.getSelectedPage();
+    if (page) this.view.closePage(page);
   }
 
   /** Close every tab. Each closure fires `onClosed`; the last fires `onEmpty`. */
@@ -143,8 +233,10 @@ export class Panel {
     if (count > 0) this.view.setSelectedPage(this.view.getNthPage(count - 1));
   }
 
-  /** Select the tab at `index` (0-based); a no-op if out of range. */
+  /** Select the tab at `index` (0-based); a no-op if out of range or not an
+   *  integer (e.g. the command run from the palette with no argument). */
   selectTab(index: number): void {
+    if (!Number.isInteger(index)) return;
     if (index < 0 || index >= this.view.getNPages()) return;
     this.view.setSelectedPage(this.view.getNthPage(index));
   }

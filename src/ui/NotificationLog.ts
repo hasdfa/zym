@@ -20,11 +20,17 @@ export class NotificationLog {
 
   private readonly listBox: InstanceType<typeof Gtk.ListBox>;
   private readonly subs = new CompositeDisposable();
+  // Notifications parallel to the rows, mapping a row index back to its model so
+  // an activated row can run its default action.
+  private rows: Notification[] = [];
 
   constructor() {
     this.listBox = new Gtk.ListBox();
     this.listBox.setSelectionMode(Gtk.SelectionMode.NONE);
     this.listBox.addCssClass('NotificationList');
+    // Activating a row (click / Enter) runs that notification's default action,
+    // if any; the row is only activatable when it has one.
+    this.listBox.on('row-activated', (row: any) => this.rows[row.getIndex()]?.activate());
 
     this.root = new Gtk.ScrolledWindow();
     this.root.setName('NotificationLog'); // selector identity for keymap + CSS
@@ -47,6 +53,7 @@ export class NotificationLog {
   private addRow(notification: Notification): void {
     const icon = new Gtk.Image({ iconName: notification.getIcon() });
     icon.setValign(Gtk.Align.START);
+    icon.addCssClass('notification-icon'); // colored per severity — see AppWindow
 
     const text = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true });
     const message = new Gtk.Label({ xalign: 0, wrap: true });
@@ -75,9 +82,11 @@ export class NotificationLog {
 
     const row = new Gtk.ListBoxRow();
     row.setSelectable(false);
-    row.setActivatable(false);
+    // Only rows with a default action are activatable (and show the affordance).
+    row.setActivatable(notification.hasDefaultAction());
     row.setChild(box);
     this.listBox.append(row);
+    this.rows.push(notification);
   }
 
   private clearRows(): void {
@@ -87,6 +96,7 @@ export class NotificationLog {
       this.listBox.remove(child);
       child = next;
     }
+    this.rows = [];
   }
 
   dispose(): void {

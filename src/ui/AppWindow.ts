@@ -14,7 +14,6 @@
 import * as Path from 'node:path';
 import {
   Adw,
-  Gio,
   Gtk,
   type Application,
   type ApplicationWindow,
@@ -26,22 +25,33 @@ import { Panel, type PanelChild } from './Panel.ts';
 import { PanelGroup, type Direction } from './PanelGroup.ts';
 import { TextEditor } from './TextEditor/index.ts';
 import { Terminal } from './Terminal.ts';
+import { AgentTerminal } from './AgentTerminal.ts';
+import { AgentList } from './AgentList.ts';
 import { BranchButton } from './BranchButton.ts';
 import { openGitRepo, type GitRepo } from '../git.ts';
 import { Workbench } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
+import { openAgentPicker } from './AgentPicker.ts';
+import { openConfigEditor } from './ConfigEditor.ts';
 import { quilx } from '../quilx.ts';
-import { loadConfig } from '../config/load.ts';
+import { type Notification } from '../Notification.ts';
+import { NotificationLog } from './NotificationLog.ts';
+import { NotificationToasts } from './NotificationToasts.ts';
+import { loadKeymaps } from '../keymaps/load.ts';
+import { loadConfig, configPath } from '../config/load.ts';
 import { type DisposableLike } from '../util/eventKit.ts';
 import { styles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 
 // The header-bar title is the project name: the last path component of the cwd.
 const PROJECT_NAME = Path.basename(process.cwd());
-const DEFAULT_WIDTH = 1000;
-const DEFAULT_HEIGHT = 800;
-const TOAST_TIMEOUT = 3;
+const DEFAULT_WIDTH = 1400;
+const DEFAULT_HEIGHT = 950;
+const TOAST_TIMEOUT = 15;
+// Initial divider (px from top) between the file tree and the agent list — the
+// file tree gets a compact top section so the agent list takes the rest.
+const LEFT_SPLIT_POSITION = 260;
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
@@ -58,18 +68,36 @@ export class AppWindow {
   // active child can be resolved back to its Terminal (it has no vim state).
   private readonly terminals = new Map<Widget, Terminal>();
 
-  // The left dock (file tree), kept as fields so the pane-switching demo
-  // commands can move focus between the docks.
+  // The left dock: file tree above, agent list below (a vertical split). Kept as
+  // fields so the pane-switching commands can move focus between the docks.
   private readonly leftPanel: Panel;
   private readonly fileTree: FileTree;
+  private readonly agentList: AgentList;
+  // Maps an agent's root widget to its center tab handle, so the agent list can
+  // reveal (select) the agent's tab on activation.
+  private readonly agentChildren = new Map<Widget, PanelChild>();
   private readonly windowTitle: WindowTitle;
   private readonly toastOverlay: ToastOverlay;
   private readonly overlay: InstanceType<typeof Gtk.Overlay>;
   private readonly window: ApplicationWindow;
 
+  // Transient notification toasts, stacked in the bottom-right of the content
+  // overlay (severity-colored). The log keeps the full history; these come and go.
+  private readonly notificationToasts: NotificationToasts;
+
+  // The notification log lives in the bottom dock, hidden until toggled. Held
+  // (with its dock host) so `notifications:toggle-log` can dock/undock it.
+  private readonly workbench: Workbench;
+  private readonly notificationLog: NotificationLog;
+  private readonly notificationPanel: Panel;
+  private notificationLogVisible = false;
+
   // Git integration for the header-bar branch indicator.
   private readonly git: GitRepo;
   private readonly branchButton: BranchButton;
+  // Last-seen upstream "behind" count, to fire the pull notification only on the
+  // transition into being behind (not on every status poll while behind).
+  private lastBehind = 0;
 
   // Watches the user config file and syncs edits into quilx.config; cancelled on
   // close.
@@ -97,20 +125,42 @@ export class AppWindow {
       onClosed: (widget) => {
         this.editors.delete(widget);
         this.terminals.delete(widget);
+        this.agentChildren.delete(widget);
       },
-      onEmpty: () => this.onQuit(),
+      // No onEmpty/quit: emptying the last panel leaves it showing the empty
+      // state. The app quits via the window close button or `app:quit`.
     });
 
-    const workbench = new Workbench();
+    this.workbench = new Workbench();
     this.fileTree = new FileTree({
       rootPath: process.cwd(),
       onOpenFile: (path) => this.openFile(path),
+      git: this.git,
     });
-    this.fileTree.root.addCssClass('quilx-filetree');
     this.leftPanel = new Panel();
     this.leftPanel.add(this.fileTree.root);
-    workbench.setLeft(this.leftPanel);
-    workbench.setCenter(this.center);
+
+    // The agent list sits below the file tree in the left dock. A vertical Paned
+    // of two Panels (the same Paned-of-Panels shape PanelGroup builds), so the
+    // side dock is a natural step toward becoming fully splittable.
+    this.agentList = new AgentList({ onActivate: (agent) => this.showAgent(agent) });
+    const agentPanel = new Panel();
+    agentPanel.add(this.agentList.root, { title: 'Agents' });
+
+    const leftPaned = new Gtk.Paned({ orientation: Gtk.Orientation.VERTICAL });
+    leftPaned.setStartChild(this.leftPanel.root);
+    leftPaned.setEndChild(agentPanel.root);
+    leftPaned.setPosition(LEFT_SPLIT_POSITION);
+    leftPaned.setResizeStartChild(false); // window resize grows the agent list, not the tree
+
+    this.workbench.setLeft({ root: leftPaned });
+    this.workbench.setCenter(this.center);
+
+    // The notification log: built now (so it backfills history), wrapped in a
+    // Panel for its title tab, but only docked into the bottom slot on toggle.
+    this.notificationLog = new NotificationLog();
+    this.notificationPanel = new Panel();
+    this.notificationPanel.add(this.notificationLog.root, { title: 'Notifications' });
 
     const toolbarView = new Adw.ToolbarView();
     toolbarView.addTopBar(this.buildHeaderBar());
@@ -118,13 +168,21 @@ export class AppWindow {
     // only the content, so the picker floats over the workbench below the header
     // bar rather than over the whole window.
     this.overlay = new Gtk.Overlay();
-    this.overlay.setChild(workbench.root);
+    this.overlay.setChild(this.workbench.root);
+    // Notification toasts float in the bottom-right of the content area.
+    this.notificationToasts = new NotificationToasts({ timeout: TOAST_TIMEOUT });
+    this.overlay.addOverlay(this.notificationToasts.root);
     toolbarView.setContent(this.overlay);
     toolbarView.addBottomBar(this.buildStatusBar());
     this.toastOverlay.setChild(toolbarView);
 
+    // Bridge the notification manager to the toast stack: every posted
+    // notification pops a transient, severity-colored toast. The manager retains
+    // the full history for the log; the toast is just the ephemeral view.
+    quilx.notifications.onDidAddNotification((n) => this.notificationToasts.show(n as Notification));
+
     this.applyChromeStyles();
-    this.registerActions();
+    this.applyNotificationStyles();
 
     this.window = new Adw.ApplicationWindow({ application: app });
     this.window.setName('AppWindow'); // selector identity for command/keymap rules
@@ -135,19 +193,32 @@ export class AppWindow {
     // CAPTURE-phase key controller.
     quilx.window = this.window;
     quilx.keymaps.initialize();
+    // Components register their commands; the keymap (bindings) is loaded
+    // centrally from src/keymaps (default table + optional user override).
     this.registerPaneCommands();
     this.registerWindowCommands();
     this.registerTerminalCommands();
     this.registerGitCommands();
+    this.registerNotificationCommands();
+    this.registerConfigCommands();
+    loadKeymaps();
 
     // Seed/load the user config and keep it in sync with on-disk edits. Done
     // before the first file opens so editors read live config values.
     this.configWatcher = loadConfig();
 
+    // Watch the upstream sync state: when the branch falls behind its upstream
+    // (e.g. a fetch brought in remote commits), offer to pull. Seed from the
+    // current state so an already-behind repo doesn't toast on launch.
+    this.lastBehind = this.git.getAheadBehind()?.behind ?? 0;
+    this.git.onChange(() => this.checkUpstream());
+
     this.window.on('close-request', () => {
       this.branchButton.dispose();
       this.git.dispose();
       this.configWatcher.dispose();
+      this.agentList.dispose();
+      this.notificationLog.dispose();
       this.onQuit();
       return false;
     });
@@ -200,6 +271,55 @@ export class AppWindow {
     return terminal;
   }
 
+  /** Launch a new agent (the configured CLI) and show it in a center tab. */
+  private openAgent(): AgentTerminal {
+    const agent = new AgentTerminal({
+      cwd: process.cwd(),
+      // No onExit: when the agent process exits the widget stays put (it prints a
+      // "process exited" notice and flips to an exited status). After that, Enter
+      // closes the agent's current tab.
+      onCloseRequest: () => this.agentChildren.get(agent.root)?.close(),
+    });
+    // One persistent title binding that updates whichever tab currently shows the
+    // agent (survives close/reopen, since it reads agentChildren on each change).
+    agent.onTitleChange(() => this.agentChildren.get(agent.root)?.setTitle(agent.title));
+    this.showAgent(agent);
+    return agent;
+  }
+
+  /**
+   * Show `agent` in the center: select its existing tab, or — if it has none
+   * (its tab was closed while the process kept running) — reattach its persisted
+   * terminal widget to a fresh tab. Driven by openAgent and the agent list.
+   */
+  private showAgent(agent: AgentTerminal): void {
+    // Gate on whether the widget is actually attached to a window, NOT on the
+    // bookkeeping map. The map can desync — a spurious page-detached drops a live
+    // tab's handle, a closed tab can leave a stale one — and trusting it caused
+    // two failures: force-unparenting a still-live tab ("the agent closed for no
+    // reason") and stranding the agent forever ("can't reopen by any mean").
+    //
+    // getRoot() is non-null for any live tab — even an unselected background one —
+    // and null once the tab is closed, even though Adw leaves the widget parented
+    // to a not-yet-finalized "zombie" page (so getParent() alone is unreliable).
+    if (agent.root.getRoot() !== null) {
+      this.agentChildren.get(agent.root)?.select(); // best effort; focus always lands
+      agent.focus();
+      return;
+    }
+
+    // Closed (or never shown): reattach to a fresh tab. Only now is unparenting
+    // safe — getRoot() is null, so we're detaching from a dead zombie page rather
+    // than ripping the widget out of a live tab.
+    this.agentChildren.delete(agent.root);
+    if (agent.root.getParent()) agent.root.unparent();
+
+    this.terminals.set(agent.root, agent);
+    const child = this.center.add(agent.root, { title: agent.title });
+    this.agentChildren.set(agent.root, child);
+    agent.focus();
+  }
+
   // --- Active-editor wiring (vim status line) --------------------------------
 
   // Connect an editor's vim signals once, at creation. The handlers update the
@@ -238,7 +358,7 @@ export class AppWindow {
 
   private buildHeaderBar() {
     const header = new Adw.HeaderBar();
-    header.addCssClass('quilx-headerbar');
+    header.setName('Header'); // CSS identity (#Header)
     header.setTitleWidget(this.windowTitle);
     header.packStart(this.branchButton.root);
     return header;
@@ -251,7 +371,7 @@ export class AppWindow {
     this.commandPreview.addCssClass('monospace');
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 12 });
-    box.addCssClass('quilx-statusbar');
+    box.setName('StatusBar'); // CSS identity (#StatusBar)
     box.setMarginStart(6);
     box.setMarginEnd(6);
     box.append(this.commandBar);
@@ -261,82 +381,127 @@ export class AppWindow {
 
   // --- Theme chrome ----------------------------------------------------------
 
-  // Paint the window chrome (header bar, file tree, status/command bar) with the
-  // theme's background. Installed as a single keyed, replaceable stylesheet so a
-  // future theme switch can re-apply it. Themes without their own background
-  // (ui.bg unset) leave the chrome to the system Adwaita styling.
+  // Paint the window chrome (header bar, file tree, status/command bar, panel tab
+  // bars) plus popover surfaces (pickers) and selected entries with the theme's
+  // colors. Installed as a single keyed, replaceable stylesheet so a future theme
+  // switch can re-apply it. Themes without their own background (ui.bg unset)
+  // leave the chrome to the system Adwaita styling.
   private applyChromeStyles() {
-    const bg = theme.ui.bg;
+    const { bg, popoverBg, selectedBg } = theme.ui;
     if (!bg) {
       styles.remove('theme-chrome');
       return;
     }
     const border = theme.ui.border ?? 'rgba(0, 0, 0, 0.3)';
-    styles.set(
-      `
-        headerbar.quilx-headerbar {
-          background: ${bg};
-          box-shadow: none;
-          border-bottom: 1px solid ${border};
-        }
-        .quilx-statusbar { background-color: ${bg}; }
-        .quilx-filetree, .quilx-filetree listview { background-color: ${bg}; }
-        .quilx-panel tabbar .box,
-        .quilx-panel tabbar tabbox,
-        .quilx-panel tabbar tab { background-color: ${bg}; }
-        .quilx-panel tabbar .box { box-shadow: none; padding: 0; min-height: 0; }
-        .quilx-panel tabbar tabbox { padding: 0; min-height: 0; }
-        .quilx-panel tabbar tab { min-height: 0; padding: 2px 12px; }
-        .quilx-panel tabbar tab:hover { background-color: shade(${bg}, 1.2); }
-        .quilx-panel tabbar tab:selected {
-          background-color: shade(${bg}, 1.6);
-          box-shadow: inset 0 -2px ${border};
-        }
-      `,
-      { key: 'theme-chrome' },
-    );
+    // De-emphasized text for the empty-panel placeholder; fall back to a faded
+    // foreground when the theme defines no explicit muted color.
+    const muted = theme.ui.textMuted ?? `alpha(${theme.ui.fg}, 0.55)`;
+    const rules = [
+      `#Header {
+        background: ${bg};
+        box-shadow: none;
+        border-bottom: 1px solid ${border};
+      }`,
+      `#StatusBar { background-color: ${bg}; }`,
+      `#FileTree, #FileTree listview { background-color: ${bg}; }`,
+      `#NotificationLog, #NotificationLog list { background-color: ${bg}; }`,
+      `#AgentList, #AgentList list { background-color: ${bg}; }`,
+      `#AgentRow { padding: 2px 12px; }`,
+      `#Panel tabbar .box,
+       #Panel tabbar tabbox,
+       #Panel tabbar tab { background-color: ${bg}; }`,
+      `#Panel tabbar .box { box-shadow: none; padding: 0; min-height: 0; }`,
+      `#Panel tabbar tabbox { padding: 0; min-height: 0; }`,
+      `#Panel tabbar tab { min-height: 0; padding: 2px 12px; }`,
+      `#Panel tabbar tab:hover { background-color: shade(${bg}, 1.2); }`,
+      `#Panel tabbar tab:selected {
+        background-color: shade(${bg}, 1.6);
+        box-shadow: inset 0 -2px ${border};
+      }`,
+      // The empty-panel placeholder blends into the app background; its text and
+      // idle face are de-emphasized, and the face brightens to the foreground
+      // color when this is the active panel.
+      `#PanelEmptyState { background-color: ${bg}; }`,
+      `#PanelEmptyText, #PanelEmptyEmoticon { color: ${muted}; }`,
+      `#PanelEmptyEmoticon.is-active { color: ${theme.ui.fg}; }`,
+    ];
+
+    // Popover surfaces: the picker card, its search entry, and result list.
+    if (popoverBg) {
+      rules.push(
+        `#Picker,
+         #PickerEntry,
+         #PickerList,
+         #PickerList list { background-color: ${popoverBg}; }`,
+      );
+    }
+
+    // Selected entries in lists (file tree, picker results). The file-tree
+    // selection is painted only while the tree is focused (`:focus-within`); an
+    // unfocused tree drops it — see FileTree's `:not(:focus-within)` rule — so the
+    // selected row reads as inactive. Pickers are always focused when shown.
+    if (selectedBg) {
+      rules.push(
+        `#FileTree:focus-within listview row:selected,
+         #AgentList:focus-within list row:selected,
+         #PickerList row:selected { background-color: ${selectedBg}; }`,
+      );
+    }
+
+    styles.set(rules.join('\n'), { key: 'theme-chrome' });
   }
 
-  // --- Actions & keyboard shortcuts ------------------------------------------
+  // Severity styling shared by the toasts and the log: each `notification-<type>`
+  // colors its icon, and a toast card gets a matching left accent border, so the
+  // severity is legible at a glance. Colors come from the theme's semantic keys
+  // (fatal reuses error), with Adwaita-ish fallbacks; applied independently of
+  // the chrome so it works even for themes that leave the chrome to Adwaita.
+  private applyNotificationStyles() {
+    const { info, success, warning, error, popoverBg, border } = theme.ui;
+    const colors: Record<string, string> = {
+      info: info ?? '#3584e4',
+      success: success ?? '#2ec27e',
+      warning: warning ?? '#e5a50a',
+      error: error ?? '#e01b24',
+      fatal: error ?? '#e01b24',
+    };
 
-  private registerActions() {
-    this.addAction('open', '<Control>o', () => this.openDialog());
-    this.addAction('find-file', '<Alt>o', () =>
-      openFilePicker(this.overlay, (path) => this.openFile(path)),
-    );
-    this.addAction('save', '<Control>s', () => this.saveActive());
-    this.addAction('save-as', '<Control><Shift>s', () => this.saveAsDialog());
-    this.addAction('quit', '<Control>q', () => this.onQuit());
-    this.addAction('command-palette', '<Control><Shift>p', () =>
-      openCommandPicker(this.overlay),
-    );
+    const rules = [
+      `.NotificationToast {
+        background-color: ${popoverBg ?? '@popover_bg_color'};
+        border: 1px solid ${border ?? 'rgba(0, 0, 0, 0.3)'};
+        border-radius: 12px;
+        padding: 8px 10px;
+        min-width: 260px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      }`,
+      // Clickable toasts (default action) get a pointer cursor and hover tint.
+      `.NotificationToast.activatable { cursor: pointer; }`,
+      `.NotificationToast.activatable:hover { background-color: shade(${popoverBg ?? '@popover_bg_color'}, 1.15); }`,
+    ];
+    for (const [type, color] of Object.entries(colors)) {
+      rules.push(`.notification-${type} .notification-icon { color: ${color}; }`);
+      rules.push(`.NotificationToast.notification-${type} { border-left: 4px solid ${color}; }`);
+      rules.push(`#NotificationRow.notification-${type} { border-left: 3px solid ${color}; padding-left: 6px; }`);
+    }
+
+    styles.set(rules.join('\n'), { key: 'notification-colors' });
   }
 
-  private addAction(name: string, accel: string, callback: (...args: any[]) => any) {
-    const action = Gio.SimpleAction.new(name, null);
-    action.on('activate', callback);
-    this.app.addAction(action);
-    this.app.setAccelsForAction(`app.${name}`, [accel]);
-  }
+  // --- Commands --------------------------------------------------------------
+  // Each group registers its command handlers; the key bindings that invoke them
+  // live in the central keymap (src/keymaps/default.ts), loaded once at startup.
 
   // --- Pane switching (demo of the ported command/keymap managers) -----------
 
-  // Vim-style window (split) management wired through the ported CommandManager
-  // + KeymapManager. The bindings target the `AppWindow` selector (the window's
-  // widget name), which is always an ancestor of the focused widget, so the
-  // CAPTURE-phase keymap controller matches them no matter what is focused:
+  // Vim-style window (split) management. Handlers only; bindings (ctrl-w v/s/c,
+  // ctrl-w h/j/k/l, ctrl-w w) live in the central keymap under `#AppWindow`.
   //
-  //   ctrl-w v          split right (side by side)
-  //   ctrl-w s          split down (stacked)
-  //   ctrl-w c          close the active split
-  //   ctrl-w h/j/k/l    focus the split left/down/up/right
-  //   ctrl-w w          cycle through the splits
-  //   ctrl-w ctrl-w     cycle through the splits
-  //
-  // Directional focus stays within the center; at the left edge `ctrl-w h` falls
-  // back to the file-tree dock, and from the file tree `ctrl-w l` returns to it.
+  // Directional focus stays within the center; at the left edge `pane:focus-left`
+  // falls back to the file-tree dock, and from the file tree `pane:focus-right`
+  // returns to it.
   private registerPaneCommands() {
-    quilx.commands.add('AppWindow', {
+    quilx.commands.add('#AppWindow', {
       'pane:split-right': () => this.splitPane('right'),
       'pane:split-down': () => this.splitPane('down'),
       'pane:close': () => this.closePane(),
@@ -346,45 +511,28 @@ export class AppWindow {
       'pane:focus-down': () => this.navPane('down'),
       'pane:focus-next': () => this.focusNextPane(),
     });
-    quilx.keymaps.add('AppWindow', {
-      AppWindow: {
-        'ctrl-w v': 'pane:split-right',
-        'ctrl-w s': 'pane:split-down',
-        'ctrl-w c': 'pane:close',
-        'ctrl-w h': 'pane:focus-left',
-        'ctrl-w j': 'pane:focus-down',
-        'ctrl-w k': 'pane:focus-up',
-        'ctrl-w l': 'pane:focus-right',
-        'ctrl-w w': 'pane:focus-next',
-        'ctrl-w ctrl-w': 'pane:focus-next',
-      },
-    });
   }
 
-  // Window-level file/edit operations registered as commands so they appear in
-  // the command palette (Ctrl+Shift+P). They share the same handlers as the Gio
-  // actions/accelerators above, so both entry points stay in sync.
+  // Window-level file/edit operations, surfaced in the command palette and (for
+  // most) on the space leader. Handlers only; bindings live in the central keymap.
   private registerWindowCommands() {
-    quilx.commands.add('AppWindow', {
+    quilx.commands.add('#AppWindow', {
       'file:open': () => this.openDialog(),
       'file:find': () => openFilePicker(this.overlay, (path) => this.openFile(path)),
       'file:save': () => this.saveActive(),
       'file:save-as': () => this.saveAsDialog(),
       'app:quit': () => this.onQuit(),
+      'command-palette:toggle': () => openCommandPicker(this.overlay),
     });
   }
 
-  // Terminal commands: open a shell in a new center-panel tab. Registered on the
-  // window's widget class so the command is always available (command palette)
-  // and bound to ctrl-shift-t.
+  // Terminal command: open a shell in a new center-panel tab. Handler only;
+  // bound to `space t` in the central keymap.
   private registerTerminalCommands() {
-    quilx.commands.add('AppWindow', {
+    quilx.commands.add('#AppWindow', {
       'terminal:new': () => this.openTerminal(),
-    });
-    quilx.keymaps.add('AppWindow', {
-      AppWindow: {
-        'ctrl-shift-t': 'terminal:new',
-      },
+      'agent:new': () => this.openAgent(),
+      'agent:switch': () => openAgentPicker(this.overlay, (agent) => this.showAgent(agent)),
     });
   }
 
@@ -392,7 +540,7 @@ export class AppWindow {
   // blocking), so the branch button's spinner reflects progress automatically;
   // the result is surfaced as a toast.
   private registerGitCommands() {
-    quilx.commands.add('AppWindow', {
+    quilx.commands.add('#AppWindow', {
       'git:fetch': () => this.runGit(['fetch'], 'Fetch'),
       'git:pull': () => this.runGit(['pull', '--ff-only'], 'Pull'),
       'git:push': () => this.runGit(['push'], 'Push'),
@@ -401,6 +549,73 @@ export class AppWindow {
 
   private runGit(args: string[], label: string) {
     this.git.run(args, (ok) => this.toast(ok ? `${label} succeeded` : `${label} failed`));
+  }
+
+  // On the transition into being behind the upstream, post an info notification
+  // offering to pull. Only fires when `behind` goes from 0 to positive, so a
+  // repo that stays behind across status polls isn't re-toasted every tick.
+  private checkUpstream() {
+    const behind = this.git.getAheadBehind()?.behind ?? 0;
+    if (behind > 0 && this.lastBehind === 0) {
+      const commits = behind === 1 ? 'commit' : 'commits';
+      quilx.notifications.addInfo(`Upstream is ahead by ${behind} ${commits}`, {
+        detail: 'Your branch is behind its upstream — pull to update.',
+        buttons: [{ text: 'Pull', onDidClick: () => this.runGit(['pull', '--ff-only'], 'Pull') }],
+      });
+    }
+    this.lastBehind = behind;
+  }
+
+  // Notification log: show/hide the bottom-dock history, and clear it. Handlers
+  // only; bindings (`space n`, and `c` while the log is focused) live in the
+  // central keymap.
+  private registerNotificationCommands() {
+    quilx.commands.add('#AppWindow', {
+      'notifications:toggle-log': () => this.toggleNotificationLog(),
+      'notifications:clear': () => quilx.notifications.clear(),
+      // Run the default action of the most recent notification that has one.
+      'notifications:activate': () => quilx.notifications.activateLast(),
+      // Demo commands (command palette only): post one notification of each
+      // severity so the toast styling and the log can be exercised by hand.
+      'notifications:test-info': () =>
+        quilx.notifications.addInfo('Info notification', {
+          detail: 'Click me to run a default action.',
+          onDidClick: () => quilx.notifications.addSuccess('Default action ran'),
+        }),
+      'notifications:test-success': () =>
+        quilx.notifications.addSuccess('Success notification', { detail: 'Something worked.' }),
+      'notifications:test-warning': () =>
+        quilx.notifications.addWarning('Warning notification', { detail: 'Something looks off.' }),
+      'notifications:test-error': () =>
+        quilx.notifications.addError('Error notification', { detail: 'Something failed.' }),
+      'notifications:test-fatal': () =>
+        quilx.notifications.addFatalError('Fatal notification', {
+          detail: 'Something failed badly.',
+          dismissable: true,
+        }),
+    });
+  }
+
+  // Settings: open the Adwaita preferences window over the config schema, or the
+  // raw config.json in an editor tab. Handlers only; `config:open` is bound to
+  // `space ,` in the central keymap.
+  private registerConfigCommands() {
+    quilx.commands.add('#AppWindow', {
+      'config:open': () => openConfigEditor(this.window),
+      'config:open-as-text': () => this.openFile(configPath()),
+    });
+  }
+
+  // Dock the log into the bottom slot (and focus it) or remove it, tracking the
+  // state so the command is a true toggle.
+  private toggleNotificationLog() {
+    this.notificationLogVisible = !this.notificationLogVisible;
+    if (this.notificationLogVisible) {
+      this.workbench.setBottom(this.notificationPanel);
+      this.notificationLog.focus();
+    } else {
+      this.workbench.setBottom(null);
+    }
   }
 
   // Split the active center pane, opening the active editor's file in the new
@@ -443,11 +658,12 @@ export class AppWindow {
   }
 
   // Move keyboard focus to the content of the active center pane (its editor or
-  // terminal); fall back to the panel itself when it has no tabs.
+  // terminal); fall back to the panel's empty-state placeholder when it has no
+  // tabs, so an empty pane steals focus from whatever held it.
   private focusActivePane() {
     const widget = this.center.activePanel.activeChild;
     if (!widget) {
-      this.center.activePanel.root.grabFocus();
+      this.center.activePanel.focusEmptyState();
       return;
     }
     const editor = this.editors.get(widget);
@@ -508,7 +724,10 @@ export class AppWindow {
 
   // --- Window chrome helpers -------------------------------------------------
 
+  // Post an informational notification (also retained in the notification log).
+  // The toast is rendered by the manager bridge (NotificationToasts) in the
+  // constructor.
   private toast(message: string) {
-    this.toastOverlay.addToast(new Adw.Toast({ title: message, timeout: TOAST_TIMEOUT }));
+    quilx.notifications.addInfo(message);
   }
 }

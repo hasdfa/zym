@@ -7,7 +7,8 @@
  * New tabs open into the *active* leaf (the one that last held focus). Splitting
  * the active leaf wraps it in a fresh Paned alongside a new empty leaf; closing a
  * leaf's last tab collapses its split so the sibling reclaims the freed space;
- * emptying the final remaining leaf bubbles `onEmpty` (the host quits).
+ * emptying the final remaining leaf leaves it in place, empty (showing the
+ * Panel's empty state) — closing panels never quits the app.
  *
  * The assembled widget is `root`, a stable container whose single child is the
  * current tree-root widget — swapped in place as the tree reshapes, so the host
@@ -65,8 +66,6 @@ export interface PanelGroupOptions {
   onActiveChanged?: (child: Widget | null) => void;
   /** Fired when any tab is closed, so the host can drop its bookkeeping. */
   onClosed?: (child: Widget) => void;
-  /** Fired when the last tab of the last remaining leaf is removed. */
-  onEmpty?: () => void;
 }
 
 export class PanelGroup {
@@ -87,6 +86,7 @@ export class PanelGroup {
     const leaf = this.createLeaf();
     this.rootNode = leaf;
     this.active = leaf;
+    leaf.panel.setActive(true);
     this.root.append(leaf.widget);
   }
 
@@ -152,24 +152,20 @@ export class PanelGroup {
 
   // --- Closing / collapsing -------------------------------------------------
 
-  /** Close the active leaf entirely (all its tabs), collapsing its split. */
+  /** Close the active leaf entirely (all its tabs). A non-root leaf then
+   *  collapses so its sibling reclaims the space; the root leaf stays put and
+   *  shows its empty state. */
   closeActivePanel(): void {
-    if (this.rootNode === this.active) {
-      this.options.onEmpty?.();
-      return;
-    }
     // Closing each tab fires onClosed for host cleanup; emptying the leaf routes
-    // through onLeafEmpty -> collapse.
+    // through onLeafEmpty (collapse for non-root, no-op for root).
     this.active.panel.closeAll();
   }
 
-  // Called when a leaf's panel loses its last tab. The final leaf bubbles
-  // onEmpty (quit); any other leaf is collapsed away.
+  // Called when a leaf's panel loses its last tab. The root leaf is allowed to
+  // sit empty (the Panel shows its empty state); any other leaf is collapsed away
+  // so its sibling reclaims the freed space.
   private onLeafEmpty(leaf: Leaf): void {
-    if (this.rootNode === leaf) {
-      this.options.onEmpty?.();
-      return;
-    }
+    if (this.rootNode === leaf) return;
     this.collapse(leaf);
   }
 
@@ -191,6 +187,7 @@ export class PanelGroup {
     if (this.active === leaf) {
       const next = firstLeaf(sibling);
       this.active = next;
+      next.panel.setActive(true);
       this.options.onActiveChanged?.(next.panel.activeChild);
     }
   }
@@ -301,7 +298,9 @@ export class PanelGroup {
 
   private setActive(leaf: Leaf): void {
     if (this.active === leaf) return;
+    this.active.panel.setActive(false);
     this.active = leaf;
+    leaf.panel.setActive(true);
     this.options.onActiveChanged?.(leaf.panel.activeChild);
   }
 

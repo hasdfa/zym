@@ -60,6 +60,18 @@ export class NotificationManager {
     return this.notifications.slice();
   }
 
+  /**
+   * Run the default action of the most recent notification that has one (newest
+   * first), returning whether anything was activated. Backs the
+   * `notifications:activate` command.
+   */
+  activateLast(): boolean {
+    for (let i = this.notifications.length - 1; i >= 0; i--) {
+      if (this.notifications[i].hasDefaultAction()) return this.notifications[i].activate();
+    }
+    return false;
+  }
+
   /** Drop the retained history; the log interface treats this as "cleared". */
   clear(): void {
     this.notifications.length = 0;

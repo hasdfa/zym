@@ -91,6 +91,12 @@ export class Config {
     return this;
   }
 
+  /** All declared `[keyPath, schema]` pairs, in declaration order — the hook a
+   *  settings UI uses to enumerate every parameter it can edit. */
+  schemaEntries(): Array<[string, ConfigSchema]> {
+    return Object.entries(this.schema);
+  }
+
   /**
    * A view of this config confined to a `namespace.` prefix. Subsystems get a
    * `settings`-style object (`get('foo')` ⇄ `get('namespace.foo')` on the

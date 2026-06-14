@@ -20,7 +20,7 @@ import { fileIconGlyph } from './fileIcons.ts';
 // The file-tree filters are global config (so they can be set in config.json and
 // observed live). Defaults: both on — hide dotfiles and untracked files. The
 // `.`/`,` keys toggle these values; each FileTree observes them (see ctor).
-const treeConfig = quilx.config.scope('tree').register({
+const treeConfig = quilx.config.scope('fileTree').register({
   hideHidden: {
     type: 'boolean',
     default: true,
@@ -173,7 +173,7 @@ export class FileTree {
   private readonly boundItems = new Set<any>();
   private gitUnsubscribe?: () => void;
 
-  // Filters, seeded from `tree.*` config and kept in sync via observers (so a
+  // Filters, seeded from `fileTree.*` config and kept in sync via observers (so a
   // config.json edit or the `.`/`,` toggles update the tree live). The untracked
   // filter only takes effect inside a git repo.
   private hideHidden: boolean;

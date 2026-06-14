@@ -20,12 +20,21 @@ import { monospaceFontDescription } from '../fonts.ts';
 
 const SCROLLBACK_LINES = 10_000;
 const DEFAULT_SHELL = '/bin/bash';
+// The xterm window-title termprop (VTE_TERMPROP_XTERM_TITLE), set by OSC 0/2.
+const XTERM_TITLE = 'xterm.title';
 
 export interface TerminalOptions {
   /** Directory to start the shell in (defaults to the user's home directory). */
   cwd?: string;
   /** Shell to launch (defaults to `$SHELL`, then `/bin/bash`). */
   shell?: string;
+  /**
+   * Full argv to spawn instead of a login shell (e.g. an agent CLI). When set,
+   * `shell` is ignored. Defaults to `[shell, '-l']`.
+   */
+  command?: string[];
+  /** Initial title, shown until the child reports its own (OSC 0/2). */
+  title?: string;
   /** Fired when the shell process exits, with its exit status. */
   onExit?: (status: number) => void;
 }
@@ -34,11 +43,12 @@ export class Terminal {
   readonly root: VteTerminal;
 
   private readonly onExit: (status: number) => void;
-  private _title = 'Terminal';
+  private _title: string;
   private readonly titleHandlers: Array<() => void> = [];
 
   constructor(options: TerminalOptions = {}) {
     this.onExit = options.onExit ?? (() => {});
+    this._title = options.title ?? 'Terminal';
 
     this.root = this.createTerminal();
     this.followSystemColorScheme();
@@ -50,6 +60,7 @@ export class Terminal {
   private createTerminal(): VteTerminal {
     const terminal = new Vte.Terminal();
     terminal.setName('Terminal'); // selector identity for command/keymap rules
+    terminal.addCssClass('has-text-input'); // release the `space` leader so it types
     terminal.setVexpand(true);
     terminal.setHexpand(true);
     terminal.setScrollbackLines(SCROLLBACK_LINES);
@@ -58,9 +69,13 @@ export class Terminal {
     terminal.setMouseAutohide(true);
     terminal.setFont(monospaceFontDescription());
 
-    // OSC 0/2 title sequences — let a host mirror the shell's reported title.
-    terminal.on('window-title-changed', () => {
-      this._title = terminal.getWindowTitle() || 'Terminal';
+    // The shell/agent's reported title (xterm OSC 0/2). VTE 0.78+ deprecated the
+    // `window-title-changed` signal in favor of termprops, so the title arrives as
+    // the `xterm.title` termprop via the detailed `termprop-changed` signal.
+    terminal.on('termprop-changed', (name: string) => {
+      if (name !== XTERM_TITLE) return;
+      const value = (terminal as any).getTermpropString(XTERM_TITLE) as string | string[] | null;
+      this._title = (Array.isArray(value) ? value[0] : value) || 'Terminal';
       this.emitTitleChange();
     });
     terminal.on('child-exited', (status: number) => this.onExit(status));
@@ -70,10 +85,11 @@ export class Terminal {
   // --- Shell process ---------------------------------------------------------
 
   private spawnShell(options: TerminalOptions) {
-    const shell = options.shell ?? process.env.SHELL ?? DEFAULT_SHELL;
     const cwd = options.cwd ?? Os.homedir();
-    // A login shell, so the user's profile (PATH, prompt, aliases) is sourced.
-    const argv = [shell, '-l'];
+    // A custom command (e.g. an agent CLI) runs verbatim; otherwise a login
+    // shell, so the user's profile (PATH, prompt, aliases) is sourced.
+    const shell = options.shell ?? process.env.SHELL ?? DEFAULT_SHELL;
+    const argv = options.command ?? [shell, '-l'];
     const envv = Object.entries(process.env).map(([key, value]) => `${key}=${value}`);
 
     this.root.spawnAsync(
@@ -93,7 +109,7 @@ export class Terminal {
         // report it explicitly instead of leaving a silent, empty terminal.
         if (error || pid === -1) {
           this.onExit(127);
-          console.error(`Terminal: failed to spawn ${shell}: ${error?.message ?? 'unknown error'}`);
+          console.error(`Terminal: failed to spawn ${argv[0]}: ${error?.message ?? 'unknown error'}`);
         }
       },
     );
@@ -119,9 +135,13 @@ export class Terminal {
     this.root.grabFocus();
   }
 
-  /** Subscribe to title changes (fired when the shell reports a new title). */
-  onTitleChange(callback: () => void) {
+  /** Subscribe to title changes; returns an unsubscribe function. */
+  onTitleChange(callback: () => void): () => void {
     this.titleHandlers.push(callback);
+    return () => {
+      const index = this.titleHandlers.indexOf(callback);
+      if (index !== -1) this.titleHandlers.splice(index, 1);
+    };
   }
 
   private emitTitleChange() {

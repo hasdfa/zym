@@ -33,7 +33,8 @@ function configDir(): string {
   return Path.join(configHome, 'quilx');
 }
 
-function configPath(): string {
+/** Absolute path to the user config file (`$XDG_CONFIG_HOME/quilx/config.json`). */
+export function configPath(): string {
   return Path.join(configDir(), 'config.json');
 }
 
@@ -73,6 +74,30 @@ function applyConfig(parsed: Record<string, unknown>, previous: Set<string>): Se
     if (!applied.has(key)) quilx.config.unset(key);
   }
   return applied;
+}
+
+/**
+ * Persist the current overrides to `config.json` — every schema key whose value
+ * differs from its default. Used by the settings UI after an edit; the file
+ * monitor then observes the write and re-applies it (a no-op, since the values
+ * already match). Keys back at their default are omitted, so resetting one drops
+ * it from the file.
+ */
+export function saveConfig(): void {
+  const overrides: Record<string, ConfigValue> = {};
+  for (const [key] of quilx.config.schemaEntries()) {
+    if (!quilx.config.has(key)) continue;
+    const value = quilx.config.get(key);
+    if (value === undefined) continue;
+    if (JSON.stringify(value) === JSON.stringify(quilx.config.getDefault(key))) continue;
+    overrides[key] = value;
+  }
+  const path = configPath();
+  try {
+    Fs.writeFileSync(path, JSON.stringify(overrides, null, 2) + '\n');
+  } catch (error) {
+    console.warn(`[config] could not write ${path}: ${(error as Error).message}`);
+  }
 }
 
 /**

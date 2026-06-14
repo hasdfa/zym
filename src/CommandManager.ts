@@ -21,7 +21,9 @@ import { Gtk } from './gi.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
-type CommandCallback = (this: Widget, event: CommandEvent, element: Widget) => void;
+// Handlers receive the event, the element, then any dispatch arguments. Args are
+// also available as `event.args` (handy for the `{ didDispatch }` form).
+type CommandCallback = (this: Widget, event: CommandEvent, element: Widget, ...args: any[]) => void;
 export type CommandEffect = CommandCallback | { didDispatch: CommandCallback };
 export type CommandMap = Record<string, CommandEffect>;
 
@@ -38,18 +40,36 @@ export class CommandManager {
   emitter = new Emitter();
 
   get(element: Widget, command: string): CommandEffect | undefined {
-    const commandBundles = this.bundlesFor(element);
+    const effect = this.resolve(element, command);
+    if (effect === undefined)
+      console.warn(`Command '${command}' is not registered for ${element.getName()}`);
+    return effect;
+  }
 
-    for (let i = 0; i < commandBundles.length; i++) {
-      const bundle = commandBundles[i];
+  // Resolve a command for a single element without warning (so callers can probe
+  // the focus chain quietly).
+  private resolve(element: Widget, command: string): CommandEffect | undefined {
+    for (const bundle of this.bundlesFor(element)) {
       if (bundle.rule !== true && !matchesRule(element, bundle.rule))
         continue;
       if (command in bundle.commands)
         return bundle.commands[command];
     }
-
-    console.warn(`Command '${command}' is not registered for ${element.getName()}`);
     return undefined;
+  }
+
+  /**
+   * Dispatch `command` to the first element of `elements` (a focus chain, most
+   * specific first) that has it registered — so a keystroke matched on one
+   * widget (e.g. the focused FileTree) can invoke a command hosted on an
+   * ancestor (e.g. `file:save` on the window). Returns false if none handle it.
+   */
+  dispatchAlongChain(elements: Widget[], command: string, ...args: unknown[]): boolean {
+    for (const element of elements) {
+      if (this.resolve(element, command) !== undefined)
+        return this.dispatch(element, command, ...args);
+    }
+    return false;
   }
 
   // All command bundles that could apply to `element`: those indexed under any
@@ -151,8 +171,8 @@ export class CommandManager {
     }
   }
 
-  dispatch(element: Widget, commandName: string | CommandCallback): boolean {
-    const event = new CommandEvent(typeof commandName === 'string' ? commandName : '');
+  dispatch(element: Widget, commandName: string | CommandCallback, ...args: unknown[]): boolean {
+    const event = new CommandEvent(typeof commandName === 'string' ? commandName : '', args);
     let effect: CommandEffect | undefined;
 
     if (typeof commandName === 'string') {
@@ -168,10 +188,10 @@ export class CommandManager {
     }
 
     if (typeof effect === 'function') {
-      effect.call(element, event, element);
+      effect.call(element, event, element, ...args);
     }
     else if (typeof effect === 'object' && typeof effect.didDispatch === 'function') {
-      effect.didDispatch.call(element, event, element);
+      effect.didDispatch.call(element, event, element, ...args);
     }
     else {
       return unreachable();
@@ -196,11 +216,14 @@ function getSource(): string {
 // FIXME: differentiate stop & stopImmediate
 export class CommandEvent {
   type: string;
+  /** Arguments passed to `dispatch` (or a keymap binding's `args`). */
+  args: unknown[];
   stopPropagationCalled = false;
   aborted = false;
 
-  constructor(type: string) {
+  constructor(type: string, args: unknown[] = []) {
     this.type = type;
+    this.args = args;
   }
 
   stopPropagation(): void {

@@ -32,6 +32,12 @@ export interface NotificationOptions {
   icon?: string;
   /** When true, the notification stays until explicitly dismissed. */
   dismissable?: boolean;
+  /**
+   * The default action: run when the notification itself is clicked (toast or
+   * log row) or via the `notifications:activate` command. Distinct from
+   * `buttons`, which are explicit, secondary actions.
+   */
+  onDidClick?: () => void;
   /** Action buttons rendered on the notification. */
   buttons?: NotificationButton[];
   /** Captured stack trace, for error/fatal notifications. */
@@ -106,7 +112,19 @@ export class Notification {
     return this.displayed;
   }
 
+  /** Whether a default action (`options.onDidClick`) is set. */
+  hasDefaultAction(): boolean {
+    return typeof this.options.onDidClick === 'function';
+  }
+
   // --- Lifecycle -------------------------------------------------------------
+
+  /** Run the default action, if any. Returns whether one was present. */
+  activate(): boolean {
+    if (!this.options.onDidClick) return false;
+    this.options.onDidClick();
+    return true;
+  }
 
   /** Mark the notification dismissed; a no-op for non-dismissable ones. */
   dismiss(): void {
