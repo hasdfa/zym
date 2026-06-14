@@ -10,6 +10,7 @@
  * asynchronously via the returned handle's `setItems`.
  */
 import { Gdk, Gtk } from './gi.ts';
+import { addStyles } from './styles.ts';
 
 const PICKER_WIDTH = 640;
 const PICKER_MAX_HEIGHT = 360;
@@ -20,17 +21,27 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 // libadwaita's `.card` fill (`@card_bg_color`) is semi-transparent — meant to
 // sit on a window, not float over editor content. Override it with the opaque
-// popover background so the editor doesn't show through. Installed once.
-let stylesInstalled = false;
-function ensureStyles(): void {
-  if (stylesInstalled) return;
-  const display = Gdk.Display.getDefault();
-  if (!display) return;
-  const provider = new Gtk.CssProvider();
-  provider.loadFromString('.quilx-picker-card { background-color: @popover_bg_color; }');
-  Gtk.StyleContext.addProviderForDisplay(display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
-  stylesInstalled = true;
-}
+// popover background so the editor doesn't show through.
+addStyles(`
+  .quilx-picker-panel {
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--window-radius);
+    background-color: var(--window-bg-color);
+    box-shadow: 0 4px 22px rgba(0, 0, 0, 0.15);
+  }
+  .quilx-picker-entry {
+    padding: 0.75em 1em;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .quilx-picker-row-scrolled-window {
+    border-radius: var(--window-radius);
+  }
+  .quilx-picker-row {
+    padding: 0.5em 1em;
+  }
+`);
 
 export interface FuzzyPickerOptions {
   host: Overlay;
@@ -48,11 +59,11 @@ export interface FuzzyPickerHandle {
 export function openFuzzyPicker(options: FuzzyPickerOptions): FuzzyPickerHandle {
   const { host } = options;
 
-  const entry = new Gtk.SearchEntry({ placeholderText: options.placeholder ?? 'Search…' });
+  const entry = new Gtk.SearchEntry({
+    placeholderText: options.placeholder ?? 'Search…',
+  });
   entry.setHexpand(true);
-  entry.setMarginTop(8);
-  entry.setMarginStart(8);
-  entry.setMarginEnd(8);
+  entry.addCssClass('quilx-picker-entry');
 
   const listBox = new Gtk.ListBox();
   listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
@@ -61,21 +72,17 @@ export function openFuzzyPicker(options: FuzzyPickerOptions): FuzzyPickerHandle 
   scrolled.setChild(listBox);
   scrolled.setPropagateNaturalHeight(true);
   scrolled.setMaxContentHeight(PICKER_MAX_HEIGHT);
-  scrolled.setMarginStart(8);
-  scrolled.setMarginEnd(8);
-  scrolled.setMarginBottom(8);
+  scrolled.addCssClass('quilx-picker-row-scrolled-window');
 
   // A floating, opaque "card" placed at the top-centre of the overlay.
-  ensureStyles();
   const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-  panel.addCssClass('card');
-  panel.addCssClass('quilx-picker-card');
+  panel.addCssClass('quilx-picker-panel');
   panel.setHalign(Gtk.Align.CENTER);
   panel.setValign(Gtk.Align.START);
-  panel.setMarginTop(12);
   panel.setSizeRequest(PICKER_WIDTH, -1);
   panel.append(entry);
   panel.append(scrolled);
+  panel.overflow = Gtk.Overflow.HIDDEN;
 
   let items = options.items ?? [];
   // The currently displayed matches, parallel to the rows in the list box, so a
@@ -101,10 +108,7 @@ export function openFuzzyPicker(options: FuzzyPickerOptions): FuzzyPickerHandle 
     for (const match of ranked) {
       const label = new Gtk.Label({ xalign: 0, useMarkup: true });
       label.setMarkup(highlightMarkup(match.item, match.positions));
-      label.setMarginTop(2);
-      label.setMarginBottom(2);
-      label.setMarginStart(6);
-      label.setMarginEnd(6);
+      label.addCssClass('quilx-picker-row');
       const row = new Gtk.ListBoxRow();
       row.setChild(label);
       listBox.append(row);
@@ -162,7 +166,7 @@ export function openFuzzyPicker(options: FuzzyPickerOptions): FuzzyPickerHandle 
 
   // Dismiss when focus leaves the card (e.g. clicking back into the editor).
   const focus = new Gtk.EventControllerFocus();
-  focus.on('leave', () => close());
+  // focus.on('leave', () => close());
   panel.addController(focus);
 
   host.addOverlay(panel);
@@ -202,13 +206,16 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
   for (const ch of needle) {
     let pos = -1;
     for (let j = from; j < haystack.length; j++) {
-      if (haystack[j] === ch) { pos = j; break; }
+      if (haystack[j] === ch) {
+        pos = j;
+        break;
+      }
     }
     if (pos === -1) return null;
 
-    if (pos === previous + 1) score += 8;                  // consecutive run
-    if (pos === 0 || isBoundary(text, pos)) score += 12;   // word / path boundary
-    score -= pos - from;                                   // penalise skipped chars
+    if (pos === previous + 1) score += 8; // consecutive run
+    if (pos === 0 || isBoundary(text, pos)) score += 12; // word / path boundary
+    score -= pos - from; // penalise skipped chars
     positions.push(pos);
     previous = pos;
     from = pos + 1;
@@ -218,8 +225,14 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
 
 function isBoundary(text: string, pos: number): boolean {
   const before = text[pos - 1];
-  if (before === '/' || before === '\\' || before === '_' ||
-      before === '-' || before === '.' || before === ' ') {
+  if (
+    before === '/' ||
+    before === '\\' ||
+    before === '_' ||
+    before === '-' ||
+    before === '.' ||
+    before === ' '
+  ) {
     return true;
   }
   // camelCase boundary: a lowercase/digit followed by an uppercase letter.
@@ -249,8 +262,13 @@ function highlightMarkup(text: string, positions: number[]): string {
   let highlit = false;
   for (let i = 0; i < text.length; i++) {
     const isMatch = matched.has(i);
-    if (isMatch && !highlit) { out += `<span foreground="${HIGHLIGHT_COLOR}" weight="bold">`; highlit = true; }
-    else if (!isMatch && highlit) { out += '</span>'; highlit = false; }
+    if (isMatch && !highlit) {
+      out += `<span foreground="${HIGHLIGHT_COLOR}" weight="bold">`;
+      highlit = true;
+    } else if (!isMatch && highlit) {
+      out += '</span>';
+      highlit = false;
+    }
     out += escapeMarkup(text[i]);
   }
   if (highlit) out += '</span>';

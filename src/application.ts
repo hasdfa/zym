@@ -13,6 +13,7 @@
  */
 import { Adw, Gio, GLib, startLoop } from './gi.ts';
 import { EditorWindow } from './editor-window.ts';
+import { installStyles } from './styles.ts';
 
 const APP_ID = 'com.github.romgrk.quilx';
 
@@ -35,6 +36,7 @@ export class Application {
   }
 
   private onActivate() {
+    installStyles();
     new EditorWindow(this.app, () => this.quit(), this.initialFile);
     startLoop();
     this.loop.run();

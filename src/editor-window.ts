@@ -11,14 +11,22 @@ import * as Path from 'node:path';
 import { openFilePicker } from './file-picker.ts';
 import { SyntaxController } from './syntax/syntax-controller.ts';
 import {
-  Adw, Gio, Gtk, GtkSource,
-  type Application, type ApplicationWindow, type SourceBuffer,
-  type SourceView, type ToastOverlay, type VimContext, type WindowTitle,
+  Adw,
+  Gio,
+  Gtk,
+  GtkSource,
+  type Application,
+  type ApplicationWindow,
+  type SourceBuffer,
+  type SourceView,
+  type ToastOverlay,
+  type VimContext,
+  type WindowTitle,
 } from './gi.ts';
 
 const TITLE = 'quilx';
-const DEFAULT_WIDTH = 800;
-const DEFAULT_HEIGHT = 600;
+const DEFAULT_WIDTH = 1000;
+const DEFAULT_HEIGHT = 800;
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;
 const TOAST_TIMEOUT = 3;
@@ -258,8 +266,12 @@ export class EditorWindow {
     const commandPreview = new Gtk.Label({ xalign: 1 });
     commandBar.addCssClass('monospace');
     commandPreview.addCssClass('monospace');
-    this.vim.on('notify::command-bar-text', () => commandBar.setText(this.vim.getCommandBarText()));
-    this.vim.on('notify::command-text', () => commandPreview.setText(this.vim.getCommandText()));
+    this.vim.on('notify::command-bar-text', () =>
+      commandBar.setText(this.vim.getCommandBarText()),
+    );
+    this.vim.on('notify::command-text', () =>
+      commandPreview.setText(this.vim.getCommandText()),
+    );
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 12 });
     box.setMarginStart(6);
@@ -288,9 +300,11 @@ export class EditorWindow {
   private registerActions() {
     this.addAction('open', '<Control>o', () => this.openDialog());
     this.addAction('find-file', '<Alt>o', () =>
-      openFilePicker(this.overlay, (path) => this.loadFile(path)));
+      openFilePicker(this.overlay, (path) => this.loadFile(path)),
+    );
     this.addAction('save', '<Control>s', () =>
-      this.currentFile ? this.saveTo(this.currentFile) : this.saveAsDialog());
+      this.currentFile ? this.saveTo(this.currentFile) : this.saveAsDialog(),
+    );
     this.addAction('save-as', '<Control><Shift>s', () => this.saveAsDialog());
     this.addAction('quit', '<Control>q', () => this.onQuit());
   }
@@ -329,7 +343,11 @@ export class EditorWindow {
   }
 
   private saveTo(path: string) {
-    const content = this.buffer.getText(this.buffer.getStartIter(), this.buffer.getEndIter(), false);
+    const content = this.buffer.getText(
+      this.buffer.getStartIter(),
+      this.buffer.getEndIter(),
+      false,
+    );
     try {
       Fs.writeFileSync(path, content);
       this.currentFile = path;
