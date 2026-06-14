@@ -25,7 +25,7 @@ import { Panel, type PanelChild } from './Panel.ts';
 import { PanelGroup, type Direction } from './PanelGroup.ts';
 import { TextEditor } from './TextEditor/index.ts';
 import { Terminal } from './Terminal.ts';
-import { AgentTerminal } from './AgentTerminal.ts';
+import { AgentTerminal, type AgentStatus } from './AgentTerminal.ts';
 import { AgentList } from './AgentList.ts';
 import { BranchButton } from './BranchButton.ts';
 import { openGitRepo, type GitRepo } from '../git.ts';
@@ -139,6 +139,8 @@ export class AppWindow {
       // state. The app quits via the window close button or `app:quit`.
     });
 
+        // The closed agent is gone from the active tab; recompute the highlight.
+        this.updateAgentHighlight();
     this.workbench = new Workbench();
     this.fileTree = new FileTree({
       rootPath: process.cwd(),
@@ -292,9 +294,18 @@ export class AppWindow {
     // One persistent title binding that updates whichever tab currently shows the
     // agent (survives close/reopen, since it reads agentChildren on each change).
     agent.onTitleChange(() => this.agentChildren.get(agent.root)?.setTitle(agent.title));
-    // Focusing the agent's terminal selects its row in the agent list.
+    // Notify when the agent needs attention while the user isn't looking at it.
+    let previousStatus = agent.status;
+    agent.onDidChangeStatus(() => {
+      this.notifyAgentAttention(agent, previousStatus, agent.status);
+      previousStatus = agent.status;
+    });
+    // The list highlight follows focus: recompute it whenever this terminal gains
+    // or loses focus (the highlight is gated on the agent being focused + active —
+    // see updateAgentHighlight).
     const focus = new Gtk.EventControllerFocus();
-    focus.on('enter', () => this.agentList.selectAgent(agent));
+    focus.on('enter', () => this.updateAgentHighlight());
+    focus.on('leave', () => this.updateAgentHighlight());
     agent.root.addController(focus);
     this.showAgent(agent);
     return agent;
@@ -322,6 +333,48 @@ export class AppWindow {
     }
 
     // Closed (or never shown): reattach to a fresh tab. Only now is unparenting
+  // Highlight an agent's row only while its terminal is the focused element AND
+  // its tab is the active panel's active tab — so the highlight clears the moment
+  // focus leaves the agent (e.g. into the picker) or its panel stops being active.
+  private updateAgentHighlight(): void {
+    const activeChild = this.center.activePanel.activeChild;
+    const terminal = activeChild ? this.terminals.get(activeChild) : undefined;
+    const focused =
+      activeChild && terminal instanceof AgentTerminal && this.isFocusWithin(activeChild)
+        ? terminal
+        : null;
+    this.agentList.selectAgent(focused);
+  }
+
+  /** The agent backing the active center tab, if that tab hosts one. */
+  private get activeAgent(): AgentTerminal | null {
+    const widget = this.center.activePanel.activeChild;
+    const terminal = widget ? this.terminals.get(widget) : undefined;
+    return terminal instanceof AgentTerminal ? terminal : null;
+  }
+
+  /** Reveal the agent `delta` steps from the active one (wraps; first if none). */
+  private focusAdjacentAgent(delta: number): void {
+    const agents = quilx.agents.getAgents();
+    if (agents.length === 0) return;
+    const index = this.activeAgent ? agents.indexOf(this.activeAgent) : -1;
+    const next = agents[(((index + delta) % agents.length) + agents.length) % agents.length];
+    if (next) this.showAgent(next);
+  }
+
+  // Surface an attention-worthy status change as a notification — but only when
+  // the user isn't already watching that agent (its tab isn't the active one).
+  // Clicking the notification reveals the agent.
+  private notifyAgentAttention(agent: AgentTerminal, previous: AgentStatus, current: AgentStatus): void {
+    if (this.center.activePanel.activeChild === agent.root) return;
+    const reveal = () => this.showAgent(agent);
+    if (current === 'waiting') {
+      quilx.notifications.addWarning(`${agent.title} needs your input`, { onDidClick: reveal });
+    } else if (current === 'idle' && previous === 'working') {
+      quilx.notifications.addInfo(`${agent.title} finished`, { onDidClick: reveal });
+    }
+  }
+
     // safe — getRoot() is null, so we're detaching from a dead zombie page rather
     // than ripping the widget out of a live tab.
     this.agentChildren.delete(agent.root);
@@ -373,6 +426,7 @@ export class AppWindow {
     const header = new Adw.HeaderBar();
     header.setName('Header'); // CSS identity (#Header)
     header.setTitleWidget(this.windowTitle);
+    this.updateAgentHighlight(); // active panel / tab changed — re-evaluate the highlight
     header.packStart(this.branchButton.root);
     return header;
   }
@@ -584,6 +638,11 @@ export class AppWindow {
   // repo that stays behind across status polls isn't re-toasted every tick.
   private checkUpstream() {
     const behind = this.git.getAheadBehind()?.behind ?? 0;
+      // Lifecycle / navigation for the active agent. Kill SIGTERMs the child (the
+      // widget lingers as exited); next/prev cycle through the running agents.
+      'agent:kill': () => this.activeAgent?.kill(),
+      'agent:focus-next': () => this.focusAdjacentAgent(1),
+      'agent:focus-prev': () => this.focusAdjacentAgent(-1),
     if (behind > 0 && this.lastBehind === 0) {
       const commits = behind === 1 ? 'commit' : 'commits';
       quilx.notifications.addInfo(`Upstream is ahead by ${behind} ${commits}`, {

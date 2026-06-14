@@ -44,6 +44,7 @@ export class Terminal {
 
   private readonly onExit: (status: number) => void;
   private _title: string;
+  private _pid: number | null = null;
   private readonly titleHandlers: Array<() => void> = [];
 
   constructor(options: TerminalOptions = {}) {
@@ -110,6 +111,8 @@ export class Terminal {
         if (error || pid === -1) {
           this.onExit(127);
           console.error(`Terminal: failed to spawn ${argv[0]}: ${error?.message ?? 'unknown error'}`);
+        } else {
+          this._pid = pid; // captured so `kill()` can signal the child
         }
       },
     );
@@ -133,6 +136,20 @@ export class Terminal {
 
   focus() {
     this.root.grabFocus();
+  }
+
+  /**
+   * Signal the child process (default SIGTERM). A direct kill(2) syscall — safe
+   * under the GLib loop (unlike node async). No-op before spawn / after exit; the
+   * resulting `child-exited` drives the rest (status, exit notice).
+   */
+  kill(signal: NodeJS.Signals = 'SIGTERM'): void {
+    if (this._pid === null) return;
+    try {
+      process.kill(this._pid, signal);
+    } catch {
+      /* already gone */
+    }
   }
 
   /** Subscribe to title changes; returns an unsubscribe function. */

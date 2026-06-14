@@ -78,6 +78,13 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     '.': 'tree:toggle-hidden-files', // show/hide dotfiles
   },
 
+  // Vim-style agent-list navigation while the list is focused.
+  '#AgentList': {
+    j: 'core:down',
+    k: 'core:up',
+    l: 'core:right', // reveal the selected agent's terminal
+  },
+
   // The notification log: while it has focus, bare keys act on the history
   // (vim-tree style). `c` clears it; `q` hides it (same command as the leader
   // toggle). The log takes no literal text input, so single keys are safe.

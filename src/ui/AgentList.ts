@@ -38,6 +38,13 @@ addStyles(`
     color: ${theme.ui.textMuted ?? '#9a9996'};
     padding: 12px;
   }
+  #AgentList .agentlist-badge {
+    color: ${theme.ui.success ?? '#2ec27e'};
+    font-weight: bold;
+  }
+  #AgentList .agentlist-badge.attention {
+    color: ${theme.ui.warning ?? '#e5a50a'};
+  }
   .quilx-agent-working { color: ${theme.ui.textMuted ?? '#9a9996'}; }
   .quilx-agent-waiting { color: ${theme.ui.warning ?? '#e5a50a'}; }
   .quilx-agent-idle    { color: ${theme.ui.success ?? '#2ec27e'}; }
@@ -56,6 +63,8 @@ export class AgentList {
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly empty: InstanceType<typeof Gtk.Label>;
   private readonly options: AgentListOptions;
+  // Header badge: count of agents waiting for input (hidden when none).
+  private readonly badge: InstanceType<typeof Gtk.Label>;
   // Renders nerd-font glyphs (header robot, working cog) in the bundled icon font.
   private readonly iconAttrs: InstanceType<typeof Pango.AttrList>;
   // Agents parallel to the list rows, mapping a row index back to its agent.
@@ -89,8 +98,13 @@ export class AgentList {
     this.empty = new Gtk.Label({ label: 'No running agents', xalign: 0 });
     this.empty.addCssClass('agentlist-empty');
 
+    this.badge = new Gtk.Label();
+    this.badge.addCssClass('agentlist-badge');
+    this.badge.setVisible(false);
+
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.root.setName('AgentList'); // selector identity + CSS (#AgentList)
+    this.registerCommands();
     this.root.append(this.buildHeader());
     this.root.append(this.scrolled);
     this.root.append(this.empty);
@@ -109,7 +123,8 @@ export class AgentList {
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     header.addCssClass('agentlist-header');
     header.append(icon);
-    header.append(new Gtk.Label({ label: 'Agents', xalign: 0 }));
+    header.append(new Gtk.Label({ label: 'Agents', xalign: 0, hexpand: true }));
+    header.append(this.badge); // pushed to the right by the hexpanding title
     return header;
   }
 
@@ -129,7 +144,10 @@ export class AgentList {
       // Status dot: green while running, muted once the process has exited.
       const dot = new Gtk.Label({ label: STATUS_DOT });
       this.applyStatus(dot, agent);
-      this.rowUnsubs.push(agent.onDidChangeStatus(() => this.applyStatus(dot, agent)));
+      this.rowUnsubs.push(agent.onDidChangeStatus(() => {
+        this.applyStatus(dot, agent);
+        this.updateBadge();
+      }));
 
       const label = new Gtk.Label({ xalign: 0 });
       label.setText(agent.title);
@@ -153,6 +171,52 @@ export class AgentList {
     this.empty.setVisible(!hasAgents);
 
     this.applySelection();
+    this.updateBadge();
+  }
+
+  // Header badge: the number of agents needing attention (idle/done or waiting),
+  // hidden when none. Green normally; warning-colored if any is waiting for input.
+  private updateBadge(): void {
+    const ready = this.agents.filter((a) => a.status === 'idle' || a.status === 'waiting');
+    const waiting = ready.filter((a) => a.status === 'waiting').length;
+    this.badge.setVisible(ready.length > 0);
+    if (ready.length === 0) return;
+    this.badge.setText(String(ready.length));
+    if (waiting > 0) this.badge.addCssClass('attention');
+    else this.badge.removeCssClass('attention');
+    this.badge.setTooltipText(
+      waiting > 0
+        ? `${ready.length} ready, ${waiting} waiting for input`
+        : `${ready.length} agent${ready.length === 1 ? '' : 's'} ready`,
+    );
+  }
+
+  // --- Keyboard navigation (vim bare keys while #AgentList is focused) --------
+
+  private registerCommands(): void {
+    quilx.commands.add(this.root, {
+      'core:down': () => this.moveSelection(1),
+      'core:up': () => this.moveSelection(-1),
+      'core:right': () => this.activateSelected(), // reveal the selected agent
+    });
+  }
+
+  private moveSelection(delta: number): void {
+    if (this.agents.length === 0) return;
+    const selectedRow = this.listBox.getSelectedRow();
+    const current = selectedRow ? selectedRow.getIndex() : -1;
+    const next = Math.max(0, Math.min(current + delta, this.agents.length - 1));
+    const row = this.listBox.getRowAtIndex(next);
+    if (row) {
+      this.listBox.selectRow(row);
+      row.grabFocus();
+    }
+  }
+
+  private activateSelected(): void {
+    const selectedRow = this.listBox.getSelectedRow();
+    const agent = selectedRow ? this.agents[selectedRow.getIndex()] : undefined;
+    if (agent) this.options.onActivate?.(agent);
   }
 
   /** Select the row for `agent` (or clear selection). Called when an agent is focused. */
