@@ -4,6 +4,8 @@ A modal source-code editor built with [GtkSourceView 5](https://gitlab.gnome.org
 GTK 4 and [Adwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), running on
 [node-gtk](https://github.com/romgrk/node-gtk).
 
+![quilx editor with file tree, agent management UI, and config panels](img/example-1.png)
+
 ## Features
 
 - **Vim-style modal editing** via `GtkSource.VimIMContext`, with a status line
