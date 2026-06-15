@@ -52,6 +52,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g b b': 'git:switch-branch', // "b"ranch picker (switch / create)
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
+  'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
   'space l d': 'lsp:go-to-definition', // "l"sp "d"efinition
   'space l D': 'lsp:go-to-declaration', // declaration
   'space l t': 'lsp:go-to-type-definition', // "t"ype definition

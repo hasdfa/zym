@@ -10,11 +10,24 @@
  * assembled widget is `root`. See tasks/code-editing/diff.md.
  */
 import { Gtk, type SourceView } from '../../gi.ts';
+import { quilx } from '../../quilx.ts';
 import { TextEditor } from './TextEditor.ts';
 import { DiffGutter } from './DiffGutter.ts';
 import { applyDiffDecorations } from './applyDiffDecorations.ts';
 import { revealRow, changeStartRows } from './diffNav.ts';
 import { splitSides, type DiffModel, type SideLine } from '../../util/DiffModel.ts';
+
+// `Tab` switches focus between the two panes — registered once (selector-scoped to
+// this widget's descendant views); each instance registers the command handler.
+// With two panes, Tab alone toggles, so no Shift-Tab is needed.
+let diffKeymapsRegistered = false;
+function registerDiffKeymapsOnce(): void {
+  if (diffKeymapsRegistered) return;
+  diffKeymapsRegistered = true;
+  quilx.keymaps.add('diff-view', {
+    '#SideBySideDiff GtkSourceView': { tab: 'diff:focus-other-pane' },
+  });
+}
 
 export class SideBySideDiffView {
   readonly root: InstanceType<typeof Gtk.Paned>;
@@ -36,11 +49,23 @@ export class SideBySideDiffView {
     syncScroll(this.left.sourceView, this.right.sourceView);
 
     this.root = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
+    this.root.setName('SideBySideDiff'); // the keymap selector targets its views
     this.root.setStartChild(this.left.root);
     this.root.setEndChild(this.right.root);
     this.root.setResizeStartChild(true);
     this.root.setResizeEndChild(true);
     this.root.setWideHandle(true);
+
+    // `Tab` switches focus between the panes — via the command/keymap system, not a
+    // raw controller, so it stays consistent with the rest of the app's bindings.
+    quilx.commands.add(this.root, { 'diff:focus-other-pane': () => this.toggleFocus() });
+    registerDiffKeymapsOnce();
+  }
+
+  /** Move focus to the other pane (defaults to the left when neither has it). */
+  private toggleFocus(): void {
+    const target = (this.right.sourceView as any).hasFocus?.() ? this.left : this.right;
+    target.focus();
   }
 
   get hunkCount(): number {

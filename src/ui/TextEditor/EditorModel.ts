@@ -946,9 +946,9 @@ export class EditorModel {
       : unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
 
     if (!this.focused) {
-      // The hollow-rectangle caret overlay stands in for the block here.
+      // An inactive editor shows no caret at all (no block, no overlay).
       this.view.setCursorVisible(false);
-      this.onCursorOverlay?.('hollow', iter);
+      this.onCursorOverlay?.('hidden');
       return;
     }
 
