@@ -236,6 +236,9 @@ export function openPicker(options: PickerOptions): PickerHandle {
   scrolled.setChild(listBox);
   scrolled.setPropagateNaturalHeight(true);
   scrolled.setMaxContentHeight(PICKER_MAX_HEIGHT);
+  // Never scroll horizontally: rows ellipsize to the card's fixed width instead
+  // of widening it / exposing a horizontal scrollbar for long labels.
+  scrolled.setPolicy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
   scrolled.setName('PickerList');
 
   // A floating, opaque "card" placed at the top-centre of the overlay.
@@ -444,6 +447,9 @@ function renderRow(
       const label = new Gtk.Label({ xalign: 0, useMarkup: true });
       label.setMarkup(mainMarkup);
       label.setName('PickerRow');
+      // Crop a long label to the card width rather than widening the row.
+      label.setHexpand(true);
+      label.setEllipsize(Pango.EllipsizeMode.END);
       if (dim) label.setOpacity(0.4);
       return label;
     }
@@ -474,16 +480,21 @@ function renderRow(
   const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
   box.setName('PickerRow');
 
+  // Main segment (e.g. filename) expands and ellipsizes so a long value crops to
+  // the card width rather than pushing the detail off the edge; the detail keeps
+  // its natural width and so always shows in full.
   const [ms, me] = item.display.main;
   const main = new Gtk.Label({ xalign: 0, useMarkup: true });
   main.setMarkup(highlightSegment(item.text, ms, me, positions));
+  main.setHexpand(true);
+  main.setEllipsize(Pango.EllipsizeMode.END);
   box.append(main);
 
   const [ds, de] = item.display.detail;
   if (de > ds) {
     const detail = new Gtk.Label({ xalign: 1, useMarkup: true });
-    detail.setHexpand(true);
     detail.setMarkup(highlightSegment(item.text, ds, de, positions));
+    detail.setEllipsize(Pango.EllipsizeMode.END);
     detail.addCssClass('picker-detail');
     box.append(detail);
   }
