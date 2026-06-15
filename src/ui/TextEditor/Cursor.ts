@@ -31,6 +31,15 @@ export class Cursor {
     return this.editor.pointAtIter(unwrapIter(buffer.getIterAtMark(buffer.getInsert())));
   }
 
+  /** Screen and buffer positions coincide (no soft-wrap / folds). */
+  getScreenPosition(): Point {
+    return this.getBufferPosition();
+  }
+
+  getScreenRow(): number {
+    return this.getBufferRow();
+  }
+
   /**
    * Move the cursor to `point` (clamped), collapsing any selection. Clears the
    * vertical-motion `goalColumn` — an explicit/horizontal move resets the target.

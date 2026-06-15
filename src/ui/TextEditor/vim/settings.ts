@@ -51,6 +51,17 @@ const schema: Record<string, ConfigSchema> = {
     default: false,
     description: 'Allow h/l (and similar) to wrap across line boundaries.',
   },
+  defaultScrollRowsOnMiniScroll: {
+    type: 'integer',
+    default: 1,
+    description: 'Rows ctrl-e/ctrl-y scroll the view by when no count is given.',
+  },
+  allowCursorPastEndOfLine: {
+    type: 'boolean',
+    default: true,
+    description:
+      "Let the cursor rest one column past the last character in normal mode (vim's `virtualedit=onemore`). Off restores the classic vim resting position on the last character.",
+  },
   useClipboardAsDefaultRegister: {
     type: 'boolean',
     default: true,
@@ -75,8 +86,8 @@ const schema: Record<string, ConfigSchema> = {
   },
   flashOnOperate: {
     type: 'boolean',
-    default: false,
-    description: 'Flash the operated-on range after an operator runs.',
+    default: true,
+    description: 'Flash the operated-on range after an operator runs (e.g. a yank).',
   },
   flashOnOperateBlacklist: {
     type: 'array',
@@ -183,7 +194,7 @@ const schema: Record<string, ConfigSchema> = {
   },
   flashOnUndoRedo: {
     type: 'boolean',
-    default: false,
+    default: true,
     description: 'Flash the changed range after undo/redo.',
   },
 };

@@ -14,7 +14,7 @@ import RegisterManager from './register-manager.js'
 import MutationManager from './mutation-manager.js'
 import swrap from './selection-wrapper.js'
 import globalState from './global-state.js'
-import { CursorStyleManager, HoverManager, FlashManager, OccurrenceManager, SequentialPasteManager } from './stubs.ts'
+import { CursorStyleManager, HoverManager, FlashManager, OccurrenceManager, SequentialPasteManager, ScrollManager } from './stubs.ts'
 import * as utils from './utils.js'
 import underscorePlus from './underscorePlus.ts'
 import { quilx } from '../../../quilx.ts'
@@ -31,6 +31,7 @@ const MANAGER_REGISTRY = {
   './flash-manager': FlashManager,
   './occurrence-manager': OccurrenceManager,
   './sequential-paste-manager': SequentialPasteManager,
+  './scroll-manager': ScrollManager,
   './utils': utils,
 }
 

@@ -149,3 +149,13 @@ test('"ayy then "ap round-trips a named register through the keymap', () => {
   type('"ap'); // select register a, put after
   assert.equal(editor.getText(), 'hello\nworld\nhello\n');
 });
+
+test('a count applies through the keymap (3l, 2dw)', () => {
+  const m = focusedEditor('one two three four\n');
+  m.type('3l');
+  assert.deepEqual(m.editor.getCursorBufferPosition().toArray(), [0, 3]);
+
+  const d = focusedEditor('one two three four\n');
+  d.type('2dw'); // delete two words
+  assert.equal(d.line(0), 'three four');
+});

@@ -91,10 +91,16 @@ export class Selection {
 
   setBufferRange(range: Range, options: SetBufferRangeOptions = {}): void {
     const { buffer } = this.editor;
+    // Matching Atom: when `reversed` isn't given, preserve the selection's
+    // current orientation. The vim layer relies on this — linewise visual
+    // re-expands (applyWise) and re-normalizes the selection without re-stating
+    // reversed each time, so forcing head-at-end here would flip an upward
+    // (reversed) selection and collapse its far end on the next motion.
+    const reversed = options.reversed ?? this.isReversed();
     const startIter = this.editor.iterAtPoint(range.start);
     const endIter = this.editor.iterAtPoint(range.end);
     // selectRange(insert, bound): the first iter becomes the head (cursor).
-    if (options.reversed) buffer.selectRange(startIter, endIter);
+    if (reversed) buffer.selectRange(startIter, endIter);
     else buffer.selectRange(endIter, startIter);
   }
 

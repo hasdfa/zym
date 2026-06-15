@@ -12,11 +12,11 @@
  * TextTag with `invisible = true` over its body lines. Folded state is derived
  * from the live tag (iter.hasTag), so folds move with edits instead of resetting.
  *
- * `z`-prefixed fold commands (za/zo/zc/zR/zM) are handled here and fed in from a
- * CAPTURE-phase key controller the editor installs on its root box (it runs
- * while vim is in normal mode); see handleFoldKey.
+ * Folding is driven by the public `toggleFoldAtCursor`/`setFoldAtCursor`/
+ * `foldAll`/`unfoldAll` methods; the editor wires them to `fold:*` commands that
+ * the vim keymap's `z`-prefix (za/zo/zc/zR/zM) dispatches.
  */
-import { Gdk, Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
+import { Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
 import { theme } from '../theme/theme.ts';
 
@@ -52,7 +52,6 @@ export class SyntaxController {
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
   private debounceId = 0;
-  private pendingZ = false;
 
   constructor(view: SourceView, buffer: SourceBuffer) {
     this.view = view;
@@ -320,7 +319,7 @@ export class SyntaxController {
     return best;
   }
 
-  private setFoldAtCursor(folded: boolean): void {
+  setFoldAtCursor(folded: boolean): void {
     const region = this.regionAtCursor();
     if (region && region.folded !== folded) this.toggleFold(region);
   }
@@ -339,35 +338,6 @@ export class SyntaxController {
     buffer.removeTag(this.invisibleTag, buffer.getStartIter(), buffer.getEndIter());
     for (const region of this.foldsByHeaderLine.values()) region.folded = false;
     (this.view as any).queueDraw();
-  }
-
-  /**
-   * Handle a key for the `z`-prefixed fold commands. Called from the editor's
-   * CAPTURE-phase fold-key controller; `isNormalMode` (the vim layer's mode)
-   * gates folding so `z` is only a fold prefix outside insert mode. Returns true
-   * if the key was consumed.
-   */
-  handleFoldKey(keyval: number, isNormalMode: boolean): boolean {
-    if (!isNormalMode) {
-      this.pendingZ = false;
-      return false;
-    }
-    if (this.pendingZ) {
-      this.pendingZ = false;
-      switch (keyval) {
-        case Gdk.KEY_a: this.toggleFoldAtCursor(); return true;
-        case Gdk.KEY_o: this.setFoldAtCursor(false); return true;
-        case Gdk.KEY_c: this.setFoldAtCursor(true); return true;
-        case Gdk.KEY_R: this.unfoldAll(); return true;
-        case Gdk.KEY_M: this.foldAll(); return true;
-        default: return false; // not a fold command; the leading `z` was consumed
-      }
-    }
-    if (keyval === Gdk.KEY_z) {
-      this.pendingZ = true;
-      return true;
-    }
-    return false;
   }
 }
 

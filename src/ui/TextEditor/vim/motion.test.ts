@@ -5,6 +5,7 @@ import { EditorModel } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
 import VimState from './vim-state.js';
 import { StatusBarManager } from './stubs.ts';
+import settings from './settings.ts';
 import './operations/mode.js';
 import './operator-insert.js';
 import './text-object.js';
@@ -37,7 +38,7 @@ test('h/l/j/k move the cursor by character and line', () => {
   assert.deepEqual(pos(), [0, 0]);
 });
 
-test('h stops at column 0 and l stops on the last character (normal mode)', () => {
+test('h stops at column 0; l reaches one past the last char (onemore default)', () => {
   const { run, at, pos } = setup('ab\n');
   at(0, 0);
   run('MoveLeft');
@@ -45,7 +46,21 @@ test('h stops at column 0 and l stops on the last character (normal mode)', () =
   run('MoveRight');
   assert.deepEqual(pos(), [0, 1]); // onto 'b'
   run('MoveRight');
-  assert.deepEqual(pos(), [0, 1]); // rests on the last char, never past it
+  assert.deepEqual(pos(), [0, 2]); // past the last char (virtualedit=onemore)
+  run('MoveRight');
+  assert.deepEqual(pos(), [0, 2]); // but no further (end of line)
+});
+
+test('allowCursorPastEndOfLine=false restores the classic last-char resting', () => {
+  settings.set('allowCursorPastEndOfLine', false);
+  try {
+    const { run, at, pos } = setup('ab\n');
+    at(0, 1); // on 'b' (the last char)
+    run('MoveRight');
+    assert.deepEqual(pos(), [0, 1]); // pulled back to the last char
+  } finally {
+    settings.set('allowCursorPastEndOfLine', true);
+  }
 });
 
 test('w / b / e move by word', () => {
@@ -69,7 +84,7 @@ test('0 / ^ / $ move within the line', () => {
   run('MoveToFirstCharacterOfLine');
   assert.deepEqual(pos(), [0, 2]); // first non-blank
   run('MoveToLastCharacterOfLine');
-  assert.deepEqual(pos(), [0, 12]); // last character ('d'), not past EOL
+  assert.deepEqual(pos(), [0, 13]); // end of line (onemore default; 'd' is at col 12)
 });
 
 test('gg / G jump to the first and last line', () => {

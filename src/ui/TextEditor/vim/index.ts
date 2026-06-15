@@ -80,6 +80,57 @@ const MOTION_BINDINGS: Record<string, string> = {
 // Multi-key motions (keystroke sequences), available while NOT in insert mode.
 const SEQUENCE_BINDINGS: Record<string, string> = {
   'g g': 'MoveToFirstLine',
+  'g e': 'MoveToPreviousEndOfWord',
+  'g E': 'MoveToPreviousEndOfWholeWord',
+  'g ctrl-d': 'ScrollQuarterScreenDown',
+  'g ctrl-u': 'ScrollQuarterScreenUp',
+};
+
+// Screen-relative line motions (use the viewport geometry).
+const SCREEN_MOTION_BINDINGS: Record<string, string> = {
+  H: 'MoveToTopOfScreen',
+  M: 'MoveToMiddleOfScreen',
+  L: 'MoveToBottomOfScreen',
+};
+
+// Sentence motions.
+const SENTENCE_BINDINGS: Record<string, string> = {
+  ')': 'MoveToNextSentence',
+  '(': 'MoveToPreviousSentence',
+};
+
+// Increment / decrement the number under (or after) the cursor.
+const NUMBER_BINDINGS: Record<string, string> = {
+  'ctrl-a': 'Increase',
+  'ctrl-x': 'Decrease',
+};
+
+// Scrolling. ctrl-f/b/d/u page-scroll (cursor moves with the view); ctrl-e/ctrl-y
+// scroll one line, keeping the cursor on screen.
+const SCROLL_BINDINGS: Record<string, string> = {
+  'ctrl-f': 'ScrollFullScreenDown',
+  'ctrl-b': 'ScrollFullScreenUp',
+  'ctrl-d': 'ScrollHalfScreenDown',
+  'ctrl-u': 'ScrollHalfScreenUp',
+  'ctrl-e': 'MiniScrollDown',
+  'ctrl-y': 'MiniScrollUp',
+};
+
+// `z`-prefix: cursor-line redraw (zz/zt/zb — vim operations). The fold keys
+// (za/zo/zc/zR/zM) share the prefix but dispatch to the editor's `fold:*`
+// commands (registered by TextEditor over the SyntaxController), not vim
+// operations — see FOLD_KEYMAP, kept out of NORMAL_OPERATIONS.
+const Z_SCROLL_BINDINGS: Record<string, string> = {
+  'z z': 'RedrawCursorLineAtMiddle',
+  'z t': 'RedrawCursorLineAtTop',
+  'z b': 'RedrawCursorLineAtBottom',
+};
+const FOLD_KEYMAP: Record<string, string> = {
+  'z a': 'fold:toggle',
+  'z o': 'fold:open',
+  'z c': 'fold:close',
+  'z R': 'fold:open-all',
+  'z M': 'fold:close-all',
 };
 
 // Find-char motions. These `requireInput`: the operation reads the next
@@ -105,6 +156,15 @@ const REPEAT_FIND_COMMANDS: Record<string, string> = {
 const REPEAT_COMMANDS: Record<string, string> = {
   '.': 'vim-mode-plus:repeat',
 };
+
+// Count digits 1-9 accumulate the operation count (e.g. `2dw`, `5j`). `0` stays
+// MoveToBeginningOfLine — using it mid-count (e.g. `10j`) isn't handled yet.
+const COUNT_BINDINGS: Record<string, { command: string; args: number[] }> = Object.fromEntries(
+  Array.from({ length: 9 }, (_, i) => [
+    String(i + 1),
+    { command: 'vim-mode-plus:set-count', args: [i + 1] },
+  ]),
+);
 
 // `"{reg}` selects the register the next yank/delete/paste uses (e.g. `"ayy`,
 // `"+p`). Reads the register letter via VimState.readChar and sets it on the
@@ -212,12 +272,16 @@ const MISC_BINDINGS: Record<string, string> = {
 const NON_INSERT_BINDINGS: Record<string, string> = {
   ...MOTION_BINDINGS,
   ...SEQUENCE_BINDINGS,
+  ...SCREEN_MOTION_BINDINGS,
+  ...SENTENCE_BINDINGS,
   ...FIND_BINDINGS,
   ...CASE_BINDINGS,
   ...REPLACE_BINDINGS,
   ...MARK_BINDINGS,
   ...OPERATOR_BINDINGS,
   ...SHORTCUT_OPERATOR_BINDINGS,
+  ...NUMBER_BINDINGS,
+  ...SCROLL_BINDINGS,
   ...INDENT_JOIN_BINDINGS,
   ...MISC_BINDINGS,
 };
@@ -229,6 +293,7 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   ...NON_INSERT_BINDINGS,
   ...TEXT_OBJECT_BINDINGS,
   ...SURROUND_BINDINGS,
+  ...Z_SCROLL_BINDINGS,
 };
 
 let keymapsRegistered = false;
@@ -251,6 +316,9 @@ function registerKeymapsOnce(): void {
       ...toKeymap(MODE_BINDINGS),
       ...toKeymap(VISUAL_BINDINGS),
       ...toKeymap(SURROUND_BINDINGS),
+      // z-prefix: folds (→ editor `fold:*` commands) + zz/zt/zb cursor-line redraw.
+      ...FOLD_KEYMAP,
+      ...toKeymap(Z_SCROLL_BINDINGS),
     },
     // Motions and operators apply in normal, operator-pending, and visual modes.
     'GtkSourceView:not(.insert-mode)': {
@@ -258,6 +326,7 @@ function registerKeymapsOnce(): void {
       ...REPEAT_FIND_COMMANDS,
       ...REPEAT_COMMANDS,
       ...REGISTER_COMMANDS,
+      ...COUNT_BINDINGS,
     },
     // In visual mode: v/V switch wise (or toggle off) and text objects select.
     'GtkSourceView.visual-mode': { ...toKeymap(VISUAL_BINDINGS), ...toKeymap(TEXT_OBJECT_BINDINGS) },
@@ -276,9 +345,15 @@ export function attachVim(editor: EditorModel): VimState {
 
   const vimState = new VimState(editor, new StatusBarManager());
 
-  const commands: Record<string, () => void> = {
+  const commands: Record<string, (...args: unknown[]) => void> = {
     'vim-mode-plus:activate-normal-mode': () => {
       vimState.operationStack.run('ActivateNormalMode');
+    },
+    // Count digits accumulate via the operation stack (mode-aware: normal vs
+    // operator-pending), so `2d3w` multiplies to 6. Commands receive
+    // (event, element, ...args); the digit is the first dispatch arg.
+    'vim-mode-plus:set-count': (_event, _element, n) => {
+      vimState.setCount(n as number);
     },
     // `;`/`,` replay the recorded find rather than running an operation class.
     'vim-mode-plus:repeat-find': () => {

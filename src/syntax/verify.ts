@@ -7,7 +7,7 @@
  *   node src/syntax/verify.ts
  */
 import { createRequire } from 'node:module';
-import { Adw, Gdk, GLib, Gtk, GtkSource } from '../gi.ts';
+import { Adw, GLib, Gtk, GtkSource } from '../gi.ts';
 import { SyntaxController } from './syntax-controller.ts';
 import { preloadGrammars } from './grammar.ts';
 
@@ -57,12 +57,10 @@ app.on('activate', () => {
       const regions = syntax.foldsByHeaderLine.size;
       const captureBefore = syntax.captureCounts();
 
-      // Exercise the vim path: cursor into loadDocument's body, then `za`.
+      // Exercise the fold path: cursor into loadDocument's body, then za (toggle
+      // fold at cursor). The vim keymap's z-prefix dispatches this method.
       (buffer as any).placeCursor((buffer as any).getIterAtLine(3)[1]);
-      const consumedZ = syntax.handleFoldKey(Gdk.KEY_z, true);
-      const consumedA = syntax.handleFoldKey(Gdk.KEY_a, true);
-      // Insert-mode gating: `z` must NOT be consumed when not in normal mode.
-      const insertModePassthrough = syntax.handleFoldKey(Gdk.KEY_z, false) === false;
+      syntax.toggleFoldAtCursor();
 
       // Live edit: insert a line. This fires insert-text → the controller records
       // a tree edit → 'changed' → a debounced incremental reparse. The new
@@ -78,8 +76,6 @@ app.on('activate', () => {
           console.log(JSON.stringify({
             grammarHandled: handled,
             foldRegions: regions,
-            zaConsumed: consumedZ && consumedA,
-            insertModePassthrough,
             captureBefore,
             captureAfterEdit,
             incrementalEditPickedUpNumber:

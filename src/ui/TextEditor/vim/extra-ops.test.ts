@@ -12,6 +12,7 @@ import './operator-insert.js';
 import './operator-transform-string.js';
 import './text-object.js';
 import './motion.js';
+import './misc-command.js';
 
 Gtk.init();
 
@@ -215,4 +216,73 @@ test('3J joins three lines', () => {
   run('Join');
   assert.equal(line(0), 'a b c');
   assert.equal(line(1), 'd');
+});
+
+// --- Increment / decrement, sentence, ge, H/M/L ----------------------------
+
+test('ctrl-a / ctrl-x increment and decrement the number on the line', () => {
+  const { run, at, line } = setup('val 41 end\n');
+  at(0, 0); // before the number — finds the next number on the line
+  run('Increase');
+  assert.equal(line(), 'val 42 end');
+  run('Decrease');
+  run('Decrease');
+  assert.equal(line(), 'val 40 end');
+});
+
+test('( and ) move by sentence', () => {
+  const { run, at, pos } = setup('One. Two. Three.\n');
+  at(0, 0);
+  run('MoveToNextSentence');
+  assert.deepEqual(pos(), [0, 5]); // start of "Two"
+  run('MoveToNextSentence');
+  assert.deepEqual(pos(), [0, 10]); // "Three"
+  run('MoveToPreviousSentence');
+  assert.deepEqual(pos(), [0, 5]);
+});
+
+test('ge moves to the previous end of word', () => {
+  const { run, at, pos } = setup('foo bar baz\n');
+  at(0, 8); // on 'b' of "baz"
+  run('MoveToPreviousEndOfWord');
+  assert.deepEqual(pos(), [0, 6]); // 'r' of "bar"
+});
+
+test('scroll commands run without error (real scrolling needs a realized view)', () => {
+  const { run, at } = setup('l0\nl1\nl2\nl3\nl4\nl5\n');
+  at(3, 0);
+  // Plumbing: ScrollManager registered, Cursor.getScreenPosition + EditorModel
+  // pixel/scroll methods present. Behavior (cursor jump + view scroll) depends on
+  // the realized viewport, so this just guards the chain against regressions.
+  for (const op of [
+    'ScrollHalfScreenDown',
+    'ScrollHalfScreenUp',
+    'ScrollFullScreenDown',
+    'ScrollFullScreenUp',
+    'ScrollQuarterScreenDown',
+    'ScrollQuarterScreenUp',
+    'MiniScrollDown', // ctrl-e
+    'MiniScrollUp', // ctrl-y
+    'RedrawCursorLineAtMiddle', // zz
+    'RedrawCursorLineAtTop', // zt
+    'RedrawCursorLineAtBottom', // zb
+  ]) {
+    run(op);
+  }
+  assert.ok(true);
+});
+
+test('H / M / L land on the top / middle / bottom viewport rows in order', () => {
+  const { editor, run, at } = setup('l0\nl1\nl2\nl3\nl4\n');
+  const row = () => editor.getCursorBufferPosition().toArray()[0];
+  at(2, 0);
+  run('MoveToTopOfScreen');
+  const top = row();
+  at(2, 0);
+  run('MoveToMiddleOfScreen');
+  const mid = row();
+  at(2, 0);
+  run('MoveToBottomOfScreen');
+  const bottom = row();
+  assert.ok(top <= mid && mid <= bottom, `expected top<=mid<=bottom, got ${top},${mid},${bottom}`);
 });

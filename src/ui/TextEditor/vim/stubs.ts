@@ -4,9 +4,11 @@
  * vim-mode-plus's VimState lazily instantiates ~15 managers; many are cosmetic
  * (cursor styling, hover overlays, flash) or belong to features not yet ported.
  * These no-op stands-in satisfy the `load()` contract so the mode/operation core
- * runs. They are replaced by real implementations as each feature lands.
+ * runs. They are replaced by real implementations as each feature lands
+ * (FlashManager and the visual-mode parts of CursorStyleManager are real now).
  */
 import type VimState from './vim-state.js';
+import { DecorationController } from '../DecorationController.ts';
 
 /**
  * Renders cursor decorations by mode in Atom; here the cursor is the native
@@ -21,8 +23,20 @@ export class CursorStyleManager {
     this.vimState = vimState;
   }
   refresh(): void {
-    this.vimState.editor.refreshCursorStyle();
-    this.vimState.editor.scrollCursorOnscreen();
+    const { editor } = this.vimState;
+    // In visual mode the block caret belongs on the selection's logical head
+    // (which `saveProperties` keeps on the line), not the insert mark — for a
+    // linewise selection the insert mark sits at the next line's start.
+    if (this.vimState.mode === 'visual') {
+      const head = this.vimState
+        .swrap(editor.getLastSelection())
+        .getBufferPositionFor('head', { from: ['property', 'selection'] });
+      editor.setCursorDisplayPoint(head ?? null);
+    } else {
+      editor.setCursorDisplayPoint(null);
+    }
+    editor.refreshCursorStyle();
+    editor.scrollCursorOnscreen();
   }
 }
 
@@ -39,11 +53,77 @@ export class StatusBarManager {
   update(_mode: string, _submode: string | null): void {}
 }
 
-/** Flash highlights on operated ranges (cosmetic). Not yet implemented. */
+/**
+ * Briefly highlights operated/yanked ranges (vim-mode-plus's `flashOnOperate`/
+ * `flashOnUndoRedo`). Ranges are painted on a dedicated decoration layer and
+ * cleared after a per-type duration; a new flash supersedes the pending one.
+ */
+const FLASH_DURATION: Record<string, number> = {
+  operator: 200,
+  'operator-long': 700,
+  'operator-occurrence': 200,
+  'operator-remove-occurrence': 200,
+  'undo-redo': 300,
+  'undo-redo-multiple-changes': 300,
+};
+const DEFAULT_FLASH_DURATION = 250;
+
 export class FlashManager {
-  constructor(_vimState: VimState) {}
-  flash(_ranges?: unknown, _options?: unknown): void {}
-  clearAllMarkers(): void {}
+  private readonly decorations: DecorationController;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(vimState: VimState) {
+    this.decorations = new DecorationController(vimState.editor);
+    vimState.onDidDestroy(() => this.destroy());
+  }
+
+  flash(ranges: unknown, options: { type?: string } = {}): void {
+    const list = (Array.isArray(ranges) ? ranges : [ranges]).filter(
+      (r): r is { isEmpty?: () => boolean } => Boolean(r) && !(r as { isEmpty?: () => boolean }).isEmpty?.(),
+    );
+    if (!list.length) return;
+
+    const duration = FLASH_DURATION[options.type ?? ''] ?? DEFAULT_FLASH_DURATION;
+    if (duration <= 0) return;
+
+    this.clearAllMarkers();
+    const layer = this.decorations.layer('vim-flash');
+    for (const range of list) layer.decorate(range as never, 'flash');
+    this.timer = setTimeout(() => this.clearAllMarkers(), duration);
+  }
+
+  clearAllMarkers(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.decorations.layer('vim-flash').clear();
+  }
+
+  destroy(): void {
+    this.clearAllMarkers();
+  }
+}
+
+/**
+ * Scrolls the view for ctrl-d/u/f/b and zz/zt/zb. vim-mode-plus's smooth-scroll
+ * animation is dropped (smooth-scroll config is off): scrolls land immediately
+ * via the view's vertical adjustment.
+ */
+export class ScrollManager {
+  private readonly vimState: VimState;
+  constructor(vimState: VimState) {
+    this.vimState = vimState;
+    vimState.onDidDestroy(() => this.destroy());
+  }
+  destroy(): void {}
+  requestScroll(options: { amountOfPixels?: number; scrollTop?: number; onFinish?: () => void } = {}): void {
+    const { editor } = this.vimState;
+    let scrollTop = options.scrollTop;
+    if (options.amountOfPixels != null) scrollTop = editor.getScrollTop() + options.amountOfPixels;
+    if (scrollTop != null) editor.setScrollTop(scrollTop);
+    options.onFinish?.();
+  }
 }
 
 /**

@@ -231,9 +231,13 @@ export default class OperationStack {
     if (this.mode === 'normal') {
       this.clearSelectionsIfNotEmpty(operation)
 
-      // Move cursor left if cursor was at EOL
-      const eolCursors = this.editor.getCursors().filter(cursor => cursor.isAtEndOfLine())
-      eolCursors.forEach(cursor => this.vimState.utils.moveCursorLeft(cursor, {keepGoalColumn: true}))
+      // Pull the cursor back to the last character if it ended past end-of-line,
+      // unless `virtualedit=onemore` is enabled (quilx default) — then let it rest
+      // one column past, like clicking past a line's end.
+      if (!this.vimState.getConfig('allowCursorPastEndOfLine')) {
+        const eolCursors = this.editor.getCursors().filter(cursor => cursor.isAtEndOfLine())
+        eolCursors.forEach(cursor => this.vimState.utils.moveCursorLeft(cursor, {keepGoalColumn: true}))
+      }
     } else if (this.mode === 'visual') {
       this.vimState.updateNarrowedState()
       this.vimState.updatePreviousSelection()
