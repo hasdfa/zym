@@ -25,17 +25,39 @@ type Binding = string | CommandRef;
 // available globally; text-input contexts release `space` with `unset!` (see
 // below) so it still types literally there.
 const SPACE_COMMANDS: Record<string, string> = {
+  'space space': 'command-palette:toggle',
   'space w': 'file:save',
   'space o': 'file:find', // fuzzy file picker
-  'space space': 'command-palette:toggle',
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space a a': 'agent:switch', // open the agent picker
   'space a n': 'agent:new', // launch a new agent
+  'space a r': 'agent:resume', // resume a past conversation (picker)
+  'space a c': 'agent:continue', // continue the latest conversation in this folder
+  // Send editor context to an agent: the second key picks selection (s) or file
+  // (f); the third picks the current agent (repeat), one from the picker (a), or
+  // a new agent with an editable prompt (n).
+  'space a s s': 'agent:send-selection', // selection → current agent
+  'space a s a': 'agent:send-selection-to', // selection → pick an agent
+  'space a s n': 'agent:send-selection-to-new', // selection → new agent (editable prompt)
+  'space a f f': 'agent:send-file', // file path → current agent
+  'space a f a': 'agent:send-file-to', // file path → pick an agent
+  'space a f n': 'agent:send-file-to-new', // file path → new agent (editable prompt)
   'space n': 'notifications:toggle-log', // show/hide the bottom notification log
   'space ,': 'config:open', // preferences (GNOME-style comma == settings)
+  'space f f': 'file-tree:focus', // focus the Files tab
+  'space g g': 'git-panel:focus', // focus the git (Source Control) tab
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
+  'space l d': 'lsp:go-to-definition', // "l"sp "d"efinition
+  'space l D': 'lsp:go-to-declaration', // declaration
+  'space l t': 'lsp:go-to-type-definition', // "t"ype definition
+  'space l i': 'lsp:go-to-implementation', // "i"mplementation
+  'space l r': 'lsp:find-references', // "r"eferences
+  'space l k': 'lsp:hover', // hover (type / docs)
+  'space l l': 'lsp:toggle-diagnostics-panel', // "l"sp problems "l"ist
+  'space s s': 'session:save', // save the workspace session
+  'space s r': 'session:restore', // restore the saved session
 };
 
 // Tab navigation. alt-, / alt-. switch to the previous / next tab; alt-1..8 jump
@@ -47,7 +69,20 @@ const TAB_BINDINGS: Record<string, Binding> = {
   'alt-9': 'tab:go-to-last',
   'alt-c': 'tab:close', // close the focused panel child
 };
-for (let n = 1; n <= 8; n++) TAB_BINDINGS[`alt-${n}`] = { command: 'tab:go-to', args: [n - 1] };
+for (let n = 1; n <= 8; n++)
+  TAB_BINDINGS[`alt-${n}`] = { command: 'tab:go-to', args: [n - 1] };
+
+// Vim-style list navigation, shared by the focusable list widgets (file tree,
+// git panel, agent list). Each widget registers the `core:*` handlers; this is
+// the one place the keystrokes are defined. `l` (core:right) is the per-list
+// "enter/activate" action.
+const LIST_NAV: Record<string, Binding> = {
+  j: 'core:down',
+  k: 'core:up',
+  'g g': 'core:top',
+  G: 'core:bottom',
+  l: 'core:right',
+};
 
 export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   '#AppWindow': {
@@ -65,25 +100,45 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     ...SPACE_COMMANDS,
   },
 
+  // LSP hover on the symbol under the cursor. Bound only in normal mode so it
+  // doesn't shadow typing 'K' while inserting.
+  'GtkSourceView.normal-mode': {
+    K: 'lsp:hover',
+  },
+
   // Tab switching, routed to whichever panel holds focus.
   '#Panel': TAB_BINDINGS,
 
-  // Vim-style file-tree navigation while the tree is focused.
+  // File tree: shared list navigation plus tree-specific keys.
   '#FileTree': {
-    j: 'core:down',
-    k: 'core:up',
-    l: 'core:right', // enter a directory / open a file
+    ...LIST_NAV, // j/k, g g, G, l (l enters a directory / opens a file)
     h: 'core:left', // collapse a directory / go to parent
     ',': 'tree:toggle-untracked-files', // show/hide files not tracked by git
     '.': 'tree:toggle-hidden-files', // show/hide dotfiles
   },
 
-  // Vim-style agent-list navigation while the list is focused.
-  '#AgentList': {
-    j: 'core:down',
-    k: 'core:up',
-    l: 'core:right', // reveal the selected agent's terminal
+  // Git panel: shared list navigation plus git-specific keys.
+  '#GitPanel': {
+    ...LIST_NAV, // j/k, g g, G, l (l opens the file under the cursor)
+    s: 'git:stage', // stage the file under the cursor
+    u: 'git:unstage', // unstage the file under the cursor
+    A: 'git:stage-all', // stage everything (or unstage all when nothing is unstaged)
+    X: 'git:discard', // restore (tracked) / delete (untracked) the file under the cursor
+    'c c': 'git:commit', // commit: edit the message in a tab, save+close to commit
   },
+
+  // Agent list: shared list navigation (l reveals the selected agent's terminal)
+  // plus lifecycle keys acting on the selected agent.
+  '#AgentList': {
+    ...LIST_NAV, // j/k, g g, G, l (l reveals the selected agent's terminal)
+    r: 'agent:restart', // restart the selected agent (resume its conversation)
+    R: 'agent:rename', // rename the selected agent
+    x: 'agent:close', // close the selected agent
+  },
+
+  // Location lists (LSP diagnostics, project-wide search, …): shared navigation
+  // (l opens the location under the cursor).
+  '#LocationList': LIST_NAV,
 
   // The notification log: while it has focus, bare keys act on the history
   // (vim-tree style). `c` clears it; `q` hides it (same command as the leader

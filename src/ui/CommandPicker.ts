@@ -63,40 +63,76 @@ export function openCommandPicker(host: Overlay): void {
   // The proportional UI font for descriptions (the picker itself is monospace).
   const uiFont = uiFontFamily();
 
+  // Match against `name` AND `description`, but rank name hits first: the text is
+  // `<description> <name>` with `boostFrom` on the name, so name matches earn the
+  // fuzzy boost (the file picker's trick). Display reads the name from `value`,
+  // so the description in `text` only affects matching/ranking.
   const items: PickerItem[] = commands
     .map((c) => c.name)
     .sort()
-    .map((name) => ({ value: name, text: name }));
+    .map((name) => {
+      const description = byName.get(name)?.description;
+      if (!description) return { value: name, text: name, boostFrom: 0 };
+      return { value: name, text: `${description} ${name}`, boostFrom: description.length + 1 };
+    });
 
   openPicker({
     host,
     placeholder: 'Run command…',
     items,
     formatMain: (item, positions) => {
-      const detail = detailMarkup(byName.get(item.value)?.description, shortcutByName.get(item.value), uiFont);
+      const name = item.value;
+      const description = byName.get(name)?.description;
+      // Positions index into `text` (`<description> <name>`). Split them into the
+      // name range (the suffix) and the description range (the prefix).
+      const nameStart = item.text.length - name.length;
+      const namePositions = positions.filter((p) => p >= nameStart).map((p) => p - nameStart);
+      const descPositions = description ? positions.filter((p) => p < description.length) : [];
       return {
-        main: formatCommandName(item.text, positions),
-        // Right-aligned detail: the muted description (smaller, proportional)
-        // followed by the keybinding flush-right — bold and monospace (the
-        // picker's font, inherited). Not dimmed as a whole, so the binding reads
-        // strong while the description stays muted via its own markup.
-        detail,
+        main: formatCommandName(name, namePositions),
+        // Right-aligned detail: the muted description (smaller, proportional, with
+        // its own matches highlighted) followed by the keybinding flush-right —
+        // bold, monospace, color-muted. Not dimmed as a whole, so each part keeps
+        // the emphasis its markup sets.
+        detail: detailMarkup(description, descPositions, shortcutByName.get(name), uiFont),
         detailMuted: false,
+        // Commands whose `when` is currently false are shown but dimmed; choosing
+        // one is a no-op (see onSelect).
+        dim: byName.get(name)?.enabled === false,
       };
     },
     onSelect: (name) => {
-      const element = byName.get(name)?.element;
-      if (element) quilx.commands.dispatch(element, name);
+      const command = byName.get(name);
+      if (!command || command.enabled === false) return; // disabled — not applicable now
+      quilx.commands.dispatch(command.element, name);
     },
   });
 }
 
-function detailMarkup(description: string | undefined, shortcut: string | undefined, uiFont: string): string | undefined {
+function detailMarkup(
+  description: string | undefined,
+  descPositions: number[],
+  shortcut: string | undefined,
+  uiFont: string,
+): string | undefined {
   const parts: string[] = [];
-  if (description)
-    parts.push(`<span size="smaller" font_family="${uiFont}" alpha="${DESC_ALPHA}">${escapeText(description)}</span>`);
+  if (description) parts.push(descMarkup(description, descPositions, uiFont));
   // Keybinding last → flush-right and column-aligned across rows; bold, monospace
   // (inherits the picker font), color-muted, shown exactly as written in the keymap.
   if (shortcut) parts.push(`<span weight="bold" alpha="${SHORTCUT_ALPHA}">${escapeText(shortcut)}</span>`);
   return parts.length ? parts.join('   ') : undefined;
+}
+
+// The description in a smaller, proportional, muted font, with matched chars
+// (from searching the description) drawn full-strength in the highlight color.
+function descMarkup(description: string, positions: number[], uiFont: string): string {
+  const matched = new Set(positions);
+  let inner = '';
+  for (let i = 0; i < description.length; i++) {
+    const ch = escapeText(description[i]);
+    inner += matched.has(i)
+      ? `<span foreground="${HIGHLIGHT_COLOR}" alpha="100%">${ch}</span>`
+      : ch;
+  }
+  return `<span size="smaller" font_family="${uiFont}" alpha="${DESC_ALPHA}">${inner}</span>`;
 }

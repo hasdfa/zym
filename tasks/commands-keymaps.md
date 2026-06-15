@@ -30,26 +30,27 @@ Core pieces:
 - [x] `#id` / tag / class selectors matched on `getName()` + CSS classes
 - [x] Central `default.ts` keymap + user `keymap.json` override (priority) with load-time validation
 - [x] Space leader; `.has-text-input` releases `space` in entries/terminal/insert mode
-- [x] Command palette with descriptions and formatted labels
+- [x] Command palette with descriptions, formatted labels, shortcut column, and frecency ordering
+- [x] Palette search matches name **and** description, with name matches ranked first (`boostFrom`)
+- [x] Command `when` predicate — the palette dims (and no-ops) commands not currently applicable
 - [x] Window always in the active-element chain, so window-level bindings fire even with no focus
 
 ## Remaining work
 
-Roughly by value. Most build on **keymap introspection**, which doesn't exist yet.
-
-- [ ] **Keymap introspection** — `KeymapManager.keystrokesForCommand(name, elements)`
-  (reverse lookup over registered keymaps). Foundation for the two items below.
-- [ ] **Show the shortcut in the command palette** — display each command's bound
-  keystroke (right-aligned, by the description). Needs introspection.
-- [ ] **which-key leader hints** — after a partial match (e.g. `space`), pop up the
-  available continuations and their commands. Big win for a leader-first editor;
-  hook the partial-match branch in `processKeystroke`.
-- [ ] **Live-reload `keymap.json`** — watch it with a `Gio.FileMonitor` and
-  re-register on change, mirroring how `config.json` is watched (`config/load.ts`).
-  Today the user keymap is read once at startup.
-- [ ] **Conflict detection at load** — `validateKeymap` flags unparseable
-  selectors/keys and empty commands, but not two bindings competing for the same
-  keystroke+selector. Warn (or report) on conflicts.
+- [x] **Keymap introspection** — `KeymapManager.keystrokesForCommand(name, elements)`
+  + `getPendingBindings(elements, queue)` (reverse lookup over registered keymaps).
+- [x] **Show the shortcut in the command palette** — each row shows its primary
+  keystroke right-aligned beside the description (`CommandPicker`).
+- [x] **which-key leader hints** — after a queued prefix, `KeymapManager` emits
+  `onPendingChanged`; `ui/WhichKey.ts` shows the continuations (after a short delay)
+  and hides on completion/break.
+- [x] **Live-reload `keymap.json`** — watched with a `Gio.FileMonitor`; edits
+  re-register the user layer live (`keymaps/load.ts`, mirrors `config.json`).
+- [x] **Conflict detection at load** — `KeymapManager.findConflicts()` reports
+  keystrokes bound to multiple commands at the same selector + priority.
+- [ ] **`when` keymap fall-through** — a disabled command currently still
+  captures its keystroke (then no-ops); a future step would let the key fall
+  through to the next match / the widget when `when` is false.
 - [ ] **Keybinding customization UI** — view/override bindings from a settings
   surface (like `ConfigEditor` for config), writing to `keymap.json`. Lower
   priority; the JSON file already covers power users.
@@ -59,6 +60,11 @@ Roughly by value. Most build on **keymap introspection**, which doesn't exist ye
 - Descriptions are keyed by command **name** (global), so they can be declared in
   one place even for commands registered by different components — see
   `AppWindow.registerCommandDescriptions`.
+- `when` is a predicate function on the command's object form
+  (`{ didDispatch, description?, when? }`), a closure over live state
+  (`when: () => this.activeEditor !== null`) — not a string DSL, since commands
+  are declared in TS with the state in scope. Applied so far to `file:save`/
+  `save-as`, `git:*`, and `agent:kill`.
 - The `:` ex-command line and richer search are tracked under
   [code-editing](code-editing/text-editor.md) (vim mode), not here — they consume
   this layer rather than extend it.

@@ -39,14 +39,14 @@ addStyles(`
   #Picker {
     padding: 0;
     border: 1px solid var(--border-color);
-    border-radius: var(--window-radius);
+    border-radius: var(--popover-radius);
     background-color: var(--window-bg-color);
     box-shadow: 0px 10px 33px 28px rgba(0,0,0,0.15);
     ${MONOSPACE.declarations}
   }
   #PickerEntry {
     padding: 0.5em 0.5em;
-    border-radius: var(--window-radius);
+    border-radius: var(--popover-radius);
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
   }
@@ -71,7 +71,7 @@ addStyles(`
     padding: 0;
   }
   #PickerList {
-    border-radius: var(--window-radius);
+    border-radius: var(--popover-radius);
   }
   /* Drop Adwaita's built-in row padding so only the label's inset applies. */
   #PickerList row {
@@ -194,6 +194,12 @@ export interface FormattedRow {
    * command palette's bold keybinding column).
    */
   detailMuted?: boolean;
+  /**
+   * Dim the whole row (e.g. a command the palette shows but that isn't currently
+   * applicable). Visual only — the row stays selectable; the caller's `onSelect`
+   * decides what choosing it does.
+   */
+  dim?: boolean;
 }
 
 export interface PickerHandle {
@@ -432,10 +438,13 @@ function renderRow(
       highlightMarkup(item.text, positions);
     const detailMarkup = typeof formatted === 'object' ? formatted.detail : undefined;
 
+    const dim = typeof formatted === 'object' && formatted.dim === true;
+
     if (!detailMarkup) {
       const label = new Gtk.Label({ xalign: 0, useMarkup: true });
       label.setMarkup(mainMarkup);
       label.setName('PickerRow');
+      if (dim) label.setOpacity(0.4);
       return label;
     }
 
@@ -458,6 +467,7 @@ function renderRow(
     if (typeof formatted === 'object' && formatted.detailMuted === false) detail.setMarginStart(16);
     else detail.addCssClass('picker-detail');
     box.append(detail);
+    if (dim) box.setOpacity(0.4);
     return box;
   }
 

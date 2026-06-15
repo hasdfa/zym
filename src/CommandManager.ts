@@ -24,7 +24,14 @@ type Widget = InstanceType<typeof Gtk.Widget>;
 // Handlers receive the event, the element, then any dispatch arguments. Args are
 // also available as `event.args` (handy for the `{ didDispatch }` form).
 type CommandCallback = (this: Widget, event: CommandEvent, element: Widget, ...args: any[]) => void;
-export type CommandEffect = CommandCallback | { didDispatch: CommandCallback };
+// A command is a plain callback, or an object carrying the callback plus optional
+// metadata: `description` (a human label for the palette) and `when` (a predicate
+// for whether the command is currently applicable — the palette dims commands
+// whose `when` is false). `when` is a closure over live state, e.g.
+// `when: () => this.activeEditor !== null`.
+export type CommandEffect =
+  | CommandCallback
+  | { didDispatch: CommandCallback; description?: string; when?: () => boolean };
 export type CommandMap = Record<string, CommandEffect>;
 
 interface CommandBundle {
@@ -37,7 +44,16 @@ export class CommandManager {
   commandsByName: Record<string, CommandBundle[]> = {};
   commandsByElement = new WeakMap<Widget, CommandBundle[]>();
   sources: Record<string, Array<{ selector: string; commands: CommandMap }>> = {};
+  // Human descriptions keyed by command name (shown in the command palette).
+  // Keyed by name (not by registration) so descriptions can be declared in one
+  // place for commands registered across many components.
+  descriptions: Record<string, string> = {};
   emitter = new Emitter();
+
+  /** Attach human descriptions to commands by name (merged; last wins). */
+  describe(descriptions: Record<string, string>): void {
+    Object.assign(this.descriptions, descriptions);
+  }
 
   get(element: Widget, command: string): CommandEffect | undefined {
     const effect = this.resolve(element, command);
@@ -85,11 +101,14 @@ export class CommandManager {
    * Enumerate every command available along a focus chain (as returned by
    * `getActiveElements`), in resolution order: the first element to offer a
    * given name wins, mirroring `get`. Each entry carries the element to dispatch
-   * the command back to. Used to populate the command palette.
+   * the command back to, plus its `description` and whether it is currently
+   * `enabled` (its `when` predicate, defaulting to true). Used by the palette.
    */
-  getAvailableCommands(elements: Widget[]): Array<{ name: string; element: Widget }> {
+  getAvailableCommands(
+    elements: Widget[],
+  ): Array<{ name: string; element: Widget; description?: string; enabled: boolean }> {
     const seen = new Set<string>();
-    const result: Array<{ name: string; element: Widget }> = [];
+    const result: Array<{ name: string; element: Widget; description?: string; enabled: boolean }> = [];
 
     for (const element of elements) {
       const commandBundles = this.bundlesFor(element);
@@ -101,7 +120,15 @@ export class CommandManager {
           if (seen.has(name))
             continue;
           seen.add(name);
-          result.push({ name, element });
+          const effect = bundle.commands[name];
+          const description =
+            (typeof effect === 'object' ? effect.description : undefined) ?? this.descriptions[name];
+          // A throwing/odd `when` shouldn't break the palette — treat as enabled.
+          let enabled = true;
+          if (typeof effect === 'object' && effect.when) {
+            try { enabled = effect.when(); } catch { enabled = true; }
+          }
+          result.push({ name, element, description, enabled });
         }
       }
     }

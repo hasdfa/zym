@@ -79,3 +79,18 @@ export function monospaceFontCss(): FontCss {
 export function monospaceFontDescription(): InstanceType<typeof Pango.FontDescription> {
   return Pango.FontDescription.fromString(monospaceFontName());
 }
+
+/** The OS monospace font family name (unquoted), for Pango markup
+ *  `font_family="…"` attributes. */
+export function monospaceFontFamily(): string {
+  return Pango.FontDescription.fromString(monospaceFontName()).getFamily() || 'monospace';
+}
+
+/** The OS UI (proportional) font family name (org.gnome.desktop.interface
+ *  font-name), e.g. "Cantarell" — for places that want the regular UI font where
+ *  a monospace ancestor would otherwise be inherited. */
+export function uiFontFamily(): string {
+  const settings = new Gio.Settings({ schemaId: 'org.gnome.desktop.interface' });
+  const name = (settings as any).getString('font-name') as string;
+  return Pango.FontDescription.fromString(name).getFamily() || 'sans-serif';
+}
