@@ -15,6 +15,17 @@ export interface LanguageDef {
   filenames?: string[];
   /** Glob patterns matched against the basename (e.g. `*.config.js`). */
   globs?: string[];
+  /**
+   * The LSP document `languageId` (per the protocol) when it differs from `id` —
+   * `id` is our grammar key, which may not be a valid LSP id.
+   */
+  lspId?: string;
+  /**
+   * Per-extension LSP language ids, overriding `lspId`/`id`. Needed when one
+   * grammar spans several LSP languages (the `tsx` grammar backs `.js`→javascript,
+   * `.jsx`→javascriptreact, `.tsx`→typescriptreact).
+   */
+  lspIds?: Record<string, string>;
 }
 
 /** Tree-sitter grammar binding for a language. */
@@ -27,12 +38,24 @@ export interface GrammarDef {
   foldTypes: string[];
 }
 
+/**
+ * How to obtain a server's binary when it isn't installed. Structured sources
+ * (e.g. `npm`) let the editor own the install location and map package→binary;
+ * `{ command }` is a raw escape hatch for anything that doesn't fit. Installs go
+ * into a quilx-managed dir (see `lsp/installer.ts`), never the user's env/project.
+ */
+export type InstallSpec =
+  | { via: 'npm'; package: string; version?: string }
+  | { command: string[] };
+
 /** An LSP server candidate for a language, with per-project activation. */
 export interface ServerDef {
   /** Stable id (e.g. `flow`, `typescript-language-server`). */
   name: string;
   command: string;
   args?: string[];
+  /** How to install the server's binary if it's missing (optional). */
+  install?: InstallSpec;
   initializationOptions?: unknown;
   settings?: unknown;
   /**

@@ -41,16 +41,33 @@ export class LanguageRegistry {
     else this.serversByLang.set(langId, [def]);
   }
 
-  /** The language id for a file path, or null if unrecognized. */
-  languageForPath(filePath: string): string | null {
+  /** The language definition matching a file path (by filename, extension, glob). */
+  private matchLanguage(filePath: string): LanguageDef | null {
     const base = Path.basename(filePath);
     const ext = Path.extname(base).slice(1).toLowerCase();
     for (const lang of this.languages.values()) {
-      if (lang.filenames?.includes(base)) return lang.id;
-      if (ext !== '' && lang.fileTypes?.some((t) => t.toLowerCase() === ext)) return lang.id;
-      if (lang.globs?.some((g) => globToRegExp(g).test(base))) return lang.id;
+      if (lang.filenames?.includes(base)) return lang;
+      if (ext !== '' && lang.fileTypes?.some((t) => t.toLowerCase() === ext)) return lang;
+      if (lang.globs?.some((g) => globToRegExp(g).test(base))) return lang;
     }
     return null;
+  }
+
+  /** The language id for a file path, or null if unrecognized. */
+  languageForPath(filePath: string): string | null {
+    return this.matchLanguage(filePath)?.id ?? null;
+  }
+
+  /**
+   * The LSP document `languageId` for a file (per the protocol), or null. Differs
+   * from `languageForPath` when one grammar language spans several LSP ids — e.g.
+   * the `tsx` grammar → `javascript` / `javascriptreact` / `typescriptreact`.
+   */
+  lspLanguageId(filePath: string): string | null {
+    const lang = this.matchLanguage(filePath);
+    if (!lang) return null;
+    const ext = Path.extname(Path.basename(filePath)).slice(1).toLowerCase();
+    return lang.lspIds?.[ext] ?? lang.lspId ?? lang.id;
   }
 
   grammarFor(langId: string): GrammarDef | null {
@@ -65,6 +82,17 @@ export class LanguageRegistry {
   /** All server candidates registered for a language (built-ins, no overrides). */
   serversFor(langId: string): ServerDef[] {
     return this.serversByLang.get(langId) ?? [];
+  }
+
+  /** Registered servers that declare an install method, de-duplicated by name. */
+  installableServers(): ServerDef[] {
+    const byName = new Map<string, ServerDef>();
+    for (const list of this.serversByLang.values()) {
+      for (const server of list) {
+        if (server.install && !byName.has(server.name)) byName.set(server.name, server);
+      }
+    }
+    return [...byName.values()];
   }
 
   /**

@@ -28,6 +28,19 @@ test('languageForPath matches by extension, else null', () => {
   assert.equal(reg.languageForPath('/p/a.zzz'), null);
 });
 
+test('lspLanguageId maps per-extension LSP ids (one grammar spans several)', () => {
+  const reg = builtins();
+  // typescript grammar id == LSP id for all its extensions.
+  assert.equal(reg.lspLanguageId('/p/a.ts'), 'typescript');
+  assert.equal(reg.lspLanguageId('/p/a.mts'), 'typescript');
+  // tsx grammar id ("tsx") is not a valid LSP id → per-extension mapping.
+  assert.equal(reg.lspLanguageId('/p/a.tsx'), 'typescriptreact');
+  assert.equal(reg.lspLanguageId('/p/a.jsx'), 'javascriptreact');
+  assert.equal(reg.lspLanguageId('/p/a.js'), 'javascript');
+  assert.equal(reg.lspLanguageId('/p/a.cjs'), 'javascript');
+  assert.equal(reg.lspLanguageId('/p/a.zzz'), null);
+});
+
 test('grammar binding is registered per language', () => {
   const reg = builtins();
   assert.equal(reg.grammarFor('typescript')?.query, 'typescript');
@@ -115,6 +128,18 @@ test('setOverrides with empty config clears prior overrides', () => {
   reg.setOverrides({ disabledLanguages: ['typescript'] });
   reg.setOverrides({});
   assert.ok(reg.effectiveServers('typescript').length > 0);
+});
+
+test('installableServers lists servers with an install method, de-duplicated', () => {
+  const reg = builtins();
+  const names = reg.installableServers().map((s) => s.name).sort();
+  // tsserver / eslint / flow declare npm installs; deno does not.
+  assert.ok(names.includes('typescript-language-server'));
+  assert.ok(names.includes('eslint'));
+  assert.ok(names.includes('flow'));
+  assert.ok(!names.includes('deno'));
+  // tsserver is registered under both `typescript` and `tsx` — listed once.
+  assert.equal(names.filter((n) => n === 'typescript-language-server').length, 1);
 });
 
 test('singleFile server activates without a root (root = file dir)', () => {

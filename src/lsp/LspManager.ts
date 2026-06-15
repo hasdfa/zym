@@ -19,17 +19,19 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { CompletionTriggerKind } from 'vscode-languageserver-protocol';
+import { CompletionTriggerKind, MessageType } from 'vscode-languageserver-protocol';
 import type {
   Definition, LocationLink, Location, Position, Hover, CompletionItem,
 } from 'vscode-languageserver-protocol';
 import { Emitter, Disposable } from '../util/eventKit.ts';
 import { Point } from '../text/Point.ts';
 import { languages } from '../lang/index.ts';
-import type { ServerDef, ActiveServer, ServerOverrides } from '../lang/types.ts';
+import type { ServerDef, ActiveServer, ServerOverrides, InstallSpec } from '../lang/types.ts';
 import { LanguageServer, serverKey, type NavigationKind } from './LanguageServer.ts';
 export type { NavigationKind } from './LanguageServer.ts';
 import { DiagnosticsStore } from './diagnostics/DiagnosticsStore.ts';
+import { nodeModulesBinDirs, resolveCommand } from './which.ts';
+import { installServer, managedBinDir } from './installer.ts';
 import { pointToPosition, positionToPoint, uriToPath } from './position.ts';
 import type { PositionEncoding } from './position.ts';
 
@@ -58,9 +60,17 @@ export type DefinitionTarget = ReferenceLocation;
 
 /** A user-facing trace of a major LSP event, routed to the notification log. */
 export interface LspNotice {
-  level: 'trace' | 'info' | 'warning' | 'error';
+  level: 'trace' | 'info' | 'success' | 'warning' | 'error';
   message: string;
   detail?: string;
+  /** An optional action the notification offers as a button (e.g. "Install"). */
+  action?: { label: string; run: () => void };
+  /** Notices sharing a key reuse one transient toast in place (see Notification). */
+  replaceKey?: string;
+  /** Keep the toast until replaced/closed (vs auto-expiring) — for in-progress notices. */
+  sticky?: boolean;
+  /** Show a spinner instead of the icon (in-progress). */
+  loading?: boolean;
 }
 
 export interface LspConfig {
@@ -69,6 +79,8 @@ export interface LspConfig {
   disabledLanguages?: string[];
   /** Per-language server overrides (disable/tweak a server, or add one). */
   serverOverrides?: ServerOverrides;
+  /** Install a missing server automatically (default false — otherwise prompt). */
+  autoInstall?: boolean;
 }
 
 // Crash recovery: restart a crashed server with exponential backoff, giving up
@@ -104,6 +116,13 @@ export class LspManager {
   private readonly openDocs = new Map<string, LspDocument>();
   // Per-(server,rootDir) crash-recovery bookkeeping.
   private readonly restartState = new Map<string, RestartState>();
+  // Whether a server's command resolves, memoized by `command\0rootDir`; and the
+  // commands we've already noted as missing (so the warning fires once).
+  private readonly availability = new Map<string, boolean>();
+  private readonly reportedMissing = new Set<string>();
+  // Server names with an install currently in flight (so we don't install twice).
+  private readonly installing = new Set<string>();
+  private autoInstall = false;
   private readonly emitter = new Emitter();
 
   constructor() {
@@ -118,10 +137,14 @@ export class LspManager {
    */
   configure(config: LspConfig): void {
     this.enabled = config.enable ?? true;
+    this.autoInstall = config.autoInstall ?? false;
     languages.setOverrides({
       disabledLanguages: config.disabledLanguages,
       servers: config.serverOverrides,
     });
+    // Re-probe availability in case a server was installed since last time.
+    this.availability.clear();
+    this.reportedMissing.clear();
     void this.reload();
   }
 
@@ -145,7 +168,11 @@ export class LspManager {
   }
 
   private notice(level: LspNotice['level'], message: string, detail?: string): void {
-    this.emitter.emit('notice', { level, message, detail } satisfies LspNotice);
+    this.emitNotice({ level, message, detail });
+  }
+
+  private emitNotice(notice: LspNotice): void {
+    this.emitter.emit('notice', notice);
   }
 
   // --- document lifecycle ----------------------------------------------------
@@ -158,11 +185,13 @@ export class LspManager {
     if (resolved.length === 0) return;
     this.openDocs.set(path, doc); // retained so a restart can re-open it
     const text = doc.getText();
+    // The LSP document languageId (e.g. `typescriptreact`), not our grammar id.
+    const languageId = languages.lspLanguageId(path) ?? resolved[0].langId;
     for (const r of resolved) {
       const server = this.ensureServer(r);
       // Guard against a duplicate didOpen (e.g. a crash-restart re-opens the doc
       // for the one server that died, while its siblings are already open).
-      if (server && !server.isOpen(path)) server.didOpen(path, r.langId, text);
+      if (server && !server.isOpen(path)) server.didOpen(path, languageId, text);
     }
   }
 
@@ -336,6 +365,15 @@ export class LspManager {
       server.onDiagnostics((e) => {
         this.diagnostics.set(spec.name, uriToPath(e.uri), e.diagnostics, server!.positionEncoding);
       });
+      // Server-pushed messages (window/showMessage) → the notification log/toasts.
+      server.onMessage((m) => this.notice(messageLevel(m.type), `${spec.name}: ${m.message}`));
+      // Verbose server logs (window/logMessage): surface only errors/warnings to the
+      // trace log (a server explaining why it's idle); drop info/debug chatter.
+      server.onLog((m) => {
+        if (m.type === MessageType.Error || m.type === MessageType.Warning) {
+          this.notice('trace', `${spec.name}: ${m.message}`);
+        }
+      });
       server.onExit((code) => {
         this.servers.delete(key);
         const st = this.restartState.get(key);
@@ -343,10 +381,13 @@ export class LspManager {
           clearTimeout(st.stableTimer);
           st.stableTimer = undefined;
         }
-        this.notice('warning', `${spec.name} exited`, code != null ? `exit code ${code}` : undefined);
+        // Spawn-level failure (e.g. EACCES) carries no exit code — surface its reason.
+        const detail = code != null ? `exit code ${code}` : server!.failureReason ?? 'process closed';
+        this.notice('warning', `${spec.name} exited`, detail);
         this.recoverFromCrash(key, spec, langId);
       });
-      this.notice('trace', `starting ${spec.command} for ${langId}`, rootDir);
+      const invocation = [spec.command, ...(spec.args ?? [])].join(' ');
+      this.notice('trace', `starting ${spec.name}`, `${invocation} (cwd ${rootDir})`);
       void server
         .start()
         .then(() => {
@@ -358,7 +399,9 @@ export class LspManager {
         })
         .catch((err) => {
           this.servers.delete(key);
-          this.notice('error', `failed to start ${spec.command}`, (err as Error).message);
+          // Report why: the spawn-level reason if we have one, else the rejection.
+          const reason = server!.failureReason ?? (err as Error).message;
+          this.notice('error', `failed to start ${spec.name}`, `${reason} — ${invocation}`);
         });
     }
     return server;
@@ -427,20 +470,106 @@ export class LspManager {
   /**
    * Resolve a path to every server that should run for it (per-project: root
    * markers gate activation, exclusion groups + priority pick within a group;
-   * see `LanguageRegistry.activeServers`). The primary is the language server
-   * requests target (highest-priority grouped server); ungrouped linters are
-   * additive (diagnostics only). Empty when the file maps to no active server.
+   * see `LanguageRegistry.activeServers`). Servers whose command isn't installed
+   * are dropped here — so an uninstalled optional server is skipped quietly
+   * rather than spawned, failed, and crash-restarted. The primary is the language
+   * server requests target (highest-priority grouped server); ungrouped linters
+   * are additive (diagnostics only). Empty when nothing active is installed.
    */
   private resolveServers(path: string): ResolvedServer[] {
     const langId = languages.languageForPath(path);
     if (!langId) return [];
-    const active = languages.activeServers(path);
+    const active = languages.activeServers(path).filter((a) => this.isInstalled(a.server, a.rootDir));
     if (active.length === 0) return [];
     const primaryKey = primaryKeyOf(active);
     return active.map(({ server, rootDir }) => {
       const key = serverKey(server.name, rootDir);
       return { langId, server, rootDir, key, primary: key === primaryKey };
     });
+  }
+
+  // Whether a server's command resolves (quilx-managed dir, then project
+  // node_modules/.bin, then PATH), memoized per (command, rootDir). The first time
+  // it's found missing, `handleMissing` decides what to do about it (once).
+  private isInstalled(server: ServerDef, rootDir: string): boolean {
+    const cacheKey = `${server.command}\0${rootDir}`;
+    let installed = this.availability.get(cacheKey);
+    if (installed === undefined) {
+      const dirs = [managedBinDir(server.name), ...nodeModulesBinDirs(rootDir)];
+      installed = resolveCommand(server.command, dirs) !== null;
+      this.availability.set(cacheKey, installed);
+      if (!installed) this.handleMissing(server, rootDir);
+    }
+    return installed;
+  }
+
+  // A server's command isn't installed. Auto-install if enabled and we know how;
+  // otherwise warn once — with an "Install" action when an install method exists.
+  private handleMissing(server: ServerDef, rootDir: string): void {
+    if (server.install && this.autoInstall) {
+      void this.install(server, true);
+      return;
+    }
+    if (this.reportedMissing.has(server.command)) return;
+    this.reportedMissing.add(server.command);
+    const detail = `command "${server.command}" not found on PATH or in node_modules/.bin (from ${rootDir})`;
+    if (server.install) {
+      // Sticky + the install `replaceKey`, so the prompt persists until acted on
+      // and clicking Install transforms this same toast into installing→installed.
+      this.emitNotice({
+        level: 'warning',
+        message: `${server.name} not started`,
+        detail,
+        action: { label: 'Install', run: () => void this.install(server) },
+        replaceKey: installNoticeKey(server),
+        sticky: true,
+      });
+    } else {
+      this.notice('warning', `${server.name} not started`, detail);
+    }
+  }
+
+  // Install a server into the managed dir, then re-probe and reload so it starts.
+  // `auto` marks an install kicked off by `lsp.autoInstall` (vs a user click) so
+  // the info notice makes clear it happened on its own — never silently.
+  private async install(server: ServerDef, auto = false): Promise<void> {
+    if (!server.install || this.installing.has(server.name)) return;
+    this.installing.add(server.name);
+    // One transient toast spans the install: the in-progress notice is sticky and
+    // shares a `replaceKey` with the result, which transforms it in place. The log
+    // keeps both as separate entries.
+    const replaceKey = installNoticeKey(server);
+    const detail = describeInstall(server.install);
+    const message = auto ? `auto-installing ${server.name}` : `installing ${server.name}…`;
+    this.emitNotice({ level: 'info', message, detail, replaceKey, sticky: true, loading: true });
+    const result = await installServer(server);
+    this.installing.delete(server.name);
+    if (result.ok) {
+      // Keep the same `detail` so the in-place toast doesn't shift when it swaps.
+      this.emitNotice({ level: 'success', message: `${server.name} installed`, detail, replaceKey });
+      // Forget cached "missing" verdicts so the freshly-installed binary is seen.
+      this.availability.clear();
+      this.reportedMissing.clear();
+      void this.reload();
+    } else {
+      this.emitNotice({ level: 'error', message: `failed to install ${server.name}`, detail: result.message, replaceKey });
+    }
+  }
+
+  /** Built-in servers that declare an install method, with current install state. */
+  installableServers(): { name: string; command: string; installed: boolean; installing: boolean }[] {
+    return languages.installableServers().map((s) => ({
+      name: s.name,
+      command: s.command,
+      installed: resolveCommand(s.command, [managedBinDir(s.name)]) !== null,
+      installing: this.installing.has(s.name),
+    }));
+  }
+
+  /** Install a server by name (for the `lsp:install-server` command). */
+  async installByName(name: string): Promise<void> {
+    const server = languages.installableServers().find((s) => s.name === name);
+    if (server) await this.install(server);
   }
 
 
@@ -470,6 +599,24 @@ export function primaryKeyOf(active: ActiveServer[]): string | null {
     if ((a.server.priority ?? 0) > (best.server.priority ?? 0)) best = a;
   }
   return serverKey(best.server.name, best.rootDir);
+}
+
+/** A short human-readable description of how a server installs (for notices). */
+function describeInstall(spec: InstallSpec): string {
+  return 'via' in spec ? `npm install ${spec.package}` : spec.command.join(' ');
+}
+
+/** Shared transient-toast key for a server's install lifecycle (prompt → installing → done). */
+function installNoticeKey(server: ServerDef): string {
+  return `lsp-install:${server.name}`;
+}
+
+/** Map an LSP `window/showMessage` MessageType to a notice level. */
+function messageLevel(type: number): LspNotice['level'] {
+  if (type === MessageType.Error) return 'error';
+  if (type === MessageType.Warning) return 'warning';
+  if (type === MessageType.Info) return 'info';
+  return 'trace'; // Log / Debug
 }
 
 // --- pure helpers (exported for testing) ------------------------------------

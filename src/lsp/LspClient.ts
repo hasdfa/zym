@@ -12,6 +12,7 @@
  * layer up in `LanguageServer`.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import * as Path from 'node:path';
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -19,6 +20,8 @@ import {
   type MessageConnection,
 } from 'vscode-jsonrpc/node';
 import { Emitter, Disposable } from '../util/eventKit.ts';
+import { nodeModulesBinDirs } from './which.ts';
+import { managedBinDir } from './installer.ts';
 import type { ServerDef } from '../lang/types.ts';
 
 export class LspClient {
@@ -29,6 +32,7 @@ export class LspClient {
   private readonly emitter = new Emitter();
   private stopped = false;
   private exited = false;
+  private startError: Error | null = null;
 
   constructor(spec: ServerDef, rootDir: string) {
     this.spec = spec;
@@ -40,22 +44,36 @@ export class LspClient {
     return `${this.spec.name} @ ${this.rootDir}`;
   }
 
+  /** Why the process failed to spawn/connect (e.g. an EACCES message), if it did. */
+  get failureReason(): string | undefined {
+    return this.startError?.message;
+  }
+
   /**
    * Spawn the server and establish the connection. Throws if the process fails
    * to spawn (e.g. the command is not on PATH).
    */
   start(): void {
+    // Resolve order: quilx-managed install dir, then the project's
+    // node_modules/.bin (a repo-local server + any child tools it shells out to),
+    // then the inherited PATH (global installs).
+    const PATH = [managedBinDir(this.spec.name), ...nodeModulesBinDirs(this.rootDir), process.env.PATH ?? '']
+      .filter(Boolean)
+      .join(Path.delimiter);
     const proc = spawn(this.spec.command, this.spec.args ?? [], {
       cwd: this.rootDir,
-      env: process.env,
+      env: { ...process.env, PATH },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.proc = proc;
 
-    // A spawn failure (e.g. command not on PATH) surfaces to callers as the
-    // initialize request rejecting when the connection closes below; this handler
-    // just keeps Node from treating 'error' as an uncaught exception.
-    proc.on('error', () => {});
+    // A spawn failure (e.g. EACCES, or a command that vanished after our
+    // pre-check) surfaces to callers as the initialize request rejecting when the
+    // connection closes below; capture the reason so the manager can log *why* it
+    // failed, and keep Node from treating 'error' as an uncaught exception.
+    proc.on('error', (err) => {
+      this.startError = err as Error;
+    });
     // A crash trips both `proc 'exit'` and the connection's `onClose`; emit our
     // own `exit` only once (whichever fires first; proc carries the exit code).
     proc.on('exit', (code) => this.emitExit(code));
@@ -100,6 +118,15 @@ export class LspClient {
   onNotification(type: any, handler: (params: any) => void): Disposable {
     if (!this.connection) throw new Error(`LspClient not started: ${this.label}`);
     const sub = this.connection.onNotification(type, handler);
+    return new Disposable(() => sub.dispose());
+  }
+
+  /** Answer a server→client request (e.g. workspace/configuration). Without a
+   *  handler, vscode-jsonrpc auto-replies MethodNotFound, which breaks servers
+   *  that depend on the request (eslint needs its config this way). */
+  onRequest(type: any, handler: (params: any) => any): Disposable {
+    if (!this.connection) throw new Error(`LspClient not started: ${this.label}`);
+    const sub = this.connection.onRequest(type, handler);
     return new Disposable(() => sub.dispose());
   }
 

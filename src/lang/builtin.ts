@@ -23,19 +23,44 @@ const JS_FOLD_TYPES = [
 const FLOW: ServerDef = {
   name: 'flow', command: 'flow', args: ['lsp'],
   roots: ['.flowconfig'], group: 'js-types', priority: 20,
+  install: { via: 'npm', package: 'flow-bin' },
 };
 const TSSERVER: ServerDef = {
   name: 'typescript-language-server', command: 'typescript-language-server', args: ['--stdio'],
   roots: ['tsconfig.json', 'jsconfig.json', 'package.json'], group: 'js-types', priority: 10,
+  // typescript-language-server needs the `typescript` package alongside it.
+  install: { via: 'npm', package: 'typescript-language-server typescript' },
 };
 const DENO: ServerDef = {
   name: 'deno', command: 'deno', args: ['lsp'],
   roots: ['deno.json', 'deno.jsonc'], group: 'js-types', priority: 30,
+  // Deno is a standalone runtime, not an npm package — installed out of band.
 };
 const ESLINT: ServerDef = {
   name: 'eslint', command: 'vscode-eslint-language-server', args: ['--stdio'],
   roots: ['.eslintrc', '.eslintrc.js', '.eslintrc.cjs', '.eslintrc.json', '.eslintrc.yaml',
     '.eslintrc.yml', 'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs'],
+  // The eslint LSP binary ships in vscode-langservers-extracted (not in `eslint`).
+  install: { via: 'npm', package: 'vscode-langservers-extracted' },
+  // The eslint server pulls these via workspace/configuration (empty section, so
+  // the whole object is returned). Defaults mirror the VS Code extension; flat vs
+  // legacy config is auto-detected. Tune via `lsp.servers.<lang>.eslint`.
+  settings: {
+    validate: 'on',
+    run: 'onType',
+    format: false,
+    quiet: false,
+    onIgnoredFiles: 'off',
+    options: {},
+    rulesCustomizations: [],
+    problems: { shortenToSingleLine: false },
+    nodePath: null,
+    workingDirectory: { mode: 'location' },
+    codeAction: {
+      disableRuleComment: { enable: true, location: 'separateLine' },
+      showDocumentation: { enable: true },
+    },
+  },
 };
 
 /** Register the built-in languages on `reg`. */
@@ -51,8 +76,19 @@ export function registerBuiltins(reg: LanguageRegistry): void {
   reg.registerServer('typescript', DENO);
   reg.registerServer('typescript', ESLINT);
 
-  // TSX / JSX / plain JS — all backed by the tsx grammar (a superset).
-  reg.registerLanguage({ id: 'tsx', fileTypes: ['tsx', 'jsx', 'js', 'mjs', 'cjs'] });
+  // TSX / JSX / plain JS — all backed by the tsx grammar (a superset), but each
+  // maps to its own LSP languageId (tsx grammar key isn't a valid LSP id).
+  reg.registerLanguage({
+    id: 'tsx',
+    fileTypes: ['tsx', 'jsx', 'js', 'mjs', 'cjs'],
+    lspIds: {
+      tsx: 'typescriptreact',
+      jsx: 'javascriptreact',
+      js: 'javascript',
+      mjs: 'javascript',
+      cjs: 'javascript',
+    },
+  });
   reg.registerGrammar('tsx', {
     wasm: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
     query: 'tsx',

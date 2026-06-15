@@ -17,7 +17,15 @@ import {
   DidChangeTextDocumentNotification,
   DidCloseTextDocumentNotification,
   DidSaveTextDocumentNotification,
+  DidChangeConfigurationNotification,
+  DidChangeWatchedFilesNotification,
   PublishDiagnosticsNotification,
+  ConfigurationRequest,
+  RegistrationRequest,
+  UnregistrationRequest,
+  WorkDoneProgressCreateRequest,
+  ShowMessageNotification,
+  LogMessageNotification,
   DefinitionRequest,
   DeclarationRequest,
   TypeDefinitionRequest,
@@ -27,6 +35,7 @@ import {
   CompletionRequest,
   CompletionResolveRequest,
   TextDocumentSyncKind,
+  MessageType,
   type ClientCapabilities,
   type ServerCapabilities,
   type Diagnostic,
@@ -41,7 +50,9 @@ import {
 } from 'vscode-languageserver-protocol';
 import { Emitter, Disposable } from '../util/eventKit.ts';
 import { LspClient } from './LspClient.ts';
-import { pathToUri } from './position.ts';
+import { pathToUri, uriToPath } from './position.ts';
+import { WorkspaceWatcher, type FileChange } from './workspaceWatcher.ts';
+import { watcherRegExp } from './glob.ts';
 import type { ServerDef } from '../lang/types.ts';
 import type { PositionEncoding } from './position.ts';
 
@@ -49,6 +60,15 @@ import type { PositionEncoding } from './position.ts';
 export interface DiagnosticsEvent {
   uri: string;
   diagnostics: Diagnostic[];
+}
+
+/** A `client/registerCapability` entry for `workspace/didChangeWatchedFiles`. */
+interface WatcherRegistration {
+  id: string;
+  method: string;
+  registerOptions?: {
+    watchers?: { globPattern: string | { baseUri: string | { uri: string }; pattern: string } }[];
+  };
 }
 
 export class LanguageServer {
@@ -62,19 +82,32 @@ export class LanguageServer {
   private readyPromise: Promise<void> | null = null;
   // Server-specific init options (sent in `initialize`), e.g. tsserver plugins.
   private readonly initializationOptions: unknown;
+  // Server settings, answered to `workspace/configuration` requests and pushed via
+  // `workspace/didChangeConfiguration` (e.g. eslint's options).
+  private readonly settings: unknown;
   // uri → document version (monotonic, per LSP didChange contract).
   private readonly versions = new Map<string, number>();
+  // File-watching: registration id → its watcher glob regexes (matching absolute
+  // paths), and the lazily-created tree watcher feeding didChangeWatchedFiles.
+  private readonly watchRegistrations = new Map<string, RegExp[]>();
+  private watcher: WorkspaceWatcher | null = null;
 
   constructor(spec: ServerDef, langId: string, rootDir: string) {
     this.langId = langId;
     this.rootDir = rootDir;
     this.key = serverKey(spec.name, rootDir);
     this.initializationOptions = spec.initializationOptions;
+    this.settings = spec.settings;
     this.client = new LspClient(spec, rootDir);
   }
 
   get positionEncoding(): PositionEncoding {
     return this.encoding;
+  }
+
+  /** Why the process failed to spawn/connect (e.g. an EACCES message), if known. */
+  get failureReason(): string | undefined {
+    return this.client.failureReason;
   }
 
   /** Start the process and run the initialize handshake (idempotent). */
@@ -90,6 +123,31 @@ export class LanguageServer {
     this.client.onNotification(PublishDiagnosticsNotification.type, (p) =>
       this.emitter.emit('diagnostics', { uri: p.uri, diagnostics: p.diagnostics } satisfies DiagnosticsEvent),
     );
+    // Server messages → surfaced by the manager (showMessage is user-facing;
+    // logMessage is verbose server output, routed to the trace log).
+    this.client.onNotification(ShowMessageNotification.type, (p) => this.emitter.emit('message', p));
+    this.client.onNotification(LogMessageNotification.type, (p) => this.emitter.emit('log', p));
+
+    // Answer the server→client requests (otherwise vscode-jsonrpc replies
+    // MethodNotFound, which e.g. stops eslint from ever linting):
+    //  - workspace/configuration → our `settings`, resolved per requested section
+    this.client.onRequest(ConfigurationRequest.type, (params: { items: { section?: string }[] }) =>
+      params.items.map((item) => getConfigSection(this.settings, item.section)),
+    );
+    //  - client/registerCapability: we act on file-watcher registrations (and
+    //    acknowledge the rest); progress-token creation is acknowledged.
+    this.client.onRequest(RegistrationRequest.type, (params: { registrations?: WatcherRegistration[] }) => {
+      for (const reg of params.registrations ?? []) {
+        if (reg.method === DidChangeWatchedFilesNotification.method) this.registerWatchers(reg);
+      }
+      return null;
+    });
+    this.client.onRequest(UnregistrationRequest.type, (params: { unregisterations?: { id: string }[] }) => {
+      for (const unreg of params.unregisterations ?? []) this.watchRegistrations.delete(unreg.id);
+      if (this.watchRegistrations.size === 0) this.disposeWatcher();
+      return null;
+    });
+    this.client.onRequest(WorkDoneProgressCreateRequest.type, () => null);
 
     const result = await this.client.sendRequest(InitializeRequest.type, {
       processId: process.pid,
@@ -101,6 +159,55 @@ export class LanguageServer {
     this.capabilities = result.capabilities;
     this.encoding = (result.capabilities.positionEncoding as PositionEncoding) ?? 'utf-16';
     this.client.sendNotification(InitializedNotification.type, {});
+    // Push settings too (the notification model), for servers that read them here
+    // rather than pulling via workspace/configuration.
+    if (this.settings !== undefined) {
+      this.client.sendNotification(DidChangeConfigurationNotification.type, { settings: this.settings });
+    }
+  }
+
+  // --- file watching (workspace/didChangeWatchedFiles) -----------------------
+
+  // Record a server's file-watcher registration: compile each watcher's glob to
+  // an absolute-path regex, and start the tree watcher on first registration.
+  private registerWatchers(reg: WatcherRegistration): void {
+    const watchers = reg.registerOptions?.watchers ?? [];
+    const regexes = watchers.map((w) => {
+      const { base, pattern } = this.resolveGlob(w.globPattern);
+      return watcherRegExp(base, pattern);
+    });
+    if (regexes.length === 0) return;
+    this.watchRegistrations.set(reg.id, regexes);
+    if (!this.watcher) {
+      this.watcher = new WorkspaceWatcher(this.rootDir, (changes) => this.onWatchedChanges(changes));
+      this.watcher.start();
+    }
+  }
+
+  // A glob may be a bare string (relative to the workspace root) or a
+  // RelativePattern ({ baseUri, pattern }) — normalize to a literal base + glob.
+  private resolveGlob(globPattern: string | { baseUri: string | { uri: string }; pattern: string }): {
+    base: string;
+    pattern: string;
+  } {
+    if (typeof globPattern === 'string') return { base: this.rootDir, pattern: globPattern };
+    const baseUri = typeof globPattern.baseUri === 'string' ? globPattern.baseUri : globPattern.baseUri.uri;
+    return { base: uriToPath(baseUri), pattern: globPattern.pattern };
+  }
+
+  // Forward only the changes matching a registered watcher glob to the server.
+  private onWatchedChanges(changes: FileChange[]): void {
+    const regexes = [...this.watchRegistrations.values()].flat();
+    const matched = changes.filter((c) => regexes.some((re) => re.test(c.path)));
+    if (matched.length === 0) return;
+    this.client.sendNotification(DidChangeWatchedFilesNotification.type, {
+      changes: matched.map((c) => ({ uri: pathToUri(c.path), type: c.type })),
+    });
+  }
+
+  private disposeWatcher(): void {
+    this.watcher?.dispose();
+    this.watcher = null;
   }
 
   /** Whether the server advertised support for a navigation kind. */
@@ -265,8 +372,19 @@ export class LanguageServer {
     return this.emitter.on('exit', handler as (v?: unknown) => void);
   }
 
+  /** A `window/showMessage` from the server (`{ type, message }`) — user-facing. */
+  onMessage(handler: (params: { type: number; message: string }) => void): Disposable {
+    return this.emitter.on('message', handler as (v?: unknown) => void);
+  }
+
+  /** A `window/logMessage` from the server (`{ type, message }`) — verbose output. */
+  onLog(handler: (params: { type: number; message: string }) => void): Disposable {
+    return this.emitter.on('log', handler as (v?: unknown) => void);
+  }
+
   /** Politely shut the server down, then tear down the transport. */
   async shutdown(): Promise<void> {
+    this.disposeWatcher();
     try {
       await this.client.sendRequest(ShutdownRequest.type, undefined);
       this.client.sendNotification(ExitNotification.type, undefined);
@@ -319,7 +437,36 @@ const CLIENT_CAPABILITIES: ClientCapabilities = {
       },
     },
   },
-  workspace: { workspaceFolders: true },
+  workspace: {
+    workspaceFolders: true,
+    // We answer workspace/configuration and accept didChangeConfiguration, so
+    // config-driven servers (eslint, …) can read their settings.
+    configuration: true,
+    didChangeConfiguration: { dynamicRegistration: false },
+    // We honor dynamically-registered file watchers (workspace/didChangeWatchedFiles).
+    didChangeWatchedFiles: { dynamicRegistration: true },
+  },
+  // Accept progress tokens (we ack window/workDoneProgress/create); not yet shown.
+  window: { workDoneProgress: true },
 };
 
-export { TextDocumentSyncKind };
+/**
+ * Resolve a requested config `section` (a dotted path, per `workspace/configuration`)
+ * against a server's `settings` object. No section → the whole settings; a missing
+ * path → null (the LSP "no configuration" value). Pure; exported for testing.
+ */
+export function getConfigSection(settings: unknown, section: string | undefined): unknown {
+  if (settings == null) return null;
+  if (!section) return settings;
+  let current: unknown = settings;
+  for (const key of section.split('.')) {
+    if (current && typeof current === 'object' && key in (current as Record<string, unknown>)) {
+      current = (current as Record<string, unknown>)[key];
+    } else {
+      return null;
+    }
+  }
+  return current ?? null;
+}
+
+export { TextDocumentSyncKind, MessageType };

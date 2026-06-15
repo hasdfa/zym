@@ -87,6 +87,84 @@ overrides: disable a server, change priority, force one, or add servers.
   gutter/squiggles/panel. Requests (hover/definition/references) target a single
   server (the language's primary in its group); only diagnostics merge.
 
+## Server availability (installed vs configured)
+
+A configured server only runs if its command is actually installed. `LspManager`
+resolves each candidate's command via `lsp/which.ts` — the quilx-managed install
+dir, then project `node_modules/.bin` (from the server's root dir upward), then
+PATH — and **drops** servers that don't resolve (memoized per command+root). So an
+optional server the user hasn't installed is skipped instead of being spawned,
+failing with ENOENT, and tripping the crash-restart loop. `LspClient` prepends the
+same dirs to the spawned server's PATH (so a managed or repo-local server resolves
+when opening another project). When a server that *did* resolve still fails to
+start, the spawn-level reason (e.g. EACCES) is captured and logged with the full
+invocation; trace logs record each `starting <cmd> <args> (cwd …)`.
+
+Note the binary names: the LSP servers are `typescript-language-server` /
+`vscode-eslint-language-server`, **not** the `tsserver` / `eslint` CLIs that often
+sit in `node_modules/.bin` (those don't speak LSP over stdio).
+
+## Installing servers
+
+A `ServerDef` may carry an `install` spec (`{ via: 'npm', package }` — `package`
+may be several space-separated specs — or a raw `{ command }` escape hatch).
+`lsp/installer.ts` installs into a managed dir (`$XDG_DATA_HOME/quilx/lsp/<server>/`,
+npm bins under its `node_modules/.bin`), never the user's global env or project.
+
+Triggers, when a needed server is missing:
+- **Warning + "Install" button** (default): the "not started" warning carries an
+  action that installs on click (`LspNotice.action` → a notification button).
+- **`lsp:install-server` command**: a picker of installable servers (install state
+  annotated) → `LspManager.installByName`.
+- **Auto-install** (`lsp.autoInstall`, default off): install on first need without a
+  prompt, announced with an `auto-installing <server>` info notification (not silent).
+
+On success the availability cache is cleared and open docs reload, so the
+freshly-installed server starts without a restart. Built-ins with installs:
+`typescript-language-server` (+`typescript`), `eslint`
+(`vscode-langservers-extracted`), `flow` (`flow-bin`); `deno` is out-of-band.
+
+## Server→client requests & configuration
+
+Servers send requests *to* the client; with no handler vscode-jsonrpc auto-replies
+`MethodNotFound`, which breaks config-driven servers. `LanguageServer` answers:
+
+- **`workspace/configuration`** → the server's `settings` (`ServerDef.settings`),
+  resolved per requested section via `getConfigSection` (empty/absent section →
+  whole object; dotted path otherwise; missing → `null`). We also push
+  `workspace/didChangeConfiguration` after `initialized`, and advertise
+  `workspace.configuration` + `didChangeConfiguration`.
+- **`client/registerCapability` / `unregisterCapability`** → file-watcher
+  registrations (`workspace/didChangeWatchedFiles`) are honored (see below); other
+  dynamic registrations are acknowledged.
+- **`window/workDoneProgress/create`** → acknowledged (progress not shown yet).
+- **`window/showMessage`** → a notice (user-facing); **`window/logMessage`** error/
+  warning lines → the trace log (info/debug chatter dropped).
+
+ESLint note: it pulls its config this way (empty section), so `ESLINT.settings`
+carries VS Code-style defaults. Caveat — `vscode-langservers-extracted` bundles an
+eslint server that may predate **flat-config** (`eslint.config.*`) support; against
+a flat-config-only project it stays idle (no error). A flat-config-capable eslint
+LSP is the fix there, independent of this client handling.
+
+## File watching (workspace/didChangeWatchedFiles)
+
+We advertise `workspace.didChangeWatchedFiles.dynamicRegistration`, so servers
+register watchers (tsserver watches `tsconfig`/source files; eslint its config) via
+`client/registerCapability`. `LanguageServer` compiles each watcher's glob to an
+absolute-path regex (`lsp/glob.ts`: `**`/`*`/`?`/`{}`) and lazily starts a
+`WorkspaceWatcher` (`lsp/workspaceWatcher.ts`) over the server's root. Matching
+changes are sent as `workspace/didChangeWatchedFiles`, so servers learn about
+external edits (new files, branch switches, config changes) without a restart.
+
+`WorkspaceWatcher` places a **non-recursive `fs.watch` per directory** (adding/
+dropping them as dirs appear/vanish) instead of `fs.watch({recursive})`, so it can
+**exclude** `node_modules`/`.git`/build dirs (recursive offers no ignore and would
+hit inotify limits). Raw events are debounced; type (created/changed/deleted) is
+resolved by stat + a known-files set. Failures (perm/limit) degrade gracefully
+(that dir is skipped). One watcher per (server, root) — two servers at one root
+double the watches today (a future dedup-by-root opportunity).
+
 ## Migration plan (phased)
 
 1. [x] `src/lang/`: `LanguageRegistry` + `types.ts` + `builtin.ts` (curated
