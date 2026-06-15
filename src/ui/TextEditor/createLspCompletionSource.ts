@@ -12,8 +12,11 @@
  * ordering via `sortText`.
  */
 import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver-protocol';
-import type { CompletionItem as LspCompletionItem, MarkupContent } from 'vscode-languageserver-protocol';
+import type { CompletionItem as LspCompletionItem, MarkupContent, Range as LspRange } from 'vscode-languageserver-protocol';
 import type { LspManager, LspDocument } from '../../lsp/LspManager.ts';
+import { positionToPoint } from '../../lsp/position.ts';
+import type { PositionEncoding } from '../../lsp/position.ts';
+import { Range } from '../../text/Range.ts';
 import type { CompletionContext, CompletionItem, CompletionSource } from './CompletionSource.ts';
 
 // LSP numeric item kinds → the framework's short kind tags (drive the icon).
@@ -58,18 +61,42 @@ export function toCompletionItem(lsp: LspCompletionItem): CompletionItem {
   const isSnippet = lsp.insertTextFormat === InsertTextFormat.Snippet;
   const editText = lsp.textEdit && 'newText' in lsp.textEdit ? lsp.textEdit.newText : undefined;
   const insertText = isSnippet ? lsp.label : lsp.insertText ?? editText ?? lsp.label;
+  // Prefer `labelDetails` (concise signature + source module) when the server
+  // sends it — it keeps the import path out of `detail`. Falls back to `detail`.
   return {
     label: lsp.label,
     insertText,
     filterText: lsp.filterText ?? lsp.label,
     kind: lsp.kind ? KIND_NAMES[lsp.kind] : undefined,
-    detail: lsp.detail,
+    detail: lsp.labelDetails?.detail ?? lsp.detail,
+    description: lsp.labelDetails?.description,
     documentation: docText(lsp.documentation),
     sortText: lsp.sortText ?? lsp.label,
   };
 }
 
-type LspCompletionApi = Pick<LspManager, 'completion' | 'completionTriggerCharacters'>;
+type LspCompletionApi = Pick<
+  LspManager,
+  'completion' | 'completionTriggerCharacters' | 'resolveCompletion' | 'completionPositionEncoding'
+>;
+
+/** The buffer range an item's `textEdit` replaces, in buffer codepoint coords.
+ *  Prefers a plain `TextEdit.range`; for `InsertReplaceEdit`, the `insert` range
+ *  (insert semantics — don't overwrite text after the cursor). */
+function editReplaceRange(
+  lsp: LspCompletionItem,
+  doc: LspDocument,
+  encoding: PositionEncoding,
+): Range | undefined {
+  const edit = lsp.textEdit;
+  if (!edit) return undefined;
+  const range: LspRange | undefined = 'range' in edit ? edit.range : edit.insert;
+  if (!range) return undefined;
+  return new Range(
+    positionToPoint(range.start, doc.lineTextForRow(range.start.line), encoding),
+    positionToPoint(range.end, doc.lineTextForRow(range.end.line), encoding),
+  );
+}
 
 export function createLspCompletionSource(
   lsp: LspCompletionApi,
@@ -87,8 +114,21 @@ export function createLspCompletionSource(
     async complete(context: CompletionContext): Promise<CompletionItem[]> {
       const doc = getDocument();
       if (!doc) return [];
+      const encoding = lsp.completionPositionEncoding(doc);
       const items = await lsp.completion(doc, { triggerCharacter: context.triggerCharacter });
-      return items.map(toCompletionItem);
+      return items.map((raw) => {
+        const item = toCompletionItem(raw);
+        // Honor the server's textEdit range, so a trigger-char completion (e.g.
+        // after `.`, whose insertText re-includes the dot) replaces exactly what
+        // the server intends instead of duplicating the trigger.
+        if (encoding) item.replaceRange = editReplaceRange(raw, doc, encoding);
+        // Most servers (tsserver, …) send documentation only on resolve. Attach a
+        // lazy resolver the controller calls when the item is selected.
+        if (item.documentation === undefined) {
+          item.resolve = () => lsp.resolveCompletion(doc, raw).then(toCompletionItem);
+        }
+        return item;
+      });
     },
   };
 }

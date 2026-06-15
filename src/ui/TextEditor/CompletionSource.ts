@@ -15,12 +15,24 @@ export interface CompletionItem {
   label: string;
   /** Text inserted on accept (defaults to `label`). */
   insertText?: string;
+  /**
+   * Exact buffer range this item replaces (LSP `textEdit` range, in buffer
+   * codepoint coordinates). When set, the controller replaces this range instead
+   * of the heuristic typed-prefix range — needed for trigger-character
+   * completions (e.g. after `.`) whose `insertText` re-includes the trigger.
+   */
+  replaceRange?: Range;
   /** Text matched against the typed prefix (defaults to `label`). */
   filterText?: string;
   /** A short kind tag — `function`, `variable`, `keyword`, … — drives the icon. */
   kind?: string;
-  /** Right-aligned detail (a type signature, the source name, …). */
+  /** Right-aligned detail (a concise type signature, …). */
   detail?: string;
+  /**
+   * Secondary, dimmed text shown after the detail — the source module / import
+   * path (LSP `labelDetails.description`). Optional.
+   */
+  description?: string;
   /**
    * Longer documentation for the item (LSP `documentation`, a signature + doc
    * comment, …). Shown in the popup's side panel when the item is selected.
@@ -33,6 +45,13 @@ export interface CompletionItem {
    * source itself need not set it). Shown dimmed in the popup as a debug tag.
    */
   source?: string;
+  /**
+   * Lazily fetch fields the list response omitted — chiefly `documentation`
+   * (LSP `completionItem/resolve`; many servers send docs only here). Called by
+   * the controller when the item is selected; the resolved fields are merged in
+   * and the doc pane refreshed. Optional; resolved at most once per item.
+   */
+  resolve?: () => Promise<CompletionItem>;
 }
 
 /** A candidate after ranking: the item plus the matched-character positions

@@ -462,7 +462,17 @@ export class TextEditor {
     // here (buffer words + LSP — Copilot lands later). It is dismissed whenever
     // the vim layer leaves insert mode. The LSP source no-ops for a fileless
     // buffer (`lspDocument` undefined) or until a server is up.
-    this.completion = new CompletionController(this.editorModel, overlay, () => this.vimState.mode === 'insert');
+    this.completion = new CompletionController(
+      this.editorModel,
+      overlay,
+      () => this.vimState.mode === 'insert',
+      // Tree-sitter highlight code blocks in completion docs, like the hover card;
+      // unlabeled fences fall back to this file's language.
+      (code, lang) => {
+        const fallbackLang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
+        return highlightToMarkup(code, lang ?? fallbackLang);
+      },
+    );
     this.completion.addSource(createBufferWordsSource(() => this.editorModel.getText()));
     this.completion.addSource(createLspCompletionSource(quilx.lsp, () => this.lspDocument ?? null));
     this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {

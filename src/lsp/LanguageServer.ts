@@ -25,6 +25,7 @@ import {
   ReferencesRequest,
   HoverRequest,
   CompletionRequest,
+  CompletionResolveRequest,
   TextDocumentSyncKind,
   type ClientCapabilities,
   type ServerCapabilities,
@@ -126,6 +127,13 @@ export class LanguageServer {
   get completionTriggerCharacters(): string[] {
     const provider = this.capabilities.completionProvider;
     return (typeof provider === 'object' && provider.triggerCharacters) || [];
+  }
+
+  /** Whether the server resolves completion items lazily (`completionItem/resolve`,
+   *  where many servers — e.g. tsserver — send the documentation/detail). */
+  get hasCompletionResolve(): boolean {
+    const provider = this.capabilities.completionProvider;
+    return typeof provider === 'object' && !!provider.resolveProvider;
   }
 
   // --- document sync (full-text) --------------------------------------------
@@ -240,6 +248,13 @@ export class LanguageServer {
     });
   }
 
+  /** Resolve a completion item (fills in documentation/detail the list omitted). */
+  async resolveCompletion(item: CompletionItem): Promise<CompletionItem> {
+    if (!this.hasCompletionResolve) return item;
+    await this.start();
+    return this.client.sendRequest(CompletionResolveRequest.type, item);
+  }
+
   // --- events ----------------------------------------------------------------
 
   onDiagnostics(handler: (event: DiagnosticsEvent) => void): Disposable {
@@ -294,7 +309,14 @@ const CLIENT_CAPABILITIES: ClientCapabilities = {
     completion: {
       dynamicRegistration: false,
       // No snippet support yet, so servers send plain insert text (not ${…} tabstops).
-      completionItem: { snippetSupport: false, documentationFormat: ['markdown', 'plaintext'] },
+      // `labelDetailsSupport` makes servers split the concise signature
+      // (`labelDetails.detail`) from the source module (`labelDetails.description`)
+      // instead of cramming both into `detail`.
+      completionItem: {
+        snippetSupport: false,
+        documentationFormat: ['markdown', 'plaintext'],
+        labelDetailsSupport: true,
+      },
     },
   },
   workspace: { workspaceFolders: true },

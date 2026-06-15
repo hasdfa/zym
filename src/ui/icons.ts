@@ -43,3 +43,40 @@ export function iconLabel(glyph: string): InstanceType<typeof Gtk.Label> {
   label.setAttributes(attrs());
   return label;
 }
+
+// Completion-item kind → Codicon glyph (nf-cod-symbol_*), keyed by the framework's
+// CompletionItem.kind strings (see createLspCompletionSource's KIND_NAMES). These
+// are the same glyphs VSCode shows in its completion list.
+const COMPLETION_KIND_CODEPOINTS: Record<string, number> = {
+  text: 0xea93,
+  method: 0xea8c,
+  function: 0xea8c,
+  constructor: 0xea8c,
+  field: 0xeb5f,
+  variable: 0xea88,
+  class: 0xeb5b,
+  interface: 0xeb61,
+  module: 0xea8b,
+  property: 0xeb65,
+  unit: 0xea96,
+  value: 0xea95,
+  enum: 0xea95,
+  keyword: 0xeb62,
+  snippet: 0xeb66,
+  color: 0xeb5c,
+  file: 0xeb60,
+  reference: 0xea94,
+  folder: 0xea83,
+  'enum-member': 0xeb5e,
+  constant: 0xeb5d,
+  struct: 0xea91,
+  event: 0xea86,
+  operator: 0xeb64,
+  'type-parameter': 0xea92,
+};
+const DEFAULT_KIND_CODEPOINT = 0xea93; // symbol-misc / text as a neutral fallback
+
+/** Nerd Font glyph for a completion item's `kind` (see `Icons`/`iconLabel`). */
+export function completionKindGlyph(kind: string | undefined): string {
+  return String.fromCodePoint((kind && COMPLETION_KIND_CODEPOINTS[kind]) || DEFAULT_KIND_CODEPOINT);
+}

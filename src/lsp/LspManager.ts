@@ -266,11 +266,36 @@ export class LspManager {
     return Array.isArray(result) ? result : result.items;
   }
 
+  /**
+   * Resolve a completion item against the file's primary server, filling in the
+   * documentation/detail many servers omit from the list response. Returns the
+   * item unchanged if the server has no resolve support or is slow.
+   */
+  async resolveCompletion(doc: LspDocument, item: CompletionItem): Promise<CompletionItem> {
+    if (!this.enabled) return item;
+    const path = doc.getPath();
+    if (!path) return item;
+    const server = this.primaryServerForPath(path);
+    if (!server || !server.hasCompletionResolve) return item;
+    const result = await Promise.race([
+      server.resolveCompletion(item),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    return result ?? item;
+  }
+
   /** Trigger characters (e.g. `.`) the primary server wants completion opened on. */
   completionTriggerCharacters(doc: LspDocument): string[] {
     const path = doc.getPath();
     if (!path) return [];
     return this.primaryServerForPath(path)?.completionTriggerCharacters ?? [];
+  }
+
+  /** The primary server's position encoding (for converting `textEdit` ranges). */
+  completionPositionEncoding(doc: LspDocument): PositionEncoding | null {
+    const path = doc.getPath();
+    if (!path) return null;
+    return this.primaryServerForPath(path)?.positionEncoding ?? null;
   }
 
   // --- server management -----------------------------------------------------

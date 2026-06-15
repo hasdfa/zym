@@ -36,7 +36,7 @@ export function createBufferWordsSource(getText: () => string): CompletionSource
       for (const [word, count] of counts) {
         // Higher frequency → smaller sortText → ranked first within a prefix group.
         const freq = Math.max(0, 999999 - count).toString().padStart(6, '0');
-        items.push({ label: word, kind: 'text', sortText: `${freq}:${word}` });
+        items.push({ label: word, kind: 'text', detail: 'buffer', sortText: `${freq}:${word}` });
       }
       return items;
     },

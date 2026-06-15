@@ -26,7 +26,7 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 const DEBOUNCE_MS = 60;
 const MIN_PREFIX = 1; // word chars typed before auto-opening
-const MAX_ITEMS = 10; // also the popup's no-scroll capacity
+const MAX_ITEMS = 50; // popup scrolls past its visible height
 
 /** Whether a source's result is a promise (async source) vs a plain array. */
 function isThenable(value: unknown): value is Promise<unknown> {
@@ -45,20 +45,35 @@ export class CompletionController {
   private readonly popup: CompletionPopup;
   private readonly sources: CompletionSource[] = [];
 
-  private replaceRange: Range | null = null;
   private requestSeq = 0; // drops stale async source responses
   private debounceId = 0;
   private suppressQuery = false; // ignore the buffer change from our own edits
-  // Tab writes the selected candidate into the buffer as a live preview (the
-  // popup stays open); `previewRange` is the buffer span it occupies so the next
-  // cycle replaces it, and `previewActive` is set once a preview has been written.
+  // Tab/arrows cycle a list whose selection runs from -1 (nothing selected, the
+  // original typed text) through the candidates and loops back to -1. The selected
+  // candidate is written into the buffer as a live preview (popup stays open).
+  //
+  // Edits are reconstructed against a fixed *base region* of the original document
+  // — `baseRange` and its original text `baseText` — so each candidate's own
+  // `replaceRange` (LSP textEdit) is honored: filling rebuilds the region from
+  // `baseText` with that item's edit applied. `previewRange` is the base region's
+  // current buffer span; `prefixStartCol` is where the heuristic typed prefix
+  // begins (used for items without their own range).
   private previewRange: Range | null = null;
-  private previewActive = false;
+  private baseRange: Range | null = null;
+  private baseText = '';
+  private prefixStartCol = 0;
+  // Items whose lazy `resolve()` has already been requested (resolve at most once).
+  private readonly resolved = new WeakSet<CompletionItem>();
 
-  constructor(editor: EditorModel, host: Overlay, isInsertMode: () => boolean) {
+  constructor(
+    editor: EditorModel,
+    host: Overlay,
+    isInsertMode: () => boolean,
+    highlightCode?: (code: string, lang: string | undefined) => string | null,
+  ) {
     this.editor = editor;
     this.isInsertMode = isInsertMode;
-    this.popup = new CompletionPopup(host);
+    this.popup = new CompletionPopup(host, highlightCode);
     editor.onDidChangeText(() => this.onBufferChanged());
     this.installKeys();
   }
@@ -75,8 +90,8 @@ export class CompletionController {
       this.debounceId = 0;
     }
     this.requestSeq++; // invalidate in-flight queries
-    this.previewActive = false;
     this.previewRange = null;
+    this.baseRange = null;
     this.popup.hide();
   }
 
@@ -164,11 +179,20 @@ export class CompletionController {
       this.popup.hide();
       return;
     }
-    this.replaceRange = context.replaceRange;
-    // A fresh result set: no preview written yet; the next Tab fills from the
-    // original word range.
-    this.previewRange = context.replaceRange;
-    this.previewActive = false;
+    // A fresh result set: nothing selected (-1). Establish the base region — the
+    // heuristic typed-prefix range, widened on the left to cover any item's own
+    // `replaceRange` (e.g. a member completion whose textEdit spans the `.`). Each
+    // fill rebuilds this region from `baseText`, so it loops back to the original.
+    const { start: prefixStart, end } = context.replaceRange;
+    let startCol = prefixStart.column;
+    for (const { item } of ranked) {
+      const r = item.replaceRange;
+      if (r && r.start.row === prefixStart.row && r.start.column < startCol) startCol = r.start.column;
+    }
+    this.prefixStartCol = prefixStart.column;
+    this.baseRange = new Range(new Point(prefixStart.row, startCol), end);
+    this.baseText = this.editor.getTextInBufferRange(this.baseRange);
+    this.previewRange = this.baseRange;
     this.popup.showAt(ranked, rect.x, rect.y + rect.height);
   }
 
@@ -199,7 +223,6 @@ export class CompletionController {
     const priorityOf = (name: string | undefined) => (name === undefined ? 0 : priorities.get(name) ?? 0);
     return items
       .map((item) => {
-        if (item.label === prefix) return null; // already fully typed
         const text = item.filterText ?? item.label;
         const match = prefix === '' ? { score: 0, positions: [] } : fuzzyMatch(prefix, text, { maxTypos: 1 });
         if (!match) return null;
@@ -227,60 +250,87 @@ export class CompletionController {
   }
 
   /**
-   * Tab / Shift-Tab. The first press writes the current selection into the
-   * buffer as a live preview (popup stays open); further presses move the
-   * selection by `delta` (wrapping) and re-fill, cycling through the candidates.
+   * Tab / Shift-Tab / arrows. Cycle the selection over the n+1 states
+   * [-1, 0 … n-1]: -1 is "nothing selected" (the original typed text), and the
+   * end loops back to -1. The selected candidate is written into the buffer as a
+   * live preview; -1 restores the typed text.
    */
   private cycle(delta: number): void {
     if (!this.popup.isOpen) return;
-    if (this.previewActive) this.popup.move(delta);
-    this.fillSelected();
+    const n = this.popup.length;
+    if (n === 0) return;
+    const states = n + 1;
+    const cur = this.popup.getSelectedIndex(); // -1 … n-1
+    const next = (((cur + 1 + delta) % states) + states) % states - 1;
+    this.popup.select(next);
+    this.applyPreview(next < 0 ? null : this.popup.getSelected());
+    if (next >= 0) this.resolveSelectedDoc();
   }
 
-  /** Arrow / Ctrl-N/P: move the selection, keeping a live preview in sync. */
-  private navigate(delta: number): void {
-    if (!this.popup.isOpen) return;
-    this.popup.move(delta);
-    if (this.previewActive) this.fillSelected();
-  }
-
-  /** Write the selected candidate into `previewRange` and track its new span. */
-  private fillSelected(): void {
+  /** Lazily fetch the selected item's documentation (LSP resolve) and, if it's
+   *  still selected when the request returns, refresh the doc pane. */
+  private resolveSelectedDoc(): void {
     const item = this.popup.getSelected();
-    const range = this.previewRange;
-    if (!item || !range) return;
+    if (!item || item.documentation !== undefined || !item.resolve || this.resolved.has(item)) return;
+    this.resolved.add(item);
+    void item
+      .resolve()
+      .then((full) => {
+        if (full.documentation) item.documentation = full.documentation;
+        if (full.detail && !item.detail) item.detail = full.detail;
+        if (item.documentation && this.popup.getSelected() === item) this.popup.refreshDoc();
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * Rebuild the base region's text for `item` (null = the original typed text),
+   * applying the item's own `replaceRange` against `baseText` so a server textEdit
+   * is honored. Returns the region's new text and the resulting cursor column.
+   */
+  private previewFor(item: CompletionItem | null): { text: string; cursorColumn: number } {
+    const base = this.baseRange!;
+    const baseCps = [...this.baseText];
+    if (!item) {
+      return { text: this.baseText, cursorColumn: base.start.column + baseCps.length };
+    }
+    const newText = item.insertText ?? item.label;
+    const clamp = (n: number) => Math.min(Math.max(n, 0), baseCps.length);
+    const r = item.replaceRange;
+    // Codepoint offsets into the base region the item's edit replaces. With a
+    // server range, use it; otherwise replace just the heuristic typed prefix.
+    const headLen =
+      r && r.start.row === base.start.row && r.end.row === base.start.row
+        ? clamp(r.start.column - base.start.column)
+        : clamp(this.prefixStartCol - base.start.column);
+    const tailStart =
+      r && r.start.row === base.start.row && r.end.row === base.start.row
+        ? clamp(r.end.column - base.start.column)
+        : baseCps.length;
+    const text = baseCps.slice(0, headLen).join('') + newText + baseCps.slice(tailStart).join('');
+    return { text, cursorColumn: base.start.column + headLen + [...newText].length };
+  }
+
+  /** Replace the base region with `item`'s preview (null restores the typed text). */
+  private applyPreview(item: CompletionItem | null): void {
+    const base = this.baseRange;
+    if (!base || !this.previewRange) return;
+    const { text, cursorColumn } = this.previewFor(item);
     // Guard the edit so its synchronous buffer-change event doesn't re-query
     // (see `onBufferChanged`/`suppressQuery`); the popup stays as-is.
     this.suppressQuery = true;
     try {
-      const inserted = this.editor.setTextInBufferRange(range, item.insertText ?? item.label);
-      this.editor.setCursorBufferPosition(inserted.end);
-      this.previewRange = inserted;
-      this.previewActive = true;
+      this.previewRange = this.editor.setTextInBufferRange(this.previewRange, text);
+      this.editor.setCursorBufferPosition(new Point(base.start.row, cursorColumn));
     } finally {
       this.suppressQuery = false;
     }
   }
 
-  /** Enter: commit. A live preview is already in the buffer, so just close;
-   *  otherwise insert the selected item (e.g. selected via arrows, never Tab'd). */
+  /** Enter with a candidate selected: the preview is already in the buffer, so
+   *  just close. (With nothing selected the key handler lets Enter through.) */
   private accept(): void {
-    if (this.previewActive) {
-      this.dismiss();
-      return;
-    }
-    const item = this.popup.getSelected();
-    const range = this.replaceRange;
     this.dismiss();
-    if (item && range) {
-      this.suppressQuery = true;
-      try {
-        const inserted = this.editor.setTextInBufferRange(range, item.insertText ?? item.label);
-        this.editor.setCursorBufferPosition(inserted.end);
-      } finally {
-        this.suppressQuery = false;
-      }
-    }
   }
 
   private installKeys(): void {
@@ -304,22 +354,28 @@ export class CompletionController {
           this.cycle(-1);
           return true;
         case Gdk.KEY_Down:
-          this.navigate(1);
+          this.cycle(1);
           return true;
         case Gdk.KEY_Up:
-          this.navigate(-1);
+          this.cycle(-1);
           return true;
         case Gdk.KEY_Return:
         case Gdk.KEY_KP_Enter:
-          this.accept();
-          return true;
+          // Commit a selected candidate; with nothing selected, let Enter
+          // through (its normal insert-mode newline) but close the popup.
+          if (this.popup.getSelectedIndex() >= 0) {
+            this.accept();
+            return true;
+          }
+          this.dismiss();
+          return false;
         default:
           if (ctrl && keyval === Gdk.KEY_n) {
-            this.navigate(1);
+            this.cycle(1);
             return true;
           }
           if (ctrl && keyval === Gdk.KEY_p) {
-            this.navigate(-1);
+            this.cycle(-1);
             return true;
           }
           if (ctrl && keyval === Gdk.KEY_e) {

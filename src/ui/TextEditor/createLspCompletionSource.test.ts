@@ -39,6 +39,16 @@ describe('toCompletionItem', () => {
     assert.equal(item.documentation, 'Calls a function on each element.');
   });
 
+  it('prefers labelDetails (detail + description) over the flat detail', () => {
+    const item = toCompletionItem({
+      label: 'createServer',
+      detail: 'vscode-languageserver-protocol', // the junky flat detail
+      labelDetails: { detail: '(options)', description: 'node:http' },
+    });
+    assert.equal(item.detail, '(options)');
+    assert.equal(item.description, 'node:http');
+  });
+
   it('extracts MarkupContent documentation', () => {
     const item = toCompletionItem({
       label: 'x',
@@ -83,6 +93,8 @@ describe('createLspCompletionSource', () => {
         return [{ label: 'length', kind: CompletionItemKind.Property }];
       },
       completionTriggerCharacters: () => ['.'],
+      resolveCompletion: async (_d: LspDocument, item: LspCompletionItem) => item,
+      completionPositionEncoding: () => null,
     };
     const source = createLspCompletionSource(lsp, () => doc);
     const items = await source.complete(ctx('.'));
@@ -95,6 +107,8 @@ describe('createLspCompletionSource', () => {
     const lsp = {
       completion: async (): Promise<LspCompletionItem[]> => [],
       completionTriggerCharacters: () => ['.', ':'],
+      resolveCompletion: async (_d: LspDocument, item: LspCompletionItem) => item,
+      completionPositionEncoding: () => null,
     };
     assert.deepEqual([...(createLspCompletionSource(lsp, () => doc).triggerCharacters ?? [])], ['.', ':']);
     assert.deepEqual([...(createLspCompletionSource(lsp, () => null).triggerCharacters ?? [])], []);
@@ -104,7 +118,59 @@ describe('createLspCompletionSource', () => {
     const lsp = {
       completion: async (): Promise<LspCompletionItem[]> => [{ label: 'x' }],
       completionTriggerCharacters: () => [],
+      resolveCompletion: async (_d: LspDocument, item: LspCompletionItem) => item,
+      completionPositionEncoding: () => null,
     };
     assert.deepEqual(await createLspCompletionSource(lsp, () => null).complete(ctx()), []);
+  });
+
+  it('attaches a lazy resolver only for items missing documentation', async () => {
+    const lsp = {
+      completion: async (): Promise<LspCompletionItem[]> => [
+        { label: 'noDoc' },
+        { label: 'hasDoc', documentation: 'already here' },
+      ],
+      completionTriggerCharacters: () => [],
+      resolveCompletion: async (_d: LspDocument, item: LspCompletionItem): Promise<LspCompletionItem> => ({
+        ...item,
+        documentation: 'resolved docs',
+      }),
+      completionPositionEncoding: () => null,
+    };
+    const items = await createLspCompletionSource(lsp, () => doc).complete(ctx());
+    const [noDoc, hasDoc] = items;
+    assert.equal(hasDoc.resolve, undefined); // documentation already present
+    assert.ok(noDoc.resolve, 'missing-doc item gets a resolver');
+    assert.equal((await noDoc.resolve!()).documentation, 'resolved docs');
+  });
+
+  it("maps a textEdit range to the item's buffer replaceRange", async () => {
+    // tsserver-style member completion after `Path.`: newText re-includes the
+    // dot, with a textEdit range covering it ([0,4]–[0,5]).
+    const docWithLine = {
+      getPath: () => '/x.ts',
+      lineTextForRow: () => 'Path.',
+    } as unknown as LspDocument;
+    const lsp = {
+      completion: async (): Promise<LspCompletionItem[]> => [
+        {
+          label: 'basename',
+          textEdit: {
+            range: { start: { line: 0, character: 4 }, end: { line: 0, character: 5 } },
+            newText: '.basename',
+          },
+        },
+      ],
+      completionTriggerCharacters: () => ['.'],
+      resolveCompletion: async (_d: LspDocument, item: LspCompletionItem) => item,
+      completionPositionEncoding: () => 'utf-16' as const,
+    };
+    const [item] = await createLspCompletionSource(lsp, () => docWithLine).complete(ctx('.'));
+    assert.equal(item.insertText, '.basename');
+    assert.deepEqual(
+      { sr: item.replaceRange!.start.row, sc: item.replaceRange!.start.column,
+        er: item.replaceRange!.end.row, ec: item.replaceRange!.end.column },
+      { sr: 0, sc: 4, er: 0, ec: 5 },
+    );
   });
 });

@@ -9,11 +9,14 @@
  * project's floating-UI rule it's a plain overlay card, not a `GtkPopover` (which
  * froze the UI). Positioned by margins + top-left alignment, like the hover card.
  */
-import { Gtk } from '../../gi.ts';
+import { Gtk, Pango } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { monospaceFontCss } from '../../fonts.ts';
-import { escapeMarkup, highlightMarkup } from '../Picker.ts';
+import { monospaceFontCss, monospaceFontFamily } from '../../fonts.ts';
+import { highlightMarkup } from '../Picker.ts';
+import { escapeMarkup } from '../proseMarkup.ts';
+import { iconLabel, completionKindGlyph } from '../icons.ts';
+import { markdownToPango } from '../markdownMarkup.ts';
 import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -22,13 +25,20 @@ const POPUP_BG = theme.ui.bg ?? theme.ui.popoverBg ?? '#1e1e1e';
 const SELECTED_BG = theme.ui.selectedBg ?? 'rgba(127, 127, 127, 0.25)';
 const DETAIL_COLOR = theme.ui.textMuted ?? theme.ui.lineNumber ?? theme.ui.fg ?? '#888888';
 const MONO = monospaceFontCss();
-const LIST_WIDTH_PX = 340;
-const DOC_WIDTH_PX = 360;
+const CODE_FONT_FAMILY = monospaceFontFamily(); // the app's monospace, for doc code spans
+const LIST_WIDTH_PX = 420;
+const DOC_WIDTH_PX = 440;
 const MAX_HEIGHT_PX = 240;
-// Left inset of a row's label inside the card: border (1px) + row padding (8px).
-// `showAt`'s anchor is the word start, so we shift left by this to align the
-// candidate text under the typed text rather than the card's edge.
-const CONTENT_INSET_PX = 9;
+// A row's left structure: card border + row padding + the fixed-width kind-icon
+// column + the icon's right margin. `showAt` shifts the popup left by this so the
+// *label* (candidate text) — not the icon — lines up under the word being typed.
+const BORDER_PX = 1;
+const ROW_PADDING_PX = 8;
+const ICON_WIDTH_PX = 18;
+const ICON_MARGIN_PX = 8;
+const LABEL_INSET_PX = BORDER_PX + ROW_PADDING_PX + ICON_WIDTH_PX + ICON_MARGIN_PX;
+// Slack for the divider + borders between the list and doc panes.
+const DOC_GAP_PX = 14;
 
 addStyles(`
   #CompletionPopup {
@@ -45,11 +55,12 @@ addStyles(`
     background-color: transparent;
     min-height: 0;
   }
-  #CompletionPopup row { padding: 1px 8px; }
+  #CompletionPopup row { padding: 1px ${ROW_PADDING_PX}px; }
   #CompletionPopup row:selected { background-color: ${SELECTED_BG}; border-radius: 0; }
+  #CompletionPopup .completion-icon { margin-right: ${ICON_MARGIN_PX}px; color: ${DETAIL_COLOR}; opacity: 0.8; }
   #CompletionPopup .completion-label { ${MONO.declarations} }
-  #CompletionPopup .completion-detail { opacity: 0.6; margin-left: 1em; }
-  #CompletionPopup .completion-source { opacity: 0.45; margin-left: 1em; font-size: 0.85em; }
+  #CompletionPopup .completion-detail { opacity: 0.55; margin-left: 0.5em; }
+  #CompletionPopup .completion-description { opacity: 0.45; margin-left: 0.75em; font-size: 0.9em; }
   #CompletionPopup separator.completion-divider { background-color: var(--border-color); }
   #CompletionPopup .completion-doc { padding: 6px 8px; }
 `);
@@ -57,21 +68,34 @@ addStyles(`
 export class CompletionPopup {
   private readonly panel: InstanceType<typeof Gtk.Box>;
   private readonly listBox: InstanceType<typeof Gtk.ListBox>;
+  private readonly listScroller: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly divider: InstanceType<typeof Gtk.Separator>;
   private readonly docScroller: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly docLabel: InstanceType<typeof Gtk.Label>;
+  private readonly host: Overlay;
+  // Syntax-highlight a fenced code block to Pango markup (tree-sitter, supplied by
+  // the editor) — same callback the LSP hover uses. Null/absent → plain mono code.
+  private readonly highlightCode?: (code: string, lang: string | undefined) => string | null;
   private entries: RankedCompletion[] = [];
   private shown = false;
+  // Once any entry's docs have been shown, the doc pane stays open (empty for
+  // doc-less entries) so cycling doesn't flicker it open/closed. Reset per show.
+  private docPaneSticky = false;
 
-  constructor(host: Overlay) {
+  constructor(
+    host: Overlay,
+    highlightCode?: (code: string, lang: string | undefined) => string | null,
+  ) {
+    this.host = host;
+    this.highlightCode = highlightCode;
     this.listBox = new Gtk.ListBox();
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
 
-    const listScroller = new Gtk.ScrolledWindow();
-    listScroller.setChild(this.listBox);
-    listScroller.setPropagateNaturalHeight(true);
-    listScroller.setMaxContentHeight(MAX_HEIGHT_PX);
-    listScroller.setSizeRequest(LIST_WIDTH_PX, -1);
+    this.listScroller = new Gtk.ScrolledWindow();
+    this.listScroller.setChild(this.listBox);
+    this.listScroller.setPropagateNaturalHeight(true);
+    this.listScroller.setMaxContentHeight(MAX_HEIGHT_PX);
+    this.listScroller.setSizeRequest(LIST_WIDTH_PX, -1);
 
     // Right pane: the selected item's documentation. Hidden until a selected
     // item actually carries `documentation` (so a plain list stays compact).
@@ -95,7 +119,7 @@ export class CompletionPopup {
     this.panel.setValign(Gtk.Align.START);
     this.panel.overflow = Gtk.Overflow.HIDDEN;
     this.panel.setCanTarget(false); // keyboard-driven; never steal editor focus
-    this.panel.append(listScroller);
+    this.panel.append(this.listScroller);
     this.panel.append(this.divider);
     this.panel.append(this.docScroller);
     this.panel.setVisible(false);
@@ -110,7 +134,19 @@ export class CompletionPopup {
   showAt(entries: RankedCompletion[], x: number, y: number): void {
     this.entries = entries;
     this.rebuild();
-    this.panel.setMarginStart(Math.max(0, Math.round(x) - CONTENT_INSET_PX));
+    let left = Math.max(0, Math.round(x) - LABEL_INSET_PX);
+    // The doc pane opens to the right when a candidate is selected. Reserve room
+    // for it and shift the popup left if the word is near the editor's right edge,
+    // so the doc pane doesn't end up clipped off-screen.
+    const overlayWidth = this.host.getWidth();
+    // Reserve doc-pane room when any entry has docs now or could gain them via a
+    // lazy resolve (LSP), so the popup doesn't shift once the pane opens.
+    const mayHaveDocs = entries.some((e) => e.item.documentation?.trim() || e.item.resolve);
+    const reserved = mayHaveDocs ? LIST_WIDTH_PX + DOC_GAP_PX + DOC_WIDTH_PX : LIST_WIDTH_PX;
+    if (overlayWidth > 0 && left + reserved > overlayWidth) {
+      left = Math.max(0, overlayWidth - reserved);
+    }
+    this.panel.setMarginStart(left);
     this.panel.setMarginTop(Math.max(0, Math.round(y)));
     this.panel.setVisible(true);
     this.shown = true;
@@ -122,20 +158,62 @@ export class CompletionPopup {
     this.panel.setVisible(false);
   }
 
-  /** Move the selection by `delta`, wrapping. (The controller caps the list to a
-   *  count that fits, so no scroll-into-view — which would need to steal focus.) */
-  move(delta: number): void {
-    if (this.entries.length === 0) return;
-    const current = this.listBox.getSelectedRow()?.getIndex() ?? 0;
-    const next = (current + delta + this.entries.length) % this.entries.length;
-    const row = this.listBox.getRowAtIndex(next);
-    if (row) this.listBox.selectRow(row);
+  /** Number of candidates. */
+  get length(): number {
+    return this.entries.length;
+  }
+
+  /** The selected row index, or -1 when nothing is selected. */
+  getSelectedIndex(): number {
+    return this.listBox.getSelectedRow()?.getIndex() ?? -1;
+  }
+
+  /**
+   * Select the row at `index`, or clear the selection when `index < 0` (the
+   * "nothing selected" state). Updates the documentation pane to match.
+   */
+  select(index: number): void {
+    if (index < 0) {
+      this.listBox.unselectAll();
+    } else {
+      const row = this.listBox.getRowAtIndex(index);
+      if (row) this.listBox.selectRow(row);
+      this.scrollSelectedIntoView();
+    }
     this.updateDoc();
+  }
+
+  /** Scroll the list so the selected row is visible (the list can hold more
+   *  candidates than fit, and the popup never takes focus to auto-scroll). */
+  private scrollSelectedIntoView(): void {
+    const row = this.listBox.getSelectedRow();
+    const adjustment = this.listScroller.getVadjustment();
+    if (!row || !adjustment) return;
+    let rect;
+    try {
+      const result: any = (row as any).computeBounds(this.listBox);
+      rect = Array.isArray(result) ? result[1] : result;
+    } catch {
+      return;
+    }
+    if (!rect) return;
+    const top = rect.getY();
+    const bottom = top + rect.getHeight();
+    const viewTop = adjustment.getValue();
+    const viewBottom = viewTop + adjustment.getPageSize();
+    if (top < viewTop) adjustment.setValue(top);
+    else if (bottom > viewBottom) adjustment.setValue(bottom - adjustment.getPageSize());
   }
 
   getSelected(): CompletionItem | null {
     const index = this.listBox.getSelectedRow()?.getIndex();
     return index === undefined ? null : (this.entries[index]?.item ?? null);
+  }
+
+  /** Re-render the doc pane from the current selection (e.g. after a late
+   *  `resolve` filled in its documentation). */
+  refreshDoc(): void {
+    this.updateDoc();
   }
 
   private rebuild(): void {
@@ -146,47 +224,70 @@ export class CompletionPopup {
       child = next;
     }
     for (const entry of this.entries) this.listBox.append(this.buildRow(entry));
-    const first = this.listBox.getRowAtIndex(0);
-    if (first) this.listBox.selectRow(first);
+    // Start with nothing selected (the -1 state); the first Tab selects row 0.
+    this.listBox.unselectAll();
+    this.docPaneSticky = false; // fresh list: pane closed until docs appear
     this.updateDoc();
   }
 
-  /** Mirror the selected item's documentation into the side pane (or hide it). */
+  /** Mirror the selected item's documentation into the side pane. The pane is
+   *  sticky: once any entry has shown docs it stays open (empty for doc-less
+   *  entries) so cycling doesn't flicker it open and closed. */
   private updateDoc(): void {
     const doc = this.getSelected()?.documentation?.trim();
-    if (doc) {
-      this.docLabel.setLabel(doc);
-      this.divider.setVisible(true);
-      this.docScroller.setVisible(true);
-    } else {
-      this.divider.setVisible(false);
-      this.docScroller.setVisible(false);
-    }
+    if (doc) this.docPaneSticky = true;
+    // Render the documentation as markdown (LSP docs are markdown/plaintext), with
+    // code spans in the app's monospace font (not Pango's generic one) and fenced
+    // blocks tree-sitter highlighted — same as the LSP hover card.
+    this.docLabel.setMarkup(
+      doc ? markdownToPango(doc, { codeFontFamily: CODE_FONT_FAMILY, highlightCode: this.highlightCode }) : '',
+    );
+    this.divider.setVisible(this.docPaneSticky);
+    this.docScroller.setVisible(this.docPaneSticky);
   }
 
   private buildRow({ item, positions }: RankedCompletion): InstanceType<typeof Gtk.ListBoxRow> {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+
+    // Muted kind icon (Nerd Font Codicon) in a fixed-width column, like VSCode.
+    const icon = iconLabel(completionKindGlyph(item.kind));
+    icon.addCssClass('completion-icon');
+    icon.setSizeRequest(ICON_WIDTH_PX, -1);
+    icon.setXalign(0.5);
+    box.append(icon);
+
+    // Label + detail packed together on the left (VSCode style: the detail sits
+    // just after the label), in a hexpanding box so the description pins right.
+    const main = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    main.setHexpand(true);
+
     const label = new Gtk.Label({ xalign: 0, useMarkup: true });
     // Highlight the fuzzy-matched characters (same accent the picker uses).
     label.setMarkup(highlightMarkup(item.label, positions));
     label.addCssClass('completion-label');
-    box.append(label);
+    label.setEllipsize(Pango.EllipsizeMode.END);
+    main.append(label);
+
     if (item.detail) {
-      const detail = new Gtk.Label({ label: item.detail, xalign: 1, useMarkup: true });
+      const detail = new Gtk.Label({ xalign: 0, useMarkup: true });
       detail.setMarkup(`<span foreground="${DETAIL_COLOR}">${escapeMarkup(item.detail)}</span>`);
-      detail.setHexpand(true);
       detail.addCssClass('completion-detail');
-      box.append(detail);
+      detail.setEllipsize(Pango.EllipsizeMode.END);
+      detail.setMaxWidthChars(40);
+      main.append(detail);
     }
-    // Debug tag: which source produced this item. Pinned to the right; expands to
-    // push itself there when there's no detail label already doing so.
-    if (item.source) {
-      const source = new Gtk.Label({ xalign: 1, useMarkup: true });
-      source.setMarkup(`<span foreground="${DETAIL_COLOR}">${escapeMarkup(item.source)}</span>`);
-      source.setHexpand(!item.detail);
-      source.addCssClass('completion-source');
-      box.append(source);
+    box.append(main);
+
+    // Source module / import path (LSP `labelDetails.description`), dimmed, far right.
+    if (item.description) {
+      const description = new Gtk.Label({ xalign: 1, useMarkup: true });
+      description.setMarkup(`<span foreground="${DETAIL_COLOR}">${escapeMarkup(item.description)}</span>`);
+      description.addCssClass('completion-description');
+      description.setEllipsize(Pango.EllipsizeMode.END);
+      description.setMaxWidthChars(24);
+      box.append(description);
     }
+
     const row = new Gtk.ListBoxRow();
     row.setChild(box);
     return row;
