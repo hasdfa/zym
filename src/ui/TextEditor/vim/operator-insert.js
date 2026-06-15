@@ -437,12 +437,19 @@ class Change extends ActivateInsertModeBase {
         this.setTextToRegister(selection.getText(), selection)
       }
       if (isLinewiseTarget) {
+        // Keep the changed line's own indentation (vim `autoindent`): capture it
+        // before clearing, then restore it on the emptied line.
+        const indent = this.editor.leadingWhitespaceForBufferRow(selection.getBufferRange().start.row)
         // Replace the line(s) with a single empty line, then step back onto it.
         // The insert leaves the cursor at the start of the *following* line, so
-        // the move must wrap across the newline (to the end of the emptied line,
-        // i.e. after any autoindent) — a plain moveLeft stalls at column 0.
+        // the move must wrap across the newline — a plain moveLeft stalls at col 0.
         selection.insertText('\n', {autoIndent: true})
         selection.cursor.moveLeft(1, {allowWrap: true})
+        if (indent) {
+          const row = selection.cursor.getBufferPosition().row
+          this.editor.setTextInBufferRange([[row, 0], [row, 0]], indent)
+          selection.cursor.setBufferPosition([row, indent.length])
+        }
       } else {
         selection.insertText('', {autoIndent: true})
       }

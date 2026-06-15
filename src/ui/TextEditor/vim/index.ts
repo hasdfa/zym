@@ -49,6 +49,14 @@ const VISUAL_BINDINGS: Record<string, string> = {
   'ctrl-v': 'ActivateBlockwiseVisualMode',
 };
 
+// Commands available only in visual mode (so they don't shadow normal-mode keys
+// like `o` = open-line). `o` swaps the selection's active end; `O` swaps the
+// other corner in blockwise.
+const VISUAL_COMMAND_BINDINGS: Record<string, string> = {
+  o: 'ReverseSelections',
+  O: 'BlockwiseOtherEnd',
+};
+
 // Single-key motions, available while NOT in insert mode.
 const MOTION_BINDINGS: Record<string, string> = {
   h: 'MoveLeft',
@@ -90,6 +98,8 @@ const SEQUENCE_BINDINGS: Record<string, string> = {
   // gj/gk — move by display (soft-wrapped) line.
   'g j': 'MoveDownDisplayLine',
   'g k': 'MoveUpDisplayLine',
+  // gv — reselect the last visual selection.
+  'g v': 'SelectPreviousSelection',
 };
 
 // By default `j`/`k` move by display line too (like `:set nowrap`-free editors),
@@ -317,6 +327,20 @@ const MISC_BINDINGS: Record<string, string> = {
   'ctrl-r': 'Redo',
 };
 
+// Insert-mode editing commands (vim's ctrl-w / ctrl-u / ctrl-r / ctrl-a).
+const INSERT_BINDINGS: Record<string, string> = {
+  'ctrl-w': 'DeleteToPreviousWordBoundary',
+  'ctrl-u': 'DeleteToBeginningOfInsertLine',
+  'ctrl-r': 'InsertRegister',
+  'ctrl-a': 'InsertLastInserted',
+};
+
+// Macros — record (q{reg}…q) and replay (@{reg}, @@). Normal mode.
+const MACRO_BINDINGS: Record<string, string> = {
+  q: 'RecordMacro',
+  '@': 'ReplayMacro',
+};
+
 // Jump list (ctrl-o/ctrl-i) and change list (g;/g,) — normal-mode navigation.
 const JUMP_BINDINGS: Record<string, string> = {
   'ctrl-o': 'JumpBackward',
@@ -362,6 +386,18 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   ...Z_SCROLL_BINDINGS,
   ...SEARCH_MOTION_BINDINGS,
   ...JUMP_BINDINGS,
+  ...MACRO_BINDINGS,
+  // Visual-only commands registered under unique keys so they don't shadow the
+  // normal-mode `o`/`O` (open-line) entries above — this map is only enumerated
+  // for command registration, so the keys are arbitrary.
+  'visual:o': 'ReverseSelections',
+  'visual:O': 'BlockwiseOtherEnd',
+  // Insert-mode commands, likewise under unique keys (ctrl-r/ctrl-a otherwise
+  // collide with Redo / Increase).
+  'insert:ctrl-w': 'DeleteToPreviousWordBoundary',
+  'insert:ctrl-u': 'DeleteToBeginningOfInsertLine',
+  'insert:ctrl-r': 'InsertRegister',
+  'insert:ctrl-a': 'InsertLastInserted',
 };
 
 let keymapsRegistered = false;
@@ -389,6 +425,8 @@ function registerKeymapsOnce(): void {
       ...toKeymap(Z_SCROLL_BINDINGS),
       // ctrl-o/ctrl-i jump list, g;/g, change list.
       ...toKeymap(JUMP_BINDINGS),
+      // q record / @ replay macros.
+      ...toKeymap(MACRO_BINDINGS),
     },
     // Motions and operators apply in normal, operator-pending, and visual modes.
     'GtkSourceView:not(.insert-mode)': {
@@ -402,6 +440,7 @@ function registerKeymapsOnce(): void {
     // `/`/`?` extend the selection to a search match.
     'GtkSourceView.visual-mode': {
       ...toKeymap(VISUAL_BINDINGS),
+      ...toKeymap(VISUAL_COMMAND_BINDINGS),
       ...toKeymap(TEXT_OBJECT_BINDINGS),
       ...toKeymap(SEARCH_MOTION_BINDINGS),
     },
@@ -414,6 +453,8 @@ function registerKeymapsOnce(): void {
     'GtkSourceView:not(.normal-mode)': {
       escape: 'vim-mode-plus:activate-normal-mode',
     },
+    // Insert-mode editing commands (ctrl-w/u/r/a).
+    'GtkSourceView.insert-mode': toKeymap(INSERT_BINDINGS),
   });
 
   // `j`/`k` → display-line motion in normal & visual mode, at a higher priority so

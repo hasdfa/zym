@@ -607,6 +607,41 @@ export default class VimState {
     this.__searchInput = provider
   }
 
+  // Macros (q/@). Recorded keystrokes are stored per register letter; replay
+  // re-dispatches them through the KeymapManager, except insert-mode printable
+  // characters which are inserted directly (no real GTK event is synthesized).
+  saveMacro (register, keys) {
+    if (!this.__macros) this.__macros = {}
+    this.__macros[register] = keys
+  }
+
+  getMacro (register) {
+    return this.__macros && this.__macros[register]
+  }
+
+  replayMacro (keys) {
+    for (const key of keys) {
+      if (this.mode === 'insert' && this.isPrintableKey(key)) {
+        this.editor.insertText(key.string)
+      } else if (this.mode === 'insert' && (key.name === 'return' || key.name === 'KP_Enter')) {
+        this.editor.insertText('\n')
+      } else {
+        quilx.keymaps.feedKey(key)
+      }
+    }
+  }
+
+  isPrintableKey (key) {
+    return (
+      !key.ctrl &&
+      !key.alt &&
+      key.name !== 'escape' &&
+      typeof key.string === 'string' &&
+      key.string.length === 1 &&
+      key.string.charCodeAt(0) >= 0x20
+    )
+  }
+
   readChar ({ onConfirm, onCancel } = {}) {
     this.__inputHandler = { onConfirm, onCancel }
     this.editorElement.addCssClass('input-char-waiting')

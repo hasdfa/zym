@@ -63,6 +63,85 @@ test('S substitutes the whole line', () => {
   assert.equal(vimState.mode, 'insert');
 });
 
+test('o / O carry the surrounding indentation', () => {
+  const below = setup('def f():\n    a = 1\n    b = 2\n');
+  below.at(1, 6); // on the indented "a = 1"
+  below.run('InsertBelowWithNewline');
+  below.editor.insertText('c = 3');
+  below.run('ActivateNormalMode');
+  assert.equal(below.editor.getText(), 'def f():\n    a = 1\n    c = 3\n    b = 2\n');
+
+  const above = setup('def f():\n    a = 1\n');
+  above.at(1, 6);
+  above.run('InsertAboveWithNewline');
+  above.editor.insertText('z = 0');
+  above.run('ActivateNormalMode');
+  assert.equal(above.editor.getText(), 'def f():\n    z = 0\n    a = 1\n');
+});
+
+test('cc keeps the changed line indentation', () => {
+  const { editor, run, at } = setup('def f():\n    a = 1\n    b = 2\n');
+  at(1, 6);
+  run('Change');
+  run('Change'); // cc
+  editor.insertText('x = 9');
+  run('ActivateNormalMode');
+  assert.equal(editor.getText(), 'def f():\n    x = 9\n    b = 2\n');
+});
+
+test('gv reselects the last visual selection', () => {
+  const { editor, vimState, run, at } = setup('hello world\n');
+  at(0, 0);
+  run('ActivateCharacterwiseVisualMode');
+  run('MoveToEndOfWord'); // select "hello"
+  run('ActivateNormalMode'); // leave visual
+  at(0, 9);
+  run('SelectPreviousSelection'); // gv
+  assert.ok(vimState.isMode('visual'));
+  const range = editor.getLastSelection().getBufferRange();
+  assert.deepEqual([range.start.toArray(), range.end.toArray()], [[0, 0], [0, 5]]);
+});
+
+test('visual o swaps the active end of the selection', () => {
+  const { editor, run, at } = setup('hello\n');
+  at(0, 1);
+  run('ActivateCharacterwiseVisualMode');
+  run('MoveToEndOfWord'); // cursor at the far end
+  const farEnd = editor.getCursorBufferPosition().toArray();
+  run('ReverseSelections'); // o
+  assert.notDeepEqual(editor.getCursorBufferPosition().toArray(), farEnd);
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 1]); // back to the start
+});
+
+test('insert-mode ctrl-w deletes the word before the cursor', () => {
+  const { editor, vimState } = setup('foo bar\n');
+  editor.setCursorBufferPosition(new Point(0, 7));
+  vimState.activate('insert');
+  vimState.operationStack.run('DeleteToPreviousWordBoundary');
+  assert.equal(editor.getText(), 'foo \n');
+});
+
+test('insert-mode ctrl-u deletes back to the first non-blank', () => {
+  const { editor, vimState } = setup('    hello\n');
+  editor.setCursorBufferPosition(new Point(0, 9));
+  vimState.activate('insert');
+  vimState.operationStack.run('DeleteToBeginningOfInsertLine');
+  assert.equal(editor.getText(), '    \n');
+});
+
+test('. repeats an insert change (ciw)', () => {
+  const { editor, vimState, run, at } = setup('aaa bbb ccc\n');
+  at(0, 0);
+  run('Change');
+  run('InnerWord');
+  editor.insertText('X');
+  run('ActivateNormalMode'); // ciwX -> "X bbb ccc"
+  assert.equal(editor.getText(), 'X bbb ccc\n');
+  at(0, 4); // on "bbb"
+  vimState.operationStack.runRecorded(); // .
+  assert.equal(editor.getText(), 'X X ccc\n'); // change repeated on "bbb"
+});
+
 test('cc empties the line and leaves the cursor on it (not the next line)', () => {
   const { editor, vimState, run, at, line, pos } = setup('foo\nbar\nbaz\n');
   at(1, 2); // on the middle line "bar"

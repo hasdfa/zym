@@ -5,6 +5,7 @@
 // keymap, so they never run. They are neutralized when those features are ported.
 import { Range } from '../../../text/Range.ts'
 import { Base } from './base.js'
+import { quilx } from '../../../quilx.ts'
 
 class MiscCommand extends Base {
   static command = false
@@ -483,6 +484,79 @@ class CopyFromLineBelow extends CopyFromLineAbove {
   rowDelta = +1
 }
 
+// Insert-mode editing: ctrl-w deletes the word before the cursor, ctrl-u deletes
+// back to the line's first non-blank (or column 0). Upstream maps these to Atom's
+// editor commands; quilx implements them directly.
+class DeleteToPreviousWordBoundary extends InsertMode {
+  execute () {
+    this.editor.transact(() => {
+      for (const selection of this.editor.getSelections()) {
+        const point = selection.cursor.getBufferPosition()
+        const before = this.editor.lineTextForBufferRow(point.row).slice(0, point.column)
+        let i = before.length
+        while (i > 0 && /\s/.test(before[i - 1])) i-- // trailing whitespace
+        if (i > 0) {
+          const wordy = /[A-Za-z0-9_]/.test(before[i - 1])
+          const cls = wordy ? /[A-Za-z0-9_]/ : /[^A-Za-z0-9_\s]/
+          while (i > 0 && cls.test(before[i - 1])) i--
+        }
+        this.editor.setTextInBufferRange([[point.row, i], point], '')
+      }
+    })
+  }
+}
+
+class DeleteToBeginningOfInsertLine extends InsertMode {
+  execute () {
+    this.editor.transact(() => {
+      for (const selection of this.editor.getSelections()) {
+        const point = selection.cursor.getBufferPosition()
+        const lineText = this.editor.lineTextForBufferRow(point.row)
+        const firstNonBlank = lineText.search(/\S/)
+        const col = firstNonBlank >= 0 && point.column > firstNonBlank ? firstNonBlank : 0
+        this.editor.setTextInBufferRange([[point.row, col], point], '')
+      }
+    })
+  }
+}
+
+// Macros. `q{reg}` starts recording keystrokes into a register, `q` stops;
+// `@{reg}` replays, `@@` replays the last. Recording/replay of the raw keystrokes
+// lives in the KeymapManager; this just drives it and owns the per-register store.
+class RecordMacro extends MiscCommand {
+  async execute () {
+    const km = quilx.keymaps
+    if (km.isRecordingMacro()) {
+      this.vimState.saveMacro(this.vimState.recordingMacroRegister, km.stopMacroRecord())
+      this.vimState.recordingMacroRegister = null
+    } else {
+      const register = await this.readCharPromised()
+      if (register && /^[a-zA-Z0-9"]$/.test(register)) {
+        this.vimState.recordingMacroRegister = register
+        km.startMacroRecord()
+      }
+    }
+  }
+}
+
+class ReplayMacro extends MiscCommand {
+  async execute () {
+    // Read the `@`-count, then clear it so it doesn't leak into the macro's own
+    // operations (`2@a` replays twice; the macro's keys carry their own counts).
+    const count = this.getCount()
+    this.vimState.operationStack.resetCount()
+
+    let register = await this.readCharPromised()
+    if (!register) return
+    if (register === '@') register = this.vimState.lastMacroRegister // @@ = repeat last
+    if (!register) return
+    const keys = this.vimState.getMacro(register)
+    if (!keys) return
+    this.vimState.lastMacroRegister = register
+    for (let i = 0; i < count; i++) this.vimState.replayMacro(keys)
+  }
+}
+
 class NextTab extends MiscCommand {
   execute () {
     const pane = atom.workspace.paneForItem(this.editor)
@@ -565,6 +639,10 @@ const __operations = {
   InsertLastInserted,
   CopyFromLineAbove,
   CopyFromLineBelow,
+  DeleteToPreviousWordBoundary,
+  DeleteToBeginningOfInsertLine,
+  RecordMacro,
+  ReplayMacro,
   NextTab,
   PreviousTab
 }
