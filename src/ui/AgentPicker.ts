@@ -10,16 +10,19 @@
  */
 import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
+import { proseMarkup } from './proseMarkup.ts';
 import { quilx } from '../quilx.ts';
 import type { AgentTerminal } from './AgentTerminal.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 export interface AgentPickerOptions {
-  /** Reveal and focus an existing agent's terminal. */
+  /** Reveal and focus an existing agent's terminal (or, for send-to, its target). */
   onActivate: (agent: AgentTerminal) => void;
   /** Launch a new agent with the typed prompt. */
   onStart: (prompt: string) => void;
+  /** Entry placeholder (e.g. "Send to agent…"). Defaults to "Switch to agent…". */
+  placeholder?: string;
 }
 
 export function openAgentPicker(host: Overlay, options: AgentPickerOptions): void {
@@ -34,8 +37,11 @@ export function openAgentPicker(host: Overlay, options: AgentPickerOptions): voi
 
   openPicker({
     host,
-    placeholder: 'Switch to agent…',
+    placeholder: options.placeholder ?? 'Switch to agent…',
     items,
+    // Agent titles can carry `backtick` spans (claude reports them); render those
+    // monospace, the rest as sans prose, with the fuzzy match highlighted.
+    formatMain: (item, positions) => proseMarkup(item.text, positions),
     onSelect: (label) => {
       const agent = byLabel.get(label);
       if (agent) options.onActivate(agent);

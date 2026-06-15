@@ -100,3 +100,14 @@ export function addStyles(css: string): void {
 export function installStyles(): void {
   styles.flush();
 }
+
+// App-wide UI custom properties, inherited by every widget under the window.
+// `--popover-radius` is the corner radius for floating chrome (the picker,
+// which-key, the editor search bar). It deliberately does NOT reuse
+// libadwaita's `--window-radius`, which collapses to 0 when the window is
+// fullscreen/maximised — these surfaces should stay rounded regardless.
+addStyles(`
+  window {
+    --popover-radius: 15px;
+  }
+`);

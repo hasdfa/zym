@@ -15,6 +15,7 @@
  */
 import { GLib, Gtk } from '../gi.ts';
 import type { Notification } from '../Notification.ts';
+import { Icons, iconLabel } from './icons.ts';
 
 export interface NotificationToastsOptions {
   /** Seconds a non-dismissable toast stays before auto-expiring. */
@@ -50,7 +51,7 @@ export class NotificationToasts {
   }
 
   private buildCard(notification: Notification): InstanceType<typeof Gtk.Widget> {
-    const icon = new Gtk.Image({ iconName: notification.getIcon() });
+    const icon = iconLabel(notification.getIcon());
     icon.setValign(Gtk.Align.START);
     icon.addCssClass('notification-icon');
 
@@ -85,7 +86,8 @@ export class NotificationToasts {
       card.append(action);
     }
 
-    const close = new Gtk.Button({ iconName: 'window-close-symbolic' });
+    const close = new Gtk.Button();
+    close.setChild(iconLabel(Icons.close));
     close.setValign(Gtk.Align.START);
     close.addCssClass('flat');
     close.addCssClass('circular');

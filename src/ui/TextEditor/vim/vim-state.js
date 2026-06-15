@@ -580,11 +580,22 @@ export default class VimState {
   // Only single-char input is supported — enough for f/t. Multi-char input
   // (search's `/`) lands with the custom search box.
 
-  focusInput ({ charsMax = 1, onConfirm, onCancel } = {}) {
-    if (charsMax !== 1) {
-      throw new Error('vim: multi-char focusInput (search) not yet ported')
+  focusInput (options = {}) {
+    const { charsMax = 1, onConfirm, onCancel } = options
+    if (charsMax === 1) {
+      this.readChar({ onConfirm, onCancel })
+      return
     }
-    this.readChar({ onConfirm, onCancel })
+    // Multi-char input — currently only search-as-motion (`d/foo`). The host
+    // (TextEditor) wires `setSearchInput` to drive its SearchBar; without one
+    // (e.g. a headless buffer with no bar) the input simply cancels.
+    if (this.__searchInput) this.__searchInput(options)
+    else if (onCancel) onCancel()
+  }
+
+  /** Wire the multi-char (search) input provider — the SearchBar, in practice. */
+  setSearchInput (provider) {
+    this.__searchInput = provider
   }
 
   readChar ({ onConfirm, onCancel } = {}) {

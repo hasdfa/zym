@@ -59,6 +59,32 @@ test('backwardsScanInBufferRange visits matches in reverse', () => {
   assert.deepEqual(cols, [8, 0]);
 });
 
+test('backwardsScanInBufferRange spans its line-aligned windows correctly', () => {
+  // > BACKWARD_SCAN_WINDOW_ROWS (200) lines so the reverse scan crosses windows.
+  // "hit" appears on rows 5, 250, 480; reverse order must be exact and complete.
+  const lines = Array.from({ length: 500 }, (_, i) => (i === 5 || i === 250 || i === 480 ? 'hit' : `line ${i}`));
+  const m = model(lines.join('\n') + '\n');
+  const rows: number[] = [];
+  m.backwardsScanInBufferRange(/hit/g, new Range([0, 0], m.getEofBufferPosition()), ({ range }) =>
+    rows.push(range.start.row),
+  );
+  assert.deepEqual(rows, [480, 250, 5]);
+});
+
+test('backwardsScanInBufferRange with stop() finds the nearest match without reading to BOF', () => {
+  const lines = Array.from({ length: 500 }, (_, i) => (i === 3 || i === 495 ? 'hit' : `line ${i}`));
+  const m = model(lines.join('\n') + '\n');
+  let first: number | null = null;
+  let visits = 0;
+  m.backwardsScanInBufferRange(/hit/g, new Range([0, 0], [499, 0]), ({ range, stop }) => {
+    visits++;
+    first = range.start.row;
+    stop();
+  });
+  assert.equal(first, 495); // last match before the end
+  assert.equal(visits, 1); // stopped immediately — didn't scan back to row 3
+});
+
 test('replace substitutes matches as one undo step', () => {
   const m = model('foo\n');
   m.scan(/o/g, ({ replace }: ScanMatchResult) => replace('0'));

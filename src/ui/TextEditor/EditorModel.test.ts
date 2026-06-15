@@ -71,3 +71,97 @@ test('empty lines have a single valid column', () => {
   const r = m.bufferRangeForBufferRow(1);
   assert.ok(r.isEmpty());
 });
+
+test('onDidChangeText reports an insertion with its new range and text', () => {
+  const m = model('hello\nworld\n');
+  const events: any[] = [];
+  m.onDidChangeText((e) => events.push(e));
+  m.setTextInBufferRange(new Range([0, 5], [0, 5]), ' there');
+  assert.equal(events.length, 1);
+  const [change] = events[0].changes;
+  assert.equal(change.newText, ' there');
+  assert.equal(change.oldText, '');
+  assert.ok(change.oldRange.isEmpty());
+  assert.deepEqual([change.newRange.start.toArray(), change.newRange.end.toArray()], [[0, 5], [0, 11]]);
+});
+
+test('onDidChangeText reports a deletion with an empty new range and the removed text', () => {
+  const m = model('hello world\n');
+  const events: any[] = [];
+  m.onDidChangeText((e) => events.push(e));
+  m.setTextInBufferRange(new Range([0, 5], [0, 11]), ''); // delete " world"
+  assert.equal(events.length, 1);
+  const [change] = events[0].changes;
+  assert.equal(change.oldText, ' world');
+  assert.equal(change.newText, '');
+  assert.ok(change.newRange.isEmpty());
+  assert.deepEqual([change.oldRange.start.toArray(), change.oldRange.end.toArray()], [[0, 5], [0, 11]]);
+});
+
+test('onDidChangeText spans multi-line inserts', () => {
+  const m = model('ab\n');
+  const events: any[] = [];
+  m.onDidChangeText((e) => events.push(e));
+  m.setTextInBufferRange(new Range([0, 1], [0, 1]), 'X\nYZ'); // a|X⏎YZ|b
+  const [change] = events[0].changes;
+  assert.deepEqual([change.newRange.start.toArray(), change.newRange.end.toArray()], [[0, 1], [1, 2]]);
+});
+
+test('onDidChangeText fires during undo/redo (the Undo command path)', () => {
+  const m = model('hello\n');
+  m.setTextInBufferRange(new Range([0, 5], [0, 5]), '!'); // "hello!"
+  const events: any[] = [];
+  const sub = m.onDidChangeText((e) => events.push(e));
+  m.undo(); // removes the "!" — a deletion
+  assert.equal(events.length, 1);
+  assert.ok(events[0].changes[0].newRange.isEmpty());
+  assert.equal(events[0].changes[0].oldText, '!');
+  sub.dispose();
+  m.redo();
+  assert.equal(events.length, 1); // unsubscribed: no further events
+});
+
+test('viewport geometry falls back to the whole buffer when the view is unrealized', () => {
+  const m = model('a\nb\nc\nd\n');
+  // Headless tests never realize the view, so geometry takes the fallback paths.
+  assert.equal(m.getFirstVisibleScreenRow(), 0);
+  assert.equal(m.getLastVisibleScreenRow(), m.getLastBufferRow());
+  assert.equal(m.pixelRectForBufferPosition(new Point(1, 0)), null);
+});
+
+test('scan produces codepoint columns across non-BMP characters (round-trips)', () => {
+  // '😀' (U+1F600) is one codepoint but two UTF-16 units. So the two "foo"s start
+  // at codepoint columns 1 and 6 — not the UTF-16 indices 2 and 8.
+  const m = model('😀foo 😀foo\n');
+  const ranges: Range[] = [];
+  m.scan(/foo/, ({ range }) => ranges.push(range));
+  assert.equal(ranges.length, 2);
+  assert.deepEqual(ranges[0].start.toArray(), [0, 1]);
+  assert.deepEqual(ranges[1].start.toArray(), [0, 6]);
+  // The codepoint ranges round-trip through iterAtPoint back to the matched text.
+  assert.equal(m.getTextInBufferRange(ranges[0]), 'foo');
+  assert.equal(m.getTextInBufferRange(ranges[1]), 'foo');
+});
+
+test('scan columns are codepoints across multiple non-BMP chars and lines', () => {
+  const m = model('a\n😀😀x\n');
+  const ranges: Range[] = [];
+  m.scan(/x/, ({ range }) => ranges.push(range));
+  assert.deepEqual(ranges[0].start.toArray(), [1, 2]); // after two emoji on row 1
+  assert.equal(m.getTextInBufferRange(ranges[0]), 'x');
+});
+
+test('lineLength is the codepoint length (not UTF-16) on non-BMP lines', () => {
+  const m = model('😀ab\nx\n'); // 😀(1 codepoint) a b → length 3, not 4
+  assert.equal(m.lineLength(0), 3);
+  assert.equal(m.lineLength(1), 1);
+});
+
+test('cursor end-of-line uses codepoint columns on non-BMP lines', () => {
+  const m = model('😀ab\n');
+  m.setCursorBufferPosition(new Point(0, 0));
+  const cursor = m.getLastCursor();
+  cursor.moveToEndOfLine();
+  assert.deepEqual(m.getCursorBufferPosition().toArray(), [0, 3]); // codepoint EOL, not 4
+  assert.ok(cursor.isAtEndOfLine());
+});

@@ -13,8 +13,9 @@
  * a notification added before its view exists isn't shown twice.
  */
 import { Emitter, type Disposable } from './util/eventKit.ts';
+import { Icons } from './ui/icons.ts';
 
-export type NotificationType = 'success' | 'info' | 'warning' | 'error' | 'fatal';
+export type NotificationType = 'trace' | 'success' | 'info' | 'warning' | 'error' | 'fatal';
 
 export interface NotificationButton {
   text: string;
@@ -44,14 +45,15 @@ export interface NotificationOptions {
   stack?: string;
 }
 
-// Default symbolic icon names per severity (GTK named icons). Overridable via
-// `options.icon`.
+// Default Nerd Font icon glyph per severity (see ui/icons.ts). `getIcon()`
+// returns a glyph rendered as label text; `options.icon` can override it.
 const DEFAULT_ICONS: Record<NotificationType, string> = {
-  success: 'emblem-ok-symbolic',
-  info: 'dialog-information-symbolic',
-  warning: 'dialog-warning-symbolic',
-  error: 'dialog-error-symbolic',
-  fatal: 'dialog-error-symbolic',
+  trace: Icons.trace,
+  success: Icons.success,
+  info: Icons.info,
+  warning: Icons.warning,
+  error: Icons.error,
+  fatal: Icons.fatal,
 };
 
 export class Notification {

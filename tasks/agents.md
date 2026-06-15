@@ -130,10 +130,42 @@ Concrete, mostly small additions on top of what exists:
 - **List ergonomics** — vim bare-key bindings while `#AgentList` is focused
   (`j`/`k` move, Enter reveal, `x` close, `r` restart), mirroring FileTree; hover
   action buttons on rows.
-- **Rename** — let the user override the display name (the CLI title still wins for
-  claude unless pinned); store on the agent.
-- **Tab affordance** — show the status indicator in the agent's tab (not just the
-  sidebar), e.g. the cog/dot prefixed on the tab title.
+- **Rename** — *done*: `AgentTerminal.rename()` pins a display name over the CLI's
+  reported title (`renamed` reports whether pinned); `agent:rename` prompts via the
+  picker (the `R` key in the list).
+- **Tab affordance** — *done*: the agent's tab title is prefixed with a status glyph
+  (`agentTabTitle` in AppWindow), refreshed on status change; mirrors the sidebar
+  indicator, sans colour.
+
+## Feature: resume / persist conversations
+
+Claude Code stores every session as a JSONL transcript at
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (the dir name is the cwd with
+`/` and `_` → `-`). A session is resumed with `claude --resume <id>` (or
+`--continue` for the latest); `--fork-session` branches a copy instead of
+appending. These compose with our `--settings` block, so status hooks keep working.
+
+**Built (`src/agentSessions.ts`, `AgentTerminal`, `AppWindow`):**
+
+- **Capture** — the hook reporter writes the live `session_id` (present in every
+  hook payload) to `<statusFile>.session`; `AgentTerminal.sessionId` reads it.
+- **Enumerate** — `listAgentSessions(cwd)` reads the transcript dir: filename → id,
+  mtime → last activity, first `type:"user"` line → label. Newest first. Only the
+  head of each transcript is read (cheap). All format-parsing is isolated here, as
+  the JSONL format is Claude Code's internal one (subject to change).
+- **Resume** — `AgentTerminal` takes a `resume: { sessionId? | continue?; fork? }`
+  option → prepends `--resume <id>` / `--continue` (+ `--fork-session`) to the
+  claude argv. Commands: `agent:resume` (a picker of past sessions, excluding any
+  currently live, label + relative time → `space a r`) and `agent:continue`
+  (`space a c`).
+- **Persist across editor restarts** — `AgentTerminal.serialize()` now records
+  `sessionId`; the (Session-management-owned) restore can relaunch a saved agent as
+  `--resume <id>` to continue the conversation rather than start fresh. The
+  `TabState` agent variant gained an optional `sessionId`.
+
+**Open**: surface session branch/cost in the resume list; resume-with-prompt;
+offer fork on resuming a *live* session; honor `cleanupPeriodDays` (transcripts are
+pruned after ~30 days).
 
 ## Feature: git worktree integration
 
@@ -179,18 +211,23 @@ UX, and co-designed with Session management.
 
 ## More ideas
 
-- **Send-to-agent** — a command to paste the current selection / file path / a
-  diagnostic into the focused agent (`Vte.feedChild`), so the editor feeds the
-  agent context.
 - **Cost / context meter** — the claude `statusLine` JSON exposes `cost` and
   `context_window.used_percentage`; a second `--settings` `statusLine` hook could
   surface a per-agent cost/▮ context gauge in the row.
-- **Persisted agents** — survive across sessions (Session management): record
-  profile + cwd + prompt; offer to relaunch on restore. (Process state can't be
-  restored, only relaunched.)
 - **Orchestration** — multiple agents on one task, or a "review" agent watching
   another's diff. Speculative; out of scope until the basics are deep.
-- **Jump to agent activity** — when an agent edits a file, offer to open it.
+- **Jump to agent activity** — when an agent edits a file, offer to open it (the
+  edited-file list now exists; see file-change awareness below — open-on-click is
+  the remaining piece).
+
+Done (moved out of ideas): **send-to-agent** (selection/file → current / picked /
+new agent), **resume past conversations** (see the feature above), **file-change
+awareness** (a `PostToolUse` Edit/Write/MultiEdit/NotebookEdit hook appends the
+edited path to `<statusFile>.files`; `AgentTerminal.changedFiles` /
+`onDidChangeFiles` watch it; the agent list shows a clickable "✎ N" badge whose
+click — or the `o` key / `agent:open-changes` — opens the edited files (one
+directly, several via a newest-first picker); each edit also triggers an immediate
+`GitRepo.refresh()`. Remaining: jump straight to an agent's latest edit location).
 
 ## Shared concerns
 
@@ -213,9 +250,10 @@ UX, and co-designed with Session management.
       with the status `--settings`
 - [ ] Picker/starter: choose a profile when launching
 - [ ] Attention notifications (waiting / finished while unfocused) + header badge
-- [ ] Lifecycle commands: kill / close / restart / focus-next/prev (+ bindings,
-      hover actions)
-- [ ] Status in the tab title; rename
+- [x] Lifecycle commands: kill / close / restart / focus-next/prev (+ bindings,
+      per-row hover actions)
+- [x] Status in the tab title; rename
+- [x] File-change awareness (PostToolUse hook → `.files`; agent-list badge)
 - [ ] `GitRepo` worktree ops (list / add / remove)
 - [ ] Run an agent in a per-agent worktree (cwd + branch + cleanup prompt)
 - [ ] Re-root editor to an agent's worktree (MVP scoped view; full re-root with

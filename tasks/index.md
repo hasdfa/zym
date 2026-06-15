@@ -1,0 +1,137 @@
+# Tasks
+
+Each task can have it own page with research, design, and implementation details.
+File name name the header structure, e.g. `git.md` for the git section, `code-editing/lsp-integration.md` for the LSP integration section, etc. When a header has more than one subheader, it should be a directory with an `index.md` file for the main section.
+
+The task documents should be updated as the implementation progresses, with notes on research findings, design decisions, and implementation details. This will help keep track of the progress and provide context for future reference.
+
+## Architecure
+
+### Commands & keymaps
+
+See [commands-keymaps.md](commands-keymaps.md). Done: commands with
+args/descriptions/`when`, keymaps with sequences/priority/`unset!`, `#id`
+selectors, user `keymap.json` (live-reloaded), command palette (shortcuts,
+name+description search, dim-when-unavailable), which-key hints, conflict
+detection. Remaining: `when` keymap fall-through; keybinding customization UI.
+
+### Panels & layout
+
+See [panels.md](panels.md) for the `Panel` / `PanelGroup` / dock model: single
+active panel = focus container (overlay exception), root-focusable panels,
+focus-driven `.active-empty` outline, `.is-panel-child` invariant, the tab-bar
+rules (`requireTabBar`, non-expanding tabs), and the zombie-safe dock-close rule
+(bottom docks veto-hide; side docks per-tab close + re-root-before-re-add).
+
+### Plugin system
+
+- [ ] Plugin system for commands, UI components, and more.
+
+## System integration
+
+See [system-integration.md](system-integration.md) for how quilx should track the
+desktop's appearance and fonts, with the rule that **OS font/theme changes are
+followed through at runtime** (no restart).
+
+- [x] Editor scheme follows the OS light/dark preference (`notify::dark`), when the theme defines no background; terminal inherits libadwaita colors.
+- [ ] Follow OS **monospace** font changes live (editor, terminal, pickers — currently read once at startup).
+- [ ] Follow OS **UI** font changes live (proportional text — currently read once).
+- [ ] Follow OS **light/dark** through the quilx theme palette (swap the theme variant; chrome/syntax/picker colors re-apply), and wire the dead `core.followSystemColorScheme` config.
+- [ ] Central `Gio.Settings`/`Adw.StyleManager` watcher that emits font/appearance-changed signals instead of per-widget one-shot reads.
+
+## Git
+
+See [git/index.md](git/index.md) for the architecture plan.
+
+- [ ] Git status viewer
+- [ ] Git commit interface
+- [ ] Github PR/issue link when applicable, then gitlab etc
+
+## Code editing
+
+### LSP integration
+
+See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the design and decisions.
+
+- [ ] **Restructure (next):** unify grammar + LSP into a `LanguageRegistry` (the plugin seam); curated hand-authored built-in language pack; drop the runtime Helix fetch; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusivity groups. See [code-editing/language-config.md](code-editing/language-config.md).
+- [x] LSP client + server-config abstraction (Helix `languages.toml`, fetched/cached), per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging of major events to the notification log. Full-text document sync. See `src/lsp/`.
+- [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, and a "Diagnostics" panel (shared `LocationList`).
+- [x] Go to shortcuts — definition/declaration/type-definition/implementation + find-references (`space l d`/`D`/`t`/`i`/`r`); jumps reveal an already-open tab.
+- [x] Hover tooltips — `space l k` / vim `K`; markdown card above the cursor, code blocks syntax-highlighted by reusing tree-sitter, in the editor monospace.
+- [ ] Code actions — `textDocument/codeAction` → pick + apply a `WorkspaceEdit` (diagnostic quick-fixes, auto-imports, refactors). Needs the shared `WorkspaceEdit` applier.
+- [ ] Formatting — `textDocument/formatting` / range formatting (applies `TextEdit`s; on-demand and optionally on save).
+- [ ] Rename — `textDocument/rename` (+ `prepareRename`) → `WorkspaceEdit`.
+- [ ] Completion — `textDocument/completion` popup (trigger chars, filtering).
+- [ ] Later: signature help, document symbols (outline), inlay hints, incremental sync, formatting-on-save.
+
+### Grammar
+
+- [ ] More default grammars
+
+### Autocompletion
+
+See [code-editing/autocompletion.md](code-editing/autocompletion.md).
+
+- [x] Framework: source contract (`CompletionSource`), coordinator (`CompletionController` — insert-mode triggers, debounce, rank, sync-immediate/async-awaited, accept/navigate/dismiss keys), and keyboard-driven popup (`CompletionPopup`). Placeholder source validates it end-to-end.
+- [ ] Real sources: buffer words (next), LSP (`textDocument/completion`), Copilot (ghost text).
+- [ ] Widget polish: kind icons, scroll-into-view, docs panel, mouse, fuzzy filter, flip-above.
+
+### Text editor
+
+See [code-editing/text-editor.md](code-editing/text-editor.md) for the widget evaluation (GtkSourceView vs. custom/Rust), the shared editor-layer primitives, and the prioritized "What's next".
+
+**Recommended next:** buffer-only editor mode (for the Git commit-message editor), then multi-cursor. (The vim `:` ex-command line is **won't-do** — see text-editor.md.)
+
+Shared primitives now in place (in `EditorModel` / `DecorationController`):
+
+- [x] Buffer change events (`EditorModel.onDidChangeText`, Atom shape) — drives LSP didChange, vim undo/redo, future multi-cursor edit-replay.
+- [x] Viewport + pixel geometry (`getFirst/LastVisibleScreenRow`, `pixelRectForBufferPosition`) — for hover/code-action popovers, vim H/M/L, scroll commands. (Realized-view paths need interactive verification.)
+- [x] Inline decoration surface (`editor.decorations` — clearable tag layers) — for search highlights and inline diff. (Diagnostic squiggles are custom-drawn via `UnderlineOverlay`; gutter icons + virtual text land with their consumers.)
+
+Features:
+
+- [ ] Consider a custom widget or a fork of GtkSourceView for better control and features. Research how to implement features like multiple cursors, rectangular selection, and better performance with large files. Consider a JS widget, or a Rust widget with a JS wrapper.
+- [ ] Diff display (inline/unified + side-by-side). See [code-editing/diff.md](code-editing/diff.md) — editor-side needs investigated: synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines); real data comes from the Git workstream.
+- [x] Search interface — `SearchBar` (top-right) + `SearchController` over `EditorModel.scan`: case/regex toggles, replace + replace-all, highlights via `editor.decorations`. Bound to vim `/` `?` `n` `N`.
+
+#### Vim mode
+
+Custom modal editing ported from Atom's vim-mode-plus, driven by quilx's
+CommandManager/KeymapManager over an `EditorModel` shim (see `src/ui/TextEditor/vim/`).
+It replaced `GtkSource.VimIMContext` and is now the default (no flag).
+
+- [x] Initial implementation derived from Atom's vim-mode-plus
+- [x] Motions, operators, text-objects, visual mode, registers, marks, counts, dot-repeat
+- [x] find-char (f/F/t/T/;/,), case ops (gU/gu/g~), surround (ys/ds/cs), indent/outdent/join
+- [x] System clipboard integration; register prefix (`"`)
+- [x] Make custom vim the default; remove GtkSource.VimIMContext
+- [~] `:` ex-command line — **won't do** (save/close/open/search reachable via `space w` / `tab:close` / `space o` / SearchBar; see text-editor.md)
+- [x] `/` `?` `n` `N` search via the `SearchBar` (incremental highlight, case/regex, replace)
+- [ ] visual-blockwise (ctrl-v) and multiple cursors (need overlay marks + rendering; see Text editor)
+- [ ] Polish: `=` auto-indent, H/M/L screen motions, scroll/fold/flash niceties
+
+## Session management
+
+See [session-management.md](session-management.md) for the architecture plan.
+
+- [ ] Define session structure and storage format (e.g. JSON file with open files, unsaved changes, terminal sessions, agent sessions, etc).
+- [ ] Define session main path(s?) (the CWD for the session)
+- [ ] Implement session saving and loading, including handling of edge cases (e.g. missing files, conflicts with unsaved changes, etc).
+- [ ] Integrate session management with the rest of the application (e.g. prompt to save session on exit, option to restore previous session on startup, etc). Hooks for each widget to prompt and save/restore their own state as part of the session.
+
+## Agents
+
+See [agents.md](agents.md) for the architecture plan.
+
+- [x] Basic agent runner (claude in terminal tab)
+- [x] Basic AgentManager, sidebar list, and picker/starter
+- [x] Live agent status (idle/working/waiting/exited) via Claude Code hooks
+- [x] Management UX: attention notifications + waiting badge, kill / focus-next/prev, vim list nav
+- [x] Send editor context to an agent (selection / file → current / picked / new agent)
+- [x] Resume / continue past conversations (transcript enumeration + `--resume`/`--continue`); capture session id for restore
+- [x] More management UX: restart (resume conversation), rename, close — keyboard/command driven (`r`/`R`/`X`); status glyph in the tab title
+- [x] File-change awareness: a PostToolUse hook records edited files; agent-list "✎ N" badge (tooltip), click/`o` opens them (newest first), and edits trigger an immediate git refresh
+- [x] Modal terminal input (Terminal & AgentTerminal): normal/insert modes — `Escape`↔`i`; normal frees the `space` leader / `ctrl-w` window-nav, `ctrl-[` sends a literal Escape to the child. Implemented by wrapping the Vte in a focusable container that *steals* focus in normal mode (Vte un-focused → cursor idles, no keys reach it — no key-swallowing guard needed); clicking the Vte re-enters insert
+- [ ] Agent configuration and customization (name, description, model, tools, etc), integration with other tools than claude.
+- [ ] Integrate agents with git worktree, and support switching to worktree when viewing an agent associated with a different worktree.
+- [ ] More ideas? (cost/context meter; jump to an agent's latest edit; orchestration)

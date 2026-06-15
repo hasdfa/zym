@@ -103,3 +103,67 @@ test('a count repeats a motion (3 l)', () => {
   run('MoveRight');
   assert.deepEqual(pos(), [0, 3]);
 });
+
+// Display-line motions (gj/gk). The wrap-aware geometry needs a realized view, so
+// headless these exercise the buffer-line fallback (and the characterwise wise).
+test('gj/gk move by line (buffer-line fallback when unrealized) keeping the column', () => {
+  const { run, at, pos } = setup('line0\nline1\nline2\nline3\n');
+  at(0, 2);
+  run('MoveDownDisplayLine'); // gj
+  assert.deepEqual(pos(), [1, 2]);
+  run('MoveDownDisplayLine');
+  assert.deepEqual(pos(), [2, 2]);
+  run('MoveUpDisplayLine'); // gk
+  assert.deepEqual(pos(), [1, 2]);
+});
+
+test('dgj is a characterwise motion (not the linewise dj)', () => {
+  const { editor, run, at } = setup('line0\nline1\nline2\n');
+  at(0, 2);
+  run('Delete');
+  run('MoveDownDisplayLine'); // dgj: delete [0,2)-(1,2) characterwise
+  assert.equal(editor.getText(), 'line1\nline2\n');
+});
+
+test('displayLineMove reports null when the view is not realized', () => {
+  const { editor } = setup('hello world\n');
+  assert.equal(editor.displayLineMove({ row: 0, column: 0 }, 'down', null), null);
+});
+
+// Subword motions (the defaults for w/b/e/ge): stop at camelCase humps,
+// snake_case parts, and acronym runs.
+test('w (MoveToNextSubword) stops at camelCase, snake_case and acronym boundaries', () => {
+  const a = setup('fooBarBaz qux\n');
+  a.at(0, 0);
+  a.run('MoveToNextSubword'); assert.deepEqual(a.pos(), [0, 3]); // Bar
+  a.run('MoveToNextSubword'); assert.deepEqual(a.pos(), [0, 6]); // Baz
+  a.run('MoveToNextSubword'); assert.deepEqual(a.pos(), [0, 10]); // qux
+
+  const b = setup('snake_case_var\n');
+  b.at(0, 0);
+  b.run('MoveToNextSubword'); assert.deepEqual(b.pos(), [0, 6]); // case
+  b.run('MoveToNextSubword'); assert.deepEqual(b.pos(), [0, 11]); // var
+
+  const c = setup('parseURLToString\n');
+  c.at(0, 0);
+  c.run('MoveToNextSubword'); assert.deepEqual(c.pos(), [0, 5]); // URL (acronym run)
+  c.run('MoveToNextSubword'); assert.deepEqual(c.pos(), [0, 8]); // To
+  c.run('MoveToNextSubword'); assert.deepEqual(c.pos(), [0, 10]); // String
+});
+
+test('e/b/ge subword motions stop at subword ends/starts', () => {
+  const e = setup('fooBarBaz\n');
+  e.at(0, 0);
+  e.run('MoveToEndOfSubword'); assert.deepEqual(e.pos(), [0, 2]); // foo end
+  e.run('MoveToEndOfSubword'); assert.deepEqual(e.pos(), [0, 5]); // Bar end
+
+  const b = setup('fooBarBaz\n');
+  b.at(0, 8);
+  b.run('MoveToPreviousSubword'); assert.deepEqual(b.pos(), [0, 6]); // Baz start
+  b.run('MoveToPreviousSubword'); assert.deepEqual(b.pos(), [0, 3]); // Bar start
+
+  const g = setup('fooBarBaz\n');
+  g.at(0, 8);
+  g.run('MoveToPreviousEndOfSubword'); assert.deepEqual(g.pos(), [0, 5]); // Bar end
+  g.run('MoveToPreviousEndOfSubword'); assert.deepEqual(g.pos(), [0, 2]); // foo end
+});

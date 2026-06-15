@@ -17,6 +17,8 @@ import { KeymapManager } from './KeymapManager.ts';
 import { NotificationManager } from './NotificationManager.ts';
 import { AgentManager } from './AgentManager.ts';
 import { SessionManager } from './SessionManager.ts';
+import { LspManager } from './lsp/LspManager.ts';
+import { Workspace } from './Workspace.ts';
 import { Config, type ConfigSchema } from './util/Config.ts';
 
 /*
@@ -50,10 +52,25 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     maximum: 100,
     description: 'Editor font size in points.',
   },
+  'editor.minimap': {
+    type: 'boolean',
+    default: false,
+    description: 'Show the source-map minimap gutter on the right of the editor.',
+  },
   'agent.command': {
     type: 'array',
     default: ['claude'],
     description: 'Argv of the terminal agent launched by AgentTerminal (agent:new).',
+  },
+  'git.remotes.upstream': {
+    type: 'string',
+    default: 'upstream',
+    description: 'Remote name for the canonical repo (PR/issue detection, fetch).',
+  },
+  'git.remotes.origin': {
+    type: 'string',
+    default: 'origin',
+    description: 'Remote name for your fork (push).',
   },
   'session.autosave': {
     type: 'boolean',
@@ -77,6 +94,32 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     maximum: 60000,
     description: 'Debounce window (ms) before an autosave is written after a change.',
   },
+  'lsp.enable': {
+    type: 'boolean',
+    default: true,
+    description: 'Enable LSP language servers (diagnostics, go-to-definition, …).',
+  },
+  'lsp.disabledLanguages': {
+    type: 'array',
+    default: [],
+    description: 'Language ids (Helix names, e.g. "python") for which no server starts.',
+  },
+  'lsp.servers': {
+    type: 'object',
+    default: {},
+    description:
+      'Per-language server overrides keyed by language id, e.g. { "typescript": { "command": "…", "args": [], "config": {} } }. Deep-merged over the fetched config.',
+  },
+  'lsp.configUrl': {
+    type: 'string',
+    default: '',
+    description: 'Override URL for the Helix languages.toml server-config source; empty uses the default.',
+  },
+  'lsp.refreshOnLaunch': {
+    type: 'boolean',
+    default: true,
+    description: 'Fetch the latest languages.toml on startup (falls back to the cached/vendored copy).',
+  },
 };
 
 class Quilx {
@@ -86,7 +129,9 @@ class Quilx {
   readonly notifications = new NotificationManager();
   readonly agents = new AgentManager();
   readonly session = new SessionManager();
+  readonly lsp = new LspManager();
   readonly config = new Config(CONFIG_SCHEMA);
+  readonly workspace = new Workspace();
 }
 
 export const quilx = new Quilx();

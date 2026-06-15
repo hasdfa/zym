@@ -17,6 +17,10 @@ import { Adw, GLib, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { quilx } from '../quilx.ts';
+import { theme } from '../theme/theme.ts';
+
+// The theme's selection color, used to outline an active empty pane.
+const SELECTED_COLOR = theme.ui.selectedBg ?? '@theme_selected_bg_color';
 
 // Square off the tab buttons (Adwaita rounds them by default) and strip the gaps
 // Adwaita puts around and between them. Structural, not color-derived, so it's
@@ -25,17 +29,20 @@ import { quilx } from '../quilx.ts';
 addStyles(`
   #Panel tabbar tabbox { padding: 0; }
   #Panel tabbar > revealer > box { padding: 0; }
+  #Panel tabbar { border-bottom: 1px solid var(--border-color); }
   #Panel tabboxchild {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
   }
-  /* The active pane with no focusable child (an empty pane) has nowhere to draw a
-     focus ring, so mark it as selected with an accent outline instead. */
-  #Panel.active-empty {
-    outline: 2px solid var(--accent-color);
-    outline-offset: -2px;
+  /* A panel-level widget (the panel root for an empty pane, or a direct panel
+     child) that holds keyboard focus directly has no inner focus ring, so mark it
+     with a thin selection-colored outline. */
+  #Panel.active-empty,
+  #Panel .active-empty {
+    outline: 1px solid ${SELECTED_COLOR};
+    outline-offset: -1px;
   }
 `);
 
@@ -57,6 +64,14 @@ export interface PanelOptions {
   onClosed?: (child: Widget) => void;
   /** Fired when the last child is removed. */
   onEmpty?: () => void;
+  /** Fired when this panel becomes the single active panel (focus entered it, or
+   *  a host activated it programmatically), so the host can sync its bookkeeping. */
+  onActivate?: () => void;
+  /** Intercept a tab-close request (alt-c or the tab's close button). Return
+   *  `true` to let the tab close normally, or `false` to keep the page intact —
+   *  e.g. a single-view dock that hides itself instead of destroying its one tab
+   *  (so reopening shows the same widget with no teardown/rebuild). */
+  onTabCloseRequest?: (child: Widget) => boolean;
 }
 
 /** A handle to a child hosted in a panel, for renaming, selecting, or closing its tab. */
@@ -71,6 +86,12 @@ export interface PanelChild {
 }
 
 export class Panel {
+  // At most one panel is active at a time — the one that contains keyboard focus.
+  // Focusing a widget inside a panel makes it active (deactivating the previous);
+  // focus moving onto an overlay (a picker/popover, outside every panel) leaves
+  // the active panel unchanged, since no panel's focus-enter fires there.
+  private static activePanel: Panel | null = null;
+
   readonly root: InstanceType<typeof Gtk.Box>;
 
   private readonly options: PanelOptions;
@@ -81,15 +102,14 @@ export class Panel {
   // The tab bar. Its visibility is driven manually (see updateEmptyState) rather
   // than by Adw's autohide, which would wrap it in an animated revealer.
   private readonly bar: InstanceType<typeof Adw.TabBar>;
-  // The empty-state placeholder (shown when the panel has no tabs), its face, and
-  // its caption; the face's glyph/color and the caption text follow the panel's
-  // active state.
-  private emptyState!: InstanceType<typeof Gtk.Box>;
+  // The empty-state placeholder's face and caption (shown when the panel has no
+  // tabs); their glyph/color and text follow the panel's active state.
   private emoticon!: InstanceType<typeof Gtk.Label>;
   private emptyText!: InstanceType<typeof Gtk.Label>;
-  // Whether this is the active panel — tracked so the empty-pane outline can be
-  // recomputed both when the active state changes and when the tab count does.
-  private active = false;
+  // Children added with `requireTabBar` — they need their tab title shown at all
+  // times (e.g. an editor), so the tab bar stays visible even for a lone tab
+  // rather than going chromeless. Keyed by child widget so it clears on close.
+  private readonly forcedBarChildren = new Set<Widget>();
 
   constructor(options: PanelOptions = {}) {
     this.options = options;
@@ -103,6 +123,9 @@ export class Panel {
     // revealer, which we don't want. We replicate the "chromeless lone tab" look
     // by toggling the bar's own visibility in updateEmptyState instead.
     this.bar.setAutohide(false);
+    // Size each tab to its content (capped + ellipsized by Adwaita) instead of
+    // stretching tabs to fill the bar's full width.
+    this.bar.setExpandTabs(false);
 
     const content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     content.append(this.bar);
@@ -116,16 +139,45 @@ export class Panel {
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.root.setName('Panel'); // selector identity for command/keymap + CSS (#Panel)
+    // A panel accepts keyboard focus on its top-level widget, so it can take focus
+    // (and steal the active state) even with no focusable content — e.g. an empty
+    // pane after a split.
+    this.root.setFocusable(true);
     this.root.append(this.stack);
+
+    // Focus entering this panel's subtree makes it the single active panel; any
+    // focus change (including the root or a child taking focus directly) refreshes
+    // the focus outline.
+    const focus = new Gtk.EventControllerFocus();
+    focus.on('enter', () => {
+      this.activate();
+      this.updateFocusOutline();
+    });
+    focus.on('leave', () => this.updateFocusOutline());
+    focus.on('notify::is-focus', () => this.updateFocusOutline());
+    this.root.addController(focus);
 
     this.view.on('notify::selected-page', () => {
       this.options.onActiveChanged?.(this.activeChild);
+      this.updateFocusOutline(); // the focused child changed with the tab
     });
     this.view.on('page-detached', (page: any) => {
+      this.forcedBarChildren.delete(page.getChild());
       this.options.onClosed?.(page.getChild());
       this.updateEmptyState();
       if (this.view.getNPages() === 0) this.options.onEmpty?.();
     });
+    // When a close handler is supplied, take over Adw's close: it may veto the
+    // close (keeping the page intact) so a dock can hide itself rather than
+    // destroy its only view. Returning true delegates finishing to us, so we must
+    // call closePageFinish with whether the close is allowed.
+    if (this.options.onTabCloseRequest) {
+      this.view.on('close-page', (page: any) => {
+        const allow = this.options.onTabCloseRequest!(page.getChild());
+        this.view.closePageFinish(page, allow);
+        return true;
+      });
+    }
 
     this.updateEmptyState();
     this.registerTabCommands();
@@ -140,9 +192,16 @@ export class Panel {
     outer.setName('PanelEmptyState'); // CSS identity (#PanelEmptyState) — paints the fill
     outer.setHexpand(true);
     outer.setVexpand(true);
-    // Focusable so an empty pane can take keyboard focus after a split (the host
-    // grabs focus on the panel root when it has no active tab to focus instead).
-    outer.setFocusable(true);
+    // Not focusable: an empty pane takes focus on the panel root itself (see
+    // focusEmptyState / the root's setFocusable), which is what carries the focus
+    // outline.
+    // Clicking the placeholder focuses (and thus activates) the pane — a focusable
+    // Gtk.Box doesn't grab focus on click on its own. Scoped to the placeholder, so
+    // it only fires for an empty pane (the placeholder isn't shown otherwise) and
+    // never competes with a child widget's own click-to-focus.
+    const click = new Gtk.GestureClick();
+    click.on('pressed', () => this.root.grabFocus());
+    outer.addController(click);
 
     // Centered content group: expands to claim the area, then centers within it.
     const inner = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
@@ -173,59 +232,85 @@ export class Panel {
     inner.append(this.emoticon);
     inner.append(this.emptyText);
     outer.append(inner);
-    this.emptyState = outer;
     return outer;
   }
 
-  /** Move keyboard focus into the panel's empty-state placeholder, so an empty
-   *  pane can steal focus from whatever held it (e.g. after a split). Without
+  /** Move keyboard focus onto the panel's own top-level widget (its root), so an
+   *  empty pane can steal focus from whatever held it (e.g. after a split). Without
    *  focus here, key bindings scoped to the panel/window (the space leader, pane
-   *  commands) wouldn't reach an empty pane. A no-op returning false when the
-   *  panel has tabs — its active child owns focus then. */
+   *  commands) wouldn't reach an empty pane. A no-op returning false when the panel
+   *  has tabs — its active child owns focus then. */
   focusEmptyState(): boolean {
     if (this.view.getNPages() > 0) return false;
-    if (this.emptyState.grabFocus()) return true;
-    // The empty page may have only just become the stack's visible child (e.g.
-    // the last tab was closed); GtkStack maps it on the next layout pass, and a
-    // widget can't take focus until mapped. Retry once it is.
+    if (this.root.grabFocus()) return true;
+    // The root may not be mappable yet (e.g. the last tab was only just closed);
+    // a widget can't take focus until mapped, so retry on the next layout pass.
     GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
-      if (this.view.getNPages() === 0) this.emptyState.grabFocus();
+      if (this.view.getNPages() === 0) this.root.grabFocus();
       return GLib.SOURCE_REMOVE;
     });
     return true;
   }
 
-  /** Reflect whether this is the active panel: the empty-state face smiles in the
-   *  foreground color when active, and sits neutral and muted otherwise. */
-  setActive(active: boolean): void {
-    this.active = active;
+  /** Make this the single active panel, deactivating the previous one. Called when
+   *  focus enters the panel, and by hosts that switch panes programmatically. */
+  activate(): void {
+    if (Panel.activePanel === this) return;
+    Panel.activePanel?.setActive(false);
+    Panel.activePanel = this;
+    this.setActive(true);
+    this.options.onActivate?.();
+  }
+
+  /** Whether this is the currently active panel. */
+  get isActive(): boolean {
+    return Panel.activePanel === this;
+  }
+
+  // Reflect whether this is the active panel: the empty-state face smiles in the
+  // foreground color when active, and sits neutral and muted otherwise. Private —
+  // activation goes through `activate` so only one panel is ever active.
+  private setActive(active: boolean): void {
     this.emoticon.setLabel(active ? EMOTICON_HAPPY : EMOTICON_NEUTRAL);
     this.emptyText.setLabel(active ? EMPTY_TEXT_ACTIVE : EMPTY_TEXT_IDLE);
     for (const label of [this.emoticon, this.emptyText]) {
       if (active) label.addCssClass('is-active');
       else label.removeCssClass('is-active');
     }
-    this.updateActiveOutline();
   }
 
-  // Outline the panel when it is active but holds no tabs: an empty pane has no
-  // focusable child to carry a visible focus ring, so without this an active
-  // empty pane looks indistinguishable from an idle one.
-  private updateActiveOutline(): void {
-    const empty = this.view.getNPages() === 0;
-    if (this.active && empty) this.root.addCssClass('active-empty');
-    else this.root.removeCssClass('active-empty');
+  // Apply the `.active-empty` outline to whichever panel-level widget currently
+  // holds *direct* keyboard focus — the root (an empty pane that took focus
+  // itself) or a direct panel child that holds focus directly rather than
+  // delegating it to inner content (an editor's view shows its own focus ring, so
+  // it gets no outline). Cleared from everything else.
+  private updateFocusOutline(): void {
+    const focus = this.focusWidget();
+    let target: Widget | null = null;
+    if (focus === this.root) target = this.root;
+    else if (focus && focus.hasCssClass('is-panel-child') && this.getChildren().includes(focus))
+      target = focus;
+
+    this.root.removeCssClass('active-empty');
+    for (const child of this.getChildren()) child.removeCssClass('active-empty');
+    target?.addCssClass('active-empty');
+  }
+
+  // The window's current keyboard-focus widget, or null when unavailable.
+  private focusWidget(): Widget | null {
+    const root: any = this.root.getRoot();
+    return root && typeof root.getFocus === 'function' ? root.getFocus() : null;
   }
 
   // Show the empty-state placeholder when there are no tabs, the tab content
   // otherwise. Called after every add/close so the panel never shows a blank
   // Adw.TabView. Also hides the tab bar for a lone tab (chromeless), replacing
-  // Adw's autohide so no animated revealer is involved.
+  // Adw's autohide so no animated revealer is involved — unless a child requires
+  // its title shown at all times, in which case the bar stays visible.
   private updateEmptyState(): void {
     const count = this.view.getNPages();
     this.stack.setVisibleChildName(count === 0 ? 'empty' : 'content');
-    this.bar.setVisible(count >= 2);
-    this.updateActiveOutline();
+    this.bar.setVisible(count >= 2 || this.forcedBarChildren.size > 0);
   }
 
   // Each panel owns the commands that switch *its own* tabs, registered against
@@ -239,16 +324,21 @@ export class Panel {
       // Parameterized: the first argument is the 0-based tab index (the central
       // keymap binds alt-1..8 to `{ command: 'tab:go-to', args: [n] }`).
       'tab:go-to': (_event, _element, index) => this.selectTab(index),
+      'tab:move-backward': () => this.moveTabBackward(),
+      'tab:move-forward': () => this.moveTabForward(),
       'tab:close': () => this.closeActiveTab(),
     });
   }
 
-  /** Add `child` as a new tab and select it. */
-  add(child: Widget, options: { title?: string } = {}): PanelChild {
+  /** Add `child` as a new tab and select it. Pass `requireTabBar` for a child
+   *  whose tab title must stay visible at all times (keeps the tab bar shown even
+   *  when it is the lone tab). */
+  add(child: Widget, options: { title?: string; requireTabBar?: boolean } = {}): PanelChild {
     const page = this.view.append(child);
     // A direct child of a Panel — a styling hook for whatever lives in a tab.
     child.addCssClass('is-panel-child');
     if (options.title) page.setTitle(options.title);
+    if (options.requireTabBar) this.forcedBarChildren.add(child);
     this.view.setSelectedPage(page);
     this.updateEmptyState();
     return {
@@ -315,5 +405,17 @@ export class Panel {
   selectLastTab(): void {
     const count = this.view.getNPages();
     if (count > 0) this.view.setSelectedPage(this.view.getNthPage(count - 1));
+  }
+
+  /** Move the active tab one position towards the start; a no-op at the front. */
+  moveTabBackward(): void {
+    const page = this.view.getSelectedPage();
+    if (page) this.view.reorderBackward(page);
+  }
+
+  /** Move the active tab one position towards the end; a no-op at the back. */
+  moveTabForward(): void {
+    const page = this.view.getSelectedPage();
+    if (page) this.view.reorderForward(page);
   }
 }

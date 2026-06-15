@@ -14,6 +14,7 @@ import { Gtk } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Notification } from '../Notification.ts';
+import { iconLabel } from './icons.ts';
 
 export class NotificationLog {
   readonly root: InstanceType<typeof Gtk.ScrolledWindow>;
@@ -51,7 +52,7 @@ export class NotificationLog {
   // Append one notification as a row: severity icon, message (+ optional detail),
   // and the post time. The type drives a CSS class so themes can color rows.
   private addRow(notification: Notification): void {
-    const icon = new Gtk.Image({ iconName: notification.getIcon() });
+    const icon = iconLabel(notification.getIcon());
     icon.setValign(Gtk.Align.START);
     icon.addCssClass('notification-icon'); // colored per severity — see AppWindow
 

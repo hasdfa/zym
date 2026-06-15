@@ -20,6 +20,9 @@ export class Cursor {
   readonly editor: EditorModel;
   readonly selection: Selection;
   goalColumn: number | null = null;
+  // The visual x-pixel a run of display-line motions (`gj`/`gk`) aims for, the
+  // wrap-aware analogue of `goalColumn`. Cleared by any explicit/horizontal move.
+  goalPixelX: number | null = null;
 
   constructor(editor: EditorModel, selection: Selection) {
     this.editor = editor;
@@ -46,6 +49,7 @@ export class Cursor {
    */
   setBufferPosition(point: PointLike, _options?: unknown): void {
     this.goalColumn = null;
+    this.goalPixelX = null;
     const iter = this.editor.iterAtPoint(point);
     // Extend (move only the head) while a motion is targeting a selection;
     // otherwise collapse the selection onto the point.
@@ -69,6 +73,25 @@ export class Cursor {
     return new RegExp(source, 'g');
   }
 
+  /**
+   * A regex matching subword segments, mirroring Atom's `Cursor.subwordRegExp`:
+   * camelCase humps, snake_case parts, and acronym runs each count as a segment
+   * (e.g. `parseURLToString` → `parse`, `URL`, `To`, `String`). Subword motions
+   * (`w`/`b`/`e`/`ge` when remapped) use it for boundaries.
+   */
+  subwordRegExp({ includeNonWordCharacters = true }: { includeNonWordCharacters?: boolean } = {}): RegExp {
+    const nonWord = escapeRegExp(this.getNonWordCharacters());
+    const lower = 'a-z\\d';
+    const upper = 'A-Z';
+    const segments = [
+      '^[\t ]+', // leading indentation
+      `[${upper}]+(?![${lower}])`, // an acronym run: the URL in parseURL
+      `[${upper}]?[${lower}]+`, // a camelCase hump / word
+    ];
+    if (includeNonWordCharacters) segments.push(`[${nonWord}]+`);
+    return new RegExp(segments.join('|'), 'g');
+  }
+
   getBufferRow(): number {
     return this.getBufferPosition().row;
   }
@@ -83,7 +106,7 @@ export class Cursor {
 
   isAtEndOfLine(): boolean {
     const position = this.getBufferPosition();
-    return position.column === this.editor.lineTextForBufferRow(position.row).length;
+    return position.column === this.editor.lineLength(position.row);
   }
 
   /** With a single cursor there is only ever one, so it is always the last. */
@@ -114,7 +137,7 @@ export class Cursor {
 
   moveToEndOfLine(): void {
     const row = this.getBufferRow();
-    this.setBufferPosition(new Point(row, this.editor.lineTextForBufferRow(row).length));
+    this.setBufferPosition(new Point(row, this.editor.lineLength(row)));
   }
 
   // --- Directional movement --------------------------------------------------
@@ -127,7 +150,7 @@ export class Cursor {
     let { row, column } = this.getBufferPosition();
     for (let i = 0; i < count; i++) {
       if (column > 0) column--;
-      else if (options.allowWrap && row > 0) column = this.editor.lineTextForBufferRow(--row).length;
+      else if (options.allowWrap && row > 0) column = this.editor.lineLength(--row);
       else break;
     }
     this.setBufferPosition(new Point(row, column));
@@ -141,7 +164,7 @@ export class Cursor {
     let { row, column } = this.getBufferPosition();
     const lastRow = this.editor.getLastBufferRow();
     for (let i = 0; i < count; i++) {
-      const length = this.editor.lineTextForBufferRow(row).length;
+      const length = this.editor.lineLength(row);
       if (column < length) column++;
       else if (options.allowWrap && row < lastRow) {
         row++;
@@ -159,6 +182,33 @@ export class Cursor {
     this.moveVertically(count);
   }
 
+  /** Move one display (soft-wrapped) line up — `gk`. */
+  moveDisplayUp(): void {
+    this.moveByDisplayLine('up');
+  }
+
+  /** Move one display (soft-wrapped) line down — `gj`. */
+  moveDisplayDown(): void {
+    this.moveByDisplayLine('down');
+  }
+
+  /**
+   * Step one display line, preserving the visual x (`goalPixelX`). Falls back to
+   * a buffer-line step when the view geometry isn't available (headless / not yet
+   * realized), so the motion still moves sensibly off-screen and in tests.
+   */
+  private moveByDisplayLine(direction: 'up' | 'down'): void {
+    const result = this.editor.displayLineMove(this.getBufferPosition(), direction, this.goalPixelX);
+    if (!result) {
+      this.moveVertically(direction === 'down' ? 1 : -1);
+      return;
+    }
+    const iter = this.editor.iterAtPoint(result.point);
+    if (this.selection.modifying) this.selection.moveHead(iter);
+    else this.selection.collapseTo(iter);
+    this.goalPixelX = result.goalX;
+  }
+
   /**
    * Move `delta` rows, keeping the column at the remembered `goalColumn` so the
    * cursor returns to its target column after passing through shorter lines
@@ -170,7 +220,7 @@ export class Cursor {
     const goal = this.goalColumn;
 
     const row = clamp(position.row + delta, 0, this.editor.getLastBufferRow());
-    const column = Math.min(goal, this.editor.lineTextForBufferRow(row).length);
+    const column = Math.min(goal, this.editor.lineLength(row));
     const iter = this.editor.iterAtPoint(new Point(row, column));
     // Respect a targeting motion (extend) vs a plain move (collapse); works for
     // secondary selections too.

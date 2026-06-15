@@ -21,11 +21,15 @@ import { quilx } from '../../quilx.ts';
 import { DiagnosticsView } from '../../lsp/diagnostics/DiagnosticsView.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
 import { monospaceFontFamily } from '../../fonts.ts';
+import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
+import { langIdForPath } from '../../syntax/grammar.ts';
 import { DecorationController } from './DecorationController.ts';
 import { GitGutter } from './GitGutter.ts';
 import { UnderlineOverlay } from './UnderlineOverlay.ts';
 import { SearchController } from './SearchController.ts';
 import { SearchBar } from './SearchBar.ts';
+import { CompletionController } from './CompletionController.ts';
+import { placeholderCompletionSource } from './placeholderCompletionSource.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';
 import type { GitRepo } from '../../git.ts';
 import type { TabState } from '../../SessionManager.ts';
@@ -153,6 +157,7 @@ export class TextEditor {
   private readonly vimState: VimState;
   private readonly decorationController: DecorationController;
   private readonly search: SearchController;
+  private completion!: CompletionController; // built in buildEditorArea (needs the overlay)
   private searchBar!: SearchBar; // built in buildEditorArea (needs the overlay)
   private underlineOverlay!: UnderlineOverlay; // drawn diagnostic squiggles; built in buildEditorArea
   private readonly onToast: (message: string) => void;
@@ -202,6 +207,11 @@ export class TextEditor {
     this.syntax = new SyntaxController(this.view, this.buffer, { lineNumbers: !this.bufferMode });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
+    // Let motions see/reveal folds (the fold state lives in SyntaxController).
+    this.editorModel.setFoldProvider({
+      isFoldedAtRow: (row) => this.syntax.isLineHidden(row),
+      unfoldRow: (row) => this.syntax.unfoldRow(row),
+    });
 
     // Modal editing runs through the vendored vim-mode-plus core.
     this.vimState = attachVim(this.editorModel);
@@ -294,7 +304,9 @@ export class TextEditor {
     const wordRe = /\w+/g;
     let match: RegExpExecArray | null;
     while ((match = wordRe.exec(line))) {
-      if (match.index + match[0].length > pos.column) {
+      // match.index/length are UTF-16; columns are codepoints — compare in codepoints.
+      const wordEndColumn = [...line.slice(0, match.index + match[0].length)].length;
+      if (wordEndColumn > pos.column) {
         this.search.searchWord(match[0], reverse);
         return;
       }
@@ -358,9 +370,16 @@ export class TextEditor {
     const rect = this.editorModel.pixelRectForBufferPosition(this.editorModel.getCursorBufferPosition());
     if (!rect) return;
 
-    // Code spans use the editor's monospace font (the OS monospace, same as the
-    // view's setMonospace(true)); prose stays in the proportional UI font.
-    this.hoverLabel.setMarkup(markdownToPango(markdown, monospaceFontFamily()));
+    // Code spans use the editor's monospace font (prose stays proportional) and
+    // are tree-sitter highlighted; unlabeled fences fall back to this file's
+    // language so same-language signatures still get colors.
+    const fallbackLang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
+    this.hoverLabel.setMarkup(
+      markdownToPango(markdown, {
+        codeFontFamily: monospaceFontFamily(),
+        highlightCode: (code, lang) => highlightToMarkup(code, lang ?? fallbackLang),
+      }),
+    );
     // Position by margins + bottom-left alignment: the overlay places the card's
     // bottom edge `HOVER_GAP` above the cursor (it grows upward) and its left edge
     // at the cursor — no need to know the card's height. Coordinates match the
@@ -437,6 +456,15 @@ export class TextEditor {
 
     // The search/replace bar floats at the top-right; it adds itself to `overlay`.
     this.searchBar = new SearchBar(overlay, this.search, this.view, { onInfo: this.onToast });
+
+    // Autocompletion: the popup floats in this overlay; sources are registered
+    // here (placeholder for now — buffer words / LSP / Copilot land later). It is
+    // dismissed whenever the vim layer leaves insert mode.
+    this.completion = new CompletionController(this.editorModel, overlay, () => this.vimState.mode === 'insert');
+    this.completion.addSource(placeholderCompletionSource);
+    this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {
+      if (mode !== 'insert') this.completion.dismiss();
+    });
 
     this.showcmdLabel.addCssClass('quilx-showcmd');
     this.showcmdLabel.addCssClass('monospace');
@@ -590,6 +618,13 @@ export class TextEditor {
       'fold:close': () => this.syntax.setFoldAtCursor(true),
       'fold:open-all': () => this.syntax.unfoldAll(),
       'fold:close-all': () => this.syntax.foldAll(),
+    });
+
+    // Keep the cursor visible: if a move (w, /, G, a click, …) lands it inside a
+    // folded body, open the fold (Vim's `foldopen`). Closing a fold moves the
+    // cursor to the still-visible header, so this never fights `fold:close`.
+    this.buffer.on('notify::cursor-position', () => {
+      this.syntax.revealLine(this.editorModel.getCursorBufferPosition().row);
     });
   }
 

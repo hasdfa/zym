@@ -49,6 +49,11 @@ export function isLineFolded(buffer: any, line: number): boolean {
   return tag ? asIter(buffer.getIterAtLine(line)).hasTag(tag) : false;
 }
 
+/** A UTF-16 low surrogate (the second half of a non-BMP codepoint pair). */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
 export class SyntaxController {
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
@@ -70,6 +75,12 @@ export class SyntaxController {
   // the line count crosses a digit boundary (see primeLineNumbers).
   private lineNumberRenderer: any = null;
   private lineNumberPrimedDigits = 0;
+
+  // Whether the current buffer contains any astral (surrogate-pair) char, so the
+  // highlight path only converts tree-sitter's UTF-16 columns to codepoints when
+  // it must; the per-line text cache (cleared each refresh) backs that conversion.
+  private hasAstral = false;
+  private readonly lineTextCache = new Map<number, string>();
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
   private debounceId = 0;
@@ -242,6 +253,11 @@ export class SyntaxController {
     // parser. Pass the prior (edited) tree for an incremental reparse, then
     // delete the old one to free its wasm allocation.
     const text = buffer.getText(start, end, true);
+    // web-tree-sitter reports UTF-16 columns; getIterAtLineOffset wants codepoints.
+    // They only diverge on astral (surrogate-pair) chars — detect once so the
+    // common, BMP-only file pays nothing in iterAt.
+    this.hasAstral = /[\ud800-\udbff]/.test(text);
+    this.lineTextCache.clear();
     const tree = this.parser.parse(text, this.tree ?? undefined);
     if (!tree) return;
     if (this.tree && this.tree !== tree) this.tree.delete();
@@ -311,9 +327,29 @@ export class SyntaxController {
   }
 
   private iterAt(line: number, col: number): any {
-    // tree-sitter columns are code-unit offsets; GtkTextBuffer wants character
-    // offsets. Equal for ASCII; a fuller impl maps through byte/char offsets.
-    return asIter((this.buffer as any).getIterAtLineOffset(line, col));
+    // tree-sitter columns are UTF-16 code units; getIterAtLineOffset wants
+    // codepoints. They match unless the line holds astral chars (see hasAstral).
+    const column = this.hasAstral ? this.toCodepointColumn(line, col) : col;
+    return asIter((this.buffer as any).getIterAtLineOffset(line, column));
+  }
+
+  /** UTF-16 column on `line` → codepoint column (surrogate pairs count as one). */
+  private toCodepointColumn(line: number, utf16Col: number): number {
+    if (utf16Col <= 0) return utf16Col;
+    let text = this.lineTextCache.get(line);
+    if (text === undefined) {
+      const start = asIter((this.buffer as any).getIterAtLine(line));
+      const end = start.copy();
+      if (!end.endsLine()) end.forwardToLineEnd();
+      text = (this.buffer as any).getText(start, end, true) as string;
+      this.lineTextCache.set(line, text);
+    }
+    let cp = 0;
+    for (let i = 0; i < utf16Col && i < text.length; cp++) {
+      const code = text.charCodeAt(i);
+      i += code >= 0xd800 && code <= 0xdbff && isLowSurrogate(text.charCodeAt(i + 1)) ? 2 : 1;
+    }
+    return cp;
   }
 
   // --- folding operations ----------------------------------------------------
@@ -355,6 +391,13 @@ export class SyntaxController {
     return false;
   }
 
+  /** Reveal `row` if it sits inside a collapsed fold (unfold every fold hiding it). */
+  unfoldRow(row: number): void {
+    for (const region of this.foldsByHeaderLine.values()) {
+      if (region.folded && row > region.startLine && row < region.endLine) this.toggleFold(region);
+    }
+  }
+
   /** Digit width to pad line numbers to, so the gutter doesn't jitter while scrolling. */
   lineNumberWidth(): number {
     return String((this.buffer as any).getLineCount()).length;
@@ -385,6 +428,30 @@ export class SyntaxController {
       }
     }
     return best;
+  }
+
+  /**
+   * Open any fold(s) hiding `line` so a cursor that moved into a folded body (via
+   * `w`, `/`, `G`, a click, …) becomes visible again — Vim's `foldopen` behavior.
+   * A line can be buried under nested folds, so unfold outermost-first until it's
+   * exposed. Returns whether anything was opened. No-op when `line` is visible
+   * (so resting on a fold *header* never auto-opens it).
+   */
+  revealLine(line: number): boolean {
+    let changed = false;
+    // Each pass exposes one more level; bounded by the fold count.
+    for (let guard = this.foldsByHeaderLine.size; guard >= 0 && this.isLineHidden(line); guard--) {
+      let outer: FoldRegion | null = null;
+      for (const region of this.foldsByHeaderLine.values()) {
+        if (region.folded && line > region.startLine && line < region.endLine) {
+          if (!outer || region.startLine < outer.startLine) outer = region;
+        }
+      }
+      if (!outer) break;
+      this.toggleFold(outer);
+      changed = true;
+    }
+    return changed;
   }
 
   setFoldAtCursor(folded: boolean): void {

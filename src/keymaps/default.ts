@@ -31,6 +31,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space a a': 'agent:switch', // open the agent picker
+  'space a l': 'agent-list:focus', // focus the agent list (sidebar)
   'space a n': 'agent:new', // launch a new agent
   'space a r': 'agent:resume', // resume a past conversation (picker)
   'space a c': 'agent:continue', // continue the latest conversation in this folder
@@ -47,6 +48,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space ,': 'config:open', // preferences (GNOME-style comma == settings)
   'space f f': 'file-tree:focus', // focus the Files tab
   'space g g': 'git-panel:focus', // focus the git (Source Control) tab
+  'space g b b': 'git:switch-branch', // "b"ranch picker (switch / create)
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
   'space l d': 'lsp:go-to-definition', // "l"sp "d"efinition
@@ -66,6 +68,9 @@ const SPACE_COMMANDS: Record<string, string> = {
 const TAB_BINDINGS: Record<string, Binding> = {
   'alt-,': 'tab:previous',
   'alt-.': 'tab:next',
+  // Reorder the active tab: shift of the prev/next keys moves it before/after.
+  'alt-<': 'tab:move-backward',
+  'alt->': 'tab:move-forward',
   'alt-9': 'tab:go-to-last',
   'alt-c': 'tab:close', // close the focused panel child
 };
@@ -133,7 +138,8 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     ...LIST_NAV, // j/k, g g, G, l (l reveals the selected agent's terminal)
     r: 'agent:restart', // restart the selected agent (resume its conversation)
     R: 'agent:rename', // rename the selected agent
-    x: 'agent:close', // close the selected agent
+    X: 'agent:close', // close the selected agent
+    o: 'agent:open-changes', // open the files the selected agent has edited
   },
 
   // Location lists (LSP diagnostics, project-wide search, …): shared navigation
@@ -146,6 +152,22 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   '#NotificationLog': {
     c: 'notifications:clear',
     q: 'notifications:toggle-log',
+  },
+
+  // Modal terminal (Terminal & AgentTerminal). Normal mode hands the keyboard to
+  // the app (leader / window-nav); `i` enters insert mode to type into the child.
+  // Insert mode types directly; Escape returns to normal, and `ctrl-[` still sends
+  // a literal Escape to the child (the usual ctrl-[ ≡ Escape, kept reachable).
+  '.quilx-terminal.terminal-normal': {
+    i: 'terminal:insert-mode',
+  },
+  '.quilx-terminal.terminal-insert': {
+    escape: 'terminal:normal-mode',
+    'ctrl-[': 'terminal:send-escape',
+    // Insert mode is a raw terminal: release `ctrl-w …` (window navigation) so the
+    // child gets it (e.g. delete-word). Use normal mode to navigate windows. The
+    // `space` leader is already released via `.has-text-input`.
+    'ctrl-w': 'unset!',
   },
 
   // Any widget that takes literal text input carries the `.has-text-input` class

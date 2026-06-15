@@ -1,0 +1,196 @@
+/*
+ * agentSessions — enumerate resumable past `claude` conversations for a project.
+ *
+ * Claude Code stores each session as a JSONL transcript at
+ * `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, where the directory name
+ * is the cwd with `/` and `_` replaced by `-`. We read that directory to list
+ * sessions; the editor resumes one with `claude --resume <id>` (see AgentTerminal).
+ *
+ * The transcript format is Claude Code's internal one (subject to change), so all
+ * parsing is isolated here: the filename is the session id, the file mtime is the
+ * last activity, and the label is the best available name, in order:
+ *   1. the `/rename` custom title (`custom-title` lines in the transcript);
+ *   2. the terminal title (the terminal-title skill's, kept per id under
+ *      `~/.claude/terminal_titles/`);
+ *   3. Claude's auto-generated title (`ai-title` lines);
+ *   4. the first `type:"user"` message.
+ * The `*-title` transcript lines are re-emitted on nearly every snapshot, so the
+ * file's tail reliably holds the latest values without reading it in full.
+ */
+import * as Fs from 'node:fs';
+import * as Os from 'node:os';
+import * as Path from 'node:path';
+
+export interface AgentSession {
+  /** The claude session id (the transcript filename, sans `.jsonl`). */
+  id: string;
+  /** A human label: the `/rename` title, else the terminal title, else Claude's
+   *  auto title, else the first user message. */
+  label: string;
+  /** Whether `label` is a real title (any of the three) rather than the
+   *  first-message fallback — lets the picker de-emphasise untitled sessions. */
+  titled: boolean;
+  /** Last-activity time (the transcript's mtime), epoch ms. */
+  modified: number;
+}
+
+// Only the head of a transcript is read for the label; the first user message is
+// effectively always within this. Large transcripts aren't read in full.
+const HEAD_BYTES = 64 * 1024;
+
+// Where Claude Code persists each session's terminal title (one file per session
+// id, contents being the title string, e.g. "quilx | Plan: Agents"). This is the
+// terminal-title skill's title, distinct from the in-transcript `/rename` title.
+const TITLES_DIR = Path.join(Os.homedir(), '.claude', 'terminal_titles');
+
+/** Claude Code's transcript directory for `cwd` (encoding: `/` and `_` → `-`). */
+export function transcriptDir(cwd: string): string {
+  const encoded = cwd.replace(/[/_]/g, '-');
+  return Path.join(Os.homedir(), '.claude', 'projects', encoded);
+}
+
+/** Resumable sessions for `cwd`, most-recently-active first. */
+export function listAgentSessions(cwd: string): AgentSession[] {
+  const dir = transcriptDir(cwd);
+  let entries: string[];
+  try {
+    entries = Fs.readdirSync(dir);
+  } catch {
+    return []; // no transcripts for this project
+  }
+
+  const project = Path.basename(cwd);
+  const sessions: AgentSession[] = [];
+  for (const name of entries) {
+    if (!name.endsWith('.jsonl')) continue;
+    const file = Path.join(dir, name);
+    let stat: Fs.Stats;
+    try {
+      stat = Fs.statSync(file);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || stat.size === 0) continue;
+    const id = name.slice(0, -'.jsonl'.length);
+    sessions.push({ id, ...resolveLabel(file, id, project, stat.size), modified: stat.mtimeMs });
+  }
+  sessions.sort((a, b) => b.modified - a.modified);
+  return sessions;
+}
+
+/** Pick the best label for a session (see the priority in the file header), and
+ *  whether it's a real title or the first-message fallback. */
+function resolveLabel(
+  file: string,
+  id: string,
+  project: string,
+  size: number,
+): { label: string; titled: boolean } {
+  const titles = readTitlesFromTail(file, size);
+  const title =
+    titles.customTitle ?? // `/rename`
+    sessionTitle(id, project) ?? // terminal-title skill
+    titles.aiTitle; // Claude's auto title
+  if (title) return { label: title, titled: true };
+  return { label: firstUserMessage(file) ?? '(no prompt)', titled: false };
+}
+
+/**
+ * The latest `/rename` (`customTitle`) and auto (`aiTitle`) titles from a
+ * transcript. These lines are re-emitted on nearly every snapshot, so scanning
+ * the file's tail finds the current values; the last occurrence of each wins.
+ */
+function readTitlesFromTail(file: string, size: number): { customTitle?: string; aiTitle?: string } {
+  let fd: number;
+  try {
+    fd = Fs.openSync(file, 'r');
+  } catch {
+    return {};
+  }
+  try {
+    const start = Math.max(0, size - HEAD_BYTES);
+    const length = size - start;
+    const buffer = Buffer.alloc(length);
+    const read = Fs.readSync(fd, buffer, 0, length, start);
+    const text = buffer.toString('utf8', 0, read);
+    let customTitle: string | undefined;
+    let aiTitle: string | undefined;
+    for (const line of text.split('\n')) {
+      if (!line.includes('-title"')) continue; // cheap pre-filter before JSON.parse
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue; // partial leading line (the tail starts mid-record), or noise
+      }
+      if (entry?.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        customTitle = entry.customTitle.trim() || customTitle;
+      } else if (entry?.type === 'ai-title' && typeof entry.aiTitle === 'string') {
+        aiTitle = entry.aiTitle.trim() || aiTitle;
+      }
+    }
+    return { customTitle, aiTitle };
+  } finally {
+    Fs.closeSync(fd);
+  }
+}
+
+/**
+ * The session's terminal title (its `/rename` name or skill-set title), or null
+ * if it has none. The terminal-title skill prefixes titles with the project name
+ * (`<project> | …`); that prefix is dropped since the resume picker is already
+ * scoped to this project.
+ */
+function sessionTitle(id: string, project: string): string | null {
+  let raw: string;
+  try {
+    raw = Fs.readFileSync(Path.join(TITLES_DIR, id), 'utf8').trim();
+  } catch {
+    return null; // no title recorded for this session
+  }
+  if (!raw) return null;
+  const prefix = `${project} | `;
+  const title = raw.startsWith(prefix) ? raw.slice(prefix.length).trim() : raw;
+  return title || null;
+}
+
+/** The first user message in a transcript, single-lined; null if none found. */
+function firstUserMessage(file: string): string | null {
+  let fd: number;
+  try {
+    fd = Fs.openSync(file, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const buffer = Buffer.alloc(HEAD_BYTES);
+    const read = Fs.readSync(fd, buffer, 0, HEAD_BYTES, 0);
+    const text = buffer.toString('utf8', 0, read);
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue; // a final partial line (truncated by the head read), or noise
+      }
+      if (entry?.type !== 'user') continue;
+      const content = entry.message?.content ?? entry.content;
+      const textValue =
+        typeof content === 'string'
+          ? content
+          : Array.isArray(content)
+            ? content.find((block: any) => block?.type === 'text')?.text
+            : null;
+      if (textValue) return singleLine(textValue);
+    }
+  } finally {
+    Fs.closeSync(fd);
+  }
+  return null;
+}
+
+/** Collapse whitespace/newlines into a single trimmed line. */
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}

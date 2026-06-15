@@ -8,14 +8,17 @@
  * into the buffer"). EditorModel is that translation layer: a first-class,
  * idiomatic API expressed in quilx `Point`/`Range`, backed by the live buffer.
  *
- * Positions are zero-based `(row, column)` where column is a *character* offset
- * within the line (matching `GtkTextIter` line offsets). This is phase 3a: the
- * position/text foundation. Cursors/selections, mutation, scanning, and markers
- * build on the `Point`↔`TextIter` bridge established here.
+ * Positions are zero-based `(row, column)` where column is a **codepoint** offset
+ * within the line (matching `GtkTextIter` line offsets, and the convention
+ * `lsp/position.ts` converts to/from). This is the single column convention for
+ * quilx Points — anything mapping a JS string offset (which is UTF-16) to a Point
+ * must count codepoints, not code units, so surrogate pairs (non-BMP, e.g. emoji)
+ * count as one column. Cursors/selections, mutation, scanning, and markers build
+ * on the `Point`↔`TextIter` bridge established here.
  */
 import { Point, type PointLike } from '../../text/Point.ts';
 import { Range, type RangeLike } from '../../text/Range.ts';
-import { unwrapIter, clamp, type TextIter } from './iter.ts';
+import { unwrapIter, clamp, type TextIter, type TextMark } from './iter.ts';
 import { Selection } from './Selection.ts';
 import { Cursor } from './Cursor.ts';
 import { MarkerLayer } from './MarkerLayer.ts';
@@ -26,9 +29,27 @@ import { Gtk, type SourceBuffer, type SourceView } from '../../gi.ts';
 /** Cursor shapes the vim layer switches between per mode. */
 export const CursorType = { BEAM: 'beam', BLOCK: 'block', UNDERLINE: 'underline' } as const;
 
-// Fraction of the visible area to keep as margin when scrolling the cursor into
-// view (a small vim-style `scrolloff`).
-const SCROLL_MARGIN = 0.1;
+// Fallback line height (px) when the view isn't realized, so the scroll math has
+// a non-zero divisor in headless contexts.
+const DEFAULT_LINE_HEIGHT = 18;
+
+// Rows per chunk for the windowed backward scan (`b`/`ge`/etc.): big enough that
+// the previous match is almost always in the first window, small enough that one
+// window is cheap on a huge buffer.
+const BACKWARD_SCAN_WINDOW_ROWS = 200;
+
+/** A UTF-16 low surrogate (the second half of a non-BMP codepoint pair). */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** Fold state, supplied by the host (SyntaxController) so motions can see folds. */
+export interface FoldProvider {
+  /** Whether `row` is hidden inside a collapsed fold. */
+  isFoldedAtRow(row: number): boolean;
+  /** Reveal `row` by unfolding the fold(s) that hide it. */
+  unfoldRow(row: number): void;
+}
 
 export class EditorModel {
   // The vim layer reaches `editorElement.constructor.CursorType`; EditorModel is
@@ -38,13 +59,30 @@ export class EditorModel {
   readonly view: SourceView;
   readonly buffer: SourceBuffer;
 
-  // GtkTextBuffer has a single insert/selection-bound pair, so there is exactly
-  // one Selection. It is exposed through the array-shaped accessors below.
-  private readonly selection: Selection;
+  // The primary Selection is backed by the buffer's native insert/selection-bound
+  // pair. Secondary selections (visual-block rows; later multi-cursor) carry their
+  // own marks and are painted with `extraSelectionTag` since GtkTextView only
+  // renders the native one.
+  // Not `readonly`: when the primary is removed while secondaries remain (a
+  // visual-block whose head is a lower row), primary-ness — the native marks and
+  // caret — is transferred onto a survivor, which then becomes `this.selection`.
+  private selection: Selection;
+  private extraSelections: Selection[] = [];
+  private extraSelectionTag?: InstanceType<typeof Gtk.TextTag>;
   private defaultMarkerLayer?: MarkerLayer;
+  private foldProvider: FoldProvider | null = null;
   private checkpointCounter = 0;
   private readonly emitter = new Emitter();
   private destroyed = false;
+
+  // Buffer-change extents collected from the pre-edit `insert-text`/
+  // `delete-range` signals, flushed as a `did-change-text` event on the
+  // following `changed` (post-mutation). See installChangeTracking.
+  private pendingTextChanges: BufferChange[] = [];
+  // Changes accumulated since each live checkpoint, keyed by checkpoint id. Used
+  // by `getChangeSinceCheckpoint` (the vim layer records insert-mode text this
+  // way, for blockwise-insert replication and insert dot-repeat).
+  private checkpointChanges = new Map<number, BufferChange[]>();
 
   // Block-cursor rendering: GTK has no CSS for a block caret, so normal/visual
   // mode hides the native beam and paints a reverse-video tag over the character
@@ -52,7 +90,22 @@ export class EditorModel {
   // color) — the effect a terminal block cursor uses. `blockCursor` is the
   // current mode's desired shape.
   private blockCursor = false;
+  // Whether the view currently holds focus. While unfocused, the solid block is
+  // replaced by the host widget's hollow-rectangle caret.
+  private focused = true;
+  // Where to paint the block caret, when it should differ from the insert mark.
+  // In linewise visual mode the buffer selection runs to the next line's start
+  // (to cover the trailing newline), but the caret belongs on the current line;
+  // the vim layer points this at the selection's logical head. null = insert mark.
+  private cursorDisplayPoint: Point | null = null;
   private readonly cursorTag: InstanceType<typeof Gtk.TextTag>;
+
+  // The on-character block caret is a reverse-video tag (keeps the glyph
+  // legible). When there's no glyph to cover (empty line / past end-of-line /
+  // end-of-buffer) or the view is unfocused, the host widget overlays a box
+  // instead — `filled` for a focused block, `hollow` when unfocused. The host
+  // sets this; `hidden` means the tag (or native caret) covers it.
+  onCursorOverlay?: (kind: 'hidden' | 'hollow' | 'filled', iter?: TextIter) => void;
 
   constructor(view: SourceView, buffer: SourceBuffer) {
     this.view = view;
@@ -60,6 +113,74 @@ export class EditorModel {
     this.selection = new Selection(this);
     this.cursorTag = this.createCursorTag();
     this.view.setOverwrite(false); // the block look comes from the tag, not overwrite
+    // Keep the block caret on the insert mark even when it moves outside the vim
+    // layer (e.g. a mouse click placing the cursor), not just after operations.
+    this.buffer.on('notify::cursor-position', () => this.refreshCursorStyle());
+    this.installChangeTracking();
+  }
+
+  // --- Buffer-change events --------------------------------------------------
+
+  /**
+   * Bridge GtkTextBuffer's edit signals to Atom-`TextBuffer`-shaped
+   * `did-change-text` events. The `insert-text`/`delete-range` user handlers run
+   * before the buffer's default handler mutates it (RUN_LAST), so their iters
+   * and `text` describe the pre-edit state — exactly what we need to compute each
+   * change's `oldRange`/`newRange`/`oldText`/`newText`. We stash the change and
+   * emit it on the next `changed` (which fires *after* the mutation), so
+   * subscribers observe the post-change buffer, matching the Atom contract.
+   *
+   * Each primitive insert/delete is delivered as its own one-change event;
+   * coalescing several edits of one user action into a single event is not done
+   * (no consumer needs it). The array is swapped out before emitting, so a
+   * listener that edits the buffer re-enters cleanly.
+   */
+  private installChangeTracking(): void {
+    this.buffer.on('insert-text', (location: TextIter, text: string) =>
+      this.pendingTextChanges.push(this.insertChange(location, text)),
+    );
+    this.buffer.on('delete-range', (start: TextIter, end: TextIter) =>
+      this.pendingTextChanges.push(this.deleteChange(start, end)),
+    );
+    this.buffer.on('changed', () => {
+      if (this.pendingTextChanges.length === 0) return;
+      const changes = this.pendingTextChanges;
+      this.pendingTextChanges = [];
+      for (const recorded of this.checkpointChanges.values()) recorded.push(...changes);
+      this.emitter.emit('did-change-text', { changes });
+    });
+  }
+
+  /** The change an insertion of `text` at `location` (pre-edit) will produce. */
+  private insertChange(location: TextIter, text: string): BufferChange {
+    const start = this.pointAtIter(location);
+    // Mirror SyntaxController's column math: tree-sitter/GTK columns coincide for
+    // ASCII; `text.length` is JS UTF-16 units, the project-wide column convention.
+    const newlines = text.split('\n').length - 1;
+    const lastNewline = text.lastIndexOf('\n');
+    const end = new Point(
+      start.row + newlines,
+      newlines === 0 ? start.column + text.length : text.length - lastNewline - 1,
+    );
+    return { oldRange: new Range(start, start), newRange: new Range(start, end), oldText: '', newText: text };
+  }
+
+  /** The change a deletion of `[start, end)` (pre-edit) will produce. */
+  private deleteChange(start: TextIter, end: TextIter): BufferChange {
+    const startPoint = this.pointAtIter(start);
+    const endPoint = this.pointAtIter(end);
+    const oldText = this.buffer.getText(start, end, true);
+    return {
+      oldRange: new Range(startPoint, endPoint),
+      newRange: new Range(startPoint, startPoint),
+      oldText,
+      newText: '',
+    };
+  }
+
+  /** Subscribe to buffer text changes (Atom `TextBuffer.onDidChangeText` shape). */
+  onDidChangeText(callback: (event: BufferChangeEvent) => void): Disposable {
+    return this.emitter.on('did-change-text', callback as (value?: unknown) => void);
   }
 
   private createCursorTag(): InstanceType<typeof Gtk.TextTag> {
@@ -182,6 +303,14 @@ export class EditorModel {
     return this.clipBufferPosition(point);
   }
 
+  bufferRowForScreenRow(screenRow: number): number {
+    return clamp(screenRow, 0, this.getLastBufferRow());
+  }
+
+  screenRowForBufferRow(bufferRow: number): number {
+    return clamp(bufferRow, 0, this.getLastBufferRow());
+  }
+
   /** True when `row` is empty or contains only whitespace. */
   isBufferRowBlank(row: number): boolean {
     return /^\s*$/.test(this.lineTextForBufferRow(row));
@@ -210,6 +339,18 @@ export class EditorModel {
   }
 
   /**
+   * The codepoint length of `row` (its last valid column). The codepoint-correct
+   * replacement for `lineTextForBufferRow(row).length`, which is UTF-16 and so
+   * over-counts on non-BMP characters — see the column-convention note up top.
+   */
+  lineLength(row: number): number {
+    const start = this.iterAtLineStart(clamp(row, 0, this.getLastBufferRow()));
+    const end = start.copy();
+    if (!end.endsLine()) end.forwardToLineEnd();
+    return end.getLineOffset();
+  }
+
+  /**
    * The range spanning `row`. Without `includeNewline` it stops at the line's
    * last character; with it, it extends to the start of the next row (or EOF on
    * the last row).
@@ -233,35 +374,111 @@ export class EditorModel {
 
   /** Move the primary cursor to `point` (clamped), collapsing any selection. */
   setCursorBufferPosition(point: PointLike): void {
+    // Atom semantics: setting *the* cursor collapses to a single one. The vim
+    // layer relies on this to drop a visual-block's extra cursors (e.g. leaving
+    // insert mode after `ctrl-v I`).
+    if (this.extraSelections.length) this.clearExtraSelections();
     this.buffer.placeCursor(this.iterAtPoint(point));
   }
 
   // --- Selections & cursors (single, surfaced as arrays) ---------------------
 
+  /** The most recently added selection (Atom semantics) — the primary when there
+   *  are no secondaries; for visual-block this is the block's last row. */
   getLastSelection(): Selection {
-    return this.selection;
+    return this.extraSelections.length ? this.extraSelections[this.extraSelections.length - 1] : this.selection;
   }
 
   getSelections(): Selection[] {
-    return [this.selection];
+    return [this.selection, ...this.extraSelections];
   }
 
-  /** With one selection, ordering is trivial. */
   getSelectionsOrderedByBufferPosition(): Selection[] {
-    return [this.selection];
+    return this.getSelections()
+      .slice()
+      .sort((a, b) => a.getBufferRange().start.compare(b.getBufferRange().start));
   }
 
   getLastCursor(): Cursor {
-    return this.selection.cursor;
+    return this.getLastSelection().cursor;
   }
 
   getCursors(): Cursor[] {
-    return [this.selection.cursor];
+    return this.getSelections().map((s) => s.cursor);
   }
 
-  /** With one cursor, ordering is trivial. */
   getCursorsOrderedByBufferPosition(): Cursor[] {
-    return [this.selection.cursor];
+    return this.getSelectionsOrderedByBufferPosition().map((s) => s.cursor);
+  }
+
+  // --- Secondary selections (visual-block; later multi-cursor) ---------------
+
+  /** Add a secondary selection over `range` and return it. */
+  addSelectionForBufferRange(range: RangeLike, options: { reversed?: boolean } = {}): Selection {
+    const r = Range.fromObject(range);
+    const head = this.buffer.createMark(null, this.iterAtPoint(r.start), false);
+    const tail = this.buffer.createMark(null, this.iterAtPoint(r.start), false);
+    const selection = new Selection(this, { head, tail });
+    this.extraSelections.push(selection);
+    selection.setBufferRange(r, options);
+    return selection;
+  }
+
+  /**
+   * Transfer primary-ness from a primary being destroyed onto a surviving
+   * selection, so the native marks (and the rendered caret) live on. Called from
+   * `Selection.destroy` — the vim layer's `removeSelections({except: head})`
+   * destroys every block member but the head, and when the head is a lower row
+   * the head is a *secondary* while the primary is among the destroyed.
+   *
+   * The last extra is chosen: in every blockwise path that removes the primary,
+   * the surviving head is the bottom row (the last extra), so the caret lands
+   * right and the kept selection's identity is stable. The removed primary is
+   * re-backed with the promoted selection's freed anonymous marks, which its
+   * `destroy()` then deletes. Returns false when there is no survivor (the
+   * primary is the only selection), leaving it in place.
+   */
+  promoteAnotherToPrimary(oldPrimary: Selection): boolean {
+    const target = this.extraSelections[this.extraSelections.length - 1];
+    if (!target) return false;
+    const head = target.getHeadIter();
+    const tail = target.getTailIter();
+    const freed = target.getMarkPair(); // target's anonymous marks
+    this.removeExtraSelection(target);
+    target.rebindMarks(this.buffer.getInsert(), this.buffer.getSelectionBound(), true);
+    this.buffer.selectRange(head, tail); // native insert at the head
+    oldPrimary.rebindMarks(freed.head, freed.tail, false);
+    this.selection = target;
+    return true;
+  }
+
+  /** Drop a destroyed secondary selection (called from `Selection.destroy`). */
+  removeExtraSelection(selection: Selection): void {
+    const index = this.extraSelections.indexOf(selection);
+    if (index >= 0) this.extraSelections.splice(index, 1);
+  }
+
+  /** Destroy every secondary selection (e.g. leaving visual-block). */
+  clearExtraSelections(): void {
+    for (const selection of this.extraSelections.slice()) selection.destroy();
+  }
+
+  /** Repaint the secondary-selection highlight. Called after operations settle. */
+  renderExtraSelections(): void {
+    if (!this.extraSelectionTag) {
+      this.extraSelectionTag = new Gtk.TextTag({
+        name: 'vim-extra-selection',
+        background: theme.ui.selectedBg ?? theme.ui.fg,
+      });
+      this.buffer.getTagTable().add(this.extraSelectionTag);
+    }
+    const [start, end] = this.buffer.getBounds();
+    this.buffer.removeTag(this.extraSelectionTag, start, end);
+    this.extraSelectionTag.setPriority(this.buffer.getTagTable().getSize() - 1);
+    for (const selection of this.extraSelections) {
+      const r = selection.getBufferRange();
+      this.buffer.applyTag(this.extraSelectionTag, this.iterAtPoint(r.start), this.iterAtPoint(r.end));
+    }
   }
 
   getSelectedText(): string {
@@ -314,6 +531,13 @@ export class EditorModel {
     this.setCursorBufferPosition(new Point(this.getCursorBufferPosition().row, 0));
   }
 
+  /** Move the cursor to the first non-blank character of its line (or col 0). */
+  moveToFirstCharacterOfLine(): void {
+    const row = this.getCursorBufferPosition().row;
+    const firstNonBlank = this.lineTextForBufferRow(row).search(/\S/);
+    this.setCursorBufferPosition(new Point(row, firstNonBlank < 0 ? 0 : firstNonBlank));
+  }
+
   /** Open a blank line below the cursor's line and put the cursor on it (`o`). */
   insertNewlineBelow(): void {
     const row = this.getCursorBufferPosition().row;
@@ -359,11 +583,47 @@ export class EditorModel {
    * `groupChangesSinceCheckpoint` only to satisfy the ported call sites.
    */
   createCheckpoint(): number {
-    return ++this.checkpointCounter;
+    const id = ++this.checkpointCounter;
+    this.checkpointChanges.set(id, []);
+    return id;
   }
 
-  groupChangesSinceCheckpoint(_checkpoint: number): boolean {
+  groupChangesSinceCheckpoint(checkpoint: number): boolean {
+    this.checkpointChanges.delete(checkpoint);
     return true;
+  }
+
+  /**
+   * The net text change since `checkpoint`, in Atom's aggregated shape
+   * (`{start, oldExtent, newExtent, newText}`), or `undefined` if nothing
+   * changed. Accurate for the contiguous insert-mode edits it's used on (typed
+   * text, an in-place replacement); for interleaved edits at scattered points it
+   * reports the bounding region, which is good enough for the insert-text and
+   * blockwise-replication callers.
+   */
+  getChangeSinceCheckpoint(checkpoint: number): AggregatedChange | undefined {
+    const changes = this.checkpointChanges.get(checkpoint);
+    if (!changes || changes.length === 0) return undefined;
+
+    // `start` is the earliest touched point; nothing before it moves, so it
+    // reads the same in original and current coordinates. `end` is in current
+    // coordinates — `newText` is simply the buffer text now spanning the region.
+    let start = changes[0].newRange.start;
+    let end = changes[0].newRange.end;
+    let pureInsertion = true;
+    for (const change of changes) {
+      if (change.oldText.length) pureInsertion = false;
+      if (change.oldRange.start.isLessThan(start)) start = change.oldRange.start;
+      if (change.newRange.start.isLessThan(start)) start = change.newRange.start;
+      if (change.newRange.end.isGreaterThan(end)) end = change.newRange.end;
+    }
+    const newText = this.getTextInBufferRange(new Range(start, end));
+    const newExtent = end.traversalFrom(start);
+    // For pure insertions the replaced span is empty; otherwise approximate it by
+    // the new extent (an equal-size replacement) — only the rarely-hit insert
+    // dot-repeat-with-deletion path depends on this being exact.
+    const oldExtent = pureInsertion ? new Point(0, 0) : newExtent;
+    return { start, oldExtent, newExtent, newText };
   }
 
   /**
@@ -371,7 +631,9 @@ export class EditorModel {
    * no-op for now; only the cancel-input operator path (not basic edits) relies
    * on it, and is revisited when that path is exercised.
    */
-  revertToCheckpoint(_checkpoint: number): void {}
+  revertToCheckpoint(checkpoint: number): void {
+    this.checkpointChanges.delete(checkpoint);
+  }
 
   undo(): void {
     this.buffer.undo();
@@ -382,13 +644,12 @@ export class EditorModel {
   }
 
   /**
-   * A minimal Atom-`TextBuffer`-shaped handle. Only `onDidChangeText` is used so
-   * far (by Undo/Redo to collect changed ranges); GtkTextBuffer has no equivalent
-   * event here, so it is an inert subscription — fine while the undo/redo
-   * cursor-positioning and flash configs are off.
+   * A minimal Atom-`TextBuffer`-shaped handle. Only `onDidChangeText` is used (by
+   * Undo/Redo to collect changed ranges); it delegates to the model's live
+   * change events (see installChangeTracking).
    */
-  getBuffer(): { onDidChangeText(callback: (event: unknown) => void): Disposable } {
-    return { onDidChangeText: () => new Disposable(() => {}) };
+  getBuffer(): { onDidChangeText(callback: (event: BufferChangeEvent) => void): Disposable } {
+    return { onDidChangeText: (callback) => this.onDidChangeText(callback) };
   }
 
   // --- Scanning --------------------------------------------------------------
@@ -407,52 +668,126 @@ export class EditorModel {
    * result the scan must re-read.
    */
   scanInBufferRange(regex: RegExp, range: RangeLike, iterator: ScanIterator): void {
-    this.iterateMatches(this.collectMatches(regex, range), iterator);
+    this.runScan(regex, range, iterator, false);
   }
 
   /** Like `scanInBufferRange`, but visits matches back to front. */
   backwardsScanInBufferRange(regex: RegExp, range: RangeLike, iterator: ScanIterator): void {
-    this.iterateMatches(this.collectMatches(regex, range).reverse(), iterator);
+    this.runScan(regex, range, iterator, true);
   }
 
-  private collectMatches(regex: RegExp, rangeLike: RangeLike): ScanMatch[] {
+  /**
+   * Match `regex` over `range` and drive `iterator`. Tuned so navigation motions
+   * (`w`/`e`/`b`/`ge`, which scan toward EOF/BOF for the next match) stay cheap on
+   * large buffers — the path that made them crawl was rebuilding every match's
+   * Point from offset 0 (O(text²)) and scanning to the buffer edge regardless:
+   *
+   *  - **Incremental Point conversion.** Match offsets only move forward within a
+   *    pass, so one cursor sweeps the text once — converting N matches is O(text),
+   *    not O(text) per match.
+   *  - **Lazy forward scan** that yields one match at a time and stops the moment
+   *    `iterator` calls `stop()` — finding the next word doesn't read to EOF.
+   *  - **Windowed backward scan.** Reverse order needs matches collected first, so
+   *    rather than read `[BOF, from]`, it sweeps line-aligned windows from the end
+   *    and stops once satisfied. Safe because every backward caller's regex is
+   *    line-local (word/sentence/find-char/markers), so no match straddles a
+   *    line-aligned window boundary.
+   */
+  private runScan(regex: RegExp, rangeLike: RangeLike, iterator: ScanIterator, reverse: boolean): void {
     const range = Range.fromObject(rangeLike);
-    const text = this.getTextInBufferRange(range);
-    const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
-    const matches: ScanMatch[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(text)) !== null) {
-      const matchText = match[0];
-      const start = this.pointAtTextOffset(range.start, text, match.index);
-      const end = this.pointAtTextOffset(range.start, text, match.index + matchText.length);
-      matches.push({ match, matchText, range: new Range(start, end) });
-      if (matchText.length === 0) re.lastIndex++; // don't spin on zero-width matches
-    }
-    return matches;
-  }
 
-  private iterateMatches(matches: ScanMatch[], iterator: ScanIterator): void {
     let stopped = false;
     const stop = () => {
       stopped = true;
     };
     const replacements: Array<[Range, string]> = [];
-
-    for (const hit of matches) {
+    const visit = (match: RegExpExecArray, matchText: string, hitRange: Range): void => {
       iterator({
-        match: hit.match,
-        matchText: hit.matchText,
-        range: hit.range,
+        match,
+        matchText,
+        range: hitRange,
         stop,
-        replace: (text: string) => replacements.push([hit.range, text]),
+        // Defer the edit (applied high→low after the scan), but return the range
+        // the new text will occupy — Atom's `replace` contract that callers like
+        // Increase/Decrease read back.
+        replace: (replacement: string): Range => {
+          replacements.push([hitRange, replacement]);
+          const lines = replacement.split('\n');
+          const end =
+            lines.length === 1
+              ? new Point(hitRange.start.row, hitRange.start.column + replacement.length)
+              : new Point(hitRange.start.row + lines.length - 1, lines[lines.length - 1].length);
+          return new Range(hitRange.start, end);
+        },
       });
-      if (stopped) break;
+    };
+
+    // Monotonic UTF-16 offset → buffer Point over `text` (starting at `from`).
+    // Offsets must be requested non-decreasing — true within one regex pass.
+    const makePointAt = (text: string, from: Point) => {
+      let i = 0;
+      let row = from.row;
+      let column = from.column;
+      return (offset: number): Point => {
+        while (i < offset) {
+          const code = text.charCodeAt(i);
+          if (code === 10 /* \n */) {
+            row++;
+            column = 0;
+            i += 1;
+          } else if (code >= 0xd800 && code <= 0xdbff && isLowSurrogate(text.charCodeAt(i + 1))) {
+            column += 1; // surrogate pair = one codepoint column
+            i += 2;
+          } else {
+            column += 1;
+            i += 1;
+          }
+        }
+        return new Point(row, column);
+      };
+    };
+    const freshRegex = () => new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
+
+    if (!reverse) {
+      const text = this.getTextInBufferRange(range);
+      const pointAt = makePointAt(text, range.start);
+      const re = freshRegex();
+      let match: RegExpExecArray | null;
+      while (!stopped && (match = re.exec(text)) !== null) {
+        const matchText = match[0];
+        visit(match, matchText, new Range(pointAt(match.index), pointAt(match.index + matchText.length)));
+        if (matchText.length === 0) re.lastIndex++; // don't spin on zero-width matches
+      }
+    } else {
+      // Sweep line-aligned windows from `range.end` back toward `range.start`.
+      let windowEnd = range.end;
+      while (!stopped && windowEnd.isGreaterThan(range.start)) {
+        const startRow = windowEnd.row - BACKWARD_SCAN_WINDOW_ROWS;
+        const windowStart = startRow <= range.start.row ? range.start : new Point(startRow, 0);
+        const text = this.getTextInBufferRange(new Range(windowStart, windowEnd));
+        const pointAt = makePointAt(text, windowStart);
+        const re = freshRegex();
+        const hits: ScanMatch[] = [];
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(text)) !== null) {
+          const matchText = match[0];
+          hits.push({
+            match,
+            matchText,
+            range: new Range(pointAt(match.index), pointAt(match.index + matchText.length)),
+          });
+          if (matchText.length === 0) re.lastIndex++;
+        }
+        for (let k = hits.length - 1; k >= 0 && !stopped; k--) visit(hits[k].match, hits[k].matchText, hits[k].range);
+        if (windowStart.isEqual(range.start)) break;
+        windowEnd = windowStart;
+      }
     }
 
     if (replacements.length > 0) {
       replacements.sort((a, b) => b[0].start.compare(a[0].start));
       this.transact(() => {
-        for (const [range, text] of replacements) this.setTextInBufferRange(range, text);
+        for (const [r, t] of replacements) this.setTextInBufferRange(r, t);
       });
     }
   }
@@ -469,15 +804,24 @@ export class EditorModel {
     return (this.defaultMarkerLayer ??= this.addMarkerLayer()).markBufferPosition(Point.fromObject(point));
   }
 
-  // --- Folding (deferred) ----------------------------------------------------
-  // Real fold integration with SyntaxController lands in a later phase; motions
-  // treat the buffer as unfolded for now.
+  // --- Folding ---------------------------------------------------------------
+  // The fold state lives in SyntaxController (the `invisible`-tag mechanism); the
+  // host wires it in via setFoldProvider so motions can see/reveal folds without
+  // EditorModel depending on SyntaxController directly.
 
-  isFoldedAtBufferRow(_row: number): boolean {
-    return false;
+  setFoldProvider(provider: FoldProvider): void {
+    this.foldProvider = provider;
   }
 
-  unfoldBufferRow(_row: number): void {}
+  /** Whether `row` is hidden inside a collapsed fold (so motions skip past it). */
+  isFoldedAtBufferRow(row: number): boolean {
+    return this.foldProvider?.isFoldedAtRow(row) ?? false;
+  }
+
+  /** Reveal `row` if a fold hides it (e.g. a motion landed inside a fold). */
+  unfoldBufferRow(row: number): void {
+    this.foldProvider?.unfoldRow(row);
+  }
 
   // --- Multi-cursor reconciliation (single cursor: no-ops) -------------------
 
@@ -563,11 +907,29 @@ export class EditorModel {
     this.refreshCursorStyle();
   }
 
+  /** Override where the block caret is painted (`null` = the insert mark). The
+   *  caller refreshes; see `cursorDisplayPoint`. */
+  setCursorDisplayPoint(point: PointLike | null): void {
+    this.cursorDisplayPoint = point ? Point.fromObject(point) : null;
+  }
+
+  /**
+   * Reflect the editor's focus on the cursor: when the view loses focus the
+   * solid block is dropped in favour of the host widget's hollow-rectangle
+   * caret (see TextEditor), and restored on focus-in.
+   */
+  setFocused(focused: boolean): void {
+    if (this.focused === focused) return;
+    this.focused = focused;
+    this.refreshCursorStyle();
+  }
+
   /**
    * Re-paint the block cursor at the current cursor position. Called on every
    * mode change and after every operation (the cursor moved). In beam mode (or
    * when the cursor sits at end-of-line with no character to cover), the native
-   * caret is shown instead.
+   * caret is shown instead. While unfocused, the block is not painted — the host
+   * widget overlays a hollow rectangle in its place.
    */
   refreshCursorStyle(): void {
     const [start, end] = this.buffer.getBounds();
@@ -575,15 +937,29 @@ export class EditorModel {
 
     if (!this.blockCursor) {
       this.view.setCursorVisible(true);
+      this.onCursorOverlay?.('hidden');
       return;
     }
 
-    const iter = unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
-    if (iter.endsLine() || iter.isEnd()) {
-      // Nothing to cover (EOL / empty line / EOF) — fall back to the native caret.
-      this.view.setCursorVisible(true);
+    const iter = this.cursorDisplayPoint
+      ? this.iterAtPoint(this.cursorDisplayPoint)
+      : unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
+
+    if (!this.focused) {
+      // The hollow-rectangle caret overlay stands in for the block here.
+      this.view.setCursorVisible(false);
+      this.onCursorOverlay?.('hollow', iter);
       return;
     }
+
+    if (iter.endsLine() || iter.isEnd()) {
+      // No glyph to cover (empty line / past end-of-line / end-of-buffer) — a
+      // filled overlay block stands in for the reverse-video caret.
+      this.view.setCursorVisible(false);
+      this.onCursorOverlay?.('filled', iter);
+      return;
+    }
+
     const next = iter.copy();
     next.forwardChar();
     // Raise the cursor tag above any syntax tags so its reverse-video foreground
@@ -591,6 +967,7 @@ export class EditorModel {
     this.cursorTag.setPriority(this.buffer.getTagTable().getSize() - 1);
     this.buffer.applyTag(this.cursorTag, iter, next);
     this.view.setCursorVisible(false); // the block stands in for the caret
+    this.onCursorOverlay?.('hidden', iter);
   }
 
   focus(): void {
@@ -611,6 +988,18 @@ export class EditorModel {
   }
 
   /**
+   * `scroll_to_mark`'s `within_margin` (a fraction of the viewport) sized to ~one
+   * line — a small vim-style `scrolloff`. A fixed fraction (e.g. 0.1) is several
+   * lines on a tall window, which would fight the line-scroll commands (ctrl-e/y):
+   * those keep the cursor a couple of lines from the edge, so a larger margin
+   * here re-scrolls the view straight back. Clamped to the legal [0, 0.5] range.
+   */
+  private scrollMarginFraction(): number {
+    const height = this.getHeight();
+    return height > 0 ? Math.min(0.49, this.getLineHeightInPixels() / height) : 0;
+  }
+
+  /**
    * Scroll the view just enough to keep the cursor (insert mark) on screen. The
    * vim layer drives the cursor with programmatic mark moves, which — unlike
    * interactive editing — don't auto-scroll GtkTextView, so we do it explicitly
@@ -618,7 +1007,7 @@ export class EditorModel {
    */
   scrollCursorOnscreen(): void {
     if (!this.view.getRealized()) return;
-    this.view.scrollToMark(this.buffer.getInsert(), SCROLL_MARGIN, false, 0, 0);
+    this.view.scrollToMark(this.buffer.getInsert(), this.scrollMarginFraction(), false, 0, 0);
   }
 
   scrollToCursorPosition(_options?: unknown): void {
@@ -627,26 +1016,186 @@ export class EditorModel {
 
   scrollToBufferPosition(point: PointLike, _options?: unknown): void {
     if (!this.view.getRealized()) return;
-    this.view.scrollToIter(this.iterAtPoint(point), SCROLL_MARGIN, false, 0, 0);
+    this.view.scrollToIter(this.iterAtPoint(point), this.scrollMarginFraction(), false, 0, 0);
   }
 
   scrollToScreenPosition(point: PointLike, options?: unknown): void {
     this.scrollToBufferPosition(point, options);
   }
 
-  /** The buffer Point at character `offset` into `text`, which begins at `start`. */
-  private pointAtTextOffset(start: Point, text: string, offset: number): Point {
-    let row = start.row;
-    let lineStart = 0;
-    for (let i = 0; i < offset; i++) {
-      if (text.charCodeAt(i) === 10 /* \n */) {
-        row++;
-        lineStart = i + 1;
-      }
-    }
-    const column = (row === start.row ? start.column : 0) + (offset - lineStart);
-    return new Point(row, column);
+  // --- Viewport & pixel geometry ---------------------------------------------
+  //
+  // Read-side geometry for the features that need to know what's on screen or
+  // where a buffer position lands in pixels: vim H/M/L + scroll commands (visible
+  // rows), and popover anchoring for LSP hover / code actions (pixel rect). All
+  // require a realized, allocated view, so each falls back gracefully when the
+  // view isn't realized (e.g. headless tests). The realized paths use
+  // `getVisibleRect`/`getLineAtY`/`getIterLocation`, which need interactive
+  // verification.
+
+  /** The topmost buffer row currently visible (row 0 when not realized). */
+  getFirstVisibleScreenRow(): number {
+    return this.visibleRowRange()[0];
   }
+
+  /** The bottommost buffer row currently visible (last row when not realized). */
+  getLastVisibleScreenRow(): number {
+    return this.visibleRowRange()[1];
+  }
+
+  /** The inclusive `[first, last]` visible buffer rows; whole buffer if unrealized. */
+  private visibleRowRange(): [number, number] {
+    if (!this.view.getRealized()) return [0, this.getLastBufferRow()];
+    const rect = (this.view as any).getVisibleRect() as PixelRect;
+    const top = this.bufferRowAtY(rect.y);
+    const bottom = this.bufferRowAtY(rect.y + Math.max(0, rect.height - 1));
+    return [top, bottom];
+  }
+
+  /** The buffer row whose line box contains buffer-coordinate `y`. */
+  private bufferRowAtY(y: number): number {
+    // get_line_at_y has out-args (iter, line_top); node-gtk returns them as an array.
+    const result = (this.view as any).getLineAtY(y);
+    const iter = Array.isArray(result) ? result[0] : result;
+    return iter.getLine();
+  }
+
+  /**
+   * The widget-relative pixel rectangle of `point`'s character cell, for
+   * anchoring a popover (LSP hover, code actions) at a buffer position. Null when
+   * the view isn't realized.
+   */
+  pixelRectForBufferPosition(point: PointLike): PixelRect | null {
+    if (!this.view.getRealized()) return null;
+    // Buffer coords → the WIDGET window (accounts for the gutter + scroll offset),
+    // mirroring TextEditor's unfocused-caret placement.
+    const cell = (this.view as any).getIterLocation(this.iterAtPoint(point)) as PixelRect;
+    const [x, y] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
+    return { x, y, width: cell.width, height: cell.height };
+  }
+
+  // --- Scrolling (pixel-based, for ctrl-d/u/f/b) -----------------------------
+  // Document-pixel coordinates throughout: `getIterLocation`'s y and the vertical
+  // adjustment's value share the same scroll-independent space, so the vim Scroll
+  // motion can add pixels and convert back via `getLineAtY`.
+
+  /** Document-pixel offset of the viewport's top edge. */
+  getScrollTop(): number {
+    return this.view.getVadjustment()?.getValue() ?? 0;
+  }
+
+  setScrollTop(top: number): void {
+    this.view.getVadjustment()?.setValue(top);
+  }
+
+  /** The viewport height in pixels (0 when not realized). */
+  getHeight(): number {
+    return (this.view as any).getHeight();
+  }
+
+  /** Pixel height of one rendered line. */
+  getLineHeightInPixels(): number {
+    const range = (this.view as any).getLineYrange(this.buffer.getStartIter());
+    const height = Array.isArray(range) ? range[1] : 0;
+    return height || DEFAULT_LINE_HEIGHT;
+  }
+
+  /** Number of whole lines that fit in the viewport (at least 1). */
+  getRowsPerPage(): number {
+    return Math.max(1, Math.floor(this.getHeight() / this.getLineHeightInPixels()));
+  }
+
+  /** Document-pixel top/left of `point`'s character cell (scroll-independent). */
+  pixelPositionForScreenPosition(point: PointLike): { top: number; left: number } {
+    const cell = (this.view as any).getIterLocation(this.iterAtPoint(point)) as PixelRect;
+    return { top: cell.y, left: cell.x };
+  }
+
+  /**
+   * One display (soft-wrapped) line up or down from `point`, preserving the
+   * visual x-pixel `goalX` (the column a run of `gj`/`gk` aims for). Wrap-aware
+   * via the view geometry: it reads the cursor cell's pixel rect and asks the
+   * view for the iter one line-height above/below at the goal x. Returns null
+   * when the view isn't realized (headless) — callers fall back to a buffer-line
+   * step.
+   */
+  displayLineMove(
+    point: PointLike,
+    direction: 'up' | 'down',
+    goalX: number | null,
+  ): { point: Point; goalX: number } | null {
+    if (!this.view.getRealized()) return null;
+    const cell = (this.view as any).getIterLocation(this.iterAtPoint(point)) as PixelRect;
+    const x = goalX ?? cell.x;
+    const y = direction === 'down' ? cell.y + cell.height : cell.y - 1;
+    if (y < 0) return null; // already on the document's first display line
+    // get_iter_at_location → [found, iter] (document/buffer pixel coordinates).
+    const result = (this.view as any).getIterAtLocation(x, y) as unknown[];
+    const iter = (Array.isArray(result) ? result : [result]).find(
+      (r): r is TextIter => Boolean(r) && typeof (r as TextIter).getLine === 'function',
+    );
+    if (!iter) return null;
+    return { point: this.pointAtIter(unwrapIter(iter)), goalX: x };
+  }
+
+  /** The buffer Point nearest a document-pixel `top` (column 0). */
+  screenPositionForPixelPosition(pixel: { top: number }): Point {
+    const top = Math.max(0, Math.round(pixel.top));
+    // `getLineAtY` needs a realized, laid-out view; off-screen it returns junk.
+    // Approximate by uniform line height otherwise (keeps headless a safe no-op).
+    const row = this.view.getRealized()
+      ? this.bufferRowAtY(top)
+      : clamp(Math.round(top / this.getLineHeightInPixels()), 0, this.getLastBufferRow());
+    return new Point(row, 0);
+  }
+
+  /** Screen and buffer positions coincide (no soft-wrap / folds). */
+  getCursorScreenPosition(): Point {
+    return this.getCursorBufferPosition();
+  }
+
+  /** Atom's scroll-past-end editor option; not modeled. */
+  getScrollPastEnd(): boolean {
+    return false;
+  }
+
+}
+
+/** A pixel rectangle (`x`/`y` widget-relative for `pixelRectForBufferPosition`). */
+export interface PixelRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * One text change, in the Atom `TextBuffer` change shape. `oldRange`/`oldText`
+ * describe what was there before, `newRange`/`newText` what replaced it; a pure
+ * deletion has an empty `newRange`, a pure insertion an empty `oldRange`.
+ */
+export interface BufferChange {
+  oldRange: Range;
+  newRange: Range;
+  oldText: string;
+  newText: string;
+}
+
+/** The event passed to `onDidChangeText`, batching the changes of one edit. */
+export interface BufferChangeEvent {
+  changes: BufferChange[];
+}
+
+/**
+ * A run of changes collapsed into one replacement, in Atom's
+ * `getChangeSinceCheckpoint` shape: replace `oldExtent` worth of text at `start`
+ * with `newText` (which spans `newExtent`).
+ */
+export interface AggregatedChange {
+  start: Point;
+  oldExtent: Point;
+  newExtent: Point;
+  newText: string;
 }
 
 /** The argument passed to a scan iterator for each match. */

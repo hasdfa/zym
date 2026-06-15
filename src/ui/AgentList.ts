@@ -23,6 +23,8 @@ const AGENT_GLYPH = String.fromCodePoint(0xf06a9);
 // nf-md-cog-sync (U+F1978, in the icon font) while working.
 const STATUS_DOT = '●';
 const WORKING_GLYPH = String.fromCodePoint(0xf1978);
+// The changed-files badge glyph.
+const CHANGED_GLYPH = String.fromCodePoint(0xf040); // nf-fa-pencil
 
 // Header styled like FileTree's; the empty-state filler muted; and the status
 // indicator colored by the agent's state: working (grey cog), waiting on the user
@@ -45,6 +47,20 @@ addStyles(`
   #AgentList .agentlist-badge.attention {
     color: ${theme.ui.warning ?? '#e5a50a'};
   }
+  /* Per-row edited-files count — a flat, muted button (click opens the files). */
+  #AgentRow .agentrow-files {
+    min-width: 0;
+    min-height: 0;
+    padding: 0 2px;
+    margin: 0;
+    background: none;
+    box-shadow: none;
+  }
+  #AgentRow .agentrow-files label {
+    color: ${theme.ui.textMuted ?? '#9a9996'};
+    font-size: 0.85em;
+  }
+  #AgentRow .agentrow-files:hover label { color: ${theme.ui.fg ?? '#deddda'}; }
   .quilx-agent-working { color: ${theme.ui.textMuted ?? '#9a9996'}; }
   .quilx-agent-waiting { color: ${theme.ui.warning ?? '#e5a50a'}; }
   .quilx-agent-idle    { color: ${theme.ui.success ?? '#2ec27e'}; }
@@ -54,6 +70,14 @@ addStyles(`
 export interface AgentListOptions {
   /** Fired when a row is activated (clicked / Enter). */
   onActivate?: (agent: AgentTerminal) => void;
+  /** Restart an agent (respawn / resume) — the list's `r` key. */
+  onRestart?: (agent: AgentTerminal) => void;
+  /** Close an agent (kill if running, then retire) — the list's `X` key. */
+  onClose?: (agent: AgentTerminal) => void;
+  /** Rename an agent — the list's `R` key. */
+  onRename?: (agent: AgentTerminal) => void;
+  /** Open the files an agent has edited — the changed-files badge / `o` key. */
+  onOpenChanges?: (agent: AgentTerminal) => void;
 }
 
 export class AgentList {
@@ -149,16 +173,32 @@ export class AgentList {
         this.updateBadge();
       }));
 
-      const label = new Gtk.Label({ xalign: 0 });
+      const label = new Gtk.Label({ xalign: 0, hexpand: true, ellipsize: Pango.EllipsizeMode.END });
       label.setText(agent.title);
       // Keep the row in sync with the agent's reported title.
       this.rowUnsubs.push(agent.onTitleChange(() => label.setText(agent.title)));
 
-      // [dot, title]. The box carries the #AgentRow identity for padding/CSS.
+      // Changed-files badge (pencil + count) — a flat button that opens the edited
+      // files; hidden until the agent edits one.
+      const filesLabel = new Gtk.Label({ useMarkup: true });
+      const files = new Gtk.Button();
+      files.setChild(filesLabel);
+      files.addCssClass('flat');
+      files.addCssClass('agentrow-files');
+      files.setCanFocus(false);
+      files.on('clicked', () => this.options.onOpenChanges?.(agent));
+      const updateFiles = () => this.applyFiles(files, filesLabel, agent);
+      updateFiles();
+      this.rowUnsubs.push(agent.onDidChangeFiles(updateFiles));
+
+      // [dot, title, files-badge]. The box carries the #AgentRow identity for
+      // padding/CSS; title hexpands so the badge right-aligns. Lifecycle actions
+      // (restart/rename/close) are keyboard/command-only — see registerCommands.
       const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
       box.setName('AgentRow');
       box.append(dot);
       box.append(label);
+      box.append(files);
 
       const row = new Gtk.ListBoxRow();
       row.setChild(box);
@@ -197,16 +237,36 @@ export class AgentList {
     quilx.commands.add(this.root, {
       'core:down': () => this.moveSelection(1),
       'core:up': () => this.moveSelection(-1),
+      'core:top': () => this.selectIndex(0), // `g g`
+      'core:bottom': () => this.selectIndex(this.agents.length - 1), // `G`
       'core:right': () => this.activateSelected(), // reveal the selected agent
+      // Lifecycle on the selected row (the row buttons cover restart/close too).
+      'agent:restart': () => this.withSelected((a) => this.options.onRestart?.(a)),
+      'agent:rename': () => this.withSelected((a) => this.options.onRename?.(a)),
+      'agent:close': () => this.withSelected((a) => this.options.onClose?.(a)),
+      'agent:open-changes': () => this.withSelected((a) => this.options.onOpenChanges?.(a)),
     });
+  }
+
+  // Run `fn` with the agent of the currently selected row, if any.
+  private withSelected(fn: (agent: AgentTerminal) => void): void {
+    const row = this.listBox.getSelectedRow();
+    const agent = row ? this.agents[row.getIndex()] : undefined;
+    if (agent) fn(agent);
   }
 
   private moveSelection(delta: number): void {
     if (this.agents.length === 0) return;
     const selectedRow = this.listBox.getSelectedRow();
     const current = selectedRow ? selectedRow.getIndex() : -1;
-    const next = Math.max(0, Math.min(current + delta, this.agents.length - 1));
-    const row = this.listBox.getRowAtIndex(next);
+    this.selectIndex(current + delta);
+  }
+
+  // Select (and scroll/focus) the agent row at `index`, clamped into range.
+  private selectIndex(index: number): void {
+    if (this.agents.length === 0) return;
+    const clamped = Math.max(0, Math.min(index, this.agents.length - 1));
+    const row = this.listBox.getRowAtIndex(clamped);
     if (row) {
       this.listBox.selectRow(row);
       row.grabFocus();
@@ -217,6 +277,14 @@ export class AgentList {
     const selectedRow = this.listBox.getSelectedRow();
     const agent = selectedRow ? this.agents[selectedRow.getIndex()] : undefined;
     if (agent) this.options.onActivate?.(agent);
+  }
+
+  /** Move keyboard focus into the list (so its scoped bindings apply and the
+   *  pane-navigation commands see focus as being within the agent list). */
+  focus(): void {
+    const row = this.listBox.getSelectedRow() ?? this.listBox.getRowAtIndex(0);
+    if (row) row.grabFocus();
+    else this.listBox.grabFocus();
   }
 
   /** Select the row for `agent` (or clear selection). Called when an agent is focused. */
@@ -235,6 +303,24 @@ export class AgentList {
     }
     const row = this.listBox.getRowAtIndex(index);
     if (row) this.listBox.selectRow(row);
+  }
+
+  // The changed-files badge: a pencil glyph + count, or hidden when none. The
+  // glyph is rendered in the icon font via a markup span; the tooltip lists names.
+  private applyFiles(
+    button: InstanceType<typeof Gtk.Button>,
+    label: InstanceType<typeof Gtk.Label>,
+    agent: AgentTerminal,
+  ): void {
+    const changed = agent.changedFiles;
+    if (changed.length === 0) {
+      button.setVisible(false);
+      return;
+    }
+    button.setVisible(true);
+    label.setMarkup(`<span font_family="${ICON_FONT_FAMILY}">${CHANGED_GLYPH}</span> ${changed.length}`);
+    const names = changed.map((path) => path.split('/').pop() ?? path);
+    button.setTooltipText(`Edited ${changed.length} file${changed.length === 1 ? '' : 's'} — click to open:\n${names.join('\n')}`);
   }
 
   private applyStatus(dot: InstanceType<typeof Gtk.Label>, agent: AgentTerminal): void {

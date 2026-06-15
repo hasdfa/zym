@@ -1,0 +1,45 @@
+/*
+ * proseMarkup — render a short, markdown-ish label as Pango markup for picker
+ * rows: prose in the default sans font with `backtick`-delimited spans in
+ * monospace (the backticks themselves hidden). Pango's "Sans"/"Monospace"
+ * generic family aliases let each span pick its own face without touching the
+ * picker's monospace CSS. Shared by the pickers that show free-text labels
+ * (resume conversations, switch/send-to agent).
+ */
+import { HIGHLIGHT_COLOR } from './Picker.ts';
+
+// Leading factor for picker prose rows; the inline-monospace runs sit taller than
+// the sans prose, so symmetric leading keeps mixed lines vertically centred
+// instead of hugging the top of the row.
+export const PROSE_LINE_HEIGHT = 1.4;
+
+/**
+ * Markup for `text`: sans prose, `code` in monospace, with the fuzzy-matched
+ * `positions` (indexing into the raw `text`, backticks included) highlighted in
+ * the accent colour. Emitted per character so the face and highlight spans never
+ * cross-nest (which Pango rejects). When `muted`, the prose is dimmed (lower
+ * foreground alpha) while the match highlight stays at full strength.
+ */
+export function proseMarkup(text: string, positions: number[] = [], muted = false): string {
+  const matched = new Set(positions);
+  let out = '';
+  let mono = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '`') { mono = !mono; continue; } // hide the delimiter, flip face
+    const attrs = [];
+    if (mono) attrs.push('face="Monospace"');
+    // Matched chars carry the accent colour; restore full opacity so the
+    // highlight reads even when the row is muted.
+    if (matched.has(i)) attrs.push(`foreground="${HIGHLIGHT_COLOR}" weight="bold"${muted ? ' alpha="100%"' : ''}`);
+    const esc = escapeMarkup(ch);
+    out += attrs.length ? `<span ${attrs.join(' ')}>${esc}</span>` : esc;
+  }
+  const alpha = muted ? ' alpha="45%"' : '';
+  return `<span face="Sans" line_height="${PROSE_LINE_HEIGHT}"${alpha}>${out}</span>`;
+}
+
+/** Escape the Pango-markup metacharacters in `text`. */
+export function escapeMarkup(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}

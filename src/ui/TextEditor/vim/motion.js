@@ -278,6 +278,24 @@ class MoveDownScreen extends MoveUpScreen {
   }
 }
 
+// `gk` / `gj` — move by display (soft-wrapped) line, keeping the visual column.
+// Exclusive characterwise (unlike the linewise `j`/`k`), matching Vim's gj/gk, so
+// `dgj` deletes to the same column one display line down. The geometry lives in
+// EditorModel.displayLineMove; headless it falls back to a buffer-line step.
+class MoveUpDisplayLine extends Motion {
+  direction = 'up'
+  moveCursor (cursor) {
+    this.moveCursorCountTimes(cursor, () => cursor.moveDisplayUp())
+  }
+}
+
+class MoveDownDisplayLine extends MoveUpDisplayLine {
+  direction = 'down'
+  moveCursor (cursor) {
+    this.moveCursorCountTimes(cursor, () => cursor.moveDisplayDown())
+  }
+}
+
 class MoveUpToEdge extends Motion {
   wise = 'linewise'
   jump = true
@@ -498,6 +516,10 @@ class MoveToPreviousEndOfWord extends MotionByWord {
 class MoveToPreviousEndOfWholeWord extends MoveToPreviousEndOfWord {
   wordRegex = /\S+/g
 }
+
+// no-keymap by default; bound to `ge` when subword motions are the default.
+// Picks the subword regex via the `endsWith('Subword')` check in MotionByWord.
+class MoveToPreviousEndOfSubword extends MoveToPreviousEndOfWord {}
 
 // Sentence
 // -------------------------
@@ -1312,9 +1334,56 @@ class MoveToPair extends Motion {
   }
 }
 
+// Search as a motion (`/` `?` in operator-pending / visual mode), so an operator
+// can target a search match: `d/foo`, `c?bar`, `y/baz`. Unlike upstream's
+// search-input mini-editor, quilx drives the host's SearchBar via the multi-char
+// `focusInput` bridge (VimState.setSearchInput → TextEditor → SearchBar). The bar
+// previews live; on confirm it hands back the seated match's *start* (with the
+// cursor restored to the origin), which `moveCursor` then moves to — an exclusive
+// motion, so `d/foo` deletes up to (not including) the next "foo".
+class SearchBase extends Motion {
+  static command = false
+  requireInput = true
+  backwards = false
+  jump = true
+
+  initialize () {
+    if (!this.repeated) {
+      this.focusInput({
+        charsMax: Infinity,
+        purpose: 'search',
+        reverse: this.backwards,
+        onConfirm: matchStart => {
+          this.input = matchStart // Point (ready) or null (cancel)
+          if (matchStart) this.processOperation()
+          else this.cancelOperation()
+        },
+        onCancel: () => this.cancelOperation(),
+      })
+    }
+    super.initialize()
+  }
+
+  moveCursor (cursor) {
+    if (this.input) cursor.setBufferPosition(this.input)
+  }
+}
+
+class Search extends SearchBase {
+  backwards = false
+}
+
+class SearchBackwards extends SearchBase {
+  backwards = true
+}
+
 const __operations = {
   Motion,
   CurrentSelection,
+  Search,
+  SearchBackwards,
+  MoveUpDisplayLine,
+  MoveDownDisplayLine,
   MoveLeft,
   MoveRight,
   MoveRightBufferColumn,
@@ -1344,6 +1413,7 @@ const __operations = {
   MoveToEndOfSubword,
   MoveToPreviousEndOfWord,
   MoveToPreviousEndOfWholeWord,
+  MoveToPreviousEndOfSubword,
   MoveToNextSentence,
   MoveToPreviousSentence,
   MoveToNextSentenceSkipBlankRow,

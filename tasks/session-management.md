@@ -235,9 +235,10 @@ Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
 - [x] Modified-status seam: `SessionParticipant` hook + `collectModified()`; the
       exit-prompt `Adw.AlertDialog` (Save all / Discard / Cancel) replacing the
       immediate quit.
-- [ ] Lifecycle wiring: debounced autosave + on-quit flush; `session:restore` /
+- [x] Lifecycle wiring: debounced autosave + on-quit flush; `session:restore` /
       `session:save` commands + keymap; launch-arg suppresses restore.
-- [ ] Cursor save/restore (with clamping) and missing-file skip notifications.
+      (`SessionController`, wired from `AppWindow`; `space s s` / `space s r`.)
+- [x] Cursor save/restore (with clamping) and missing-file skip notifications.
 - [ ] Agents in sessions (record + opt-in relaunch) — co-design with agent profiles.
 - [ ] Multi-root sessions + `session:open` picker — co-design with agent worktrees.
 

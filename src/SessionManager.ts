@@ -34,7 +34,7 @@ export const SESSION_VERSION = 1;
 export type TabState =
   | { kind: 'file'; path: string; cursor?: [number, number] }
   | { kind: 'terminal'; cwd: string }
-  | { kind: 'agent'; command: string[]; cwd: string; prompt?: string };
+  | { kind: 'agent'; command: string[]; cwd: string; prompt?: string; sessionId?: string };
 
 /** The split tree of one workspace: `leaf` tab strips joined by `split` panes. */
 export type PanelNode =

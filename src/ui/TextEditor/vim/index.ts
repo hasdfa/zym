@@ -55,11 +55,13 @@ const MOTION_BINDINGS: Record<string, string> = {
   l: 'MoveRight',
   j: 'MoveDown',
   k: 'MoveUp',
-  w: 'MoveToNextWord',
+  // Lowercase w/b/e default to *subword* motions (camelCase/snake_case aware);
+  // the uppercase WHOLE-word variants (W/B/E) stay whole-word.
+  w: 'MoveToNextSubword',
   W: 'MoveToNextWholeWord',
-  b: 'MoveToPreviousWord',
+  b: 'MoveToPreviousSubword',
   B: 'MoveToPreviousWholeWord',
-  e: 'MoveToEndOfWord',
+  e: 'MoveToEndOfSubword',
   E: 'MoveToEndOfWholeWord',
   '0': 'MoveToBeginningOfLine',
   '^': 'MoveToFirstCharacterOfLine',
@@ -81,10 +83,22 @@ const MOTION_BINDINGS: Record<string, string> = {
 // Multi-key motions (keystroke sequences), available while NOT in insert mode.
 const SEQUENCE_BINDINGS: Record<string, string> = {
   'g g': 'MoveToFirstLine',
-  'g e': 'MoveToPreviousEndOfWord',
+  'g e': 'MoveToPreviousEndOfSubword', // subword by default; `g E` stays whole-word
   'g E': 'MoveToPreviousEndOfWholeWord',
   'g ctrl-d': 'ScrollQuarterScreenDown',
   'g ctrl-u': 'ScrollQuarterScreenUp',
+  // gj/gk — move by display (soft-wrapped) line.
+  'g j': 'MoveDownDisplayLine',
+  'g k': 'MoveUpDisplayLine',
+};
+
+// By default `j`/`k` move by display line too (like `:set nowrap`-free editors),
+// but only in normal/visual mode — operator-pending keeps the linewise buffer
+// `j`/`k` so `dj`/`dk` still delete whole lines. Registered at a higher priority
+// so it wins over the buffer-line `j`/`k` from the shared motion bindings.
+const DISPLAY_LINE_DEFAULTS: Record<string, string> = {
+  j: 'MoveDownDisplayLine',
+  k: 'MoveUpDisplayLine',
 };
 
 // Screen-relative line motions (use the viewport geometry).
@@ -287,6 +301,14 @@ const NON_INSERT_BINDINGS: Record<string, string> = {
   ...MISC_BINDINGS,
 };
 
+// Search as an operator/visual motion (`d/foo`, `v?bar`). Bound only in
+// operator-pending and visual modes — in normal mode `/`/`?` open the SearchBar
+// directly (TextEditor's `editor:search-*` commands), not the vim motion.
+const SEARCH_MOTION_BINDINGS: Record<string, string> = {
+  '/': 'Search',
+  '?': 'SearchBackwards',
+};
+
 // All operation classes a command is registered for, by class name.
 const NORMAL_OPERATIONS: Record<string, string> = {
   ...MODE_BINDINGS,
@@ -295,6 +317,7 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   ...TEXT_OBJECT_BINDINGS,
   ...SURROUND_BINDINGS,
   ...Z_SCROLL_BINDINGS,
+  ...SEARCH_MOTION_BINDINGS,
 };
 
 let keymapsRegistered = false;
@@ -329,15 +352,35 @@ function registerKeymapsOnce(): void {
       ...REGISTER_COMMANDS,
       ...COUNT_BINDINGS,
     },
-    // In visual mode: v/V switch wise (or toggle off) and text objects select.
-    'GtkSourceView.visual-mode': { ...toKeymap(VISUAL_BINDINGS), ...toKeymap(TEXT_OBJECT_BINDINGS) },
-    // Text objects are also operator targets in operator-pending mode.
-    'GtkSourceView.operator-pending-mode': toKeymap(TEXT_OBJECT_BINDINGS),
+    // In visual mode: v/V switch wise (or toggle off), text objects select, and
+    // `/`/`?` extend the selection to a search match.
+    'GtkSourceView.visual-mode': {
+      ...toKeymap(VISUAL_BINDINGS),
+      ...toKeymap(TEXT_OBJECT_BINDINGS),
+      ...toKeymap(SEARCH_MOTION_BINDINGS),
+    },
+    // Operator targets in operator-pending mode: text objects and `d/foo` search.
+    'GtkSourceView.operator-pending-mode': {
+      ...toKeymap(TEXT_OBJECT_BINDINGS),
+      ...toKeymap(SEARCH_MOTION_BINDINGS),
+    },
     // Escape returns to normal mode from insert, operator-pending, and visual.
     'GtkSourceView:not(.normal-mode)': {
       escape: 'vim-mode-plus:activate-normal-mode',
     },
   });
+
+  // `j`/`k` → display-line motion in normal & visual mode, at a higher priority so
+  // it overrides the buffer-line `j`/`k` bound above. Operator-pending is left out
+  // on purpose, so `dj`/`dk` stay linewise.
+  quilx.keymaps.add(
+    'vim-mode-plus-display-lines',
+    {
+      'GtkSourceView.normal-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
+      'GtkSourceView.visual-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
+    },
+    1,
+  );
 }
 
 /** Create and wire a VimState for `editor`, returning it. */

@@ -77,6 +77,9 @@ addStyles(`
   #FileTree row:not(:selected) label {
     color: ${theme.ui.fg};
   }
+  #FileTree row:not(:selected) .filetree-icon {
+    color: ${theme.ui.textMuted ?? '#9a9996'}; /* mute the file-type icon */
+  }
   #FileTree expander {
     color: alpha(${theme.ui.fg}, 0.45); /* mute the disclosure chevron */
   }
@@ -211,6 +214,7 @@ export class FileTree {
       const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
       const icon = new Gtk.Label({ xalign: 0 });
       icon.setAttributes(iconAttrs);
+      icon.addCssClass('filetree-icon'); // muted, less prominent than the filename
       const name = new Gtk.Label({ xalign: 0, hexpand: true }); // push status to the right
       const status = new Gtk.Label({ xalign: 1, marginEnd: 6 });
       box.append(icon);
@@ -430,6 +434,8 @@ export class FileTree {
     quilx.commands.add(this.root, {
       'core:down': () => this.move(+1),
       'core:up': () => this.move(-1),
+      'core:top': () => this.select(0), // `g g`
+      'core:bottom': () => this.select(this.tree.getNItems() - 1), // `G`
       'core:right': () => this.enter(),
       'core:left': () => this.exit(),
       // Toggle the config value; the observer applies it and rebuilds.

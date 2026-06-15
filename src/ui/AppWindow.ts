@@ -42,6 +42,7 @@ import { openFilePicker } from './FilePicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
+import { openBranchPicker } from './BranchPicker.ts';
 import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
@@ -240,6 +241,8 @@ export class AppWindow {
     this.leftPanel = new Panel({ onEmpty: () => this.detachDock(this.leftPanel) });
     this.filesTab = this.leftPanel.add(this.fileTree.root, { title: `${fileIconGlyph('', true)}  Files` });
     this.gitTab = this.leftPanel.add(this.gitPanel.root, { title: `${Icons.git}  Git` });
+    // add() selects each tab as it's added, so Git (added last) would win. Default to Files.
+    this.filesTab.select();
 
     // The agent list sits below that tabbed panel in the left dock.
     this.agentList = new AgentList({
@@ -247,6 +250,7 @@ export class AppWindow {
       onRestart: (agent) => this.restartAgent(agent),
       onClose: (agent) => this.closeAgent(agent),
       onRename: (agent) => this.renameAgentPrompt(agent),
+      onOpenChanges: (agent) => this.openAgentChanges(agent),
     });
     this.agentPanel = new Panel({ onEmpty: () => this.detachDock(this.agentPanel) });
     this.agentPanel.add(this.agentList.root, { title: 'Agents' });
@@ -341,6 +345,11 @@ export class AppWindow {
     // Publish the window on the global registry and start the keymap manager's
     // CAPTURE-phase key controller.
     quilx.window = this.window;
+    // Expose file-opening app-wide (reveal-if-open by default — see openFile).
+    quilx.workspace.setOpener((path, options) => {
+      const editor = this.openFile(path);
+      if (options?.cursor) editor.restoreCursor(options.cursor);
+    });
     quilx.keymaps.initialize();
     // which-key hint: shows the continuations after a queued prefix (e.g. Space).
     this.whichKey = new WhichKey(this.overlay);
@@ -465,8 +474,19 @@ export class AppWindow {
     return widget ? this.editors.get(widget) ?? null : null;
   }
 
-  /** Open `path` in a new center tab, wiring it to the window, and select it. */
+  /**
+   * Open `path` in a center tab and focus it — revealing an already-open editor
+   * for the file (in any split) instead of opening a duplicate tab. This is the
+   * single funnel every file-open goes through, so reveal-if-open is the default
+   * everywhere; it's also exposed app-wide as `quilx.workspace.openFile`.
+   */
   private openFile(path: string): TextEditor {
+    const existing = [...this.editors.values()].find((editor) => editor.currentFile === path);
+    if (existing) {
+      this.editorChildren.get(existing.root)?.select();
+      existing.focus();
+      return existing;
+    }
     const built = this.createEditorTab(path);
     const child = this.center.add(built.widget, {
       title: built.title,
@@ -576,6 +596,9 @@ export class AppWindow {
       this.notifyAgentAttention(agent, previousStatus, agent.status);
       previousStatus = agent.status;
     });
+    // When the agent edits files, re-check git now instead of waiting for the poll,
+    // so its changes surface in Source Control / the branch indicator promptly.
+    agent.onDidChangeFiles(() => this.git.refresh());
     // The list highlight follows focus: recompute it whenever this terminal gains
     // or loses focus (the highlight is gated on the agent being focused + active —
     // see updateAgentHighlight).
@@ -752,6 +775,38 @@ export class AppWindow {
   private closeCurrentAgent(): void {
     const agent = this.currentAgent();
     if (agent) this.closeAgent(agent);
+  }
+
+  private openChangesOfCurrentAgent(): void {
+    const agent = this.currentAgent();
+    if (agent) this.openAgentChanges(agent);
+  }
+
+  // Open the files an agent has edited this session: one opens directly, several
+  // go through a picker (newest edits first, so its latest work is at the top).
+  private openAgentChanges(agent: AgentTerminal): void {
+    const files = agent.changedFiles;
+    if (files.length === 0) {
+      quilx.notifications.addInfo(`${agent.title} hasn't edited any files yet`);
+      return;
+    }
+    if (files.length === 1) {
+      this.openFile(files[0]);
+      return;
+    }
+    const cwd = process.cwd();
+    openPicker({
+      host: this.overlay,
+      placeholder: 'Open edited file…',
+      items: files
+        .slice()
+        .reverse()
+        .map((path) => {
+          const text = Path.relative(cwd, path) || path;
+          return { value: path, text, boostFrom: text.lastIndexOf('/') + 1 };
+        }),
+      onSelect: (path) => this.openFile(path),
+    });
   }
 
   // Restart an agent: retire the old one and relaunch with the same cwd, resuming
@@ -1045,6 +1100,8 @@ export class AppWindow {
       'tab:previous': 'Previous tab',
       'tab:go-to': 'Go to tab by index',
       'tab:go-to-last': 'Go to the last tab',
+      'tab:move-backward': 'Move tab before',
+      'tab:move-forward': 'Move tab after',
       'tab:close': 'Close the active tab',
       // File tree
       'core:down': 'Move down',
@@ -1055,6 +1112,9 @@ export class AppWindow {
       'tree:toggle-untracked-files': 'Toggle untracked files',
       // Terminal / agents
       'terminal:new': 'Open a new terminal',
+      'terminal:insert-mode': 'Terminal: enter insert mode (type into the child)',
+      'terminal:normal-mode': 'Terminal: enter normal mode (app shortcuts)',
+      'terminal:send-escape': 'Terminal: send Escape to the child',
       'agent:new': 'Start a new agent',
       'agent:switch': 'Switch to an agent',
       'agent:resume': 'Resume a past conversation…',
@@ -1063,6 +1123,7 @@ export class AppWindow {
       'agent:restart': 'Restart the agent (resume its conversation)',
       'agent:rename': 'Rename the agent',
       'agent:close': 'Close the agent',
+      'agent:open-changes': "Open the agent's edited files",
       'agent:focus-next': 'Focus the next agent',
       'agent:focus-prev': 'Focus the previous agent',
       'agent:send-selection': 'Send the selection to the current agent',
@@ -1075,6 +1136,7 @@ export class AppWindow {
       'git:fetch': 'Fetch from the remote',
       'git:pull': 'Pull from upstream (fast-forward)',
       'git:push': 'Push to the remote',
+      'git:switch-branch': 'Switch or create a branch…',
       'git:commit': 'Commit staged changes',
       'git:discard': 'Discard changes',
       'git:stage': 'Stage changes',
@@ -1255,18 +1317,10 @@ export class AppWindow {
     this.referencesList.focus();
   }
 
-  // Reveal an already-open editor for `path` (in any split) and place the cursor;
-  // otherwise open the file in a new tab. Used by location jumps (diagnostics,
-  // go-to-definition).
+  // Open `path` (revealing an already-open tab, since openFile dedupes) and place
+  // the cursor. Used by location jumps (diagnostics, go-to-definition, search).
   private openOrFocusFile(path: string, cursor: [number, number]): void {
-    const existing = [...this.editors.values()].find((e) => e.currentFile === path);
-    if (existing) {
-      this.editorChildren.get(existing.root)?.select();
-      existing.restoreCursor(cursor);
-      existing.focus();
-    } else {
-      this.openFile(path).restoreCursor(cursor);
-    }
+    this.openFile(path).restoreCursor(cursor);
   }
 
   // Focus whichever left-dock tab is currently active (file tree or Source
@@ -1317,6 +1371,7 @@ export class AppWindow {
       'agent:restart': { didDispatch: () => this.restartCurrentAgent(), when: () => this.currentAgent() !== null },
       'agent:rename': { didDispatch: () => this.renameCurrentAgent(), when: () => this.currentAgent() !== null },
       'agent:close': { didDispatch: () => this.closeCurrentAgent(), when: () => this.currentAgent() !== null },
+      'agent:open-changes': { didDispatch: () => this.openChangesOfCurrentAgent(), when: () => this.currentAgent() !== null },
       'agent:focus-next': () => this.focusAdjacentAgent(1),
       'agent:focus-prev': () => this.focusAdjacentAgent(-1),
       // Push the active editor's context into an agent's prompt — the current
@@ -1339,6 +1394,10 @@ export class AppWindow {
       'git:fetch': { didDispatch: () => this.runGit(['fetch'], 'Fetch'), when: () => this.git.getBranch() !== null },
       'git:pull': { didDispatch: () => this.runGit(['pull', '--ff-only'], 'Pull'), when: () => this.git.getBranch() !== null },
       'git:push': { didDispatch: () => this.runGit(['push'], 'Push'), when: () => this.git.getBranch() !== null },
+      'git:switch-branch': {
+        didDispatch: () => openBranchPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
     });
   }
 

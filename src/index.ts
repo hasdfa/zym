@@ -25,12 +25,26 @@ import * as Path from 'node:path';
 import { Application } from './application.ts';
 import { preloadGrammars } from './syntax/grammar.ts';
 
-// With no file argument, open the editor's own source.
+// node-gtk drains Node's microtask queue inside the GLib main loop, so a stray
+// rejected promise would otherwise terminate the whole editor. The known offender
+// is vscode-jsonrpc: writing to a language server whose stdio was destroyed (it
+// crashed or failed to spawn) re-throws the write failure inside an async Promise
+// executor — an unhandled rejection the caller can't catch. Such transport errors
+// are benign (the server is simply gone), so swallow them; log anything else so
+// real bugs stay visible, but never let a stray rejection crash the app.
+process.on('unhandledRejection', (reason) => {
+  if ((reason as { code?: string } | null)?.code === 'ERR_STREAM_DESTROYED') return;
+  console.error('Unhandled promise rejection:', reason);
+});
+
+// With no file argument, open the editor's own source. An explicit file arg also
+// suppresses session restore-on-launch (see SessionController).
 const arg = process.argv[2];
+const explicitFile = Boolean(arg);
 const initialFile = arg ? Path.resolve(arg) : import.meta.filename;
 
 // Load tree-sitter grammars before the GLib main loop starts — emscripten's
-// async wasm init doesn't resolve once the loop is running.
+// sync wasm init doesn't resolve once the loop is running.
 await preloadGrammars();
 
-process.exit(new Application(initialFile).run());
+new Application(initialFile, explicitFile).run();

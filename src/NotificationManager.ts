@@ -25,6 +25,11 @@ export class NotificationManager {
 
   // --- Typed posting helpers -------------------------------------------------
 
+  /** Low-level diagnostic trace (e.g. unimplemented paths); the quietest level. */
+  addTrace(message: string, options?: NotificationOptions): Notification {
+    return this.add('trace', message, options);
+  }
+
   addSuccess(message: string, options?: NotificationOptions): Notification {
     return this.add('success', message, options);
   }

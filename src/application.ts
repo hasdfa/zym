@@ -25,9 +25,13 @@ export class Application {
     flags: Gio.ApplicationFlags.NON_UNIQUE,
   });
   private readonly initialFile: string;
+  // Whether `initialFile` came from an explicit CLI arg (vs the default). An
+  // explicit file suppresses session restore-on-launch.
+  private readonly explicitFile: boolean;
 
-  constructor(initialFile: string) {
+  constructor(initialFile: string, explicitFile = false) {
     this.initialFile = initialFile;
+    this.explicitFile = explicitFile;
     this.app.on('activate', () => this.onActivate());
   }
 
@@ -39,7 +43,7 @@ export class Application {
   private onActivate() {
     registerBundledFonts();
     installStyles();
-    new AppWindow(this.app, () => this.quit(), this.initialFile);
+    new AppWindow(this.app, () => this.quit(), this.initialFile, this.explicitFile);
     startLoop();
     this.loop.run();
   }

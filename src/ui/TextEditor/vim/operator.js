@@ -819,7 +819,7 @@ class PutBefore extends Operator {
         const eof = this.editor.bufferRangeForBufferRow(this.editor.getLastBufferRow()).end
         this.utils.insertTextAtBufferPosition(this.editor, eof, '\n')
       }
-      const lineLength = this.editor.lineTextForBufferRow(targetRow).length
+      const lineLength = this.editor.lineLength(targetRow) // codepoint length (see EditorModel)
       const pad = lineLength < startColumn ? ' '.repeat(startColumn - lineLength) : ''
       const insertColumn = Math.min(startColumn, lineLength)
       const range = this.utils.insertTextAtBufferPosition(this.editor, [targetRow, insertColumn], pad + lines[i].repeat(count))

@@ -27,6 +27,8 @@ import type { PanelNode, TabState } from '../SessionManager.ts';
 export interface RestoredChild {
   widget: InstanceType<typeof Gtk.Widget>;
   title?: string;
+  /** Keep the tab bar (and thus the title) visible even as a lone tab. */
+  requireTabBar?: boolean;
   onAttached?: (child: PanelChild) => void;
 }
 
@@ -99,7 +101,7 @@ export class PanelGroup {
     const leaf = this.createLeaf();
     this.rootNode = leaf;
     this.active = leaf;
-    leaf.panel.setActive(true);
+    leaf.panel.activate();
     this.root.append(leaf.widget);
   }
 
@@ -111,7 +113,7 @@ export class PanelGroup {
   }
 
   /** Add `child` as a new tab in the active leaf and select it. */
-  add(child: Widget, options: { title?: string } = {}): PanelChild {
+  add(child: Widget, options: { title?: string; requireTabBar?: boolean } = {}): PanelChild {
     return this.active.panel.add(child, options);
   }
 
@@ -205,12 +207,7 @@ export class PanelGroup {
     // Replace the parent split with the surviving sibling.
     this.attach(sibling, grand, parentWasStart);
 
-    if (this.active === leaf) {
-      const next = firstLeaf(sibling);
-      this.active = next;
-      next.panel.setActive(true);
-      this.options.onActiveChanged?.(next.panel.activeChild);
-    }
+    if (this.active === leaf) this.setActive(firstLeaf(sibling));
   }
 
   // --- Session serialization -------------------------------------------------
@@ -263,7 +260,7 @@ export class PanelGroup {
 
     const first = firstLeaf(newRoot);
     this.active = first;
-    first.panel.setActive(true);
+    first.panel.activate(); // onActivate early-returns (active already set); sync below
     this.options.onActiveChanged?.(first.panel.activeChild);
   }
 
@@ -275,7 +272,10 @@ export class PanelGroup {
       node.tabs.forEach((state, index) => {
         const built = buildChild(state);
         if (!built) return;
-        const child = leaf.panel.add(built.widget, { title: built.title });
+        const child = leaf.panel.add(built.widget, {
+          title: built.title,
+          requireTabBar: built.requireTabBar,
+        });
         built.onAttached?.(child);
         if (index === node.activeIndex) activeHandleIndex = handles.length;
         handles.push(child);
@@ -393,6 +393,14 @@ export class PanelGroup {
       },
       onClosed: (child) => this.options.onClosed?.(child),
       onEmpty: () => this.onLeafEmpty(leaf),
+      // Focus entering this leaf (a click, or programmatic activation) makes it the
+      // active leaf. The Panel owns the single-active-panel rule and the focus
+      // controller; here we just sync the tree's notion of which leaf is active.
+      onActivate: () => {
+        if (this.active === leaf) return;
+        this.active = leaf;
+        this.options.onActiveChanged?.(leaf.panel.activeChild);
+      },
     });
     leaf = new Leaf(panel);
 
@@ -400,20 +408,14 @@ export class PanelGroup {
     panel.root.setHexpand(true);
     panel.root.setVexpand(true);
 
-    // A click into any pane makes it active (focus enters the panel subtree).
-    const focus = new Gtk.EventControllerFocus();
-    focus.on('enter', () => this.setActive(leaf));
-    panel.root.addController(focus);
-
     return leaf;
   }
 
+  // Make `leaf` the active leaf. Routes through the Panel's single-active-panel
+  // manager (which deactivates the previously active panel — another leaf or a
+  // dock); `onActivate` then updates `this.active`.
   private setActive(leaf: Leaf): void {
-    if (this.active === leaf) return;
-    this.active.panel.setActive(false);
-    this.active = leaf;
-    leaf.panel.setActive(true);
-    this.options.onActiveChanged?.(leaf.panel.activeChild);
+    leaf.panel.activate();
   }
 
   // Remove `node` from its slot (a parent paned, or the root container).

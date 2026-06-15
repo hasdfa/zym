@@ -45,11 +45,23 @@ const HOOK_SCRIPT = Path.join(
   Path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'hooks', 'agent-status.sh',
 );
 
+/** Resume a past `claude` conversation rather than starting fresh. */
+export interface AgentResume {
+  /** Resume a specific session id (`claude --resume <id>`). */
+  sessionId?: string;
+  /** Continue the most recent conversation in the cwd (`claude --continue`). */
+  continue?: boolean;
+  /** Branch a copy instead of appending to the original (`--fork-session`). */
+  fork?: boolean;
+}
+
 export interface AgentTerminalOptions extends TerminalOptions {
   /** Fired when the user presses Enter after the agent process has exited. */
   onCloseRequest?: () => void;
   /** An initial prompt to launch the agent with (appended to its argv). */
   prompt?: string;
+  /** Resume a past conversation rather than starting a new one (claude only). */
+  resume?: AgentResume;
 }
 
 export class AgentTerminal extends Terminal {
@@ -58,14 +70,25 @@ export class AgentTerminal extends Terminal {
   private readonly onCloseRequest?: () => void;
   private readonly statusFile: string | null;
   private statusMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  // Files the agent has edited, captured from a PostToolUse hook (via
+  // `<statusFile>.files`); a watched, deduped, launch-order list.
+  private filesMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  private _changedFiles: string[] = [];
+  private readonly fileHandlers: Array<() => void> = [];
+  // A user-pinned display name (`rename`); when set it overrides the CLI's
+  // reported (OSC) title.
+  private _displayName: string | null = null;
   // The agent's argv as the user requested it (before `--settings` injection) and
   // its launch prompt — retained so a session can relaunch the agent verbatim.
   private readonly baseCommand: string[];
   private readonly launchPrompt?: string;
+  // The claude session id, captured from the hooks (via `<statusFile>.session`),
+  // for resuming / persisting the conversation. Read lazily and cached.
+  private _sessionId: string | null = null;
 
   constructor(options: AgentTerminalOptions = {}) {
     const baseCommand = options.command ?? resolveAgentCommand();
-    const integration = buildStatusIntegration(baseCommand);
+    const integration = buildStatusIntegration(baseCommand, resumeFlags(options.resume));
     // A launch prompt rides along as a trailing argv element (e.g. `claude
     // "<prompt>"`), so the agent starts already working on it.
     const command = options.prompt
@@ -84,13 +107,32 @@ export class AgentTerminal extends Terminal {
     // notice instead. A second child-exited handler avoids touching `this` in the
     // super() call.
     quilx.agents.add(this);
-    this.root.on('child-exited', () => this.onChildExited());
-    if (this.statusFile) this.watchStatus(this.statusFile);
+    this.terminal.on('child-exited', () => this.onChildExited());
+    if (this.statusFile) {
+      this.watchStatus(this.statusFile);
+      this.watchChangedFiles(`${this.statusFile}.files`);
+    }
   }
 
   /** The agent session's current status. */
   get status(): AgentStatus {
     return this._status;
+  }
+
+  // A pinned name (rename) wins over the CLI's reported title.
+  get title(): string {
+    return this._displayName ?? super.title;
+  }
+
+  /** Whether the user has pinned a custom name via `rename`. */
+  get renamed(): boolean {
+    return this._displayName !== null;
+  }
+
+  /** Pin a display name (empty clears it, reverting to the CLI title). */
+  rename(name: string): void {
+    this._displayName = name.trim() || null;
+    this.emitTitleChange();
   }
 
   /** Whether the agent process has exited (the widget lingers afterward). */
@@ -100,9 +142,28 @@ export class AgentTerminal extends Terminal {
 
   // --- Session integration ----------------------------------------------------
 
-  /** Session state: the base argv + cwd + prompt, for a later relaunch. */
+  /** The claude session id once a hook has reported it (null until then). */
+  get sessionId(): string | null {
+    if (this._sessionId) return this._sessionId;
+    if (!this.statusFile) return null;
+    try {
+      this._sessionId = Fs.readFileSync(`${this.statusFile}.session`, 'utf8').trim() || null;
+    } catch {
+      /* not written yet */
+    }
+    return this._sessionId;
+  }
+
+  /** Session state: base argv + cwd + prompt, plus the session id so a restore can
+   *  resume the conversation rather than start over. */
   serialize(): TabState | null {
-    return { kind: 'agent', command: this.baseCommand, cwd: this.cwd, prompt: this.launchPrompt };
+    return {
+      kind: 'agent',
+      command: this.baseCommand,
+      cwd: this.cwd,
+      prompt: this.launchPrompt,
+      sessionId: this.sessionId ?? undefined,
+    };
   }
 
   /** A running agent is live work — it blocks exit until confirmed. */
@@ -121,6 +182,20 @@ export class AgentTerminal extends Terminal {
     return () => {
       const index = this.statusHandlers.indexOf(callback);
       if (index !== -1) this.statusHandlers.splice(index, 1);
+    };
+  }
+
+  /** Absolute paths of files the agent has edited this session (deduped). */
+  get changedFiles(): string[] {
+    return this._changedFiles.slice();
+  }
+
+  /** Subscribe to the edited-files list growing. Returns unsub. */
+  onDidChangeFiles(callback: () => void): () => void {
+    this.fileHandlers.push(callback);
+    return () => {
+      const index = this.fileHandlers.indexOf(callback);
+      if (index !== -1) this.fileHandlers.splice(index, 1);
     };
   }
 
@@ -151,17 +226,52 @@ export class AgentTerminal extends Terminal {
     for (const handler of this.statusHandlers) handler();
   }
 
+  // Watch the append-only edited-files log the PostToolUse hook writes, reflecting
+  // each new path as a change.
+  private watchChangedFiles(file: string): void {
+    const gfile = Gio.File.newForPath(file);
+    this.filesMonitor = FileProto.monitorFile.call(gfile, Gio.FileMonitorFlags.NONE, null);
+    this.filesMonitor!.on('changed', () => this.readChangedFiles(file));
+  }
+
+  private readChangedFiles(file: string): void {
+    let raw: string;
+    try {
+      raw = Fs.readFileSync(file, 'utf8');
+    } catch {
+      return; // not written yet / removed on exit
+    }
+    // Dedupe, preserving first-seen order; the hook appends one path per edit.
+    const seen = new Set<string>();
+    const files: string[] = [];
+    for (const line of raw.split('\n')) {
+      const path = line.trim();
+      if (path && !seen.has(path)) {
+        seen.add(path);
+        files.push(path);
+      }
+    }
+    if (files.length === this._changedFiles.length) return; // nothing new
+    this._changedFiles = files;
+    for (const handler of this.fileHandlers) handler();
+  }
+
   private onChildExited(): void {
     if (this._status === 'exited') return;
     this.setStatus('exited');
+    void this.sessionId; // cache the id before its file is removed (restart resumes it)
     // Print a notice into the (now child-less) terminal so the pane shows why it
     // went quiet, rather than closing or freezing on the last frame.
-    this.root.feed(encode('\r\n\x1b[2m── process exited (press enter to close) ──\x1b[0m\r\n'));
+    this.terminal.feed(encode('\r\n\x1b[2m── process exited (press enter to close) ──\x1b[0m\r\n'));
     this.installCloseOnEnter();
     this.statusMonitor?.cancel();
     this.statusMonitor = null;
+    this.filesMonitor?.cancel();
+    this.filesMonitor = null;
     if (this.statusFile) {
       try { Fs.rmSync(this.statusFile, { force: true }); } catch { /* best effort */ }
+      try { Fs.rmSync(`${this.statusFile}.session`, { force: true }); } catch { /* best effort */ }
+      try { Fs.rmSync(`${this.statusFile}.files`, { force: true }); } catch { /* best effort */ }
     }
   }
 
@@ -187,7 +297,7 @@ export class AgentTerminal extends Terminal {
   private applyThemeColors() {
     const { bg, fg } = theme.ui;
     if (!bg) return;
-    this.root.setColors(parseColor(fg), parseColor(bg), null);
+    this.terminal.setColors(parseColor(fg), parseColor(bg), null);
   }
 }
 
@@ -208,9 +318,12 @@ function resolveAgentCommand(): string[] {
  * report status to a freshly-created status file; returns the augmented argv and
  * that file's path. For any other command, status integration is skipped.
  */
-function buildStatusIntegration(command: string[]): { command: string[]; statusFile: string | null } {
+function buildStatusIntegration(
+  command: string[],
+  resume: string[] = [],
+): { command: string[]; statusFile: string | null } {
   if (command.length === 0 || Path.basename(command[0]) !== 'claude') {
-    return { command, statusFile: null };
+    return { command, statusFile: null }; // resume + status hooks are claude-only
   }
   const id = randomUUID();
   const dir = Path.join(process.env.XDG_RUNTIME_DIR || Os.tmpdir(), 'quilx', 'agents');
@@ -218,6 +331,7 @@ function buildStatusIntegration(command: string[]): { command: string[]; statusF
   try {
     Fs.mkdirSync(dir, { recursive: true });
     Fs.writeFileSync(statusFile, 'idle'); // exists up front so the monitor tracks it
+    Fs.writeFileSync(`${statusFile}.files`, ''); // edited-files log (one path per line)
   } catch {
     return { command, statusFile: null }; // can't set up IPC — run plain
   }
@@ -229,6 +343,11 @@ function buildStatusIntegration(command: string[]): { command: string[]; statusF
       SessionStart: [{ hooks: [{ type: 'command', command: run('idle') }] }],
       UserPromptSubmit: [{ hooks: [{ type: 'command', command: run('working') }] }],
       PreToolUse: [{ matcher: '', hooks: [{ type: 'command', command: run('working') }] }],
+      // Record which files the agent edits, for change-awareness in the UI.
+      PostToolUse: [{
+        matcher: 'Edit|Write|MultiEdit|NotebookEdit',
+        hooks: [{ type: 'command', command: run('files') }],
+      }],
       Stop: [{ hooks: [{ type: 'command', command: run('idle') }] }],
       Notification: [{ hooks: [{ type: 'command', command: run('notification') }] }],
     },
@@ -237,9 +356,21 @@ function buildStatusIntegration(command: string[]): { command: string[]; statusF
   // JSON needs no shell-escaping; only the hook command strings (run by claude's
   // shell) are quoted.
   return {
-    command: [command[0], '--settings', JSON.stringify(settings), ...command.slice(1)],
+    command: [command[0], ...resume, '--settings', JSON.stringify(settings), ...command.slice(1)],
     statusFile,
   };
+}
+
+/** The claude resume flags for a resume request (empty when starting fresh). */
+function resumeFlags(resume?: AgentResume): string[] {
+  if (!resume) return [];
+  const base = resume.continue
+    ? ['--continue']
+    : resume.sessionId
+      ? ['--resume', resume.sessionId]
+      : [];
+  if (base.length && resume.fork) base.push('--fork-session');
+  return base;
 }
 
 /** Single-quote a string for embedding in a POSIX shell command. */
