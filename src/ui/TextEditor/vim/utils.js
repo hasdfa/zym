@@ -363,8 +363,10 @@ function getLineTextToBufferPosition (editor, {row, column}, {exclusive = true} 
   return editor.lineTextForBufferRow(row).slice(0, exclusive ? column : column + 1)
 }
 
-function getCodeFoldRanges ({tokenizedBuffer}) {
-  return tokenizedBuffer.getFoldableRanges(1).filter(range => !tokenizedBuffer.isRowCommented(range.start.row))
+function getCodeFoldRanges (editor) {
+  // quilx: foldable ranges come from the tree-sitter fold model (SyntaxController),
+  // surfaced via EditorModel — not Atom's tokenizedBuffer.
+  return editor.getFoldableRanges()
 }
 
 // Used in vmp-jasmine-increase-focus
@@ -1290,7 +1292,7 @@ function changeCharOrder (text, action) {
 }
 
 function isUsingTreeSitter (editor) {
-  return !!editor.languageMode.tree
+  return !!(editor.languageMode && editor.languageMode.tree)
 }
 
 export {

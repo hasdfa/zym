@@ -71,7 +71,8 @@ const MOTION_BINDINGS: Record<string, string> = {
   B: 'MoveToPreviousWholeWord',
   e: 'MoveToEndOfSubword',
   E: 'MoveToEndOfWholeWord',
-  '0': 'MoveToBeginningOfLine',
+  // `0` is bound separately (count-aware): a count digit mid-count (`10j`),
+  // otherwise MoveToBeginningOfLine. See ZERO_BINDING / count-or-line-start.
   '^': 'MoveToFirstCharacterOfLine',
   $: 'MoveToLastCharacterOfLine',
   G: 'MoveToLastLine',
@@ -100,6 +101,11 @@ const SEQUENCE_BINDINGS: Record<string, string> = {
   'g k': 'MoveUpDisplayLine',
   // gv — reselect the last visual selection.
   'g v': 'SelectPreviousSelection',
+  // Fold motions: zj/zk to the next/previous fold, [z/]z to the current fold's edges.
+  'z j': 'MoveToNextFoldStart',
+  'z k': 'MoveToPreviousFoldEnd',
+  '[ z': 'MoveToPreviousFoldStart',
+  '] z': 'MoveToNextFoldEnd',
 };
 
 // By default `j`/`k` move by display line too (like `:set nowrap`-free editors),
@@ -191,6 +197,12 @@ const COUNT_BINDINGS: Record<string, { command: string; args: number[] }> = Obje
   ]),
 );
 
+// `0` is count-aware: it extends a pending count (`10j`) or, with no count,
+// moves to the beginning of the line.
+const ZERO_BINDING: Record<string, string> = {
+  '0': 'vim-mode-plus:count-or-line-start',
+};
+
 // `"{reg}` selects the register the next yank/delete/paste uses (e.g. `"ayy`,
 // `"+p`). Reads the register letter via VimState.readChar and sets it on the
 // register manager; it clears itself after the next operation. Not an operation
@@ -232,6 +244,9 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   // whole buffer.
   'i e': 'InnerEntire',
   'a e': 'AEntire',
+  // fold region (the foldable block at the cursor).
+  'i z': 'InnerFold',
+  'a z': 'AFold',
   // Brackets use the targets.vim-style *AllowForwarding* variants: when the cursor
   // isn't inside a pair, the text object seeks to the next pair on the line (an
   // enclosing pair still wins). `b`/`B` are vim's aliases for ()/{}; either
@@ -435,6 +450,7 @@ function registerKeymapsOnce(): void {
       ...REPEAT_COMMANDS,
       ...REGISTER_COMMANDS,
       ...COUNT_BINDINGS,
+      ...ZERO_BINDING,
     },
     // In visual mode: v/V switch wise (or toggle off), text objects select, and
     // `/`/`?` extend the selection to a search match.
@@ -485,6 +501,11 @@ export function attachVim(editor: EditorModel): VimState {
     // (event, element, ...args); the digit is the first dispatch arg.
     'vim-mode-plus:set-count': (_event, _element, n) => {
       vimState.setCount(n as number);
+    },
+    // `0`: extend a pending count, else move to the beginning of the line.
+    'vim-mode-plus:count-or-line-start': () => {
+      if (vimState.operationStack.hasCount()) vimState.setCount(0);
+      else vimState.operationStack.run('MoveToBeginningOfLine');
     },
     // `;`/`,` replay the recorded find rather than running an operation class.
     'vim-mode-plus:repeat-find': () => {

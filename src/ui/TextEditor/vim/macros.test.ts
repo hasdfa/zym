@@ -67,3 +67,13 @@ test('a macro replays an insert-mode edit', async () => {
   await type('@a');
   assert.equal(editor.getText(), 'one\n>two\n');
 });
+
+test('0 extends a pending count, else moves to line start', async () => {
+  const { editor, type } = focusedEditor('abcdefghij\n');
+  editor.setCursorBufferPosition({ row: 0, column: 5 });
+  await type('0'); // no count -> beginning of line
+  assert.equal(editor.getCursorBufferPosition().column, 0);
+  editor.setCursorBufferPosition({ row: 0, column: 0 });
+  await type('10l'); // the 0 extends the count -> move right 10
+  assert.equal(editor.getCursorBufferPosition().column, 10);
+});
