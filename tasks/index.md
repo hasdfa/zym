@@ -72,9 +72,13 @@ See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the d
 
 See [code-editing/autocompletion.md](code-editing/autocompletion.md).
 
-- [x] Framework: source contract (`CompletionSource`), coordinator (`CompletionController` — insert-mode triggers, debounce, rank, sync-immediate/async-awaited, accept/navigate/dismiss keys), and keyboard-driven popup (`CompletionPopup`). Placeholder source validates it end-to-end.
-- [ ] Real sources: buffer words (next), LSP (`textDocument/completion`), Copilot (ghost text).
-- [ ] Widget polish: kind icons, scroll-into-view, docs panel, mouse, fuzzy filter, flip-above.
+- [x] Framework: source contract (`CompletionSource`), coordinator (`CompletionController` — insert-mode triggers, debounce, rank, sync-immediate/async-awaited, accept/navigate/dismiss keys), and keyboard-driven popup (`CompletionPopup`).
+- [x] Fuzzy matching: reuse the picker's fzy scorer (`fuzzyMatch`, subsequence + 1 typo) for ranking, with matched-character highlighting in the popup.
+- [x] Popup: theme background, word-start alignment, square selection, compact (no min-height), and a split documentation pane (`CompletionItem.documentation`).
+- [x] Buffer-words source (`createBufferWordsSource`) — the first real source.
+- [ ] More sources: LSP (`textDocument/completion`, feeds the doc pane), Copilot (ghost text).
+- [ ] Widget polish: kind icons, scroll-into-view, mouse, flip-above.
+- [ ] Behavior: trigger characters (`.`/`::`), snippet insertion, eagerness config.
 
 ### Text editor
 

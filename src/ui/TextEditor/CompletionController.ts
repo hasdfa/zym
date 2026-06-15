@@ -16,8 +16,9 @@ import { Gdk, GLib, Gtk } from '../../gi.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 import type { EditorModel } from './EditorModel.ts';
+import { fuzzyMatch } from '../fuzzyMatch.ts';
 import { CompletionPopup } from './CompletionPopup.ts';
-import type { CompletionContext, CompletionItem, CompletionSource, CompletionTrigger } from './CompletionSource.ts';
+import type { CompletionContext, CompletionItem, CompletionSource, CompletionTrigger, RankedCompletion } from './CompletionSource.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -112,16 +113,16 @@ export class CompletionController {
   }
 
   private present(raw: CompletionItem[], context: CompletionContext): void {
-    const items = this.rank(raw, context.prefix);
+    const ranked = this.rank(raw, context.prefix);
     // Anchor at the start of the word being completed, not the cursor, so the
     // candidate labels line up under the text they're replacing.
-    const rect = items.length > 0 ? this.editor.pixelRectForBufferPosition(context.replaceRange.start) : null;
+    const rect = ranked.length > 0 ? this.editor.pixelRectForBufferPosition(context.replaceRange.start) : null;
     if (!rect) {
       this.popup.hide();
       return;
     }
     this.replaceRange = context.replaceRange;
-    this.popup.showAt(items, rect.x, rect.y + rect.height);
+    this.popup.showAt(ranked, rect.x, rect.y + rect.height);
   }
 
   /** The word being typed before the cursor and the range it occupies. */
@@ -137,22 +138,38 @@ export class CompletionController {
     return { prefix, cursor, replaceRange, line, trigger };
   }
 
-  /** Prefix-filter, then prefer prefix matches and stable order; cap to the popup. */
-  private rank(items: CompletionItem[], prefix: string): CompletionItem[] {
-    const needle = prefix.toLowerCase();
+  /**
+   * Fuzzy-filter against the prefix (reusing the picker's fzy scorer, so a
+   * subsequence — and a single typo — still matches), rank by score, and cap to
+   * the popup. fzy's word-start/consecutive bonuses keep prefix matches on top;
+   * `sortText` (e.g. buffer-word frequency) breaks ties. An empty prefix keeps
+   * everything, ordered by `sortText`/label.
+   */
+  private rank(items: CompletionItem[], prefix: string): RankedCompletion[] {
     return items
-      .map((item) => ({ item, text: (item.filterText ?? item.label).toLowerCase() }))
-      .filter(({ text, item }) => (needle === '' || text.includes(needle)) && item.label !== prefix)
+      .map((item) => {
+        if (item.label === prefix) return null; // already fully typed
+        const text = item.filterText ?? item.label;
+        const match = prefix === '' ? { score: 0, positions: [] } : fuzzyMatch(prefix, text, { maxTypos: 1 });
+        if (!match) return null;
+        // Highlight positions must index into the displayed `label`. They already
+        // do when matching `label` directly; if a source matched a distinct
+        // `filterText`, re-derive positions against the label (best effort).
+        const positions =
+          text === item.label
+            ? match.positions
+            : (prefix === '' ? [] : (fuzzyMatch(prefix, item.label)?.positions ?? []));
+        return { item, score: match.score, positions };
+      })
+      .filter((entry): entry is { item: CompletionItem; score: number; positions: number[] } => entry !== null)
       .sort((a, b) => {
-        const ap = a.text.startsWith(needle) ? 0 : 1;
-        const bp = b.text.startsWith(needle) ? 0 : 1;
-        if (ap !== bp) return ap - bp;
+        if (a.score !== b.score) return b.score - a.score; // higher score first
         const ak = a.item.sortText ?? a.item.label;
         const bk = b.item.sortText ?? b.item.label;
         return ak < bk ? -1 : ak > bk ? 1 : 0;
       })
       .slice(0, MAX_ITEMS)
-      .map(({ item }) => item);
+      .map(({ item, positions }) => ({ item, positions }));
   }
 
   private accept(): void {

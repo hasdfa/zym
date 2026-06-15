@@ -30,6 +30,13 @@ export interface CompletionItem {
   sortText?: string;
 }
 
+/** A candidate after ranking: the item plus the matched-character positions
+ *  (indices into `item.label`) the popup highlights. */
+export interface RankedCompletion {
+  item: CompletionItem;
+  positions: number[];
+}
+
 export type CompletionTrigger = 'auto' | 'manual' | 'character';
 
 /** Everything a source needs to produce candidates for the current position. */

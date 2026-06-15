@@ -508,7 +508,7 @@ function highlightSegment(text: string, start: number, end: number, positions: n
 }
 
 /** Render `text` as Pango markup with the matched characters highlighted red. */
-function highlightMarkup(text: string, positions: number[]): string {
+export function highlightMarkup(text: string, positions: number[]): string {
   const matched = new Set(positions);
   let out = '';
   let highlit = false;

@@ -13,8 +13,8 @@ import { Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
 import { monospaceFontCss } from '../../fonts.ts';
-import { escapeMarkup } from '../Picker.ts';
-import type { CompletionItem } from './CompletionSource.ts';
+import { escapeMarkup, highlightMarkup } from '../Picker.ts';
+import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -59,7 +59,7 @@ export class CompletionPopup {
   private readonly divider: InstanceType<typeof Gtk.Separator>;
   private readonly docScroller: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly docLabel: InstanceType<typeof Gtk.Label>;
-  private items: CompletionItem[] = [];
+  private entries: RankedCompletion[] = [];
   private shown = false;
 
   constructor(host: Overlay) {
@@ -105,9 +105,9 @@ export class CompletionPopup {
     return this.shown;
   }
 
-  /** Show `items` with the list's first row aligned to widget pixel `(x, y)`. */
-  showAt(items: CompletionItem[], x: number, y: number): void {
-    this.items = items;
+  /** Show `entries` with the list's first row aligned to widget pixel `(x, y)`. */
+  showAt(entries: RankedCompletion[], x: number, y: number): void {
+    this.entries = entries;
     this.rebuild();
     this.panel.setMarginStart(Math.max(0, Math.round(x) - CONTENT_INSET_PX));
     this.panel.setMarginTop(Math.max(0, Math.round(y)));
@@ -124,9 +124,9 @@ export class CompletionPopup {
   /** Move the selection by `delta`, wrapping. (The controller caps the list to a
    *  count that fits, so no scroll-into-view — which would need to steal focus.) */
   move(delta: number): void {
-    if (this.items.length === 0) return;
+    if (this.entries.length === 0) return;
     const current = this.listBox.getSelectedRow()?.getIndex() ?? 0;
-    const next = (current + delta + this.items.length) % this.items.length;
+    const next = (current + delta + this.entries.length) % this.entries.length;
     const row = this.listBox.getRowAtIndex(next);
     if (row) this.listBox.selectRow(row);
     this.updateDoc();
@@ -134,7 +134,7 @@ export class CompletionPopup {
 
   getSelected(): CompletionItem | null {
     const index = this.listBox.getSelectedRow()?.getIndex();
-    return index === undefined ? null : (this.items[index] ?? null);
+    return index === undefined ? null : (this.entries[index]?.item ?? null);
   }
 
   private rebuild(): void {
@@ -144,7 +144,7 @@ export class CompletionPopup {
       this.listBox.remove(child);
       child = next;
     }
-    for (const item of this.items) this.listBox.append(this.buildRow(item));
+    for (const entry of this.entries) this.listBox.append(this.buildRow(entry));
     const first = this.listBox.getRowAtIndex(0);
     if (first) this.listBox.selectRow(first);
     this.updateDoc();
@@ -163,9 +163,11 @@ export class CompletionPopup {
     }
   }
 
-  private buildRow(item: CompletionItem): InstanceType<typeof Gtk.ListBoxRow> {
+  private buildRow({ item, positions }: RankedCompletion): InstanceType<typeof Gtk.ListBoxRow> {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    const label = new Gtk.Label({ label: item.label, xalign: 0 });
+    const label = new Gtk.Label({ xalign: 0, useMarkup: true });
+    // Highlight the fuzzy-matched characters (same accent the picker uses).
+    label.setMarkup(highlightMarkup(item.label, positions));
     label.addCssClass('completion-label');
     box.append(label);
     if (item.detail) {
