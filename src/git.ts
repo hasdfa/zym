@@ -88,6 +88,9 @@ export interface GitRepo {
   run(args: string[], onDone?: (ok: boolean) => void): void;
   /** Subscribe to branch / working-tree / busy changes. Returns an unsubscribe fn. */
   onChange(callback: () => void): () => void;
+  /** Re-check the working tree now (and fire `onChange` if it moved) instead of
+   *  waiting for the next poll — e.g. right after an agent edits files. */
+  refresh(): void;
   /** Stop watching and release resources. */
   dispose(): void;
 }
@@ -327,6 +330,11 @@ class GgitRepo implements GitRepo {
     if (signature === this.lastSignature) return;
     this.lastSignature = signature;
     this.notify();
+  }
+
+  /** Force an immediate working-tree re-check (fires onChange if anything moved). */
+  refresh(): void {
+    this.maybeEmit();
   }
 
   // Busy is reference-counted so overlapping operations stay busy until the last

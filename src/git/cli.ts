@@ -1,0 +1,199 @@
+/*
+ * git/cli.ts — a thin wrapper over the `git` command line, used by the Source
+ * Control UI for status, staging, and committing.
+ *
+ * Why the CLI (not the libgit2 `GitRepo` in ../git.ts): it gives us exactly what
+ * `git status`/`git diff` print without re-deriving it, and respects the user's
+ * hooks and config (name/email, GPG, pre-commit/commit-msg) for free. node I/O
+ * is fine here — a probe under the live GLib loop confirmed `execFileSync` and
+ * `execFile` callbacks work; only promise/microtask resolution is starved, so we
+ * use the callback form and avoid promise wrappers.
+ */
+import { execFile, execFileSync } from 'node:child_process';
+import * as Path from 'node:path';
+
+export type GitFileState =
+  | 'new'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'conflicted'
+  | 'untracked';
+
+/** One changed path, with where the change lives (index vs worktree). */
+export interface GitChange {
+  /** Absolute path. */
+  path: string;
+  /** Repo-relative path (display + git pathspec). */
+  relPath: string;
+  state: GitFileState;
+  staged: boolean;
+  unstaged: boolean;
+}
+
+export type GitDone = (ok: boolean, stdout: string, stderr: string) => void;
+
+const MAX_BUFFER = 64 * 1024 * 1024;
+
+/** Run git synchronously and return stdout. Throws on non-zero exit. */
+export function gitSync(cwd: string, args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER });
+}
+
+/** Run git asynchronously (callback form — promises are starved under the loop). */
+export function git(cwd: string, args: string[], onDone: GitDone): void {
+  execFile('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER }, (err, stdout, stderr) => {
+    onDone(!err, stdout ?? '', stderr ?? '');
+  });
+}
+
+/** The repository top-level for `cwd`, or null when not inside a repo. */
+export function repoRoot(cwd: string): string | null {
+  try {
+    return gitSync(cwd, ['rev-parse', '--show-toplevel']).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Absolute path of `.git/COMMIT_EDITMSG` (handles worktrees/submodules). */
+export function commitMsgPath(root: string): string {
+  const p = gitSync(root, ['rev-parse', '--git-path', 'COMMIT_EDITMSG']).trim();
+  return Path.isAbsolute(p) ? p : Path.join(root, p);
+}
+
+/** Parse `git status --porcelain=v2 -z` into a flat list of changes. */
+export function getChanges(root: string): GitChange[] {
+  let out: string;
+  try {
+    out = gitSync(root, ['status', '--porcelain=v2', '-z']);
+  } catch {
+    return [];
+  }
+
+  const changes: GitChange[] = [];
+  const tokens = out.split('\0');
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (!tok) continue;
+    const kind = tok[0];
+
+    if (kind === '?') {
+      changes.push(mk(root, tok.slice(2), 'untracked', false, true));
+    } else if (kind === '1') {
+      // 1 <xy> <sub> <mH> <mI> <mW> <hH> <hI> <path>
+      const f = tok.split(' ');
+      pushTracked(changes, root, f[1], f.slice(8).join(' '));
+    } else if (kind === '2') {
+      // 2 <xy> <sub> <mH> <mI> <mW> <hH> <hI> <Xscore> <path>\0<origPath>
+      const f = tok.split(' ');
+      pushTracked(changes, root, f[1], f.slice(9).join(' '));
+      i++; // the next token is the rename's original path — consume it
+    } else if (kind === 'u') {
+      // u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
+      const f = tok.split(' ');
+      changes.push(mk(root, f.slice(10).join(' '), 'conflicted', true, true));
+    }
+    // '!' (ignored) and anything else: skip.
+  }
+  return changes;
+}
+
+// --- Mutations (callback form; refresh on completion) ------------------------
+
+export function stage(root: string, relPath: string, onDone: GitDone): void {
+  git(root, ['add', '--', relPath], onDone);
+}
+
+export function unstage(root: string, relPath: string, onDone: GitDone): void {
+  git(root, ['restore', '--staged', '--', relPath], onDone);
+}
+
+/** Discard working-tree changes to a tracked file (destructive). */
+export function discard(root: string, relPath: string, onDone: GitDone): void {
+  git(root, ['restore', '--', relPath], onDone);
+}
+
+/** Remove an untracked file (destructive). */
+export function clean(root: string, relPath: string, onDone: GitDone): void {
+  git(root, ['clean', '-f', '--', relPath], onDone);
+}
+
+export function stageAll(root: string, onDone: GitDone): void {
+  git(root, ['add', '-A'], onDone);
+}
+
+export function unstageAll(root: string, onDone: GitDone): void {
+  git(root, ['reset', '-q'], onDone);
+}
+
+/** Commit using a message file (`git commit -F`). */
+export function commit(root: string, messageFile: string, onDone: GitDone): void {
+  git(root, ['commit', '-F', messageFile], onDone);
+}
+
+// --- branches ----------------------------------------------------------------
+
+/** The current branch name, or null (detached HEAD / not a repo). */
+export function currentBranch(root: string): string | null {
+  try {
+    return gitSync(root, ['branch', '--show-current']).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Local branch names, most-recently-committed first. */
+export function listBranches(root: string): string[] {
+  try {
+    return gitSync(root, ['branch', '--format=%(refname:short)', '--sort=-committerdate'])
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Switch to an existing branch. */
+export function switchBranch(root: string, branch: string, onDone: GitDone): void {
+  git(root, ['switch', branch], onDone);
+}
+
+/** Create a new branch off HEAD and switch to it. */
+export function createBranch(root: string, name: string, onDone: GitDone): void {
+  git(root, ['switch', '-c', name], onDone);
+}
+
+// --- internals ---------------------------------------------------------------
+
+function pushTracked(changes: GitChange[], root: string, xy: string, rel: string): void {
+  const staged = xy[0] !== '.';
+  const unstaged = xy[1] !== '.';
+  changes.push(mk(root, rel, mapState(staged ? xy[0] : xy[1]), staged, unstaged));
+}
+
+function mapState(ch: string): GitFileState {
+  switch (ch) {
+    case 'A':
+      return 'new';
+    case 'D':
+      return 'deleted';
+    case 'R':
+      return 'renamed';
+    case 'U':
+      return 'conflicted';
+    default:
+      return 'modified'; // M, T (type change), C (copy)
+  }
+}
+
+function mk(
+  root: string,
+  rel: string,
+  state: GitFileState,
+  staged: boolean,
+  unstaged: boolean,
+): GitChange {
+  return { path: Path.join(root, rel), relPath: rel, state, staged, unstaged };
+}
