@@ -23,10 +23,20 @@ import { quilx } from '../quilx.ts';
 // installed unconditionally here rather than with the theme chrome (which only
 // applies when the theme defines its own background).
 addStyles(`
-  #Panel tabbar taboxchild { border-radius: 0; margin: 0; }
-  #Panel tabbar revealer { width: 0; height: 0; }
   #Panel tabbar tabbox { padding: 0; }
   #Panel tabbar > revealer > box { padding: 0; }
+  #Panel tabboxchild {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  /* The active pane with no focusable child (an empty pane) has nowhere to draw a
+     focus ring, so mark it as selected with an accent outline instead. */
+  #Panel.active-empty {
+    outline: 2px solid var(--accent-color);
+    outline-offset: -2px;
+  }
 `);
 
 // Nerd Font emoticons for the empty-state face (bundled icon font). Neutral while
@@ -53,6 +63,8 @@ export interface PanelOptions {
 export interface PanelChild {
   readonly widget: Widget;
   setTitle(title: string): void;
+  /** Toggle Adw's "needs attention" tab highlight (an accent-coloured marker). */
+  setNeedsAttention(needs: boolean): void;
   /** Make this child's tab the selected one in its panel. */
   select(): void;
   close(): void;
@@ -66,12 +78,18 @@ export class Panel {
   // A two-page stack: the tab content when populated, the empty-state placeholder
   // when the panel holds no tabs. `updateEmptyState` swaps between them.
   private readonly stack: InstanceType<typeof Gtk.Stack>;
+  // The tab bar. Its visibility is driven manually (see updateEmptyState) rather
+  // than by Adw's autohide, which would wrap it in an animated revealer.
+  private readonly bar: InstanceType<typeof Adw.TabBar>;
   // The empty-state placeholder (shown when the panel has no tabs), its face, and
   // its caption; the face's glyph/color and the caption text follow the panel's
   // active state.
   private emptyState!: InstanceType<typeof Gtk.Box>;
   private emoticon!: InstanceType<typeof Gtk.Label>;
   private emptyText!: InstanceType<typeof Gtk.Label>;
+  // Whether this is the active panel — tracked so the empty-pane outline can be
+  // recomputed both when the active state changes and when the tab count does.
+  private active = false;
 
   constructor(options: PanelOptions = {}) {
     this.options = options;
@@ -79,12 +97,15 @@ export class Panel {
     this.view = new Adw.TabView();
     this.view.setVexpand(true);
 
-    const bar = new Adw.TabBar();
-    bar.setView(this.view);
-    bar.setAutohide(true); // a lone child is shown chromeless, with no tab bar
+    this.bar = new Adw.TabBar();
+    this.bar.setView(this.view);
+    // Autohide off: it hides a lone tab's bar by collapsing an internal animated
+    // revealer, which we don't want. We replicate the "chromeless lone tab" look
+    // by toggling the bar's own visibility in updateEmptyState instead.
+    this.bar.setAutohide(false);
 
     const content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    content.append(bar);
+    content.append(this.bar);
     content.append(this.view);
 
     this.stack = new Gtk.Stack();
@@ -177,19 +198,34 @@ export class Panel {
   /** Reflect whether this is the active panel: the empty-state face smiles in the
    *  foreground color when active, and sits neutral and muted otherwise. */
   setActive(active: boolean): void {
+    this.active = active;
     this.emoticon.setLabel(active ? EMOTICON_HAPPY : EMOTICON_NEUTRAL);
     this.emptyText.setLabel(active ? EMPTY_TEXT_ACTIVE : EMPTY_TEXT_IDLE);
     for (const label of [this.emoticon, this.emptyText]) {
       if (active) label.addCssClass('is-active');
       else label.removeCssClass('is-active');
     }
+    this.updateActiveOutline();
+  }
+
+  // Outline the panel when it is active but holds no tabs: an empty pane has no
+  // focusable child to carry a visible focus ring, so without this an active
+  // empty pane looks indistinguishable from an idle one.
+  private updateActiveOutline(): void {
+    const empty = this.view.getNPages() === 0;
+    if (this.active && empty) this.root.addCssClass('active-empty');
+    else this.root.removeCssClass('active-empty');
   }
 
   // Show the empty-state placeholder when there are no tabs, the tab content
   // otherwise. Called after every add/close so the panel never shows a blank
-  // Adw.TabView.
+  // Adw.TabView. Also hides the tab bar for a lone tab (chromeless), replacing
+  // Adw's autohide so no animated revealer is involved.
   private updateEmptyState(): void {
-    this.stack.setVisibleChildName(this.view.getNPages() === 0 ? 'empty' : 'content');
+    const count = this.view.getNPages();
+    this.stack.setVisibleChildName(count === 0 ? 'empty' : 'content');
+    this.bar.setVisible(count >= 2);
+    this.updateActiveOutline();
   }
 
   // Each panel owns the commands that switch *its own* tabs, registered against
@@ -218,6 +254,7 @@ export class Panel {
     return {
       widget: child,
       setTitle: (title: string) => page.setTitle(title),
+      setNeedsAttention: (needs: boolean) => page.setNeedsAttention(needs),
       select: () => this.view.setSelectedPage(page),
       close: () => this.view.closePage(page),
     };

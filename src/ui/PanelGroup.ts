@@ -169,6 +169,14 @@ export class PanelGroup {
    *  collapses so its sibling reclaims the space; the root leaf stays put and
    *  shows its empty state. */
   closeActivePanel(): void {
+    // An already-empty pane has no tabs to close, so closeAll would be a no-op.
+    // Route it through onLeafEmpty directly so `pane:close` still collapses an
+    // empty non-root pane (the root leaf stays put — there's no sibling to
+    // reclaim its space).
+    if (this.active.panel.tabCount === 0) {
+      this.onLeafEmpty(this.active);
+      return;
+    }
     // Closing each tab fires onClosed for host cleanup; emptying the leaf routes
     // through onLeafEmpty (collapse for non-root, no-op for root).
     this.active.panel.closeAll();
