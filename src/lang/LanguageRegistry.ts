@@ -10,6 +10,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
+import { Disposable } from '../util/eventKit.ts';
 import type {
   LanguageDef, GrammarDef, ServerDef, ActiveServer, ServerOverride, ServerOverrides,
 } from './types.ts';
@@ -27,18 +28,36 @@ export class LanguageRegistry {
   private disabledLanguages = new Set<string>();
   private serverOverrides: ServerOverrides = {};
 
-  registerLanguage(def: LanguageDef): void {
+  /**
+   * Register a language definition (detection). Returns a Disposable that
+   * removes it again (used by plugin deactivation); removal is a no-op if the
+   * entry was meanwhile replaced by a later registration of the same id.
+   */
+  registerLanguage(def: LanguageDef): Disposable {
     this.languages.set(def.id, def);
+    return new Disposable(() => {
+      if (this.languages.get(def.id) === def) this.languages.delete(def.id);
+    });
   }
 
-  registerGrammar(langId: string, def: GrammarDef): void {
+  registerGrammar(langId: string, def: GrammarDef): Disposable {
     this.grammars.set(langId, def);
+    return new Disposable(() => {
+      if (this.grammars.get(langId) === def) this.grammars.delete(langId);
+    });
   }
 
-  registerServer(langId: string, def: ServerDef): void {
+  registerServer(langId: string, def: ServerDef): Disposable {
     const list = this.serversByLang.get(langId);
     if (list) list.push(def);
     else this.serversByLang.set(langId, [def]);
+    return new Disposable(() => {
+      const current = this.serversByLang.get(langId);
+      if (!current) return;
+      const i = current.indexOf(def);
+      if (i !== -1) current.splice(i, 1);
+      if (current.length === 0) this.serversByLang.delete(langId);
+    });
   }
 
   /** The language definition matching a file path (by filename, extension, glob). */

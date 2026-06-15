@@ -1,15 +1,18 @@
 /*
- * Built-in language pack — the curated, hand-authored languages quilx ships
- * with, registered in-process at startup (effectively the first "plugin"). Each
- * entry pairs detection + a tree-sitter grammar (where we vendor one) + LSP
- * server candidates with per-project activation.
+ * The TypeScript plugin — quilx's first plugin, and the reference for the
+ * contribution model. It bundles everything that makes the TS/JS family a
+ * first-class language: detection, tree-sitter grammars (vendored under
+ * `queries/`), and the LSP server candidates (flow / tsserver / deno / eslint)
+ * with their per-project activation.
  *
- * Server configs are authored here (referencing Helix's `languages.toml` as a
- * guide), not fetched. Servers must be on `PATH`; an inactive/uninstalled server
- * simply never spawns. Extend by adding languages here (or, later, via plugins).
+ * This was previously the in-process "built-in pack" (`src/lang/builtin.ts`);
+ * it now activates through a `PluginContext`, so every contribution is tracked
+ * and torn down cleanly if the plugin is deactivated. Server configs are authored
+ * here (referencing Helix's `languages.toml` as a guide), not fetched; a server
+ * that isn't installed/active simply never spawns.
  */
-import type { LanguageRegistry } from './LanguageRegistry.ts';
-import type { ServerDef } from './types.ts';
+import type { Plugin, PluginContext } from '../../plugin/types.ts';
+import type { ServerDef } from '../../lang/types.ts';
 
 // Tree-sitter node types that fold when they span more than one line. Shared by
 // the TS-family grammars.
@@ -71,39 +74,46 @@ const ESLINT: ServerDef = {
   },
 };
 
-/** Register the built-in languages on `reg`. */
-export function registerBuiltins(reg: LanguageRegistry): void {
-  // TypeScript (the typescript grammar; tsx grammar would misread `<T>` casts).
-  reg.registerLanguage({ id: 'typescript', fileTypes: ['ts', 'mts', 'cts'] });
-  reg.registerGrammar('typescript', {
-    wasm: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
-    query: 'typescript',
-    foldTypes: JS_FOLD_TYPES,
-  });
-  reg.registerServer('typescript', TSSERVER);
-  reg.registerServer('typescript', DENO);
-  reg.registerServer('typescript', ESLINT);
+export const typescriptPlugin: Plugin = {
+  id: 'typescript',
+  name: 'TypeScript',
+  description: 'TypeScript / JavaScript: grammar, folding, and language servers (tsserver, flow, deno, eslint).',
 
-  // TSX / JSX / plain JS — all backed by the tsx grammar (a superset), but each
-  // maps to its own LSP languageId (tsx grammar key isn't a valid LSP id).
-  reg.registerLanguage({
-    id: 'tsx',
-    fileTypes: ['tsx', 'jsx', 'js', 'mjs', 'cjs'],
-    lspIds: {
-      tsx: 'typescriptreact',
-      jsx: 'javascriptreact',
-      js: 'javascript',
-      mjs: 'javascript',
-      cjs: 'javascript',
-    },
-  });
-  reg.registerGrammar('tsx', {
-    wasm: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
-    query: 'tsx',
-    foldTypes: JS_FOLD_TYPES,
-  });
-  reg.registerServer('tsx', FLOW);
-  reg.registerServer('tsx', TSSERVER);
-  reg.registerServer('tsx', DENO);
-  reg.registerServer('tsx', ESLINT);
-}
+  activate(ctx: PluginContext) {
+    const { languages } = ctx;
+
+    // TypeScript (the typescript grammar; the tsx grammar would misread `<T>` casts).
+    languages.registerLanguage({ id: 'typescript', fileTypes: ['ts', 'mts', 'cts'] });
+    languages.registerGrammar('typescript', {
+      wasm: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
+      highlightsPath: ctx.resolve('queries/typescript/highlights.scm'),
+      foldTypes: JS_FOLD_TYPES,
+    });
+    languages.registerServer('typescript', TSSERVER);
+    languages.registerServer('typescript', DENO);
+    languages.registerServer('typescript', ESLINT);
+
+    // TSX / JSX / plain JS — all backed by the tsx grammar (a superset), but each
+    // maps to its own LSP languageId (the tsx grammar key isn't a valid LSP id).
+    languages.registerLanguage({
+      id: 'tsx',
+      fileTypes: ['tsx', 'jsx', 'js', 'mjs', 'cjs'],
+      lspIds: {
+        tsx: 'typescriptreact',
+        jsx: 'javascriptreact',
+        js: 'javascript',
+        mjs: 'javascript',
+        cjs: 'javascript',
+      },
+    });
+    languages.registerGrammar('tsx', {
+      wasm: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
+      highlightsPath: ctx.resolve('queries/tsx/highlights.scm'),
+      foldTypes: JS_FOLD_TYPES,
+    });
+    languages.registerServer('tsx', FLOW);
+    languages.registerServer('tsx', TSSERVER);
+    languages.registerServer('tsx', DENO);
+    languages.registerServer('tsx', ESLINT);
+  },
+};

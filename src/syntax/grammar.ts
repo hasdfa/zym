@@ -13,7 +13,6 @@
 import { createRequire } from 'node:module';
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { languages } from '../lang/index.ts';
 
 const require_ = createRequire(import.meta.url);
@@ -38,26 +37,22 @@ export interface Grammar {
 }
 
 // Highlights queries are vendored verbatim from Zed (GPL-3.0; see /LICENSE and the
-// header in each .scm) under queries/<name>/highlights.scm. They use Zed's capture
-// names; the highlighter maps those to colors with longest-prefix fallback — e.g.
-// @function.method → @function — so dotted names need no special handling here
-// (see theme/theme.ts and syntax-controller's resolveTag).
+// header in each .scm). They use Zed's capture names; the highlighter maps those
+// to colors with longest-prefix fallback — e.g. @function.method → @function — so
+// dotted names need no special handling here (see theme/theme.ts and
+// syntax-controller's resolveTag). Each grammar's `highlightsPath` (a `GrammarDef`
+// field) is an absolute path the contributing plugin owns; this module just reads
+// it.
 //
-// We DON'T use the stock tree-sitter-javascript grammar: Zed's javascript query is
-// written for Zed's TS-aware JS grammar and references TS-only nodes/tokens that
-// the pinned v0.20.3 wasm lacks (it won't compile). Instead .js/.jsx route to the
-// tsx grammar — a superset that parses plain JS, JSX and TS — so Zed's tsx query
-// applies verbatim. Plain .ts uses the typescript grammar (the tsx grammar would
-// misread `<T>` casts as JSX).
-const QUERIES_DIR = Path.join(Path.dirname(fileURLToPath(import.meta.url)), 'queries');
-
-function loadHighlights(name: string): string {
-  return Fs.readFileSync(Path.join(QUERIES_DIR, name, 'highlights.scm'), 'utf8');
-}
-
 // The language definitions (extensions, grammar wasm + query + fold types) live
-// in the `LanguageRegistry` (src/lang); this module just loads/caches the wasm
-// and runs the query. Grammar specs come from `languages.grammarFor`.
+// in the `LanguageRegistry` (src/lang), contributed by plugins (src/plugins);
+// this module just loads/caches the wasm and runs the query. Grammar specs come
+// from `languages.grammarFor`.
+
+/** Resolve a grammar's wasm: absolute paths as-is, else a node_modules specifier. */
+function resolveWasm(wasm: string): string {
+  return Path.isAbsolute(wasm) ? wasm : require_.resolve(wasm);
+}
 
 /** Map a file path to a known language id, or null if unsupported. */
 export function langIdForPath(path: string): string | null {
@@ -74,10 +69,10 @@ export async function loadGrammar(langId: string): Promise<Grammar | null> {
   if (cached) return cached;
 
   await initTreeSitter();
-  const language = await Parser.Language.load(require_.resolve(spec.wasm));
+  const language = await Parser.Language.load(resolveWasm(spec.wasm));
   const grammar: Grammar = {
     language,
-    query: language.query(loadHighlights(spec.query)),
+    query: language.query(Fs.readFileSync(spec.highlightsPath, 'utf8')),
     foldTypes: new Set(spec.foldTypes),
   };
   cache.set(langId, grammar);
@@ -87,6 +82,11 @@ export async function loadGrammar(langId: string): Promise<Grammar | null> {
 /** Synchronously get an already-loaded grammar, or null if not preloaded. */
 export function getGrammar(langId: string): Grammar | null {
   return cache.get(langId) ?? null;
+}
+
+/** Drop a cached grammar (e.g. when a plugin unregisters it). */
+export function clearGrammar(langId: string): void {
+  cache.delete(langId);
 }
 
 /**

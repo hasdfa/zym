@@ -39,7 +39,7 @@ const MATCH = {
 export type CommandRef = { command: string; args?: unknown[] };
 type Effect = string | CommandRef | ((this: Widget, event: unknown, element: Widget) => void);
 type Keymap = Record<string, Effect>;
-type KeymapBySelector = Record<string, Keymap>;
+export type KeymapBySelector = Record<string, Keymap>;
 
 type Listener = (key: Key, element: Widget | undefined, elements: Widget[]) => boolean;
 

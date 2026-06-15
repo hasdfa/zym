@@ -39,10 +39,11 @@ Resolution API: `languageForPath(path)`, `grammarFor(langId)`,
 `activeServers(path)`, plus loaders (`grammar.ts` keeps wasm/query loading but
 reads its specs from the registry).
 
-Built-in languages register at startup (`src/lang/builtin/*`) — effectively the
-first, in-process "plugin". External plugin *loading* (manifest + per-plugin
-asset paths) lands with the broader Plugin-system task; this restructure is its
-precursor.
+Built-in languages register at startup via the bundled plugins
+(`src/plugins/*`) — the TypeScript plugin is the first one and contributes the
+whole TS/JS family. This restructure was the precursor; the plugin system that
+consumes it now exists (see [../plugins.md](../plugins.md)). External plugin
+*loading* (manifest + out-of-repo packages) is still ahead.
 
 ## Multiple server configs per language (per-project selection)
 
@@ -276,6 +277,12 @@ double the watches today (a future dedup-by-root opportunity).
 
 **Migration complete** — grammar + LSP config is fully registry-driven, curated,
 and override-able; no runtime fetch remains.
+
+> **Since superseded:** the curated built-in pack (`src/lang/builtin.ts`,
+> referenced in the phases above) has been extracted into the TypeScript plugin
+> (`src/plugins/typescript/`) and now registers through a `PluginContext` at
+> activation rather than at import. The `LanguageRegistry` is unchanged — it was
+> the plugin seam all along. See [../plugins.md](../plugins.md).
 
 ## Open questions
 

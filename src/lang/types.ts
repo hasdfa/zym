@@ -30,10 +30,12 @@ export interface LanguageDef {
 
 /** Tree-sitter grammar binding for a language. */
 export interface GrammarDef {
-  /** Resolvable path to the grammar `.wasm`. */
+  /** The grammar `.wasm`: an absolute path, or a module specifier resolved
+   *  against quilx's `node_modules` (e.g. `tree-sitter-wasms/out/…`). */
   wasm: string;
-  /** Highlights query name (`queries/<query>/highlights.scm`). */
-  query: string;
+  /** Absolute path to the highlights query file (`…/highlights.scm`). Plugins
+   *  vendor this alongside their code (`ctx.resolve('queries/…/highlights.scm')`). */
+  highlightsPath: string;
   /** Node types that fold when they span >1 line. */
   foldTypes: string[];
 }

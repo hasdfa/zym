@@ -13,6 +13,7 @@
  * exists); that holds for anything built during/after AppWindow construction.
  */
 import { Gdk, Gtk } from './gi.ts';
+import { Disposable } from './util/eventKit.ts';
 
 const PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION;
 
@@ -22,10 +23,20 @@ export interface StyleSheet {
   remove(): void;
 }
 
+// A removable static sheet queued before the display exists: `flush` back-fills
+// `provider` once installed, so a later dispose can remove it either way.
+interface QueuedRemovable {
+  css: string;
+  provider: InstanceType<typeof Gtk.CssProvider> | null;
+  cancelled: boolean;
+}
+
 class StyleManager {
   private ready = false;
   // Static CSS queued before the display exists (module-init time).
   private readonly queued: string[] = [];
+  // Removable static sheets queued before the display exists (plugin styles).
+  private readonly queuedRemovable: QueuedRemovable[] = [];
   // Live providers for keyed sheets, so each can be replaced or removed.
   private readonly byKey = new Map<string, InstanceType<typeof Gtk.CssProvider>>();
 
@@ -35,11 +46,34 @@ class StyleManager {
     else this.queued.push(css);
   }
 
+  /**
+   * Add static CSS that can later be removed — for plugin stylesheets, which are
+   * contributed at activation (possibly before the display exists) and torn down
+   * on deactivation. Returns a Disposable that removes the sheet whether it was
+   * installed immediately or is still queued.
+   */
+  addRemovable(css: string): Disposable {
+    if (this.ready) {
+      const provider = this.install(css, PRIORITY);
+      return new Disposable(() => this.removeProvider(provider));
+    }
+    const entry: QueuedRemovable = { css, provider: null, cancelled: false };
+    this.queuedRemovable.push(entry);
+    return new Disposable(() => {
+      entry.cancelled = true;
+      if (entry.provider) this.removeProvider(entry.provider);
+    });
+  }
+
   /** Flush queued static CSS and mark the display ready. Call once at activate. */
   flush(): void {
     this.ready = true;
     for (const css of this.queued) this.install(css, PRIORITY);
     this.queued.length = 0;
+    for (const entry of this.queuedRemovable) {
+      if (!entry.cancelled) entry.provider = this.install(entry.css, PRIORITY);
+    }
+    this.queuedRemovable.length = 0;
   }
 
   /**
@@ -79,12 +113,17 @@ class StyleManager {
     this.byKey.delete(key);
   }
 
-  private install(css: string, priority: number): void {
-    const display = Gdk.Display.getDefault();
-    if (!display) return;
+  private install(css: string, priority: number): InstanceType<typeof Gtk.CssProvider> {
     const provider = new Gtk.CssProvider();
     provider.loadFromString(css);
-    Gtk.StyleContext.addProviderForDisplay(display, provider, priority);
+    const display = Gdk.Display.getDefault();
+    if (display) Gtk.StyleContext.addProviderForDisplay(display, provider, priority);
+    return provider;
+  }
+
+  private removeProvider(provider: InstanceType<typeof Gtk.CssProvider>): void {
+    const display = Gdk.Display.getDefault();
+    if (display) Gtk.StyleContext.removeProviderForDisplay(display, provider);
   }
 }
 

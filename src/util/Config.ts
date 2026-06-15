@@ -91,6 +91,17 @@ export class Config {
     return this;
   }
 
+  /**
+   * Drop a previously-declared parameter and any value `set` for it — the
+   * inverse of `setSchema`, used when a plugin that contributed the key
+   * deactivates. Reverts to undeclared: `get` returns undefined afterwards.
+   */
+  removeSchema(keyPath: string): this {
+    delete this.schema[keyPath];
+    this.store.delete(keyPath);
+    return this;
+  }
+
   /** All declared `[keyPath, schema]` pairs, in declaration order — the hook a
    *  settings UI uses to enumerate every parameter it can edit. */
   schemaEntries(): Array<[string, ConfigSchema]> {

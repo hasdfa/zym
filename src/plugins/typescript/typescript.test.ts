@@ -1,11 +1,40 @@
+/*
+ * Tests for the TypeScript plugin's contributions (detection, grammars, LSP
+ * server selection) — activated against a throwaway `LanguageRegistry` through a
+ * minimal `PluginContext`. This exercises both the plugin's data and the
+ * registry's per-project server-resolution logic.
+ */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LanguageRegistry } from './LanguageRegistry.ts';
-import { registerBuiltins } from './builtin.ts';
+import { LanguageRegistry } from '../../lang/index.ts';
+import type { PluginContext, PluginLanguages } from '../../plugin/types.ts';
+import { typescriptPlugin } from './index.ts';
 
+// A partial `PluginContext` backed by `reg` — the plugin only touches
+// `ctx.languages` and `ctx.resolve`. `onRegister` lets a test collect the
+// returned disposables (for the deactivation test).
+function fakeContext(
+  reg: LanguageRegistry,
+  onRegister?: (d: { dispose(): void }) => void,
+): PluginContext {
+  const track = <T extends { dispose(): void }>(d: T): T => (onRegister?.(d), d);
+  const languages: PluginLanguages = {
+    registerLanguage: (def) => track(reg.registerLanguage(def)),
+    registerGrammar: (id, def) => track(reg.registerGrammar(id, def)),
+    registerServer: (id, def) => track(reg.registerServer(id, def)),
+  };
+  return {
+    id: 'typescript',
+    dir: '/plugins/typescript',
+    resolve: (p: string) => `/plugins/typescript/${p}`,
+    languages,
+  } as unknown as PluginContext;
+}
+
+// Activate the plugin onto a fresh registry.
 function builtins(): LanguageRegistry {
   const reg = new LanguageRegistry();
-  registerBuiltins(reg);
+  typescriptPlugin.activate(fakeContext(reg));
   return reg;
 }
 
@@ -43,7 +72,7 @@ test('lspLanguageId maps per-extension LSP ids (one grammar spans several)', () 
 
 test('grammar binding is registered per language', () => {
   const reg = builtins();
-  assert.equal(reg.grammarFor('typescript')?.query, 'typescript');
+  assert.match(reg.grammarFor('typescript')!.highlightsPath, /queries\/typescript\/highlights\.scm$/);
   assert.match(reg.grammarFor('tsx')!.wasm, /tree-sitter-tsx\.wasm$/);
   assert.equal(reg.grammarFor('nope'), null);
 });
@@ -78,7 +107,7 @@ test('disabledLanguages: no servers activate, but detection still works', () => 
   assert.deepEqual(reg.activeServers('/proj/a.ts', { fileExists: present('/proj/tsconfig.json') }), []);
   // Detection/grammar are untouched — highlighting keeps working when LSP is off.
   assert.equal(reg.languageForPath('/proj/a.ts'), 'typescript');
-  assert.equal(reg.grammarFor('typescript')?.query, 'typescript');
+  assert.match(reg.grammarFor('typescript')!.highlightsPath, /queries\/typescript\/highlights\.scm$/);
 });
 
 test('override can disable a single server, leaving the rest', () => {
@@ -142,11 +171,16 @@ test('installableServers lists servers with an install method, de-duplicated', (
   assert.equal(names.filter((n) => n === 'typescript-language-server').length, 1);
 });
 
-test('singleFile server activates without a root (root = file dir)', () => {
+test('contributions are disposable: deactivating removes detection, grammar, and servers', () => {
   const reg = new LanguageRegistry();
-  reg.registerLanguage({ id: 'x', fileTypes: ['x'] });
-  reg.registerServer('x', { name: 's', command: 's', singleFile: true });
-  const active = reg.activeServers('/a/b/c.x', { fileExists: () => false });
-  assert.equal(active.length, 1);
-  assert.equal(active[0].rootDir, '/a/b');
+  const disposables: Array<{ dispose(): void }> = [];
+  typescriptPlugin.activate(fakeContext(reg, (d) => disposables.push(d)));
+  assert.equal(reg.languageForPath('/x/a.ts'), 'typescript');
+  assert.ok(reg.grammarFor('typescript'));
+  assert.ok(reg.serversFor('typescript').length > 0);
+
+  for (const d of disposables) d.dispose();
+  assert.equal(reg.languageForPath('/x/a.ts'), null);
+  assert.equal(reg.grammarFor('typescript'), null);
+  assert.deepEqual(reg.serversFor('typescript'), []);
 });
