@@ -17,6 +17,7 @@
         "editor.line_number": "#888888",
         "editor.active_line_number": "#bbc2cf",
         "text.muted": "#5b6268",
+        "text.accent": "#05d6d9",
         "success": "#98be65",
         "warning": "#ecbe7b",
         "error": "#ff6c6b",

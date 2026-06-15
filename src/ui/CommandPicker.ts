@@ -4,30 +4,99 @@
  * CommandManager), opens the fuzzy picker over their names, and dispatches the
  * chosen command back to the element that offered it.
  *
+ * Rows are styled for readability: a command's `prefix:` is muted and followed
+ * by a space (`file: save`), matched characters are highlighted, and the
+ * command's description (when it has one) is shown right-aligned in a smaller,
+ * proportional (non-monospace) muted font.
+ *
  * The available commands are snapshotted *before* the picker grabs focus, so the
  * list reflects the context the user was in (the editor, the file tree, …) rather
  * than the picker itself.
  */
 import { Gtk } from '../gi.ts';
-import { openPicker } from './Picker.ts';
+import { openPicker, escapeMarkup, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
+import { uiFontFamily } from '../fonts.ts';
 import { getActiveElements } from '../util/getActiveElements.ts';
 import { quilx } from '../quilx.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
+const PREFIX_ALPHA = '55%'; // muted `prefix:` segment
+const DESC_ALPHA = '55%'; // muted trailing description
+const SHORTCUT_ALPHA = '60%'; // muted keybinding (still bold + monospace)
+
+function escapeText(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Render `prefix:verb` as `prefix: verb` — the `prefix` muted, a space inserted
+// after the colon — with matched characters highlighted. Hyphens (word
+// separators in command names) are muted too, so `focus-left` reads as the words
+// with dim joiners. Positions index into the raw command name.
+export function formatCommandName(name: string, positions: number[]): string {
+  const matched = new Set(positions);
+  const colon = name.indexOf(':');
+  let out = '';
+  for (let i = 0; i < name.length; i++) {
+    const ch = escapeMarkup(name[i]);
+    const muted = (colon !== -1 && i < colon) || name[i] === '-';
+    if (matched.has(i)) out += `<span foreground="${HIGHLIGHT_COLOR}" weight="bold">${ch}</span>`;
+    else if (muted) out += `<span alpha="${PREFIX_ALPHA}">${ch}</span>`;
+    else out += ch;
+    if (i === colon) out += ' '; // a space after the ':'
+  }
+  return out;
+}
+
 export function openCommandPicker(host: Overlay): void {
   const elements = getActiveElements();
   const commands = quilx.commands.getAvailableCommands(elements);
-  // Map each name back to the element it should dispatch to.
-  const elementByName = new Map(commands.map((c) => [c.name, c.element]));
+  // Resolve a chosen name back to its element (to dispatch) and description.
+  const byName = new Map(commands.map((c) => [c.name, c]));
+  // Primary keystroke per command (computed once; highest-priority binding).
+  // Shown verbatim, as written in the keymap (e.g. `space w`, `ctrl-shift-p`).
+  const shortcutByName = new Map<string, string>();
+  for (const c of commands) {
+    const [primary] = quilx.keymaps.keystrokesForCommand(c.name, elements);
+    if (primary) shortcutByName.set(c.name, primary);
+  }
+  // The proportional UI font for descriptions (the picker itself is monospace).
+  const uiFont = uiFontFamily();
+
+  const items: PickerItem[] = commands
+    .map((c) => c.name)
+    .sort()
+    .map((name) => ({ value: name, text: name }));
 
   openPicker({
     host,
     placeholder: 'Run command…',
-    items: commands.map((c) => c.name).sort(),
+    items,
+    formatMain: (item, positions) => {
+      const detail = detailMarkup(byName.get(item.value)?.description, shortcutByName.get(item.value), uiFont);
+      return {
+        main: formatCommandName(item.text, positions),
+        // Right-aligned detail: the muted description (smaller, proportional)
+        // followed by the keybinding flush-right — bold and monospace (the
+        // picker's font, inherited). Not dimmed as a whole, so the binding reads
+        // strong while the description stays muted via its own markup.
+        detail,
+        detailMuted: false,
+      };
+    },
     onSelect: (name) => {
-      const element = elementByName.get(name);
+      const element = byName.get(name)?.element;
       if (element) quilx.commands.dispatch(element, name);
     },
   });
+}
+
+function detailMarkup(description: string | undefined, shortcut: string | undefined, uiFont: string): string | undefined {
+  const parts: string[] = [];
+  if (description)
+    parts.push(`<span size="smaller" font_family="${uiFont}" alpha="${DESC_ALPHA}">${escapeText(description)}</span>`);
+  // Keybinding last → flush-right and column-aligned across rows; bold, monospace
+  // (inherits the picker font), color-muted, shown exactly as written in the keymap.
+  if (shortcut) parts.push(`<span weight="bold" alpha="${SHORTCUT_ALPHA}">${escapeText(shortcut)}</span>`);
+  return parts.length ? parts.join('   ') : undefined;
 }

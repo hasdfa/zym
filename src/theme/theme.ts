@@ -38,6 +38,12 @@ export interface UiColors {
   selectedBg?: string;
   /** De-emphasized text (secondary labels, subtitles). */
   textMuted?: string;
+  /**
+   * Accent foreground for emphasized text — used for the matched-character
+   * highlight in pickers (the role Zed's `text.accent` plays in its fuzzy
+   * finders). The picker falls back to a blue/purple when this is unset.
+   */
+  textAccent?: string;
   /** Semantic text colors for status/feedback (Zed's status keys). */
   success?: string;
   warning?: string;
@@ -135,6 +141,7 @@ function adaptZedTheme(zed: ZedTheme): Theme {
       popoverBg: pick('elevated_surface.background', 'surface.background', 'background'),
       selectedBg: pick('element.selected', 'ghost_element.selected'),
       textMuted: pick('text.muted'),
+      textAccent: pick('text.accent', 'text.accent.emphasis', 'accent'),
       success: pick('success'),
       warning: pick('warning'),
       error: pick('error'),

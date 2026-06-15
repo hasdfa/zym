@@ -9,16 +9,26 @@
  * the candidate strings and an `onSelect` callback. Items may arrive
  * asynchronously via the returned handle's `setItems`.
  */
-import { Gdk, Gtk } from '../gi.ts';
+import { Gdk, Gtk, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
-import { monospaceFontCss } from '../fonts.ts';
+import { monospaceFontCss, uiFontFamily } from '../fonts.ts';
+import { fuzzyMatch } from './fuzzyMatch.ts';
+import { theme } from '../theme/theme.ts';
+import { frecency } from '../util/Frecency.ts';
 
 const MONOSPACE = monospaceFontCss();
+// The proportional UI font, for the opt-in `.prose-entry` (CSS doesn't resolve
+// the `sans-serif` generic reliably, so a concrete family is used).
+const UI_FONT = uiFontFamily();
 
 const PICKER_WIDTH = 640;
 const PICKER_MAX_HEIGHT = 360;
 const MAX_RESULTS = 200;
-const HIGHLIGHT_COLOR = '#e01b24'; // Adwaita red
+// Color of the matched characters. Sourced from the theme's accent foreground
+// (Zed's `text.accent`), with a blue fallback when the theme omits it. Baked
+// into Pango markup at row-build time, so it can't be a CSS variable (and Pango
+// can't gradient-fill text, so it's a solid color).
+export const HIGHLIGHT_COLOR = theme.ui.textAccent ?? '#05d6d9';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -50,6 +60,12 @@ addStyles(`
     padding: 0;
     margin: 0;
   }
+  /* Opt-in sans entry (e.g. the resume picker, whose query is prose, not a path
+     or identifier). Overrides the card's inherited monospace family. */
+  #PickerEntry.prose-entry,
+  #PickerEntry.prose-entry > text {
+    font-family: "${UI_FONT}";
+  }
   #PickerEntry > text {
     margin: 0;
     padding: 0;
@@ -63,6 +79,12 @@ addStyles(`
   }
   #PickerRow {
     padding: 0.5em 1em;
+  }
+  /* Two-column rows (e.g. the file picker): filename on the left, its directory
+     right-aligned and muted. Highlights still show through the dimming. */
+  #PickerRow > .picker-detail {
+    margin-left: 1em;
+    opacity: 0.5;
   }
   #PickerEmpty {
     padding: 0.5em 1em;
@@ -92,22 +114,106 @@ export interface PickerAction {
   run: (query: string) => void;
 }
 
+/**
+ * A candidate richer than a bare string. Plain strings are still accepted and
+ * normalised to `{ value, text }`; objects let a caller separate the value
+ * returned on selection from the text matched against, boost matches in a
+ * sub-range (e.g. a filename), and split the display into two columns.
+ */
+export interface PickerItem {
+  /** Passed to `onSelect` when this item is chosen. */
+  value: string;
+  /** Text matched against the query; highlight positions index into this. */
+  text: string;
+  /**
+   * Char offset in `text` from which matches score higher. The file picker
+   * points this at the filename so filename matches outrank directory matches.
+   */
+  boostFrom?: number;
+  /** Optional two-column display (main left, detail right-aligned and muted). */
+  display?: PickerItemDisplay;
+}
+
+export interface PickerItemDisplay {
+  /** Substring range `[start, end)` of `text` shown on the left, highlighted. */
+  main: [number, number];
+  /** Substring range `[start, end)` shown right-aligned and muted, highlighted. */
+  detail: [number, number];
+}
+
 export interface PickerOptions {
   host: Overlay;
   placeholder?: string;
-  items?: string[];
-  onSelect: (item: string) => void;
+  items?: Array<string | PickerItem>;
+  /** Initial entry text (e.g. seed an action prompt with the editor selection). */
+  query?: string;
+  onSelect: (value: string) => void;
   action?: PickerAction;
+  /**
+   * Show the `action` row only when the query matches no items (rather than
+   * always, alongside matches). Used by the resume picker, which offers "start a
+   * new agent with this prompt" as a fallback when nothing matches.
+   */
+  actionWhenEmpty?: boolean;
+  /** Render the search entry in a proportional (sans) font instead of the card's
+   *  monospace — for pickers whose query is prose rather than a path/identifier. */
+  proseEntry?: boolean;
+  /**
+   * Override the markup of a (non-`display`) row, given the item and its
+   * matched-char positions (into `item.text`). Return either a single markup
+   * string (the row's only label) or `{ main, detail }` to add a right-aligned,
+   * muted detail column. Lets a caller restyle the row — e.g. the command picker
+   * mutes a command's `prefix:`, inserts a space, and right-aligns its
+   * description. Positions still drive the match highlight.
+   */
+  formatMain?: (item: PickerItem, positions: number[]) => string | FormattedRow;
+  /**
+   * Enable frecency ("frequency × recency") ordering under this namespace (e.g.
+   * `"file"`). When set, chosen items are recorded on selection, and a modest
+   * bonus floats frequently/recently chosen ones up — both in the no-query list
+   * and once a query is typed. Off by default; not every picker wants it (the
+   * command palette, for one, prefers stable alphabetical ordering).
+   */
+  frecency?: string;
+  /**
+   * Lower-level escape hatch: a ranking bonus added to an item's fuzzy score and
+   * used to order the no-query list. `frecency` is the usual way to get this;
+   * supply `weight` directly only for a custom signal. Takes precedence over
+   * `frecency`'s ordering bonus when both are set. Keep it modest (~0–1.5).
+   */
+  weight?: (item: PickerItem) => number;
+}
+
+/** Markup for a row's main label plus an optional right-aligned detail. */
+export interface FormattedRow {
+  main: string;
+  detail?: string;
+  /**
+   * Whether the detail is dimmed (the muted `.picker-detail` look). Default true;
+   * set false when the caller controls emphasis in the markup itself (e.g. the
+   * command palette's bold keybinding column).
+   */
+  detailMuted?: boolean;
 }
 
 export interface PickerHandle {
   /** Replace the candidate list (e.g. once an async scan completes). */
-  setItems(items: string[]): void;
+  setItems(items: Array<string | PickerItem>): void;
   close(): void;
 }
 
+function normalizeItem(item: string | PickerItem): PickerItem {
+  return typeof item === 'string' ? { value: item, text: item } : item;
+}
+
 export function openPicker(options: PickerOptions): PickerHandle {
-  const { host } = options;
+  const { host, frecency: frecencyNs } = options;
+
+  // Effective ranking bonus: an explicit `weight` wins; otherwise derive one
+  // from the frecency store when a namespace is configured.
+  const weight =
+    options.weight ??
+    (frecencyNs ? (item: PickerItem) => frecency.boost(frecencyNs, item.value) : undefined);
 
   const entry = new Gtk.SearchEntry({
     placeholderText: options.placeholder ?? 'Search…',
@@ -115,6 +221,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
   entry.setHexpand(true);
   entry.setName('PickerEntry');
   entry.addCssClass('has-text-input'); // release the `space` leader so it types
+  if (options.proseEntry) entry.addCssClass('prose-entry');
 
   const listBox = new Gtk.ListBox();
   listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
@@ -136,10 +243,10 @@ export function openPicker(options: PickerOptions): PickerHandle {
   panel.append(scrolled);
   panel.overflow = Gtk.Overflow.HIDDEN;
 
-  let items = options.items ?? [];
+  let items = (options.items ?? []).map(normalizeItem);
   // The currently displayed matches, parallel to the leading rows in the list
   // box, so a row can be mapped back to its item by index.
-  let results: string[] = [];
+  let results: PickerItem[] = [];
   // The trailing action row, when an action is configured and the entry is
   // non-empty; checked in `choose` to run the action instead of selecting.
   let actionRow: InstanceType<typeof Gtk.ListBoxRow> | null = null;
@@ -165,21 +272,19 @@ export function openPicker(options: PickerOptions): PickerHandle {
       child = next;
     }
     const query = entry.getText();
-    const ranked = rank(query, items).slice(0, MAX_RESULTS);
+    const ranked = rank(query, items, weight).slice(0, MAX_RESULTS);
     results = ranked.map((match) => match.item);
     for (const match of ranked) {
-      const label = new Gtk.Label({ xalign: 0, useMarkup: true });
-      label.setMarkup(highlightMarkup(match.item, match.positions));
-      label.setName('PickerRow');
       const row = new Gtk.ListBoxRow();
-      row.setChild(label);
+      row.setChild(renderRow(match.item, match.positions, options.formatMain));
       listBox.append(row);
     }
 
     // The prompt-driven action sits after the matches; it appears only when the
-    // user has typed something for it to act on.
+    // user has typed something for it to act on — and, when `actionWhenEmpty`,
+    // only if nothing matched (so it reads as a "nothing found, do this instead").
     actionRow = null;
-    if (options.action && query.length > 0) {
+    if (options.action && query.length > 0 && (!options.actionWhenEmpty || results.length === 0)) {
       const label = new Gtk.Label({ xalign: 0 });
       label.setText(options.action.label(query));
       label.setName('PickerAction');
@@ -217,8 +322,9 @@ export function openPicker(options: PickerOptions): PickerHandle {
     }
     const item = results[target.getIndex()];
     if (item === undefined) return;
+    if (frecencyNs) frecency.record(frecencyNs, item.value);
     close(false);
-    options.onSelect(item);
+    options.onSelect(item.value);
   };
 
   const move = (delta: number) => {
@@ -267,89 +373,117 @@ export function openPicker(options: PickerOptions): PickerHandle {
   panel.addController(focus);
 
   host.addOverlay(panel);
+  if (options.query) entry.setText(options.query); // prefill (e.g. a seeded prompt)
   rebuild();
   entry.grabFocus();
 
   return {
-    setItems(next: string[]) {
-      items = next;
+    setItems(next: Array<string | PickerItem>) {
+      items = next.map(normalizeItem);
       if (!closed) rebuild();
     },
     close,
   };
 }
 
-export interface FuzzyMatch {
-  /** Higher is a better match. */
-  score: number;
-  /** Indices in the text that the query matched, in order. */
-  positions: number[];
-}
-
-/**
- * Score `text` against `query` as a fuzzy (subsequence) match, recording which
- * characters matched. Returns `null` when `query` is not a subsequence of
- * `text`. An empty query matches everything with a neutral score.
- */
-export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
-  if (query.length === 0) return { score: 0, positions: [] };
-  const needle = query.toLowerCase();
-  const haystack = text.toLowerCase();
-
-  const positions: number[] = [];
-  let score = 0;
-  let from = 0;
-  let previous = -2;
-  for (const ch of needle) {
-    let pos = -1;
-    for (let j = from; j < haystack.length; j++) {
-      if (haystack[j] === ch) {
-        pos = j;
-        break;
-      }
-    }
-    if (pos === -1) return null;
-
-    if (pos === previous + 1) score += 8; // consecutive run
-    if (pos === 0 || isBoundary(text, pos)) score += 12; // word / path boundary
-    score -= pos - from; // penalise skipped chars
-    positions.push(pos);
-    previous = pos;
-    from = pos + 1;
-  }
-  return { score: score - text.length * 0.05, positions }; // prefer shorter, denser hits
-}
-
-function isBoundary(text: string, pos: number): boolean {
-  const before = text[pos - 1];
-  if (
-    before === '/' ||
-    before === '\\' ||
-    before === '_' ||
-    before === '-' ||
-    before === '.' ||
-    before === ' '
-  ) {
-    return true;
-  }
-  // camelCase boundary: a lowercase/digit followed by an uppercase letter.
-  return /[a-z0-9]/.test(before) && /[A-Z]/.test(text[pos]);
-}
-
 interface RankedItem {
-  item: string;
+  item: PickerItem;
   positions: number[];
 }
 
-function rank(query: string, items: string[]): RankedItem[] {
-  if (query.length === 0) return items.map((item) => ({ item, positions: [] }));
+function rank(
+  query: string,
+  items: PickerItem[],
+  weight?: (item: PickerItem) => number,
+): RankedItem[] {
+  // No query: keep insertion order, but float weighted (frecent) items up.
+  if (query.length === 0) {
+    const ranked = items.map((item) => ({ item, positions: [] as number[] }));
+    if (weight) ranked.sort((a, b) => weight(b.item) - weight(a.item));
+    return ranked;
+  }
   const scored: Array<RankedItem & { score: number }> = [];
   for (const item of items) {
-    const match = fuzzyMatch(query, item);
-    if (match) scored.push({ item, positions: match.positions, score: match.score });
+    const match = fuzzyMatch(query, item.text, { boostFrom: item.boostFrom, maxTypos: 1 });
+    if (match) {
+      const score = match.score + (weight ? weight(item) : 0);
+      scored.push({ item, positions: match.positions, score });
+    }
   }
   scored.sort((a, b) => b.score - a.score);
   return scored;
+}
+
+/**
+ * Build a row's widget for `item`, highlighting the matched `positions`. A plain
+ * item renders as a single highlighted label; a two-column item (e.g. a file)
+ * renders its `main` segment on the left and its `detail` segment right-aligned
+ * and muted, with highlights mapped into each segment.
+ */
+function renderRow(
+  item: PickerItem,
+  positions: number[],
+  formatMain?: (item: PickerItem, positions: number[]) => string | FormattedRow,
+): InstanceType<typeof Gtk.Widget> {
+  if (!item.display) {
+    const formatted = formatMain?.(item, positions);
+    const mainMarkup =
+      (typeof formatted === 'string' ? formatted : formatted?.main) ??
+      highlightMarkup(item.text, positions);
+    const detailMarkup = typeof formatted === 'object' ? formatted.detail : undefined;
+
+    if (!detailMarkup) {
+      const label = new Gtk.Label({ xalign: 0, useMarkup: true });
+      label.setMarkup(mainMarkup);
+      label.setName('PickerRow');
+      return label;
+    }
+
+    // Main label on the left, a right-aligned muted detail on the right (reusing
+    // the two-column `.picker-detail` styling). The main label expands and
+    // ellipsizes so a long label crops to the picker width rather than pushing
+    // the detail (e.g. a "5m ago" timestamp) off the edge; the detail keeps its
+    // natural width so it always shows in full.
+    const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
+    box.setName('PickerRow');
+    const main = new Gtk.Label({ xalign: 0, useMarkup: true });
+    main.setMarkup(mainMarkup);
+    main.setHexpand(true);
+    main.setEllipsize(Pango.EllipsizeMode.END);
+    box.append(main);
+    const detail = new Gtk.Label({ xalign: 1, useMarkup: true });
+    detail.setMarkup(detailMarkup);
+    // Dimmed by default; an un-muted detail keeps the spacing but not the opacity
+    // (the caller's markup sets its own emphasis).
+    if (typeof formatted === 'object' && formatted.detailMuted === false) detail.setMarginStart(16);
+    else detail.addCssClass('picker-detail');
+    box.append(detail);
+    return box;
+  }
+
+  const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
+  box.setName('PickerRow');
+
+  const [ms, me] = item.display.main;
+  const main = new Gtk.Label({ xalign: 0, useMarkup: true });
+  main.setMarkup(highlightSegment(item.text, ms, me, positions));
+  box.append(main);
+
+  const [ds, de] = item.display.detail;
+  if (de > ds) {
+    const detail = new Gtk.Label({ xalign: 1, useMarkup: true });
+    detail.setHexpand(true);
+    detail.setMarkup(highlightSegment(item.text, ds, de, positions));
+    detail.addCssClass('picker-detail');
+    box.append(detail);
+  }
+  return box;
+}
+
+/** Highlight the `[start, end)` slice of `text`, with positions in `text` coords. */
+function highlightSegment(text: string, start: number, end: number, positions: number[]): string {
+  const local = positions.filter((p) => p >= start && p < end).map((p) => p - start);
+  return highlightMarkup(text.slice(start, end), local);
 }
 
 /** Render `text` as Pango markup with the matched characters highlighted red. */
@@ -372,7 +506,7 @@ function highlightMarkup(text: string, positions: number[]): string {
   return out;
 }
 
-function escapeMarkup(ch: string): string {
+export function escapeMarkup(ch: string): string {
   if (ch === '&') return '&amp;';
   if (ch === '<') return '&lt;';
   if (ch === '>') return '&gt;';
