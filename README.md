@@ -1,26 +1,34 @@
 # quilx
 
-A modal source-code editor built with [GtkSourceView 5](https://gitlab.gnome.org/GNOME/gtksourceview),
-GTK 4 and [Adwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), running on
-[node-gtk](https://github.com/romgrk/node-gtk).
+**A keyboard-driven, Vim-style code editor for the Linux desktop — with AI
+coding agents living right inside the workbench.**
+
+quilx pairs modal editing and a `Space`-leader command scheme with a native
+GTK 4 / Adwaita interface that feels at home on GNOME. Split your windows like
+Vim, drive everything from the keyboard, and run terminal coding agents (like
+`claude`) side by side with your code — each tracked live with its own status,
+so you always know which agent is working, waiting, or done.
 
 ![quilx editor with file tree, agent management UI, and config panels](img/example-1.png)
 
-## Features
+## Highlights
 
-- **Vim-style modal editing** via `GtkSource.VimIMContext`, with a status line
-  showing the command bar (`:`, `/`) and pending command preview (e.g. `2dw`)
-- Syntax highlighting with automatic language detection
-- Adwaita light/dark style schemes that follow the system preference, plus a
-  toolbar toggle to force dark mode
-- Open / Save / Save-As through the native `Gtk.FileDialog`
-- A source-map (minimap) gutter on the right
-- A `Space`-leader keybinding scheme, plus `Ctrl+*` shortcuts and Vim-style
-  window splits — see [Keybindings](#keybindings)
-- Notifications surfaced as transient toasts and kept in a persistent log panel
-  — see [Notifications](#notifications)
-- Terminal-based coding **agents** embedded in the workbench, with a live status
-  list and a quick-switcher — see [Agents](#agents)
+- ⌨️ **Vim-style modal editing** with a status line for the command bar (`:`,
+  `/`) and a pending-command preview (e.g. `2dw`)
+- 🤖 **Embedded coding agents** — run `claude` and friends in the workbench,
+  with a live status list and a fuzzy quick-switcher
+- 🪟 **Built for the keyboard** — a `Space`-leader scheme, `Ctrl+*` shortcuts,
+  and Vim-style window splits, all fully rebindable
+- 🎨 **Native GNOME look** — Adwaita light/dark schemes that follow the system
+  preference, with a one-click dark-mode toggle
+- ✨ **Editor essentials** — syntax highlighting with automatic language
+  detection, a minimap gutter, and native Open / Save / Save-As dialogs
+- 🔔 **Notifications** surfaced as transient toasts and kept in a persistent
+  session log
+
+Jump to the details: [Keybindings](#keybindings) ·
+[Notifications](#notifications) · [Agents](#agents) ·
+[Configuration](#configuration)
 
 ## Requirements
 
