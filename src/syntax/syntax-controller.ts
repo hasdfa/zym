@@ -22,6 +22,9 @@ import { theme } from '../theme/theme.ts';
 
 const HIGHLIGHT_DEBOUNCE_MS = 60;
 
+// Line-number gutter color (muted), matching how syntax colors are themed.
+const LINE_NUMBER_COLOR = theme.ui.lineNumber ?? theme.ui.textMuted ?? theme.ui.fg ?? '#888888';
+
 
 interface FoldRegion {
   startLine: number; // line the block opens on (stays visible)
@@ -33,6 +36,17 @@ interface FoldRegion {
 // iter for get_start/end_iter. Normalize to an iter.
 function asIter(r: any): any {
   return Array.isArray(r) ? r[r.length - 1] : r;
+}
+
+// The shared `invisible` tag that performs folding. Other gutter renderers (git
+// change bars, diagnostics) look it up by name to skip hidden lines so their
+// glyphs don't pile up at the collapsed fold position.
+export const FOLD_HIDDEN_TAG_NAME = 'ts:fold-hidden';
+
+/** Whether buffer `line` is hidden inside a fold (any gutter renderer can call this). */
+export function isLineFolded(buffer: any, line: number): boolean {
+  const tag = buffer.getTagTable().lookup(FOLD_HIDDEN_TAG_NAME);
+  return tag ? asIter(buffer.getIterAtLine(line)).hasTag(tag) : false;
 }
 
 export class SyntaxController {
@@ -49,11 +63,18 @@ export class SyntaxController {
   // amortizes the per-capture string work on every refresh.
   private readonly tagCache = new Map<string, any>();
   private readonly invisibleTag: any;
+
+  // The fold-aware line-number gutter renderer (null when line numbers are off),
+  // and the digit width its size is currently primed for. GtkSourceGutterRendererText
+  // sizes from its set text, so we prime it to the widest number and re-prime when
+  // the line count crosses a digit boundary (see primeLineNumbers).
+  private lineNumberRenderer: any = null;
+  private lineNumberPrimedDigits = 0;
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
   private debounceId = 0;
 
-  constructor(view: SourceView, buffer: SourceBuffer) {
+  constructor(view: SourceView, buffer: SourceBuffer, options: { lineNumbers?: boolean } = {}) {
     this.view = view;
     this.buffer = buffer;
 
@@ -66,16 +87,28 @@ export class SyntaxController {
     }
 
     // The tag that performs the actual hiding when a range is folded.
-    this.invisibleTag = new Gtk.TextTag({ name: 'ts:fold-hidden', invisible: true });
+    this.invisibleTag = new Gtk.TextTag({ name: FOLD_HIDDEN_TAG_NAME, invisible: true });
     (buffer as any).getTagTable().add(this.invisibleTag);
 
-    // The fold-chevron gutter renderer. Safe to instantiate: SyntaxController is
-    // built inside the application's activate handler (via EditorWindow), so the
-    // app is already running (vfunc subclasses crash if instantiated earlier).
+    // Gutter renderers (safe to instantiate: SyntaxController is built inside the
+    // application's activate handler, so vfunc subclasses don't crash). Order:
+    // line numbers (leftmost), then the fold chevron next to the text.
+    const gutter = (view as any).getGutter(Gtk.TextWindowType.LEFT);
+    // Custom, fold-aware line numbers. GtkSourceView's built-in line-number gutter
+    // renders a number for every invisible (folded) line at the collapsed y — a
+    // mashup, and slow. Ours draws nothing for hidden lines.
+    if (options.lineNumbers) {
+      const lineNumbers = new LineNumberRenderer();
+      (lineNumbers as any).controller = this;
+      lineNumbers.setXpad(3);
+      gutter.insert(lineNumbers, 0);
+      this.lineNumberRenderer = lineNumbers;
+      this.primeLineNumbers();
+    }
     const renderer = new FoldRenderer();
     (renderer as any).controller = this;
     renderer.setXpad(4);
-    (view as any).getGutter(Gtk.TextWindowType.LEFT).insert(renderer, 0);
+    gutter.insert(renderer, options.lineNumbers ? 1 : 0);
 
     // Feed edits into the current tree for incremental reparsing. insert-text /
     // delete-range run before the buffer is modified (the default handlers are
@@ -83,7 +116,10 @@ export class SyntaxController {
     // schedules the reparse) fires after, so the edit is recorded first.
     (buffer as any).on('insert-text', (location: any, text: string) => this.onInsert(location, text));
     (buffer as any).on('delete-range', (start: any, end: any) => this.onDelete(start, end));
-    (buffer as any).on('changed', () => this.scheduleRefresh());
+    (buffer as any).on('changed', () => {
+      this.primeLineNumbers(); // keep the gutter wide enough as the line count grows
+      this.scheduleRefresh();
+    });
   }
 
   // --- incremental-parse edit tracking ---------------------------------------
@@ -308,6 +344,38 @@ export class SyntaxController {
     if (region) this.toggleFold(region);
   }
 
+  /**
+   * Whether `line` sits inside a *folded* region's hidden body (used by the
+   * line-number gutter to skip hidden lines). Cheap region check — no iter ops.
+   */
+  isLineHidden(line: number): boolean {
+    for (const region of this.foldsByHeaderLine.values()) {
+      if (region.folded && line > region.startLine && line < region.endLine) return true;
+    }
+    return false;
+  }
+
+  /** Digit width to pad line numbers to, so the gutter doesn't jitter while scrolling. */
+  lineNumberWidth(): number {
+    return String((this.buffer as any).getLineCount()).length;
+  }
+
+  /**
+   * Size the line-number gutter to the widest number. GtkSourceGutterRendererText
+   * measures its width from the *currently set* text, and at the gutter's measure
+   * pass no per-line text is set yet — so without this the column collapses to the
+   * padding and no numbers show. Setting representative text + queue_resize fixes
+   * the allocation; re-run only when the digit count changes (cheap no-op otherwise).
+   */
+  private primeLineNumbers(): void {
+    if (!this.lineNumberRenderer) return;
+    const digits = this.lineNumberWidth();
+    if (digits === this.lineNumberPrimedDigits) return;
+    this.lineNumberPrimedDigits = digits;
+    this.lineNumberRenderer.setText('0'.repeat(digits), -1);
+    this.lineNumberRenderer.queueResize();
+  }
+
   private regionAtCursor(): FoldRegion | null {
     const line = asIter((this.buffer as any).getIterAtMark((this.buffer as any).getInsert())).getLine();
     let best: FoldRegion | null = null;
@@ -348,10 +416,13 @@ export class SyntaxController {
 // ---------------------------------------------------------------------------
 
 class FoldRenderer extends GtkSource.GutterRendererText {
-  // Set the glyph for this line: ▸ folded, ▾ foldable-open, else blank.
+  // Set the glyph for this line: ▸ folded, ▾ foldable-open, else blank. A nested
+  // header hidden inside an outer fold draws blank (so it doesn't pile up).
   queryData(_lines: any, line: number) {
-    const region = (this as any).controller?.foldsByHeaderLine.get(line);
-    this.setMarkup(region ? (region.folded ? '▸' : '▾') : ' ', -1);
+    const controller = (this as any).controller as SyntaxController | undefined;
+    const region = controller?.foldsByHeaderLine.get(line);
+    const glyph = region && !controller!.isLineHidden(line) ? (region.folded ? '▸' : '▾') : ' ';
+    this.setMarkup(glyph, -1);
   }
 
   // Only fold-header lines respond to clicks.
@@ -367,3 +438,26 @@ class FoldRenderer extends GtkSource.GutterRendererText {
   }
 }
 registerClass(FoldRenderer);
+
+// ---------------------------------------------------------------------------
+// Fold-aware line-number gutter renderer. Draws the 1-based line number for
+// visible lines and NOTHING for lines hidden inside a fold — so folded line
+// numbers don't pile up at the collapsed position (the built-in gutter's bug).
+// ---------------------------------------------------------------------------
+
+class LineNumberRenderer extends GtkSource.GutterRendererText {
+  queryData(_lines: any, line: number) {
+    const controller = (this as any).controller as SyntaxController | undefined;
+    const width = controller ? controller.lineNumberWidth() : 1;
+    // Always emit fixed-width content so the gutter column keeps a stable width
+    // (empty text collapses it to zero → no numbers show). Hidden (folded) lines
+    // render as blanks of the same width, so they don't pile up.
+    if (!controller || controller.isLineHidden(line)) {
+      this.setText(' '.repeat(width), -1);
+      return;
+    }
+    const num = String(line + 1).padStart(width, ' ');
+    this.setMarkup(`<span foreground="${LINE_NUMBER_COLOR}">${num}</span>`, -1);
+  }
+}
+registerClass(LineNumberRenderer);

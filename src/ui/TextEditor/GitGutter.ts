@@ -17,6 +17,7 @@ import { theme } from '../../theme/theme.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { diffLines } from '../../util/lineDiff.ts';
 import { git, repoRoot } from '../../git/cli.ts';
+import { isLineFolded } from '../../syntax/syntax-controller.ts';
 import type { GitRepo } from '../../git.ts';
 
 type ChangeKind = 'added' | 'modified' | 'removed';
@@ -46,10 +47,13 @@ function splitLines(text: string): string[] {
 class GitGutterRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)
   kindByLine!: Map<number, ChangeKind>;
+  buffer!: any;
 
   queryData(_lines: any, line: number) {
     const kind = this.kindByLine?.get(line);
-    if (!kind) {
+    // Blank for unchanged lines, and for changed lines hidden inside a fold (so
+    // bars don't pile up at the collapsed position).
+    if (!kind || isLineFolded(this.buffer, line)) {
       this.setMarkup(' ', -1);
       return;
     }
@@ -85,6 +89,7 @@ export class GitGutter {
 
     this.renderer = new GitGutterRenderer();
     (this.renderer as any).kindByLine = this.kindByLine;
+    (this.renderer as any).buffer = (view as any).getBuffer();
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
 
     // HEAD moved (commit / checkout / staging): re-fetch the base and re-diff.
