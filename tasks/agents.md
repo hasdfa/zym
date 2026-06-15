@@ -17,13 +17,39 @@ This page covers the architecture; per-feature pages can split out later
 
 What already exists and is reused, not rebuilt:
 
+- **Per-person layouts** — `src/ui/Layout.ts` (renamed from `Workbench`) is one
+  person's dock frame (left/right/top/bottom/center) plus an `owner` field naming
+  its person. **Each person in the LayoutList owns a fully self-contained `Layout`** —
+  its own center, its own Files/Source-Control, its own bottom docks. **Nothing is
+  shared or reparented across layouts.** `buildLayout(owner)` builds the whole
+  `LayoutBundle` (the `Layout` + every per-slot widget) and registers it in
+  `AppWindow.bundles` (owner → bundle). `activateLayout(layout)` shows it
+  (`overlay.setChild(layout.root)`) and `applyBundle` mirrors that bundle's widgets
+  onto the `this.*` fields (`center`/`fileTree`/`gitPanel`/`leftPanel`/the four bottom
+  docks/…), so the rest of AppWindow keeps addressing "the active layout" unchanged.
+  `saveActiveBundle` writes the mutable bits (`filesTab`/`gitTab`/`bottomDock`) back
+  before switching out. `activateOwner(owner)` is the convenience that resolves a
+  person → their `Layout`; `cycleLayout(±1)` (bound to `super-,` / `super-.`) steps
+  the active layout through `[user, …agents]` (the layout-list order), wrapping.
+  Detached layouts stay alive, so a terminal's scrollback /
+  open editors survive a switch. An agent's layout opens terminal-only —
+  `buildLayout` only `setRight`s Files/Source-Control for the user; an agent's panel
+  is still built (so `this.fileTree`/`gitPanel` stay valid and `file-tree:focus`/git
+  commands can reveal it) but not shown on open. The terminal auto-opens on creation
+  (`openAgent` → `buildLayout(agent)`); `closeAgent` drops its bundle.
+  **Worktree-ready:** each agent already has its own Files/Git — a per-worktree
+  build just needs a per-bundle root + `GitRepo` in `buildLayout`. **Deferred:**
+  per-worktree roots; session restore of agent layouts (only the user layout is
+  serialized); per-layout `NotificationLog`/`KeymapPanel` subscribe to global
+  signals and aren't disposed on close (minor leak; agents are few).
 - **`src/ui/AgentTerminal.ts`** — a `Terminal` subclass that spawns the agent CLI
   (`agent.command` config, default `['claude']`). Notable behaviour:
   - initial title = the agent's program basename until the CLI reports its own
     (OSC) title; `prompt` option appends a launch prompt to argv;
-  - on process exit the widget is **not** torn down — it prints a "process
-    exited" notice, flips to `exited`, and stays listed; `onCloseRequest` (Enter)
-    closes the dead tab;
+  - on process exit the widget is **not** torn down and the agent/layout is **not**
+    closed — it prints a "process exited" notice, flips to `exited`, and stays
+    listed; the user restarts (`agent:restart`/`r`) or closes (`agent:close`/`X`) it
+    from the layout list when done;
   - **live status** (`idle | working | waiting | exited`, via `status` /
     `onDidChangeStatus`): for a `claude` agent it injects a per-session
     `--settings` block whose **hooks** write a status word to a file the terminal
@@ -32,9 +58,21 @@ What already exists and is reused, not rebuilt:
     `Stop`/`SessionStart`→idle.
 - **`src/AgentManager.ts` — `quilx.agents`** — the registry: `add`/`remove`/
   `getAgents` (launch order) + `onDidAddAgent`/`onDidRemoveAgent`.
-- **`src/ui/AgentList.ts`** — left-dock sidebar under an "Agents" header (robot
-  glyph). Rows = status indicator (grey cog while working, colored dot otherwise)
-  + title; empty-state filler; `onActivate` / `selectAgent`.
+- **`src/ui/LayoutList.ts`** — the contents of the **LayoutSidebar** (the
+  full-height column at the very left of the window, outside/left of the header
+  bar; AppWindow wraps everything in a top-level horizontal `Gtk.Paned` —
+  `sidebarSplit` — whose start child is the sidebar). Each entry is (will be)
+  associated with a particular **workbench layout**: the first ("default",
+  selected-by-default) row is the **user** (person glyph + name, as a pseudo-agent
+  — `onActivateUser`), the rest are the running agents (status indicator + title +
+  changed-files badge). **Never empty** (the user row is always present → no empty
+  state); every row is one header-bar tall. Its top is an `Adw.HeaderBar` (themed
+  to match the window header bar) whose only content is a flat **logo button**
+  (a square placeholder glyph for now — will become the real logo — styled like the
+  git branch button) that collapses the sidebar to icons-only / expands to
+  icons+text — the width change is applied by the host via `onToggleCollapsed`
+  (`sidebarSplit` position between `LAYOUT_SIDEBAR_COLLAPSED_WIDTH` and
+  `LAYOUT_SIDEBAR_WIDTH`).
 - **`src/ui/AgentPicker.ts`** — fuzzy quick-switcher over running agents, with a
   *Start agent: `<query>`* action that launches a new agent with the typed prompt.
 - **`AppWindow`** — `openAgent(prompt?)` / `showAgent` (reattaches a persisted
@@ -167,10 +205,64 @@ appending. These compose with our `--settings` block, so status hooks keep worki
 offer fork on resuming a *live* session; honor `cleanupPeriodDays` (transcripts are
 pruned after ~30 days).
 
+## Feature: reviewing an agent's work
+
+Goal: let the user review **what one agent changed** — while it works (ongoing) or
+after (past). The obstacle: a working tree shared by several agents (the main
+folder, *or a worktree that hosts more than one agent* — see below) mixes
+everyone's edits, so a plain `git diff` can't attribute a change to one agent.
+Per-agent attribution is therefore the **primary** mechanism, needed even when
+worktrees are in play. (Observed usage: parallel agents mostly edit **disjoint**
+areas, so attribution-without-full-isolation is good enough for the common case.)
+
+### Per-agent baselines (the attribution mechanism)
+
+Capture each agent's "before" so its diff is well-defined:
+
+- A `PreToolUse` hook on `Edit/Write/MultiEdit/NotebookEdit` copies the target
+  file's *current* content into `<statusFile>.baseline/<encoded-path>` the **first**
+  time this agent touches it — "the file as it was right before agent A started."
+  Pairs with the existing `PostToolUse` → `.files` log (the touched set / "after").
+- Agent A's change to a file = `diff(baseline, current)`. Tool-agnostic and under
+  our control. (Claude keeps its own snapshots under `~/.claude/file-history/`, but
+  it's internal/undocumented — at most a fallback for resumed sessions with no
+  baseline.)
+- Works in **any** tree, which is why it's primary: a worktree can hold several
+  agents, so the worktree's own `git diff` ≠ a single agent's work.
+
+### Review UI
+
+- An **"Agent Changes" panel** — a `LocationList`-style list (like Diagnostics) of
+  the agent's changed files with ± counts; selecting one opens its diff. The "✎ N"
+  badge / `o` key graduates from "open the files" to "review the changes."
+- A **diff view** per file (`baseline → current`): next/prev change, optionally
+  per-hunk accept / revert.
+- **Depends on the editor Diff renderer** (`code-editing/diff.md`, not built yet) —
+  that's the rendering substrate. Sequence: diff display → agent review.
+
+### Ongoing vs past
+
+- **Ongoing**: a `Gio.FileMonitor` (reuse the `.files` watch) keeps the diff live as
+  the agent edits.
+- **Past**: baselines persist after the process exits (cleaned with `.files` /
+  `.session` when the agent is retired), so a finished agent stays reviewable.
+  Resumed sessions with no baseline fall back to claude's file-history or `git diff`.
+
+### Parallel agents in one tree
+
+- **Disjoint files** (the common case) → clean per-agent diffs, nothing more needed.
+- **Overlap** (two live agents edit the same file): compare agents' `changedFiles`
+  sets and **flag the overlap** in the agent list — attribution muddies and the
+  agents can stomp each other. True isolation for that case = worktrees (below).
+
 ## Feature: git worktree integration
 
-Goal: run agents in **isolated worktrees** so parallel agents don't fight over one
-working tree, and make "viewing an agent" re-root the editor to its worktree.
+Goal: let agents run in **worktrees** (not only the main folder) so a group of
+related agents shares an isolated branch, and "viewing an agent" can re-root the
+editor to its worktree. **A worktree is its own axis, N:1 with agents — more than
+one agent can run in the same worktree.** So a worktree gives *isolation between
+worktrees*, while telling agents apart *within* a worktree still relies on the
+per-agent baselines above.
 
 ### Backend (`GitRepo`)
 
@@ -184,13 +276,16 @@ removeWorktree(path: string, onDone): void;                        // run(['work
 
 ### Association & lifecycle
 
-- An agent profile / launch can request a worktree: create
-  `<repo>/.quilx/worktrees/<agent>` on a new branch (e.g. `agent/<name>`), set the
-  agent's `cwd` to it.
+- An agent launch picks a worktree — an **existing** one or a **new**
+  `<repo>/.quilx/worktrees/<name>` on a new branch (e.g. `agent/<name>`) — and the
+  agent's `cwd` is set to it. Several agents may target the same worktree.
 - The agent carries its `cwd` (already passed to VTE). Track `agent.cwd` so the UI
-  can show the branch/worktree and so reveal can re-root.
-- On agent close/exit: offer to **keep / merge / discard** the worktree (it may
-  hold uncommitted work) — destructive, never implicit.
+  can group agents by worktree, show the branch, and so reveal can re-root.
+- Review at **two granularities**: the whole worktree's changes (`git diff` of the
+  worktree) and one agent's slice within it (per-agent baselines, above).
+- Lifecycle is **per worktree, not per agent** (it's shared): only when the **last**
+  agent leaves a worktree do we offer **keep / merge / discard** the branch — and a
+  worktree with uncommitted/unmerged work is never removed implicitly.
 
 ### Re-rooting the editor (the hard part)
 
@@ -217,13 +312,10 @@ exists, so it's cheap and high-value; the rest are bigger or more speculative.
 
 ### Builds on what exists
 
-- **Review an agent's diff** *(recommended next)* — the natural step past
-  "open changed files": snapshot the working tree (or just the edited files'
-  contents) when an agent starts, then show **what that agent changed** as a diff
-  against its own baseline. Turns the "✎ N" badge into a "review this agent's work"
-  loop — the daily pain point in agent-driven dev. Reuses `AgentTerminal.changedFiles`
-  for the file set and the (planned) editor Diff display for rendering; the baseline
-  is a per-agent snapshot taken on launch. Per-agent, so two agents' edits don't mix.
+- **Review an agent's diff** *(recommended next)* — promoted to its own design:
+  see **Feature: reviewing an agent's work** above (per-agent baselines + an "Agent
+  Changes" diff panel; the attribution mechanism that also works inside a shared
+  worktree).
 - **Live activity timeline** — a panel that tails the agent's transcript JSONL
   (already parsed by `agentSessions.ts` for resume) into a structured feed: tools
   used, files touched, assistant messages. A readable "what is it doing" view
@@ -285,10 +377,15 @@ container that steals focus from the Vte; see index.md).
       per-row hover actions)
 - [x] Status in the tab title; rename
 - [x] File-change awareness (PostToolUse hook → `.files`; agent-list badge)
+- [ ] Editor Diff renderer (`code-editing/diff.md`) — substrate for review (blocks below)
+- [ ] Review work: per-agent baselines (PreToolUse snapshot → `.baseline/`); "Agent
+      Changes" diff panel (baseline → current); live (FileMonitor) + post-exit
+- [ ] Overlap warning when two live agents edit the same file (compare `changedFiles`)
 - [ ] `GitRepo` worktree ops (list / add / remove)
-- [ ] Run an agent in a per-agent worktree (cwd + branch + cleanup prompt)
-- [ ] Re-root editor to an agent's worktree (MVP scoped view; full re-root with
-      Session management)
+- [ ] Run agents in a worktree (cwd + branch; **N agents per worktree**; per-worktree
+      keep/merge/discard when the last agent leaves)
+- [ ] Re-root editor to a worktree (MVP scoped view; full re-root with Session
+      management) + per-worktree vs per-agent (baseline) review granularity
 
 ## Open questions
 
@@ -298,6 +395,13 @@ container that steals focus from the Vte; see index.md).
   generic "waiting for input" heuristic (PTY idle / prompt detection)?
 - **Worktree re-rooting**: secondary scoped root (cheap) vs full window re-root
   (needs Session management) — how independent should an agent's view be?
+- **Review granularity inside a shared worktree**: N agents per worktree means the
+  worktree's `git diff` mixes them — is the default review view the *worktree* diff,
+  the *per-agent* (baseline) diff, or both side by side? Baselines are the precise
+  per-agent answer; the worktree diff is the "what's the net state" answer.
+- **Baseline cost**: snapshot-on-first-edit (`PreToolUse` copy) is cheap per file
+  but unbounded across a long session — cap by count/size, or rely on git for large
+  files? And dedupe baselines when several agents share a worktree + file.
 - **Kill semantics**: SIGTERM the VTE child directly, or `claude`-aware graceful
   shutdown? And should closing a *running* agent's tab ever kill it, or always
   detach (today) and require explicit `agent:kill`?

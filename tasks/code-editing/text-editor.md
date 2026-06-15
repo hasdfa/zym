@@ -280,14 +280,27 @@ and search/replace via the SearchBar. So `:w`/`:q`/`:e`/`:%s` are covered withou
 a modal command prompt, and the `command-bar-text`/`command-text` status the
 removed `VimIMContext` emitted stays gone.
 
-### 2. Multi-cursor / blockwise — *headline, larger*
+### 2. Multi-cursor / blockwise — *done*
 
-The widget-evaluation's marquee feature; bigger and riskier, so after search.
-Grow `getCursors()`/`getSelections()` from 1- to N-element via `MarkerLayer` mark
-pairs; edit-replay on the change events; extra-caret rendering through the
-decoration / `snapshot_layer` path. Flip `hasMultipleCursors`/`mergeCursors`/
-`onDidAddSelection` from stubs. Rectangular selection (`ctrl-v`) falls out of the
-same infra.
+The widget-evaluation's marquee feature, built on Option A as planned.
+`getCursors()`/`getSelections()` are N-element over `MarkerLayer` mark pairs;
+`hasMultipleCursors`/`mergeCursors`/`mergeIntersectingSelections`/
+`onDidAddSelection` are real (no longer stubs), and `Selection.onDidDestroy`
+backs per-selection register clipboard. Entry points: blockwise `ctrl-v`,
+occurrence `c o p`, and persistent `ctrl-alt-↑/↓` add-cursor (`escape` collapses).
+Extra carets render as reverse-video block tags in normal/visual and host-drawn
+beam carets in insert (`onExtraCursors` → a caret-widget pool in `TextEditor.ts`).
+Multi-cursor operations coalesce into one undo step (`mutateSelections` in one
+`transact`); insert is **live-replicated** to every cursor — each typed
+chunk/backspace is mirrored on a deferred microtask (off the `changed` signal, to
+avoid invalidating the in-flight edit's iters). Tests: `blockwise.test.ts`,
+`multicursor.test.ts`, `occurrence.test.ts`.
+
+Remaining (in-app verification / edges): beam-caret visuals + `ctrl-alt-arrow`
+keys can't be tested headless; an insert *session* undoes in a couple of steps
+(the native keystroke and the mirror flush are separate GTK user actions);
+replication covers insertions + single-line backspaces, with multi-line deletes /
+mid-text replacements falling back to the leave-insert replay.
 
 ### 3. Quick cleanups — *any time*
 

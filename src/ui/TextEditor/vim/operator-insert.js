@@ -121,12 +121,23 @@ class ActivateInsertModeBase extends Operator {
       blockwiseSelection.skipNormalization()
     }
 
+    // With multiple cursors, mirror the primary's typing onto the others live
+    // (incremental insert) instead of replaying once on leave. Blockwise keeps
+    // the leave-time replay (it prepends operator text / handles count repeats).
+    const liveReplication = this.editor.getSelections().length > 1 && this.getBlockwiseSelections().length === 0
+    if (liveReplication) this.editor.beginMultiCursorEditReplication()
+
     const insertModeDisposable = this.vimState.preemptWillDeactivateMode(({mode}) => {
       if (mode !== 'insert') {
         return
       }
       insertModeDisposable.dispose()
       this.disposeReplaceMode()
+
+      // If edits were mirrored to the extra cursors live, the leave-time replay
+      // below must not run (it would double-insert). Stop replication first.
+      const wasReplicating = this.editor.isReplicatingMultiCursorEdits()
+      this.editor.endMultiCursorEditReplication()
 
       this.vimState.mark.set('^', this.editor.getCursorBufferPosition()) // Last insert-mode position
       let textByUserInput = ''
@@ -143,7 +154,7 @@ class ActivateInsertModeBase extends Operator {
       // — this is plain Vim's blockwise-insert behavior, which mirrors the typed
       // text to every row on leaving insert mode. Then collapse to one cursor,
       // since quilx doesn't keep persistent multi-cursors.
-      if (textByUserInput && this.editor.getSelections().length > 1) {
+      if (!wasReplicating && textByUserInput && this.editor.getSelections().length > 1) {
         for (const selection of this.editor.getSelections()) {
           if (selection.isPrimary) continue
           selection.insertText(textByOperator + textByUserInput, {autoIndent: false})

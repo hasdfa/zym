@@ -12,6 +12,8 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { SyntaxController } from '../../syntax/syntax-controller.ts';
+import { detectIndentation } from './detectIndentation.ts';
+import { handleAutoPairInsert, handleAutoPairBackspace } from './autoPair.ts';
 import { theme } from '../../theme/theme.ts';
 import { createSourceScheme } from '../../theme/createSourceScheme.ts';
 import { addStyles } from '../../styles.ts';
@@ -32,11 +34,16 @@ import { CompletionController } from './CompletionController.ts';
 import { createBufferWordsSource } from './createBufferWordsSource.ts';
 import { createLspCompletionSource } from './createLspCompletionSource.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';
+import { lspToRange } from '../../lsp/position.ts';
+import type { PositionEncoding } from '../../lsp/position.ts';
+import type { TextEdit, SignatureHelp, ParameterInformation } from 'vscode-languageserver-protocol';
+import { escapeMarkup } from '../Picker.ts';
 import type { GitRepo } from '../../git.ts';
 import type { TabState } from '../../SessionManager.ts';
 import {
   Adw,
   Gdk,
+  GLib,
   Gtk,
   GtkSource,
   type SourceBuffer,
@@ -65,6 +72,11 @@ addStyles(`
     background-color: ${theme.ui.fg};
     border-radius: 1px;
   }
+  /* Beam caret for extra (multi-cursor) carets in insert mode — a thin vertical
+     bar, like the primary insert-mode caret. */
+  .quilx-beam-caret {
+    background-color: ${theme.ui.fg};
+  }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
   .quilx-placeholder {
     color: ${theme.ui.textMuted ?? theme.ui.lineNumber ?? theme.ui.fg};
@@ -88,6 +100,11 @@ const RIGHT_MARGIN = 80;
 // label fills this width and wraps. HOVER_GAP keeps the card clear of the cursor.
 const HOVER_WIDTH_PX = 300;
 const HOVER_GAP = 4;
+// Left inset of a `.quilx-hover` card's text (1px border + 8px padding); the
+// signature card shifts left by this so its text lines up with the code column.
+const CARD_CONTENT_INSET_PX = 9;
+// Settle the autopair `()` insert + cursor move before requesting signature help.
+const SIGNATURE_DEBOUNCE_MS = 40;
 
 type VimState = ReturnType<typeof attachVim>;
 
@@ -115,6 +132,8 @@ function registerSearchKeymapsOnce(): void {
       N: 'editor:search-previous',
       '*': 'editor:search-word-forward',
       '#': 'editor:search-word-backward',
+      'g *': 'editor:search-word-forward-loose',
+      'g #': 'editor:search-word-backward-loose',
     },
   });
 }
@@ -153,6 +172,63 @@ export interface BufferEditorOptions {
   languagePath?: string;
 }
 
+// Syntax-highlight a signature fragment (falling back to plain escaped text when
+// the language has no grammar). The whole label is the language's code.
+function highlightFragment(text: string, lang: string | undefined): string {
+  return (lang && highlightToMarkup(text, lang)) || escapeMarkup(text);
+}
+
+// Codepoint column where the active call's callee name begins, so the signature
+// card anchors at the function name (not the `(`). Walks left from `cursorCol`
+// to the call's open paren (depth-aware, so nested calls resolve to the innermost
+// enclosing one), then back over the callee chain (`foo`, `obj.method`). Returns
+// null when the open paren / a name isn't on this line (then we fall back).
+function callNameStartColumn(line: string[], cursorCol: number): number | null {
+  let depth = 0;
+  let i = cursorCol - 1;
+  for (; i >= 0; i--) {
+    const ch = line[i];
+    if (ch === ')') depth++;
+    else if (ch === '(') {
+      if (depth === 0) break;
+      depth--;
+    }
+  }
+  if (i < 0 || line[i] !== '(') return null;
+  let end = i;
+  while (end > 0 && /\s/.test(line[end - 1])) end--; // skip whitespace before `(`
+  let start = end;
+  while (start > 0 && /[\w$.]/.test(line[start - 1])) start--; // the callee name chain
+  return start < end ? start : null;
+}
+
+// Build Pango markup for a signature label: syntax-highlighted, with the active
+// parameter bolded. `param.label` is either a substring of the signature or
+// `[start, end]` offsets into it (labelOffsetSupport, which we advertise).
+function signatureMarkup(
+  label: string,
+  parameters: ParameterInformation[] | undefined,
+  activeParam: number | undefined,
+  lang: string | undefined,
+): string {
+  const param = activeParam !== undefined ? parameters?.[activeParam] : undefined;
+  let range: [number, number] | undefined;
+  if (param) {
+    if (Array.isArray(param.label)) range = [param.label[0], param.label[1]];
+    else {
+      const idx = label.indexOf(param.label);
+      if (idx >= 0) range = [idx, idx + param.label.length];
+    }
+  }
+  if (!range) return highlightFragment(label, lang);
+  const [start, end] = range;
+  return (
+    highlightFragment(label.slice(0, start), lang) +
+    `<b>${highlightFragment(label.slice(start, end), lang)}</b>` +
+    highlightFragment(label.slice(end), lang)
+  );
+}
+
 export class TextEditor {
   readonly root: InstanceType<typeof Gtk.Box>;
 
@@ -180,12 +256,24 @@ export class TextEditor {
   // Vertical box so the label fills (and wraps to) the card's fixed width.
   private readonly hoverCard = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the hover card
+  // The signature-help card: shown live while typing a call's arguments. Same
+  // floating-card pattern as hover; `signatureSeq` drops stale async responses.
+  private readonly signatureLabel = new Gtk.Label({ useMarkup: true, wrap: true, xalign: 0 });
+  private readonly signatureCard = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+  private signatureSeq = 0;
+  private signatureTimer = 0;
+  // Whether the signature card's position is fixed for the current call (set on
+  // first show, cleared on dismiss) — so it stays put as arguments are typed.
+  private signatureAnchored = false;
 
   // Editor-local overlays: the pending-command preview (showcmd) and the
   // hollow-rectangle caret shown while the view is unfocused.
   private readonly showcmdLabel = new Gtk.Label({ label: '' });
   private readonly caretLayer = new Gtk.Fixed();
   private readonly caret = new Gtk.Box();
+  // Pool of caret widgets for the extra (multi-cursor) carets, grown on demand
+  // and hidden when unused. Driven by `editorModel.onExtraCursors`.
+  private readonly extraCarets: InstanceType<typeof Gtk.Box>[] = [];
   private showcmd = '';
 
   // Buffer-only mode config (null = a normal file editor), and the placeholder
@@ -213,10 +301,17 @@ export class TextEditor {
     this.syntax = new SyntaxController(this.view, this.buffer, { lineNumbers: !this.bufferMode });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
+    // Default indentation from config; `loadFile` detects and overrides per file.
+    this.editorModel.setIndentation({
+      useSpaces: quilx.config.get('editor.insertSpaces') !== false,
+      width: (quilx.config.get('editor.tabLength') as number) || TAB_WIDTH,
+    });
     // Let motions see/reveal folds (the fold state lives in SyntaxController).
     this.editorModel.setFoldProvider({
       isFoldedAtRow: (row) => this.syntax.isLineHidden(row),
       unfoldRow: (row) => this.syntax.unfoldRow(row),
+      foldableRanges: () => this.syntax.foldRegions(),
+      functionRangeAt: (row, column) => this.syntax.functionRangeAt(row, column),
     });
 
     // Modal editing runs through the vendored vim-mode-plus core.
@@ -231,6 +326,7 @@ export class TextEditor {
     this.root.setName('TextEditor'); // selector identity for command/keymap rules
 
     this.installFoldCommands();
+    this.installAutoPair();
     this.installCursorOverlay();
     this.installShowcmd();
     this.followSystemColorScheme();
@@ -261,8 +357,13 @@ export class TextEditor {
     // so the first parse sees it). Grammars must be preloaded (preloadGrammars).
     if (mode.languagePath) this.syntax.setLanguageForPath(mode.languagePath);
     // Read-only viewer (e.g. a diff pane): block edits at the view; vim normal-mode
-    // navigation still works, and insert-mode keystrokes simply do nothing.
-    if (mode.readOnly) this.view.setEditable(false);
+    // navigation still works, and insert-mode keystrokes simply do nothing. Start
+    // unfocused so a freshly-shown pane has no caret until it's actually focused
+    // (otherwise both side-by-side panes would show one at creation).
+    if (mode.readOnly) {
+      this.view.setEditable(false);
+      this.editorModel.setFocused(false);
+    }
 
     if (mode.onSubmit) {
       // Ctrl+Enter submits. Capture-phase on the view so it fires only when the
@@ -295,9 +396,12 @@ export class TextEditor {
       'editor:search-previous': () => {
         if (this.search.hasActiveSearch) this.search.previous();
       },
-      // `*`/`#`: search the word under the cursor forward/backward.
-      'editor:search-word-forward': () => this.searchWordUnderCursor(false),
-      'editor:search-word-backward': () => this.searchWordUnderCursor(true),
+      // `*`/`#`: whole-word search of the word under the cursor; `g*`/`g#` match
+      // substrings too.
+      'editor:search-word-forward': () => this.searchWordUnderCursor(false, true),
+      'editor:search-word-backward': () => this.searchWordUnderCursor(true, true),
+      'editor:search-word-forward-loose': () => this.searchWordUnderCursor(false, false),
+      'editor:search-word-backward-loose': () => this.searchWordUnderCursor(true, false),
     });
 
     // Search-as-motion (`d/foo`): the vim layer requests multi-char input through
@@ -310,7 +414,7 @@ export class TextEditor {
 
   /** vim `*`/`#`: search for the keyword under (or next on the line after) the
    *  cursor. No-op when the line has no word at/after the cursor. */
-  private searchWordUnderCursor(reverse: boolean): void {
+  private searchWordUnderCursor(reverse: boolean, wholeWord: boolean): void {
     const pos = this.editorModel.getCursorBufferPosition();
     const line = this.editorModel.lineTextForBufferRow(pos.row);
     const wordRe = /\w+/g;
@@ -319,7 +423,7 @@ export class TextEditor {
       // match.index/length are UTF-16; columns are codepoints — compare in codepoints.
       const wordEndColumn = [...line.slice(0, match.index + match[0].length)].length;
       if (wordEndColumn > pos.column) {
-        this.search.searchWord(match[0], reverse);
+        this.search.searchWord(match[0], reverse, wholeWord);
         return;
       }
     }
@@ -336,18 +440,117 @@ export class TextEditor {
       getCursorBufferPosition: () => this.editorModel.getCursorBufferPosition(),
     };
     this.diagnostics = new DiagnosticsView(this.view, this.underlineOverlay, this.editorModel, () => this._currentFile);
-    // Full-text sync: any buffer edit re-sends the whole document.
-    this.editorModel.onDidChangeText(() => quilx.lsp.didChange(this.lspDocument));
+    // Sync edits to the server; pass per-change deltas so a server that
+    // negotiated incremental sync gets just the change (else full text).
+    this.editorModel.onDidChangeText((event) => {
+      quilx.lsp.didChange(
+        this.lspDocument,
+        event.changes.map((c) => ({ start: c.oldRange.start, oldText: c.oldText, newText: c.newText })),
+      );
+      this.maybeSignatureHelp(event);
+    });
     // The hover popover is anchored to a fixed cursor position; dismiss it once
     // the cursor moves or the view scrolls (both no-ops when nothing is showing).
-    this.buffer.on('notify::cursor-position', () => this.dismissHover());
-    this.view.getVadjustment()?.on('value-changed', () => this.dismissHover());
+    this.buffer.on('notify::cursor-position', () => {
+      this.dismissHover();
+      // While the card is up, follow the cursor: re-request so it updates the
+      // active parameter and closes once the cursor leaves the call (e.g. after
+      // an autopair type-over of `)`, which moves the cursor without a text edit).
+      if (this.signatureCard.getVisible()) this.scheduleSignatureRequest();
+    });
+    this.view.getVadjustment()?.on('value-changed', () => {
+      this.dismissHover();
+      this.dismissSignature();
+    });
+    // Leaving insert mode (or destroying) closes the signature card.
+    this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {
+      if (mode !== 'insert') this.dismissSignature();
+    });
     // Tear down with the widget: close the document and drop diagnostics.
     this.root.on('destroy', () => {
       this.dismissHover();
+      this.dismissSignature();
       quilx.lsp.didClose(this.lspDocument);
       this.diagnostics.dispose();
     });
+  }
+
+  // Request signature help when typing inside a call. Triggered when a trigger
+  // char (`(`, `,`) appears in the *typed text* — not the char before the cursor,
+  // which autopair leaves as the auto-inserted `)` — or while the card is already
+  // up (to track the active parameter / detect leaving the call). Debounced so the
+  // autopair's `()` insert + cursor move settle before we ask; the request then
+  // uses the settled cursor, and a null result (cursor left the call) hides it.
+  private maybeSignatureHelp(event: { changes: { newText: string }[] }) {
+    if (this.vimState.mode !== 'insert') return;
+    const triggers = quilx.lsp.signatureHelpTriggerCharacters(this.lspDocument);
+    const typed = event.changes.map((c) => c.newText).join('');
+    const typedTrigger = [...typed].some((ch) => triggers.includes(ch));
+    if (!this.signatureCard.getVisible() && !typedTrigger) return;
+    this.scheduleSignatureRequest();
+  }
+
+  // Debounced (re)request — coalesces the autopair edits + cursor moves of one
+  // keystroke into a single request against the settled cursor.
+  private scheduleSignatureRequest() {
+    if (this.signatureTimer) GLib.sourceRemove(this.signatureTimer);
+    this.signatureTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, SIGNATURE_DEBOUNCE_MS, () => {
+      this.signatureTimer = 0;
+      this.requestSignatureHelp();
+      return false;
+    });
+  }
+
+  private requestSignatureHelp() {
+    const seq = ++this.signatureSeq;
+    void quilx.lsp.signatureHelp(this.lspDocument).then((help) => {
+      if (seq !== this.signatureSeq) return; // superseded by a newer keystroke
+      if (help && help.signatures.length > 0) this.showSignature(help);
+      else this.dismissSignature();
+    });
+  }
+
+  // Render the active signature (syntax-highlighted, active parameter bolded).
+  // The card is anchored to the call site once (when it first opens) and stays
+  // there as you type arguments — only its content updates — rather than drifting
+  // right with the cursor. The anchor is cleared on dismiss / re-evaluated on the
+  // next call.
+  private showSignature(help: SignatureHelp) {
+    const sig = help.signatures[help.activeSignature ?? 0] ?? help.signatures[0];
+    if (!sig) return;
+    const activeParam = sig.activeParameter ?? help.activeParameter ?? undefined;
+    const lang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
+    this.signatureLabel.setMarkup(
+      `<span face="${monospaceFontFamily()}">${signatureMarkup(sig.label, sig.parameters, activeParam, lang)}</span>`,
+    );
+    if (!this.signatureAnchored) {
+      // Anchor at the callee name's start (fall back to the cursor if not found).
+      const cursor = this.editorModel.getCursorBufferPosition();
+      const line = [...this.editorModel.lineTextForBufferRow(cursor.row)];
+      const nameCol = callNameStartColumn(line, cursor.column);
+      const anchor = nameCol !== null ? { row: cursor.row, column: nameCol } : cursor;
+      const rect = this.editorModel.pixelRectForBufferPosition(anchor);
+      if (!rect) return;
+      const ow = this.contentOverlay.getWidth();
+      const oh = this.contentOverlay.getHeight();
+      // Shift left by the card's content inset (border + padding) so the signature
+      // text lines up with the code column rather than the card's edge.
+      const x = rect.x - CARD_CONTENT_INSET_PX;
+      this.signatureCard.setMarginStart(ow > 0 ? Math.max(0, Math.min(x, ow - HOVER_WIDTH_PX)) : Math.max(0, x));
+      this.signatureCard.setMarginBottom(oh > 0 ? Math.max(0, oh - rect.y + HOVER_GAP) : HOVER_GAP);
+      this.signatureAnchored = true;
+    }
+    this.signatureCard.setVisible(true);
+  }
+
+  private dismissSignature() {
+    if (this.signatureTimer) {
+      GLib.sourceRemove(this.signatureTimer);
+      this.signatureTimer = 0;
+    }
+    this.signatureSeq++; // invalidate any in-flight request
+    this.signatureAnchored = false; // the next call re-anchors at its own site
+    this.signatureCard.setVisible(false);
   }
 
   // --- Git gutter ------------------------------------------------------------
@@ -368,6 +571,20 @@ export class TextEditor {
   /** The LSP document adapter for this editor (used by `lsp:*` commands). */
   get lsp(): LspDocument {
     return this.lspDocument;
+  }
+
+  /**
+   * Apply LSP `TextEdit`s (a code action / rename / format result) to this
+   * editor's buffer. Converts each range with the negotiated `encoding` and
+   * applies last-first, so earlier ranges stay valid; goes through the normal
+   * buffer edit path (so it's a single undo group and updates decorations).
+   */
+  applyLspEdits(edits: TextEdit[], encoding: PositionEncoding): void {
+    const lineAt = (row: number) => this.editorModel.lineTextForBufferRow(row);
+    const ranges = edits
+      .map((e) => ({ range: lspToRange(e.range, lineAt, encoding), text: e.newText }))
+      .sort((a, b) => b.range.start.compare(a.range.start));
+    for (const { range, text } of ranges) this.editorModel.setTextInBufferRange(range, text);
   }
 
   /**
@@ -525,6 +742,16 @@ export class TextEditor {
     this.hoverCard.setVisible(false);
     overlay.addOverlay(this.hoverCard);
 
+    // The signature-help card reuses the hover card's look (floated above the cursor).
+    this.signatureCard.addCssClass('quilx-hover');
+    this.signatureCard.setSizeRequest(HOVER_WIDTH_PX, -1);
+    this.signatureCard.setHalign(Gtk.Align.START);
+    this.signatureCard.setValign(Gtk.Align.END);
+    this.signatureCard.setCanTarget(false);
+    this.signatureCard.append(this.signatureLabel);
+    this.signatureCard.setVisible(false);
+    overlay.addOverlay(this.signatureCard);
+
     // Buffer-only mode: a greyed placeholder over the empty buffer, and no minimap.
     if (this.bufferMode?.placeholder) {
       this.placeholderLabel = new Gtk.Label({ label: this.bufferMode.placeholder });
@@ -562,6 +789,7 @@ export class TextEditor {
     // or an overlay box at positions with none / when unfocused) and drives this
     // — including on cursor-position changes, so a mouse click repositions it.
     this.editorModel.onCursorOverlay = (kind, iter) => this.renderCursorOverlay(kind, iter);
+    this.editorModel.onExtraCursors = (carets) => this.renderExtraCarets(carets);
 
     const focus = new Gtk.EventControllerFocus();
     focus.on('enter', () => this.editorModel.setFocused(true));
@@ -595,6 +823,43 @@ export class TextEditor {
     this.caret.removeCssClass(kind === 'filled' ? 'quilx-unfocused-caret' : 'quilx-block-caret');
     this.caret.addCssClass(kind === 'filled' ? 'quilx-block-caret' : 'quilx-unfocused-caret');
     this.caret.setVisible(true);
+  }
+
+  /**
+   * Render the extra (multi-cursor) carets the model can't paint with a tag: beam
+   * carets in insert mode (a thin bar) and block carets where there's no glyph to
+   * reverse-video. Reuses a widget pool; surplus widgets are hidden.
+   */
+  private renderExtraCarets(carets: Array<{ iter: unknown; beam: boolean }>) {
+    const realized = this.view.getRealized();
+    for (let i = 0; i < carets.length; i++) {
+      let widget = this.extraCarets[i];
+      if (!widget) {
+        widget = new Gtk.Box();
+        widget.setCanTarget(false);
+        this.caretLayer.put(widget, 0, 0);
+        this.extraCarets[i] = widget;
+      }
+      if (!realized) {
+        widget.setVisible(false);
+        continue;
+      }
+      const cell = (this.view as any).getIterLocation(carets[i].iter) as {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+      const [winX, winY] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
+      const beam = carets[i].beam;
+      const width = beam ? 2 : cell.width > 1 ? cell.width : Math.max(2, Math.round(cell.height * 0.5));
+      widget.setSizeRequest(width, cell.height);
+      this.caretLayer.move(widget, winX, winY);
+      widget.removeCssClass(beam ? 'quilx-block-caret' : 'quilx-beam-caret');
+      widget.addCssClass(beam ? 'quilx-beam-caret' : 'quilx-block-caret');
+      widget.setVisible(true);
+    }
+    for (let i = carets.length; i < this.extraCarets.length; i++) this.extraCarets[i].setVisible(false);
   }
 
   // --- Pending-command preview (showcmd) -------------------------------------
@@ -658,6 +923,27 @@ export class TextEditor {
     });
   }
 
+  // --- Auto-close brackets / quotes (insert mode) ----------------------------
+
+  private installAutoPair() {
+    // A capture-phase key controller on the view: in insert mode it intercepts
+    // openers/closers/backspace before GtkSourceView's own text input. The
+    // window-level KeymapManager runs first (also capture) and leaves these
+    // unbound keys to fall through here.
+    const keys = new Gtk.EventControllerKey();
+    keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
+    keys.on('key-pressed', (keyval: number, _keycode: number, state: number) => {
+      if (this.vimState.mode !== 'insert') return false;
+      if ((state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)) !== 0) return false;
+      if (quilx.config.get('editor.autoCloseBrackets') === false) return false;
+      if (keyval === Gdk.KEY_BackSpace) return handleAutoPairBackspace(this.editorModel);
+      const code = Gdk.keyvalToUnicode(keyval);
+      if (!code) return false;
+      return handleAutoPairInsert(this.editorModel, String.fromCharCode(code));
+    });
+    this.view.addController(keys);
+  }
+
   // --- Style scheme: follow the system light/dark preference -----------------
 
   private followSystemColorScheme() {
@@ -679,6 +965,16 @@ export class TextEditor {
 
   // --- File operations -------------------------------------------------------
 
+  /** Match the editor's indentation to the loaded file's own style; if the file
+   *  has no detectable indentation, keep the config default set in `createView`.
+   *  A tab-indented file keeps the configured *display* width. */
+  private applyDetectedIndentation(content: string): void {
+    const detected = detectIndentation(content);
+    if (!detected) return;
+    const width = detected.width ?? ((quilx.config.get('editor.tabLength') as number) || TAB_WIDTH);
+    this.editorModel.setIndentation({ useSpaces: detected.useSpaces, width });
+  }
+
   loadFile(path: string) {
     if (this.bufferMode) return; // buffer-only editors have no file
     try {
@@ -692,6 +988,7 @@ export class TextEditor {
       // disk, so clear the flag — `isModified()` then tracks genuine edits.
       this.buffer.setModified(false);
       this._currentFile = path;
+      this.applyDetectedIndentation(content);
       this.view.grabFocus();
 
       // Prefer tree-sitter; fall back to GtkSourceView's `.lang` engine for
@@ -733,7 +1030,8 @@ export class TextEditor {
       quilx.lsp.didSave(this.lspDocument);
       this.gitGutter?.refresh();
       this.emitTitleChange();
-      this.onToast(`Saved ${Path.basename(path)}`);
+      // Routine and frequent — log-only (trace) so saving doesn't pop a toast.
+      quilx.notifications.addTrace(`Saved ${Path.basename(path)}`);
     } catch (error) {
       this.onToast(`Could not save: ${(error as Error).message}`);
     }

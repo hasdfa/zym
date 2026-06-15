@@ -87,10 +87,10 @@ export class SearchController {
    * search direction (`*` forward, `#` backward) and arming `n`/`N` to continue.
    * `word` is a literal — it's escaped (and `\b`-wrapped) when the regex is built.
    */
-  searchWord(word: string, reverse: boolean): SearchState {
+  searchWord(word: string, reverse: boolean, wholeWord = true): SearchState {
     this.start(reverse);
     this.query = word;
-    this.wholeWord = true;
+    this.wholeWord = wholeWord; // `*`/`#` match whole words; `g*`/`g#` match substrings too
     this.options.useRegex = false; // `word` is literal; whole-word wrapping is separate
     return this.next(); // step in the search direction, off the word under the cursor
   }

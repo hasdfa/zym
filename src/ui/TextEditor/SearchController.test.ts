@@ -170,3 +170,11 @@ test('a bar query after a word search drops the whole-word constraint', () => {
   const state = search.setQuery('foo'); // plain bar search
   assert.equal(state.count, 2); // now matches inside "foobar" too
 });
+
+test('searchWord(wholeWord=false) — g* matches substrings too', () => {
+  const { editor, search } = setup('foo foobar foo\n');
+  editor.setCursorBufferPosition(new Point(0, 0));
+  const state = search.searchWord('foo', false, false); // g*
+  assert.equal(state.count, 3); // foo, the foo in foobar, foo
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 4]); // into "foobar"
+});

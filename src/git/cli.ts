@@ -165,6 +165,65 @@ export function createBranch(root: string, name: string, onDone: GitDone): void 
   git(root, ['switch', '-c', name], onDone);
 }
 
+/** Delete a branch (safe: refuses unmerged branches). */
+export function deleteBranch(root: string, name: string, onDone: GitDone): void {
+  git(root, ['branch', '-d', name], onDone);
+}
+
+/** Merge a branch into the current one. */
+export function mergeBranch(root: string, name: string, onDone: GitDone): void {
+  git(root, ['merge', name], onDone);
+}
+
+/** Rename the current branch. */
+export function renameBranch(root: string, name: string, onDone: GitDone): void {
+  git(root, ['branch', '-m', name], onDone);
+}
+
+// --- stash -------------------------------------------------------------------
+
+export interface Stash {
+  ref: string; // e.g. "stash@{0}"
+  description: string; // e.g. "WIP on master: 1a2b3c …"
+}
+
+/** The stash entries, newest first. */
+export function listStashes(root: string): Stash[] {
+  try {
+    return gitSync(root, ['stash', 'list', '--format=%gd%x09%gs'])
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const tab = line.indexOf('\t');
+        return tab === -1
+          ? { ref: line, description: '' }
+          : { ref: line.slice(0, tab), description: line.slice(tab + 1) };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** Stash the working-tree changes. */
+export function stashPush(root: string, onDone: GitDone): void {
+  git(root, ['stash', 'push'], onDone);
+}
+
+/** Apply a stash and drop it. */
+export function stashPop(root: string, ref: string, onDone: GitDone): void {
+  git(root, ['stash', 'pop', ref], onDone);
+}
+
+/** Apply a stash, keeping it in the list. */
+export function stashApply(root: string, ref: string, onDone: GitDone): void {
+  git(root, ['stash', 'apply', ref], onDone);
+}
+
+/** Discard a stash. */
+export function stashDrop(root: string, ref: string, onDone: GitDone): void {
+  git(root, ['stash', 'drop', ref], onDone);
+}
+
 // --- internals ---------------------------------------------------------------
 
 function pushTracked(changes: GitChange[], root: string, xy: string, rel: string): void {

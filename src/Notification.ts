@@ -29,6 +29,15 @@ export interface NotificationOptions {
   detail?: string;
   /** Longer markdown body, shown when the notification is expanded. */
   description?: string;
+  /**
+   * Correlates a sequence of notifications that should share one *transient
+   * toast*: a later notification with the same `replaceKey` transforms the live
+   * toast the earlier one created, in place, instead of stacking a new card. The
+   * log still records each as a separate entry. Used e.g. for installing→installed.
+   */
+  replaceKey?: string;
+  /** Show a spinner in place of the icon (an in-progress notification). */
+  loading?: boolean;
   /** Override the default per-type icon name. */
   icon?: string;
   /** When true, the notification stays until explicitly dismissed. */
@@ -96,6 +105,16 @@ export class Notification {
 
   getDetail(): string | undefined {
     return this.options.detail;
+  }
+
+  /** Key tying this to a shared transient toast (see `NotificationOptions`). */
+  getReplaceKey(): string | undefined {
+    return this.options.replaceKey;
+  }
+
+  /** Whether to show a spinner instead of the severity icon (in-progress). */
+  isLoading(): boolean {
+    return this.options.loading ?? false;
   }
 
   getIcon(): string {

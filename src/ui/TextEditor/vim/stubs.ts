@@ -9,6 +9,13 @@
  */
 import type VimState from './vim-state.js';
 import { DecorationController } from '../DecorationController.ts';
+import { Range } from '../../../text/Range.ts';
+import { Point } from '../../../text/Point.ts';
+import type { Marker } from '../Marker.ts';
+import type { MarkerLayer } from '../MarkerLayer.ts';
+import { Emitter } from '../../../util/eventKit.ts';
+// Vendored utils are untyped JS; import the two helpers the occurrence port needs.
+import { collectRangeByScan, shrinkRangeEndToBeforeNewLine } from './utils.js';
 
 /**
  * Renders cursor decorations by mode in Atom; here the cursor is the native
@@ -130,29 +137,230 @@ export class ScrollManager {
 }
 
 /**
- * Tracks "occurrence" markers (the `o`/`O` occurrence operator-modifier). Every
- * operator queries `hasMarkers()` on init, so this reports none until the
- * occurrence feature is ported. The other methods are only reached once
- * occurrence is active, so they stay inert.
+ * Tracks "occurrence" markers — the marker layer behind vim-mode-plus's
+ * occurrence operator-modifier (`c o p` = change every cursor-word in the
+ * paragraph) and preset occurrence (`g o` toggles persistent markers any later
+ * operator restricts itself to). Ported from vim-mode-plus's OccurrenceManager.
+ *
+ * Adaptations to quilx's primitives:
+ *  - Atom's `decorateMarkerLayer` is replaced by a DecorationController layer
+ *    re-synced (`renderMarkers`) whenever the marker set changes — quilx markers
+ *    move with edits but don't carry their own decoration.
+ *  - quilx's `MarkerLayer.findMarkers` only filters by `containsBufferPosition`,
+ *    so range-intersection queries iterate the markers directly.
+ *  - quilx markers don't auto-invalidate on edit, so the upstream
+ *    invalidated-marker sweep is dropped; markers are cleared by `resetPatterns`
+ *    when an occurrence operation finishes.
  */
 export class OccurrenceManager {
-  constructor(_vimState: VimState) {}
+  private readonly vimState: VimState;
+  private readonly emitter = new Emitter();
+  private readonly markerLayer: MarkerLayer;
+  private readonly decorations: DecorationController;
+  private patterns: RegExp[] = [];
+
+  constructor(vimState: VimState) {
+    this.vimState = vimState;
+    const { editor } = vimState;
+    vimState.onDidDestroy(() => this.destroy());
+
+    this.markerLayer = editor.addMarkerLayer();
+    this.decorations = new DecorationController(editor);
+
+    // All marker create/destroy is driven by reacting to pattern changes.
+    this.onDidChangePatterns(({ pattern, occurrenceType }) => {
+      if (pattern) this.markBufferRangeByPattern(pattern, occurrenceType);
+      else this.clearMarkers();
+      this.renderMarkers();
+    });
+    this.markerLayer.onDidUpdate(() => this.renderMarkers());
+  }
+
+  private markBufferRangeByPattern(regex: RegExp, occurrenceType?: string): void {
+    const { editor } = this.vimState;
+    let occurrenceRanges: Range[] = collectRangeByScan(editor, regex);
+
+    if (occurrenceType === 'subword') {
+      const subwordRegex = editor.getLastCursor().subwordRegExp();
+      const subwordRangesByRow: Record<number, Range[]> = {};
+      occurrenceRanges = occurrenceRanges.filter((range) => {
+        const row = range.start.row;
+        if (!subwordRangesByRow[row]) subwordRangesByRow[row] = collectRangeByScan(editor, subwordRegex, { row });
+        return subwordRangesByRow[row].some((subwordRange) => subwordRange.isEqual(range));
+      });
+    }
+
+    for (const range of occurrenceRanges) this.markerLayer.markBufferRange(range);
+  }
+
+  /** Repaint the occurrence highlight from the current marker ranges. */
+  private renderMarkers(): void {
+    const layer = this.decorations.layer('vim-occurrence');
+    layer.clear();
+    for (const marker of this.getMarkers()) layer.decorate(marker.getBufferRange(), 'highlight');
+  }
+
+  // Callback gets `{pattern, occurrenceType}`; `pattern` is undefined on reset.
+  private onDidChangePatterns(fn: (event: { pattern?: RegExp; occurrenceType?: string }) => void) {
+    return this.emitter.on('did-change-patterns', fn as (value: unknown) => void);
+  }
+
+  destroy(): void {
+    this.decorations.layer('vim-occurrence').clear();
+    this.markerLayer.destroy();
+  }
+
+  // --- Patterns --------------------------------------------------------------
+  hasPatterns(): boolean {
+    return this.patterns.length > 0;
+  }
+
+  resetPatterns(): void {
+    this.patterns = [];
+    this.emitter.emit('did-change-patterns', {});
+  }
+
+  addPattern(pattern: RegExp | null = null, { reset = false, occurrenceType = 'base' } = {}): void {
+    if (reset) this.clearMarkers();
+    if (pattern) this.patterns.push(pattern);
+    this.emitter.emit('did-change-patterns', { pattern, occurrenceType });
+  }
+
+  saveLastPattern(occurrenceType?: string): void {
+    this.vimState.globalState.set('lastOccurrencePattern', this.buildPattern());
+    this.vimState.globalState.set('lastOccurrenceType', occurrenceType);
+  }
+
+  // Union of every added pattern, as a single global regex. Cached onto the
+  // operator so `.` can repeat an occurrence operation.
+  buildPattern(): RegExp {
+    return new RegExp(this.patterns.map((regex) => regex.source).join('|'), 'g');
+  }
+
+  // --- Markers ---------------------------------------------------------------
+  private clearMarkers(): void {
+    this.markerLayer.clear();
+  }
+
+  destroyMarkers(markers: Marker[]): void {
+    for (const marker of markers) marker.destroy();
+  }
+
   hasMarkers(): boolean {
-    return false;
+    return this.markerLayer.getMarkerCount() > 0;
   }
-  getMarkerAtPoint(_point: unknown): null {
-    return null;
+
+  getMarkers(): Marker[] {
+    return this.markerLayer.getMarkers();
   }
-  buildPattern(): null {
-    return null;
+
+  getMarkerBufferRanges(): Range[] {
+    return this.markerLayer.getMarkers().map((marker) => marker.getBufferRange());
   }
-  select(_wise?: unknown): boolean {
-    return false;
+
+  getMarkerCount(): number {
+    return this.markerLayer.getMarkerCount();
   }
-  addPattern(_pattern?: unknown, _options?: unknown): void {}
-  resetPatterns(): void {}
-  destroyMarkers(_markers?: unknown): void {}
-  saveLastPattern(_type?: unknown): void {}
+
+  // Occurrence markers intersecting `selection`. quilx's findMarkers can't do a
+  // range query, so iterate all markers and test intersection directly.
+  getMarkersIntersectsWithSelection(selection: { getBufferRange(): Range }, exclusive = false): Marker[] {
+    const range = shrinkRangeEndToBeforeNewLine(selection.getBufferRange());
+    return this.getMarkers().filter((marker) => range.intersectsWith(marker.getBufferRange(), exclusive));
+  }
+
+  getMarkerAtPoint(point: Point): Marker | undefined {
+    // For `abc()` we mark `abc` and `(`; a cursor on `(` is contained by both,
+    // so prefer the marker whose end is past the point.
+    return this.markerLayer
+      .findMarkers({ containsBufferPosition: point })
+      .find((marker) => marker.getBufferRange().end.isGreaterThan(point));
+  }
+
+  // Select every occurrence-marker range intersecting the current selection(s),
+  // re-creating selections from them, then migrate per-selection mutation state
+  // onto the new selections. Returns whether anything was selected.
+  select(wise?: string): boolean {
+    const closestRangeIndexByOriginalSelection = new Map<unknown, number>();
+    const rangesToSelect: Range[] = [];
+    const markersSelected: Marker[] = [];
+    const { editor } = this.vimState;
+
+    for (const selection of editor.getSelections()) {
+      const markers = this.getMarkersIntersectsWithSelection(selection, this.vimState.mode === 'visual');
+      if (!markers.length) continue;
+
+      const ranges = markers.map((marker) => marker.getBufferRange());
+      markersSelected.push(...markers);
+      // Move the closest occurrence to the end so it becomes the last selection
+      // (where insert/autocomplete anchors after the operation).
+      const closestRange = this.getClosestRangeForSelection(ranges, selection);
+      ranges.splice(ranges.indexOf(closestRange), 1);
+      ranges.push(closestRange);
+
+      rangesToSelect.push(...ranges);
+      closestRangeIndexByOriginalSelection.set(selection, rangesToSelect.indexOf(closestRange));
+    }
+
+    if (!rangesToSelect.length) return false;
+
+    const reversed = editor.getLastSelection().isReversed();
+    if (this.vimState.isMode('visual', 'blockwise')) {
+      (this.vimState as { activate(mode: string, submode?: string): void }).activate('visual', 'characterwise');
+    }
+
+    editor.setSelectedBufferRanges(rangesToSelect, { reversed });
+    const selections = editor.getSelections();
+    closestRangeIndexByOriginalSelection.forEach((closestRangeIndex, originalSelection) => {
+      this.vimState.mutationManager.migrateMutation(originalSelection, selections[closestRangeIndex]);
+    });
+    this.destroyMarkers(markersSelected);
+    this.vimState.swrap.saveProperties(editor, { force: true });
+
+    if (wise === 'linewise') {
+      for (const $selection of this.vimState.swrap.getSelections(editor)) $selection.applyWise('linewise');
+
+      // Merging adjacent linewise selections destroys some; migrate their
+      // mutation onto the survivor that swallowed them. quilx selections don't
+      // emit a destroy event, so snapshot ranges before the merge and detect
+      // the merged-away selections by set difference afterward.
+      const { mutationsBySelection } = this.vimState.mutationManager;
+      const rangeByMutation = new Map<{ selection: unknown }, Range>();
+      const before = [...mutationsBySelection.entries()];
+      for (const [sel, mutation] of before) rangeByMutation.set(mutation, sel.getBufferRange());
+
+      editor.mergeSelectionsOnSameRows(); // destroys merged selections
+      this.vimState.swrap.saveProperties(editor, { force: true });
+
+      const survivors = new Set(editor.getSelections());
+      for (const [sel, mutation] of before) {
+        if (survivors.has(sel)) continue;
+        mutationsBySelection.delete(sel);
+        const range = rangeByMutation.get(mutation);
+        const selection = editor
+          .getSelections()
+          .find((s: { getBufferRange(): Range }) => range && s.getBufferRange().containsRange(range));
+        mutation.selection = selection;
+        if (selection) mutationsBySelection.set(selection, mutation);
+      }
+    }
+
+    return true;
+  }
+
+  // Which occurrence becomes the last selection, in order of preference:
+  //  1. under the original cursor  2. forward on the same row
+  //  3. first on the same row      4. forward (wrapping to first)
+  private getClosestRangeForSelection(ranges: Range[], selection: unknown): Range {
+    const point: Point = this.vimState.mutationManager.mutationsBySelection.get(selection).initialPoint;
+
+    const containing = ranges.find((range) => range.containsPoint(point));
+    if (containing) return containing;
+
+    const rangesInSameRow = ranges.filter((range) => range.start.row === point.row);
+    if (rangesInSameRow.length) ranges = rangesInSameRow;
+    return ranges.find((range) => range.start.isGreaterThan(point)) || ranges[0];
+  }
 }
 
 /**

@@ -38,7 +38,17 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: 2,
     minimum: 1,
     maximum: 16,
-    description: 'Number of spaces a tab is rendered as.',
+    description: 'Default indent width (a file with its own detectable indentation overrides this).',
+  },
+  'editor.insertSpaces': {
+    type: 'boolean',
+    default: true,
+    description: 'Indent with spaces by default (a file with detectable tab indentation overrides this).',
+  },
+  'editor.autoCloseBrackets': {
+    type: 'boolean',
+    default: true,
+    description: 'Auto-insert the closing bracket/quote when typing an opener, and delete both on backspace.',
   },
   'editor.fontFamily': {
     type: 'string',
@@ -71,6 +81,13 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     type: 'string',
     default: 'origin',
     description: 'Remote name for your fork (push).',
+  },
+  'git.autoFetchMinutes': {
+    type: 'integer',
+    default: 5,
+    minimum: 0,
+    maximum: 1440,
+    description: 'Background `git fetch` interval in minutes (0 disables).',
   },
   'session.autosave': {
     type: 'boolean',
@@ -111,6 +128,12 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
       'Per-language server overrides, keyed by language id then server name, e.g. ' +
       '{ "typescript": { "deno": { "disable": true }, "typescript-language-server": { "command": "…", "priority": 50 } } }. ' +
       'Set "disable": true to turn a server off; an unknown name with a "command" adds a new server.',
+  },
+  'lsp.autoInstall': {
+    type: 'boolean',
+    default: false,
+    description:
+      'Automatically install a missing language server (into a quilx-managed dir) when a file needs it — shown as an info notification — instead of prompting with an Install button.',
   },
 };
 

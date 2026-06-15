@@ -1,11 +1,12 @@
 /*
- * Branch picker — a quick-switcher over the repository's local branches.
+ * Branch pickers — quick-switchers over the repository's local branches.
  *
- * Opens the fuzzy picker over local branch names (most-recent first, excluding
- * the current one); selecting one switches to it. When the typed name matches no
- * branch, an action row offers to create it (off HEAD) and switch. Switch/create
- * go through `git/cli.ts`; HEAD moving makes the branch button and gutters update
- * via the existing `GitRepo.onChange`. Results surface through `quilx.notifications`.
+ * `openBranchPicker` switches (current branch marked; create-on-no-match);
+ * `openDeleteBranchPicker` / `openMergeBranchPicker` act on a chosen other branch;
+ * `openRenameBranchPicker` is an entry-only picker whose action renames the
+ * current branch. All go through `git/cli.ts`; HEAD/working-tree changes make the
+ * branch button and gutters update via `GitRepo.onChange`. Results surface
+ * through `quilx.notifications`.
  */
 import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
@@ -17,6 +18,9 @@ import {
   listBranches,
   switchBranch,
   createBranch,
+  deleteBranch,
+  mergeBranch,
+  renameBranch,
   type GitDone,
 } from '../git/cli.ts';
 
@@ -53,6 +57,70 @@ export function openBranchPicker(host: Overlay, cwd: string): void {
         if (name) createBranch(root, name, report(`Created branch ${name}`));
       },
     },
+  });
+}
+
+/** Pick another branch (not the current one) to delete. */
+export function openDeleteBranchPicker(host: Overlay, cwd: string): void {
+  pickOtherBranch(host, cwd, 'Delete branch…', (root, branch) =>
+    deleteBranch(root, branch, report(`Deleted branch ${branch}`)),
+  );
+}
+
+/** Pick another branch to merge into the current one. */
+export function openMergeBranchPicker(host: Overlay, cwd: string): void {
+  pickOtherBranch(host, cwd, 'Merge branch into current…', (root, branch) =>
+    mergeBranch(root, branch, report(`Merged ${branch}`)),
+  );
+}
+
+/** Rename the current branch: an entry-only picker whose action does the rename. */
+export function openRenameBranchPicker(host: Overlay, cwd: string): void {
+  const root = repoRoot(cwd);
+  if (!root) {
+    quilx.notifications.addInfo('Not a git repository');
+    return;
+  }
+  const current = currentBranch(root);
+  openPicker({
+    host,
+    placeholder: 'Rename current branch to…',
+    items: [], // no list — just the entry + action
+    query: current ?? '',
+    onSelect: () => {}, // never called (no items); the action does the rename
+    action: {
+      label: (query) => `Rename to: ${query.trim()}`,
+      run: (query) => {
+        const name = query.trim();
+        if (name && name !== current) renameBranch(root, name, report(`Renamed to ${name}`));
+      },
+    },
+  });
+}
+
+// Shared: pick a branch other than the current one, then run `onPick`.
+function pickOtherBranch(
+  host: Overlay,
+  cwd: string,
+  placeholder: string,
+  onPick: (root: string, branch: string) => void,
+): void {
+  const root = repoRoot(cwd);
+  if (!root) {
+    quilx.notifications.addInfo('Not a git repository');
+    return;
+  }
+  const current = currentBranch(root);
+  const branches = listBranches(root).filter((b) => b !== current);
+  if (branches.length === 0) {
+    quilx.notifications.addInfo('No other branches');
+    return;
+  }
+  openPicker({
+    host,
+    placeholder,
+    items: branches,
+    onSelect: (branch) => onPick(root, branch),
   });
 }
 

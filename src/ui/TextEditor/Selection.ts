@@ -15,6 +15,7 @@ import { Point } from '../../text/Point.ts';
 import { Range, type RangeLike } from '../../text/Range.ts';
 import { unwrapIter, type TextIter, type TextMark } from './iter.ts';
 import { Cursor } from './Cursor.ts';
+import { Emitter, type Disposable } from '../../util/eventKit.ts';
 import type { EditorModel } from './EditorModel.ts';
 
 export interface SetBufferRangeOptions {
@@ -39,6 +40,7 @@ export class Selection {
   private headMark: TextMark;
   private tailMark: TextMark;
   private destroyed = false;
+  private readonly emitter = new Emitter();
   // Captured on destroy so position queries still answer afterwards (matching
   // Atom, where a destroyed marker keeps reporting its last range). The vim layer
   // reads member cursors in an `onDidFinishOperation` hook that runs *after* a
@@ -168,10 +170,17 @@ export class Selection {
     this.editor.buffer.deleteMark(this.headMark);
     this.editor.buffer.deleteMark(this.tailMark);
     this.editor.removeExtraSelection(this);
+    this.emitter.emit('did-destroy');
   }
 
   isDestroyed(): boolean {
     return this.destroyed;
+  }
+
+  /** Fires when this selection is destroyed (multi-cursor / blockwise teardown).
+   *  The register manager uses it to drop per-selection clipboard state. */
+  onDidDestroy(callback: () => void): Disposable {
+    return this.emitter.on('did-destroy', callback as (value: unknown) => void);
   }
 
   /** Scroll the view to keep this selection's head on screen. */

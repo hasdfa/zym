@@ -367,6 +367,37 @@ const JUMP_BINDINGS: Record<string, string> = {
   'g ,': 'GoToNewerChange',
 };
 
+// Occurrence (vim-mode-plus): `g o` toggles preset occurrence markers from the
+// cursor word (any later operator restricts itself to them); `g O` the subword
+// variant; `g .` re-adds the last occurrence pattern. The `o`/`O` *operator
+// modifiers* (`c o p` = change occurrences in the paragraph) are bound in
+// operator-pending mode as commands, below.
+const OCCURRENCE_BINDINGS: Record<string, string> = {
+  'g o': 'TogglePresetOccurrence',
+  'g O': 'TogglePresetSubwordOccurrence',
+  'g .': 'AddPresetOccurrenceFromLastOccurrencePattern',
+};
+
+// `o`/`O` while an operator is pending set an occurrence modifier on it rather
+// than running an operation class — they go through `setOperatorModifier`.
+const OPERATOR_MODIFIER_COMMANDS: Record<string, string> = {
+  o: 'vim-mode-plus:operator-modifier-occurrence',
+  O: 'vim-mode-plus:operator-modifier-subword-occurrence',
+};
+
+// Persistent multi-cursor: add a cursor on the row below/above (Sublime/VS Code
+// `ctrl-alt-↓/↑`). The extra cursors then move with motions, are operated on by
+// operators, and receive typed text on leaving insert mode (the same path
+// blockwise/occurrence use). `escape` in normal mode collapses back to one.
+// These are plain commands (no operation class), wired in `attachVim`.
+const MULTI_CURSOR_COMMANDS: Record<string, string> = {
+  'ctrl-alt-down': 'vim-mode-plus:add-cursor-below',
+  'ctrl-alt-up': 'vim-mode-plus:add-cursor-above',
+};
+const MULTI_CURSOR_CLEAR: Record<string, string> = {
+  escape: 'vim-mode-plus:clear-multiple-cursors',
+};
+
 // Motions + operators are bound in every non-insert mode (notably operator-pending,
 // so the motion that follows `d` resolves). Mode-entry keys (i/a) are normal-only.
 const NON_INSERT_BINDINGS: Record<string, string> = {
@@ -384,6 +415,7 @@ const NON_INSERT_BINDINGS: Record<string, string> = {
   ...SCROLL_BINDINGS,
   ...INDENT_JOIN_BINDINGS,
   ...MISC_BINDINGS,
+  ...OCCURRENCE_BINDINGS,
 };
 
 // Search as an operator/visual motion (`d/foo`, `v?bar`). Bound only in
@@ -416,6 +448,11 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   'insert:ctrl-u': 'DeleteToBeginningOfInsertLine',
   'insert:ctrl-r': 'InsertRegister',
   'insert:ctrl-a': 'InsertLastInserted',
+  // Occurrence operations reachable as commands but without a default keystroke
+  // (registered for command creation only; the keys here are arbitrary).
+  'occurrence:select': 'SelectOccurrence',
+  'occurrence:next': 'MoveToNextOccurrence',
+  'occurrence:prev': 'MoveToPreviousOccurrence',
 };
 
 let keymapsRegistered = false;
@@ -445,6 +482,9 @@ function registerKeymapsOnce(): void {
       ...toKeymap(JUMP_BINDINGS),
       // q record / @ replay macros.
       ...toKeymap(MACRO_BINDINGS),
+      // ctrl-alt-↑/↓ add a cursor; escape collapses multi-cursor back to one.
+      ...MULTI_CURSOR_COMMANDS,
+      ...MULTI_CURSOR_CLEAR,
     },
     // Motions and operators apply in normal, operator-pending, and visual modes.
     'GtkSourceView:not(.insert-mode)': {
@@ -463,10 +503,12 @@ function registerKeymapsOnce(): void {
       ...toKeymap(TEXT_OBJECT_BINDINGS),
       ...toKeymap(SEARCH_MOTION_BINDINGS),
     },
-    // Operator targets in operator-pending mode: text objects and `d/foo` search.
+    // Operator targets in operator-pending mode: text objects, `d/foo` search,
+    // and the `o`/`O` occurrence modifiers (`c o p`, `d O w`).
     'GtkSourceView.operator-pending-mode': {
       ...toKeymap(TEXT_OBJECT_BINDINGS),
       ...toKeymap(SEARCH_MOTION_BINDINGS),
+      ...OPERATOR_MODIFIER_COMMANDS,
     },
     // Escape returns to normal mode from insert, operator-pending, and visual.
     'GtkSourceView:not(.normal-mode)': {
@@ -524,6 +566,28 @@ export function attachVim(editor: EditorModel): VimState {
     // `"` — read a register letter and target it for the next operation.
     'vim-mode-plus:set-register-name': () => {
       vimState.register.setName();
+    },
+    // `o`/`O` occurrence modifiers: set the pending operator to operate on
+    // occurrences of the cursor word (base) / cursor subword.
+    'vim-mode-plus:operator-modifier-occurrence': () => {
+      vimState.setOperatorModifier({ occurrence: true, occurrenceType: 'base' });
+    },
+    'vim-mode-plus:operator-modifier-subword-occurrence': () => {
+      vimState.setOperatorModifier({ occurrence: true, occurrenceType: 'subword' });
+    },
+    // Persistent multi-cursor add/clear (direct EditorModel ops, then repaint).
+    'vim-mode-plus:add-cursor-below': () => {
+      editor.addCursorBelow();
+      editor.renderExtraSelections();
+    },
+    'vim-mode-plus:add-cursor-above': () => {
+      editor.addCursorAbove();
+      editor.renderExtraSelections();
+    },
+    'vim-mode-plus:clear-multiple-cursors': () => {
+      if (!editor.hasMultipleCursors()) return;
+      editor.clearExtraSelections();
+      editor.renderExtraSelections();
     },
   };
   for (const klass of Object.values(NORMAL_OPERATIONS)) {

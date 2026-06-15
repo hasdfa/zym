@@ -26,7 +26,7 @@ import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { Gdk, Gio, Gtk } from '../gi.ts';
+import { Gdk, Gio } from '../gi.ts';
 import { Terminal, type TerminalOptions } from './Terminal.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
@@ -56,8 +56,6 @@ export interface AgentResume {
 }
 
 export interface AgentTerminalOptions extends TerminalOptions {
-  /** Fired when the user presses Enter after the agent process has exited. */
-  onCloseRequest?: () => void;
   /** An initial prompt to launch the agent with (appended to its argv). */
   prompt?: string;
   /** Resume a past conversation rather than starting a new one (claude only). */
@@ -67,7 +65,6 @@ export interface AgentTerminalOptions extends TerminalOptions {
 export class AgentTerminal extends Terminal {
   private _status: AgentStatus = 'idle';
   private readonly statusHandlers: Array<() => void> = [];
-  private readonly onCloseRequest?: () => void;
   private readonly statusFile: string | null;
   private statusMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   // Files the agent has edited, captured from a PostToolUse hook (via
@@ -95,7 +92,6 @@ export class AgentTerminal extends Terminal {
       ? [...integration.command, options.prompt]
       : integration.command;
     super({ ...options, command, title: options.title ?? agentName(baseCommand) });
-    this.onCloseRequest = options.onCloseRequest;
     this.statusFile = integration.statusFile;
     this.baseCommand = baseCommand;
     this.launchPrompt = options.prompt;
@@ -261,9 +257,10 @@ export class AgentTerminal extends Terminal {
     this.setStatus('exited');
     void this.sessionId; // cache the id before its file is removed (restart resumes it)
     // Print a notice into the (now child-less) terminal so the pane shows why it
-    // went quiet, rather than closing or freezing on the last frame.
-    this.terminal.feed(encode('\r\n\x1b[2m── process exited (press enter to close) ──\x1b[0m\r\n'));
-    this.installCloseOnEnter();
+    // went quiet, rather than closing or freezing on the last frame. The agent and
+    // its layout linger — the user restarts (`r`) or closes (`X`) it from the layout
+    // list when they're done reading the output.
+    this.terminal.feed(encode('\r\n\x1b[2m── process exited ──\x1b[0m\r\n'));
     this.statusMonitor?.cancel();
     this.statusMonitor = null;
     this.filesMonitor?.cancel();
@@ -275,21 +272,6 @@ export class AgentTerminal extends Terminal {
     }
   }
 
-  // After exit there is no child to consume input, so Enter requests closing the
-  // (now-dead) widget. Capture phase so it fires before Vte swallows the key.
-  private installCloseOnEnter(): void {
-    if (!this.onCloseRequest) return;
-    const keys = new Gtk.EventControllerKey();
-    keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
-    keys.on('key-pressed', (keyval: number) => {
-      if (keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter) {
-        this.onCloseRequest?.();
-        return true;
-      }
-      return false;
-    });
-    this.root.addController(keys);
-  }
 
   // Vte inherits the Adwaita view colors by default (see Terminal); override the
   // background (and foreground) with the theme's editor colors. Themes without

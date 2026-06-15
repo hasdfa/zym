@@ -7,8 +7,8 @@
  * icon is replaced by a spinner. It reads from an injected `GitRepo` and
  * refreshes on `GitRepo.onChange`; outside a repo it hides itself.
  *
- * It is a flat button so it can later grow into a branch switcher (open a popover
- * on click). The assembled widget is exposed via `root`.
+ * A flat button; clicking it invokes `onClicked` (the host opens the branch
+ * picker). The assembled widget is exposed via `root`.
  */
 import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
@@ -16,18 +16,22 @@ import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import type { GitRepo } from '../git.ts';
 
-// nf-oct-git_branch from the bundled "Symbols Nerd Font Mono" (see fonts.ts).
+// nf-oct-git_branch from the bundled "Symbols Nerd Font Mono" (see fonts.ts), and
+// nf-fa-warning shown instead while the working tree has merge conflicts.
 const BRANCH_GLYPH = String.fromCodePoint(0xf418);
+const CONFLICT_GLYPH = String.fromCodePoint(0xf071); // nf-fa-exclamation-triangle
 
 // Counts in theme colors (fallbacks are Adwaita's): working-tree insertions/
 // deletions in success/error; upstream ahead in info, behind in warning, and
-// both (a diverged branch) in danger/error.
+// both (a diverged branch) in danger/error. The conflict icon is error-colored.
 addStyles(`
   .quilx-diff-added   { color: ${theme.ui.success ?? '#2ec27e'}; }
   .quilx-diff-removed { color: ${theme.ui.error ?? '#e01b24'}; }
   .quilx-sync-info    { color: ${theme.ui.info ?? '#3584e4'}; }
   .quilx-sync-warning { color: ${theme.ui.warning ?? '#e5a50a'}; }
   .quilx-sync-danger  { color: ${theme.ui.error ?? '#e01b24'}; }
+  .quilx-branch-count { font-size: 0.8em; }
+  .quilx-conflict     { color: ${theme.ui.error ?? '#e01b24'}; }
 `);
 
 const SYNC_CLASSES = ['quilx-sync-info', 'quilx-sync-warning', 'quilx-sync-danger'];
@@ -45,7 +49,7 @@ export class BranchButton {
   private readonly behind: InstanceType<typeof Gtk.Label>;
   private readonly unsubscribe: () => void;
 
-  constructor(repo: GitRepo) {
+  constructor(repo: GitRepo, onClicked?: () => void) {
     this.repo = repo;
 
     // [icon | spinner, branch name, +added, -removed, ↑ahead, ↓behind]. The icon
@@ -62,10 +66,14 @@ export class BranchButton {
     this.label = new Gtk.Label();
     this.added = new Gtk.Label();
     this.added.addCssClass('quilx-diff-added');
+    this.added.addCssClass('quilx-branch-count');
     this.removed = new Gtk.Label();
     this.removed.addCssClass('quilx-diff-removed');
+    this.removed.addCssClass('quilx-branch-count');
     this.ahead = new Gtk.Label();
+    this.ahead.addCssClass('quilx-branch-count');
     this.behind = new Gtk.Label();
+    this.behind.addCssClass('quilx-branch-count');
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     box.append(this.icon);
@@ -81,7 +89,9 @@ export class BranchButton {
     this.root.addCssClass('flat');
     this.root.addCssClass('quilx-branch');
     this.root.setChild(box);
+    this.root.setTooltipText('Switch branch');
     this.root.setVisible(false); // shown once a branch is resolved
+    this.root.on('clicked', () => onClicked?.());
 
     this.unsubscribe = repo.onChange(() => this.refresh());
     this.refresh();
@@ -95,6 +105,14 @@ export class BranchButton {
     }
     this.label.setText(branch);
     this.root.setVisible(true);
+
+    // A merge/rebase with conflicts shows a warning icon (error-colored) in place
+    // of the branch glyph, and changes the tooltip.
+    const conflicts = this.repo.hasConflicts();
+    this.icon.setText(conflicts ? CONFLICT_GLYPH : BRANCH_GLYPH);
+    if (conflicts) this.icon.addCssClass('quilx-conflict');
+    else this.icon.removeCssClass('quilx-conflict');
+    this.root.setTooltipText(conflicts ? 'Merge conflicts — resolve them' : 'Switch branch');
 
     // Swap the branch icon for a spinner while a git operation is running.
     const busy = this.repo.isBusy();

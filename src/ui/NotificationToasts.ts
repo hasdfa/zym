@@ -24,10 +24,16 @@ export interface NotificationToastsOptions {
 
 const MAX_WIDTH_CHARS = 44;
 
+type Box = InstanceType<typeof Gtk.Box>;
+
 export class NotificationToasts {
-  readonly root: InstanceType<typeof Gtk.Box>;
+  readonly root: Box;
 
   private readonly timeout: number;
+  // Live toasts that can be transformed in place, keyed by `replaceKey`: a later
+  // notification with the same key reuses the same card widget instead of
+  // stacking a new one (both still appear as separate rows in the log).
+  private readonly replaceable = new Map<string, { card: Box; cancelTimer: () => void; notification: Notification }>();
 
   constructor(options: NotificationToastsOptions) {
     this.timeout = options.timeout;
@@ -43,15 +49,54 @@ export class NotificationToasts {
     this.root.setCanTarget(true);
   }
 
-  /** Pop a toast for `notification`, newest on top. */
+  /**
+   * Pop a toast for `notification`, newest on top — unless it carries a
+   * `replaceKey` matching a live toast, in which case that same card is
+   * transformed in place (e.g. "installing…" → "installed").
+   */
   show(notification: Notification): void {
-    const card = this.buildCard(notification);
+    const key = notification.getReplaceKey();
+    const prev = key ? this.replaceable.get(key) : undefined;
+    if (prev) {
+      // Reuse the existing widget: stop its timer, drop the old severity class,
+      // mark the superseded notification dismissed (it stays in the log), and
+      // refill the card with the new content.
+      prev.cancelTimer();
+      prev.card.removeCssClass(`notification-${prev.notification.getType()}`);
+      prev.notification.dismiss();
+      const cancelTimer = this.fillCard(prev.card, notification);
+      this.replaceable.set(key!, { card: prev.card, cancelTimer, notification });
+      notification.setDisplayed(true);
+      return;
+    }
+
+    const card = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
+    card.addCssClass('NotificationToast'); // CSS identity (.NotificationToast)
+    const cancelTimer = this.fillCard(card, notification);
     this.root.prepend(card);
+    if (key) this.replaceable.set(key, { card, cancelTimer, notification });
     notification.setDisplayed(true);
   }
 
-  private buildCard(notification: Notification): InstanceType<typeof Gtk.Widget> {
-    const icon = iconLabel(notification.getIcon());
+  // (Re)fill `card` with `notification`'s content + behavior. Returns a function
+  // that cancels the auto-expire timer (called when the card is reused in place).
+  private fillCard(card: Box, notification: Notification): () => void {
+    for (let child = card.getFirstChild(); child; ) {
+      const next = child.getNextSibling();
+      card.remove(child);
+      child = next;
+    }
+    card.addCssClass(`notification-${notification.getType()}`); // per-severity hook
+
+    // An in-progress notification shows a spinner where the severity icon goes.
+    let icon: InstanceType<typeof Gtk.Widget>;
+    if (notification.isLoading()) {
+      const spinner = new Gtk.Spinner();
+      spinner.start();
+      icon = spinner;
+    } else {
+      icon = iconLabel(notification.getIcon());
+    }
     icon.setValign(Gtk.Align.START);
     icon.addCssClass('notification-icon');
 
@@ -71,9 +116,6 @@ export class NotificationToasts {
       text.append(detailLabel);
     }
 
-    const card = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    card.addCssClass('NotificationToast'); // CSS identity (.NotificationToast)
-    card.addCssClass(`notification-${notification.getType()}`); // per-severity hook
     card.append(icon);
     card.append(text);
 
@@ -97,13 +139,21 @@ export class NotificationToasts {
     // button. `dismiss()` on removal keeps the model in sync (a no-op for the
     // non-dismissable case, which is already considered dismissed).
     let timeoutId = 0;
-    const remove = () => {
+    const cancelTimer = () => {
       if (timeoutId) {
         GLib.sourceRemove(timeoutId);
         timeoutId = 0;
       }
+    };
+    const forget = () => {
+      const key = notification.getReplaceKey();
+      if (key && this.replaceable.get(key)?.card === card) this.replaceable.delete(key);
+    };
+    const remove = () => {
+      cancelTimer();
       this.root.remove(card);
       notification.dismiss();
+      forget();
     };
     close.on('clicked', remove);
 
@@ -123,10 +173,11 @@ export class NotificationToasts {
         timeoutId = 0;
         this.root.remove(card);
         notification.dismiss();
+        forget();
         return false; // one-shot: remove the source
       });
     }
 
-    return card;
+    return cancelTimer;
   }
 }

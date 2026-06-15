@@ -284,9 +284,14 @@ class Operator extends Base {
   }
 
   mutateSelections () {
-    for (const selection of this.editor.getSelectionsOrderedByBufferPosition()) {
-      this.mutateSelection(selection)
-    }
+    // Coalesce every selection's mutation into ONE undo step, so a multi-cursor
+    // operation (blockwise / occurrence / multiple cursors) undoes as a whole.
+    // Inner per-edit `transact`s nest into this outer user action.
+    this.editor.transact(() => {
+      for (const selection of this.editor.getSelectionsOrderedByBufferPosition()) {
+        this.mutateSelection(selection)
+      }
+    })
     this.mutationManager.setCheckpoint('did-finish')
     this.restoreCursorPositionsIfNecessary()
   }

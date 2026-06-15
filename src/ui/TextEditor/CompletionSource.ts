@@ -41,6 +41,13 @@ export interface CompletionItem {
   /** Ordering hint within a source (compared as a string; falls back to `label`). */
   sortText?: string;
   /**
+   * Extra edits applied elsewhere in the buffer when the item is accepted — e.g.
+   * the `import` line an LSP auto-import completion adds (LSP
+   * `additionalTextEdits`). Ranges are in buffer codepoint coordinates and must
+   * not overlap the main insertion. Often arrives via `resolve()`.
+   */
+  additionalEdits?: { range: Range; newText: string }[];
+  /**
    * Name of the source that produced this item, stamped by the controller (the
    * source itself need not set it). Shown dimmed in the popup as a debug tag.
    */

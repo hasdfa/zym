@@ -65,6 +65,9 @@ export interface GitRepo {
    * Null outside a repo, on a detached HEAD, or when there is no upstream.
    */
   getAheadBehind(): AheadBehind | null;
+  /** Whether the index has unmerged (conflicted) entries — a merge/rebase/etc.
+   *  in progress with conflicts. False outside a repo. */
+  hasConflicts(): boolean;
   /**
    * Per-file working-tree status keyed by absolute path: untracked files, and
    * tracked files with their insert/delete line counts (matching `git diff
@@ -207,6 +210,16 @@ class GgitRepo implements GitRepo {
       return { ahead: Number(ahead), behind: Number(behind) };
     } catch {
       return null;
+    }
+  }
+
+  hasConflicts(): boolean {
+    const repo = this.openRepo();
+    if (!repo) return false;
+    try {
+      return repo.getIndex()?.hasConflicts() ?? false;
+    } catch {
+      return false;
     }
   }
 

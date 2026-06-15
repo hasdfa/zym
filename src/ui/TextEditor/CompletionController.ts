@@ -271,13 +271,16 @@ export class CompletionController {
    *  still selected when the request returns, refresh the doc pane. */
   private resolveSelectedDoc(): void {
     const item = this.popup.getSelected();
-    if (!item || item.documentation !== undefined || !item.resolve || this.resolved.has(item)) return;
+    if (!item || !item.resolve || this.resolved.has(item)) return;
+    // Resolve to fill the doc pane and/or the auto-import edits (additionalEdits).
+    if (item.documentation !== undefined && item.additionalEdits !== undefined) return;
     this.resolved.add(item);
     void item
       .resolve()
       .then((full) => {
         if (full.documentation) item.documentation = full.documentation;
         if (full.detail && !item.detail) item.detail = full.detail;
+        if (full.additionalEdits && !item.additionalEdits) item.additionalEdits = full.additionalEdits;
         if (item.documentation && this.popup.getSelected() === item) this.popup.refreshDoc();
       })
       .catch(() => {});
@@ -328,9 +331,34 @@ export class CompletionController {
   }
 
   /** Enter with a candidate selected: the preview is already in the buffer, so
-   *  just close. (With nothing selected the key handler lets Enter through.) */
+   *  just close — then apply the item's extra edits (e.g. an auto-import line).
+   *  If those haven't been resolved yet (fast accept), resolve and apply async. */
   private accept(): void {
+    const item = this.popup.getSelected();
     this.dismiss();
+    if (!item) return;
+    if (item.additionalEdits) {
+      this.applyAdditionalEdits(item.additionalEdits);
+    } else if (item.resolve && !this.resolved.has(item)) {
+      this.resolved.add(item);
+      void item
+        .resolve()
+        .then((full) => full.additionalEdits && this.applyAdditionalEdits(full.additionalEdits))
+        .catch(() => {});
+    }
+  }
+
+  // Apply an accepted item's extra edits (LSP additionalTextEdits, e.g. an import
+  // line). They sit above/around the inserted text in pre-accept coordinates, so
+  // apply last-first; guarded so the edit doesn't re-open the popup.
+  private applyAdditionalEdits(edits: { range: Range; newText: string }[]): void {
+    const sorted = [...edits].sort((a, b) => b.range.start.compare(a.range.start));
+    this.suppressQuery = true;
+    try {
+      for (const { range, newText } of sorted) this.editor.setTextInBufferRange(range, newText);
+    } finally {
+      this.suppressQuery = false;
+    }
   }
 
   private installKeys(): void {

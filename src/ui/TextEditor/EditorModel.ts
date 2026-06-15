@@ -49,6 +49,21 @@ export interface FoldProvider {
   isFoldedAtRow(row: number): boolean;
   /** Reveal `row` by unfolding the fold(s) that hide it. */
   unfoldRow(row: number): void;
+  /** Inclusive `[startRow, endRow]` of every foldable region (for fold motions /
+   *  the fold text object). */
+  foldableRanges?(): Array<{ startRow: number; endRow: number }>;
+  /** The function enclosing `(row, column)` — outer (whole def) and inner (body)
+   *  line spans — for the `if`/`af` text object. Null when off a function. */
+  functionRangeAt?(
+    row: number,
+    column: number,
+  ): { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } } | null;
+}
+
+/** The `if`/`af` function ranges, as linewise Ranges. */
+export interface FunctionRange {
+  outer: Range;
+  inner: Range;
 }
 
 export class EditorModel {
@@ -69,6 +84,7 @@ export class EditorModel {
   private selection: Selection;
   private extraSelections: Selection[] = [];
   private extraSelectionTag?: InstanceType<typeof Gtk.TextTag>;
+  private extraCursorTag?: InstanceType<typeof Gtk.TextTag>;
   private defaultMarkerLayer?: MarkerLayer;
   private foldProvider: FoldProvider | null = null;
   private checkpointCounter = 0;
@@ -107,10 +123,19 @@ export class EditorModel {
   // sets this; `hidden` means the tag (or native caret) covers it.
   onCursorOverlay?: (kind: 'hidden' | 'hollow' | 'filled', iter?: TextIter) => void;
 
+  // Host-drawn carets for the *extra* cursors (multi-cursor / blockwise). Block
+  // carets over a glyph are painted as tags; beam carets (insert mode) and carets
+  // with no glyph to cover are drawn by the host here. Empty array clears them.
+  onExtraCursors?: (carets: Array<{ iter: TextIter; beam: boolean }>) => void;
+
   constructor(view: SourceView, buffer: SourceBuffer) {
     this.view = view;
     this.buffer = buffer;
     this.selection = new Selection(this);
+    // Indent with spaces by default; the host overrides via `setIndentation`
+    // (config default + per-file detection). Without this a bare GtkSourceView
+    // defaults to tabs, which the indent/auto-indent paths would then emit.
+    this.view.setInsertSpacesInsteadOfTabs(true);
     this.cursorTag = this.createCursorTag();
     this.view.setOverwrite(false); // the block look comes from the tag, not overwrite
     // Keep the block caret on the insert mark even when it moves outside the vim
@@ -208,9 +233,9 @@ export class EditorModel {
     return this.buffer.getCharCount() === 0;
   }
 
-  /** GtkTextBuffer has a single cursor; multi-cursor is not modeled yet. */
+  /** True once at least one secondary selection (extra cursor) exists. */
   hasMultipleCursors(): boolean {
-    return false;
+    return this.extraSelections.length > 0;
   }
 
   /** Fire destruction (called by the host widget when the editor goes away). */
@@ -224,11 +249,10 @@ export class EditorModel {
     return this.emitter.on('did-destroy', callback);
   }
 
-  // Selection-change hooks the vim layer subscribes to. They are inert until the
-  // visual-mode reconciliation lands (phase 6); returning a Disposable keeps the
-  // ported subscription bookkeeping happy.
-  onDidAddSelection(_callback: (selection: Selection) => void): Disposable {
-    return new Disposable(() => {});
+  // Fires when a secondary selection is added (multi-cursor / blockwise). The vim
+  // layer subscribes to keep visual-mode state reconciled with the live set.
+  onDidAddSelection(callback: (selection: Selection) => void): Disposable {
+    return this.emitter.on('did-add-selection', callback as (value: unknown) => void);
   }
 
   onDidChangeSelectionRange(_callback: (event: unknown) => void): Disposable {
@@ -421,6 +445,7 @@ export class EditorModel {
     const selection = new Selection(this, { head, tail });
     this.extraSelections.push(selection);
     selection.setBufferRange(r, options);
+    this.emitter.emit('did-add-selection', selection);
     return selection;
   }
 
@@ -463,7 +488,18 @@ export class EditorModel {
     for (const selection of this.extraSelections.slice()) selection.destroy();
   }
 
-  /** Repaint the secondary-selection highlight. Called after operations settle. */
+  /**
+   * Repaint the secondary selections (multi-cursor / blockwise): a selection
+   * background over each non-empty range, plus a caret per extra cursor so they
+   * are visible (the native caret renders only the primary). Called after
+   * operations settle and after each multi-cursor insert replication.
+   *
+   * The caret follows the current cursor *shape*: in normal/visual (block) mode
+   * it's a reverse-video block over the head character (a tag); in insert (beam)
+   * mode — and wherever there's no glyph to reverse-video (EOL / empty line) — it
+   * is drawn by the host as an overlay caret via `onExtraCursors` (beam = a thin
+   * bar, matching the primary's insert-mode caret).
+   */
   renderExtraSelections(): void {
     if (!this.extraSelectionTag) {
       this.extraSelectionTag = new Gtk.TextTag({
@@ -472,13 +508,42 @@ export class EditorModel {
       });
       this.buffer.getTagTable().add(this.extraSelectionTag);
     }
+    if (!this.extraCursorTag) {
+      // Same reverse-video styling as the primary block caret.
+      this.extraCursorTag = new Gtk.TextTag({
+        name: 'vim-extra-cursor',
+        background: theme.ui.fg,
+        foreground: theme.ui.bg ?? '#000000',
+      });
+      this.buffer.getTagTable().add(this.extraCursorTag);
+    }
     const [start, end] = this.buffer.getBounds();
     this.buffer.removeTag(this.extraSelectionTag, start, end);
-    this.extraSelectionTag.setPriority(this.buffer.getTagTable().getSize() - 1);
+    this.buffer.removeTag(this.extraCursorTag, start, end);
+    const tagTableSize = this.buffer.getTagTable().getSize();
+    this.extraSelectionTag.setPriority(tagTableSize - 2);
+    this.extraCursorTag.setPriority(tagTableSize - 1); // caret above its own selection bg
+
+    const beam = !this.blockCursor; // insert mode → thin beam carets
+    const overlayCarets: Array<{ iter: TextIter; beam: boolean }> = [];
     for (const selection of this.extraSelections) {
       const r = selection.getBufferRange();
-      this.buffer.applyTag(this.extraSelectionTag, this.iterAtPoint(r.start), this.iterAtPoint(r.end));
+      if (!r.isEmpty()) {
+        this.buffer.applyTag(this.extraSelectionTag, this.iterAtPoint(r.start), this.iterAtPoint(r.end));
+      }
+      const headIter = this.iterAtPoint(selection.getHeadBufferPosition());
+      const noGlyph = headIter.endsLine() || headIter.isEnd();
+      if (!beam && !noGlyph) {
+        // Block caret over the character — a reverse-video tag (cheap, no widget).
+        const next = headIter.copy();
+        next.forwardChar();
+        this.buffer.applyTag(this.extraCursorTag, headIter, next);
+      } else {
+        // Beam caret, or a block where there's no glyph to cover — host-drawn.
+        overlayCarets.push({ iter: headIter, beam });
+      }
     }
+    this.onExtraCursors?.(overlayCarets);
   }
 
   getSelectedText(): string {
@@ -491,6 +556,45 @@ export class EditorModel {
 
   setSelectedBufferRange(range: RangeLike, options: { reversed?: boolean } = {}): void {
     this.selection.setBufferRange(Range.fromObject(range), options);
+  }
+
+  getSelectedBufferRanges(): Range[] {
+    return this.getSelections().map((s) => s.getBufferRange());
+  }
+
+  /**
+   * Replace all selections with one per range: the first becomes the primary,
+   * the rest secondaries (Atom semantics). `getSelections()` afterward returns
+   * them in the same order as `ranges` — the occurrence path relies on this to
+   * migrate per-selection mutation state by index.
+   */
+  setSelectedBufferRanges(ranges: RangeLike[], options: { reversed?: boolean } = {}): void {
+    if (!ranges.length) throw new Error('setSelectedBufferRanges: at least one range is required');
+    this.clearExtraSelections();
+    this.setSelectedBufferRange(ranges[0], options);
+    for (let i = 1; i < ranges.length; i++) this.addSelectionForBufferRange(ranges[i], options);
+  }
+
+  /**
+   * Merge selections that share any buffer row into one spanning selection,
+   * destroying the absorbed ones (used by linewise occurrence so adjacent
+   * single-line selections collapse into a block). The lowest-positioned
+   * selection of each overlapping run survives.
+   */
+  mergeSelectionsOnSameRows(): void {
+    const ordered = this.getSelectionsOrderedByBufferPosition();
+    let keeper = ordered[0];
+    for (let i = 1; i < ordered.length; i++) {
+      const selection = ordered[i];
+      const keeperRange = keeper.getBufferRange();
+      const range = selection.getBufferRange();
+      if (range.start.row <= keeperRange.end.row) {
+        keeper.setBufferRange(new Range(keeperRange.start, Point.max(keeperRange.end, range.end)));
+        selection.destroy();
+      } else {
+        keeper = selection;
+      }
+    }
   }
 
   // --- Mutation --------------------------------------------------------------
@@ -538,32 +642,61 @@ export class EditorModel {
     this.setCursorBufferPosition(new Point(row, firstNonBlank < 0 ? 0 : firstNonBlank));
   }
 
-  /** Open a blank line below the cursor's line and put the cursor on it (`o`). */
-  insertNewlineBelow(): void {
-    const row = this.getCursorBufferPosition().row;
-    const lineEnd = this.bufferRangeForBufferRow(row).end;
-    this.setTextInBufferRange(new Range(lineEnd, lineEnd), '\n');
-    this.setCursorBufferPosition(new Point(row + 1, 0));
+  /** The leading whitespace of `row`, verbatim (tabs/spaces as written). */
+  leadingWhitespaceForBufferRow(row: number): string {
+    return this.lineTextForBufferRow(row).match(/^[\t ]*/)![0];
   }
 
-  /** Open a blank line above the cursor's line and put the cursor on it (`O`). */
+  /** Open a blank line below the cursor's line and put the cursor on it (`o`),
+   *  carrying the current line's indentation (vim `autoindent`). */
+  insertNewlineBelow(): void {
+    const row = this.getCursorBufferPosition().row;
+    const indent = this.leadingWhitespaceForBufferRow(row);
+    const lineEnd = this.bufferRangeForBufferRow(row).end;
+    this.setTextInBufferRange(new Range(lineEnd, lineEnd), '\n' + indent);
+    this.setCursorBufferPosition(new Point(row + 1, indent.length));
+  }
+
+  /** Open a blank line above the cursor's line and put the cursor on it (`O`),
+   *  carrying the current line's indentation. */
   insertNewlineAbove(): void {
     const row = this.getCursorBufferPosition().row;
+    const indent = this.leadingWhitespaceForBufferRow(row);
     const lineStart = new Point(row, 0);
-    this.setTextInBufferRange(new Range(lineStart, lineStart), '\n');
-    this.setCursorBufferPosition(new Point(row, 0));
+    this.setTextInBufferRange(new Range(lineStart, lineStart), indent + '\n');
+    this.setCursorBufferPosition(new Point(row, indent.length));
   }
 
   /**
-   * Whether the view auto-indents new lines. Reported as false to the vim layer
-   * so `o`/`O` open a plain blank line (auto-indent-on-open is not modeled yet).
+   * `o`/`O` carry indentation themselves (`insertNewlineBelow`/`Above`), so the
+   * vim layer's separate auto-indent-empty-rows pass is left off — running it
+   * would re-derive `O`'s indent from the wrong reference line.
    */
   get autoIndent(): boolean {
     return false;
   }
 
-  /** Auto-indent a row. Not modeled yet; no-op (only reached when `autoIndent`). */
-  autoIndentBufferRow(_row: number): void {}
+  /** The indent level a fresh line at `row` should take: the indentation of the
+   *  nearest non-blank line above it (vim `autoindent`), or 0 at the top. */
+  suggestedIndentForBufferRow(row: number): number {
+    for (let r = row - 1; r >= 0; r--) {
+      if (!this.isBufferRowBlank(r)) return this.indentationForBufferRow(r);
+    }
+    return 0;
+  }
+
+  /** Re-indent `row` to its suggested level, replacing the existing leading
+   *  whitespace; keeps the cursor after the indent when it's on that row. */
+  autoIndentBufferRow(row: number): void {
+    const indent = this.buildIndentString(this.suggestedIndentForBufferRow(row));
+    const current = this.leadingWhitespaceForBufferRow(row);
+    if (current === indent) return;
+    this.setTextInBufferRange(new Range(new Point(row, 0), new Point(row, current.length)), indent);
+    const cursor = this.getCursorBufferPosition();
+    if (cursor.row === row && cursor.column <= Math.max(current.length, indent.length)) {
+      this.setCursorBufferPosition(new Point(row, indent.length));
+    }
+  }
 
   // --- Undo grouping ---------------------------------------------------------
 
@@ -823,19 +956,191 @@ export class EditorModel {
     this.foldProvider?.unfoldRow(row);
   }
 
-  // --- Multi-cursor reconciliation (single cursor: no-ops) -------------------
+  /** Every foldable region as a linewise Range (fold motions, `iz`/`az`). */
+  getFoldableRanges(): Range[] {
+    const ranges = this.foldProvider?.foldableRanges?.() ?? [];
+    return ranges.map((r) => new Range(new Point(r.startRow, 0), new Point(r.endRow, 0)));
+  }
 
-  mergeCursors(): void {}
-  mergeIntersectingSelections(): void {}
+  /** The function enclosing `point` (whole def + body), as linewise Ranges, or
+   *  null when the cursor isn't in a function (or there's no parse tree). */
+  getFunctionRange(point: PointLike): FunctionRange | null {
+    const p = Point.fromObject(point);
+    const r = this.foldProvider?.functionRangeAt?.(p.row, p.column);
+    if (!r) return null;
+    const rowRange = (s: { startRow: number; endRow: number }) =>
+      new Range(new Point(s.startRow, 0), new Point(s.endRow, this.lineLength(s.endRow)));
+    return { outer: rowRange(r.outer), inner: rowRange(r.inner) };
+  }
 
-  /** Whether soft tabs (spaces) are used; selects the column-based motion path. */
+  /**
+   * Add an extra cursor one row below the bottom-most cursor, at the same column
+   * (clamped to that row's length) — "add cursor below" multi-cursor. Returns
+   * the new selection, or null if there's no row below. Repaint with
+   * `renderExtraSelections` after.
+   */
+  addCursorBelow(): Selection | null {
+    const cursors = this.getCursorsOrderedByBufferPosition();
+    const from = cursors[cursors.length - 1].getBufferPosition();
+    const row = from.row + 1;
+    if (row > this.getLastBufferRow()) return null;
+    const point = new Point(row, Math.min(from.column, this.lineLength(row)));
+    return this.addSelectionForBufferRange(new Range(point, point));
+  }
+
+  /** "Add cursor above": one row above the top-most cursor, same column. */
+  addCursorAbove(): Selection | null {
+    const cursors = this.getCursorsOrderedByBufferPosition();
+    const from = cursors[0].getBufferPosition();
+    const row = from.row - 1;
+    if (row < 0) return null;
+    const point = new Point(row, Math.min(from.column, this.lineLength(row)));
+    return this.addSelectionForBufferRange(new Range(point, point));
+  }
+
+  // --- Multi-cursor live edit replication ------------------------------------
+
+  private multiCursorReplication = false;
+  private replicatingEdit = false;
+  private replicationSub?: Disposable;
+  private replicationQueue: BufferChange[] = [];
+  private replicationScheduled = false;
+
+  /**
+   * Start mirroring the primary cursor's edits onto every extra cursor — so
+   * typing (or backspacing) in insert mode with multiple cursors inserts at each
+   * cursor incrementally, not only on leaving insert. The vim layer turns this on
+   * when entering insert with >1 selection and off on leave.
+   *
+   * Replication is **deferred** to a microtask rather than run inside the
+   * `changed` signal: a buffer mutation invalidates every outstanding `TextIter`,
+   * so editing mid-signal would corrupt the originating edit (and a mirror on a
+   * line above the primary would shift it). Off-signal, the primary edit has
+   * settled and each mirror uses the extra cursor's mark (which tracks edits).
+   */
+  beginMultiCursorEditReplication(): void {
+    if (this.multiCursorReplication) return;
+    this.multiCursorReplication = true;
+    this.replicationSub = this.onDidChangeText((event) => {
+      if (this.replicatingEdit || this.extraSelections.length === 0) return;
+      this.replicationQueue.push(...event.changes);
+      if (!this.replicationScheduled) {
+        this.replicationScheduled = true;
+        queueMicrotask(() => this.flushReplication());
+      }
+    });
+  }
+
+  endMultiCursorEditReplication(): void {
+    if (this.replicationQueue.length) this.flushReplication(); // drain pending synchronously
+    this.multiCursorReplication = false;
+    this.replicationSub?.dispose();
+    this.replicationSub = undefined;
+  }
+
+  /** Whether live multi-cursor replication is active (the vim layer skips its
+   *  leave-insert replay when it is, to avoid double-inserting). */
+  isReplicatingMultiCursorEdits(): boolean {
+    return this.multiCursorReplication;
+  }
+
+  /** Apply the queued primary edits to every extra cursor. Mirrored edits fire
+   *  their own change events; `replicatingEdit` keeps them out of the queue. */
+  private flushReplication(): void {
+    this.replicationScheduled = false;
+    const changes = this.replicationQueue;
+    this.replicationQueue = [];
+    if (!changes.length || this.extraSelections.length === 0) return;
+    this.replicatingEdit = true;
+    try {
+      this.transact(() => {
+        for (const change of changes) {
+          if (change.oldText === '' && change.newText !== '') {
+            // Pure insertion: insert the same text at each extra cursor. Marks have
+            // right gravity, so the cursor advances past the inserted text.
+            for (const selection of this.extraSelections) {
+              const at = selection.getHeadBufferPosition();
+              this.setTextInBufferRange(new Range(at, at), change.newText);
+            }
+          } else if (change.newText === '' && change.oldText !== '') {
+            // Pure deletion (backspace): delete the same number of columns before
+            // each extra cursor. Skip multi-line deletions (line-join at column 0).
+            const { start, end } = change.oldRange;
+            if (start.row !== end.row) continue;
+            const width = end.column - start.column;
+            for (const selection of this.extraSelections) {
+              const head = selection.getHeadBufferPosition();
+              const from = new Point(head.row, Math.max(0, head.column - width));
+              if (from.column === head.column) continue;
+              this.setTextInBufferRange(new Range(from, head), '');
+            }
+          }
+          // Replacements (both sides non-empty) are left to the leave-insert path.
+        }
+      });
+    } finally {
+      this.replicatingEdit = false;
+    }
+    this.renderExtraSelections();
+  }
+
+  // --- Multi-cursor reconciliation -------------------------------------------
+
+  /**
+   * Collapse cursors that have landed on the same position into one (e.g. after
+   * a motion drives several cursors to the same spot). The earliest-positioned
+   * survivor is kept — the primary wins ties since `getSelections()` lists it
+   * first. No-op while single-cursor.
+   */
+  mergeCursors(): void {
+    if (!this.extraSelections.length) return;
+    const seen = new Set<string>();
+    for (const selection of this.getSelectionsOrderedByBufferPosition()) {
+      const head = selection.getHeadBufferPosition();
+      const key = `${head.row},${head.column}`;
+      if (seen.has(key)) selection.destroy();
+      else seen.add(key);
+    }
+  }
+
+  /**
+   * Merge selections whose ranges overlap into one spanning selection,
+   * destroying the absorbed ones. Called after a select-motion so overlapping
+   * visual selections coalesce. No-op while single-cursor.
+   */
+  mergeIntersectingSelections(): void {
+    if (!this.extraSelections.length) return;
+    const ordered = this.getSelectionsOrderedByBufferPosition();
+    let keeper = ordered[0];
+    for (let i = 1; i < ordered.length; i++) {
+      const selection = ordered[i];
+      const keeperRange = keeper.getBufferRange();
+      const range = selection.getBufferRange();
+      if (keeperRange.intersectsWith(range)) {
+        keeper.setBufferRange(new Range(keeperRange.start, Point.max(keeperRange.end, range.end)));
+        selection.destroy();
+      } else {
+        keeper = selection;
+      }
+    }
+  }
+
+  /** Whether soft tabs (spaces) are used; selects the column-based motion path
+   *  and whether indentation is built from spaces or tabs. Reflects the view. */
   get softTabs(): boolean {
-    return true;
+    return this.view.getInsertSpacesInsteadOfTabs();
   }
 
   /** Display width of a tab stop (used to build/measure indentation). */
   getTabLength(): number {
     return this.view.getTabWidth() || 4;
+  }
+
+  /** Apply an indentation style: spaces-vs-tabs and the indent/tab width. */
+  setIndentation({ useSpaces, width }: { useSpaces: boolean; width: number }): void {
+    this.view.setInsertSpacesInsteadOfTabs(useSpaces);
+    this.view.setTabWidth(width);
+    (this.view as { setIndentWidth(w: number): void }).setIndentWidth(width);
   }
 
   /** The indent level of `row` (leading whitespace width ÷ tab length). */
@@ -905,6 +1210,9 @@ export class EditorModel {
   setCursorType(type: (typeof CursorType)[keyof typeof CursorType]): void {
     this.blockCursor = type !== CursorType.BEAM;
     this.refreshCursorStyle();
+    // Extra carets follow the same shape (block ↔ beam), so re-render them when
+    // the mode switches — e.g. entering insert turns multi-cursor blocks to beams.
+    if (this.extraSelections.length) this.renderExtraSelections();
   }
 
   /** Override where the block caret is painted (`null` = the insert mark). The

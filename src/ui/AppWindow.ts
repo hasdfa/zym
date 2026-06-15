@@ -29,20 +29,31 @@ import { TextEditor } from './TextEditor/index.ts';
 import { Terminal } from './Terminal.ts';
 import { AgentTerminal, type AgentStatus, type AgentResume } from './AgentTerminal.ts';
 import { listAgentSessions } from '../agentSessions.ts';
-import { AgentList } from './AgentList.ts';
+import { LayoutList } from './LayoutList.ts';
 import { GitPanel } from './GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons, iconLabel } from './icons.ts';
 import { BranchButton } from './BranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { openGitRepo, type GitRepo } from '../git.ts';
-import { repoRoot, commitMsgPath, commit } from '../git/cli.ts';
-import { Workbench } from './Workbench.ts';
+import { git, repoRoot, commitMsgPath, commit, stashPush } from '../git/cli.ts';
+import { computeDiff } from '../util/DiffModel.ts';
+import { DiffViewer } from './TextEditor/DiffViewer.ts';
+import { Layout } from './Layout.ts';
 import { openFilePicker } from './FilePicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
-import { openBranchPicker } from './BranchPicker.ts';
+import {
+  openBranchPicker,
+  openDeleteBranchPicker,
+  openMergeBranchPicker,
+  openRenameBranchPicker,
+} from './BranchPicker.ts';
+import { openStashPicker } from './StashPicker.ts';
+import { openGithubFailedCIPicker } from './GithubFailedCIPicker.ts';
+import { openGithubPrPicker, checkoutGithubPrPicker } from './GithubPrPicker.ts';
+import { openGithubIssuePicker } from './GithubIssuePicker.ts';
 import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
@@ -54,7 +65,10 @@ import { NotificationLog } from './NotificationLog.ts';
 import { KeymapPanel } from './KeymapPanel.ts';
 import { LocationList } from './LocationList.ts';
 import { DiagnosticsPanel } from '../lsp/diagnostics/DiagnosticsPanel.ts';
-import { type NavigationKind, type LspConfig } from '../lsp/LspManager.ts';
+import { type NavigationKind, type LspConfig, type LspDocument } from '../lsp/LspManager.ts';
+import { normalizeWorkspaceEdit, applyTextEdits } from '../lsp/workspaceEdit.ts';
+import { uriToPath, type PositionEncoding } from '../lsp/position.ts';
+import type { WorkspaceEdit, CodeAction, Command } from 'vscode-languageserver-protocol';
 import { NotificationToasts } from './NotificationToasts.ts';
 import { loadKeymaps } from '../keymaps/load.ts';
 import { loadConfig, configPath } from '../config/load.ts';
@@ -65,19 +79,60 @@ import { theme } from '../theme/theme.ts';
 // The unsaved/modified marker (a small dot) — warning-colored in the header bar.
 addStyles(`.quilx-modified-dot { color: ${theme.ui.warning ?? '#e5a50a'}; }`);
 
+// The identifier under the cursor (for prefilling the rename prompt). Codepoint-
+// aware: columns are codepoints, so index the line as codepoints.
+function wordUnderCursor(doc: LspDocument): string {
+  const cursor = doc.getCursorBufferPosition();
+  const cp = [...doc.lineTextForRow(cursor.row)];
+  let start = cursor.column;
+  let end = cursor.column;
+  while (start > 0 && /\w/.test(cp[start - 1])) start--;
+  while (end < cp.length && /\w/.test(cp[end])) end++;
+  return cp.slice(start, end).join('');
+}
+
 // The header-bar title is the project name: the last path component of the cwd.
 const PROJECT_NAME = Path.basename(process.cwd());
 const DEFAULT_WIDTH = 1400;
 const DEFAULT_HEIGHT = 950;
 const TOAST_TIMEOUT = 15;
-// Initial height (px) of the tabbed Files/Source-Control panel atop the left
-// dock; the agent list takes the remainder below it. Kept modest so the agent
-// list gets the larger share of the dock by default.
-const LEFT_SPLIT_POSITION = 360;
+// Shared `replaceKey` for the upstream-pull lifecycle, so the "behind" prompt,
+// the "pulling…" spinner, and the result all transform one toast in place.
+const PULL_NOTICE_KEY = 'git:pull';
+// Expanded width (px) of the layout sidebar — the full-height column at the very
+// left of the window, outside (left of) the header bar.
+const LAYOUT_SIDEBAR_WIDTH = 240;
+// Collapsed sidebar width (icons only) — toggled by the robot button.
+const LAYOUT_SIDEBAR_COLLAPSED_WIDTH = 48;
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 // What currently occupies the (otherwise empty) bottom dock.
 type BottomDock = 'notifications' | 'diagnostics' | 'references' | 'keymap' | null;
+
+// One person's layout and every widget filling its dock slots. Built per person by
+// `buildLayout`; the active bundle's widgets are mirrored onto the `this.*` fields
+// (applyBundle) so the rest of AppWindow keeps addressing "the active layout". The
+// mutable fields (filesTab/gitTab/bottomDock) are written back on switch-out
+// (saveActiveBundle), since reveal/toggle reassign them while a layout is active.
+interface LayoutBundle {
+  owner: 'user' | AgentTerminal;
+  layout: Layout<'user' | AgentTerminal>;
+  center: PanelGroup;
+  fileTree: FileTree;
+  gitPanel: GitPanel;
+  leftPanel: Panel;
+  filesTab: PanelChild;
+  gitTab: PanelChild;
+  notificationLog: NotificationLog;
+  notificationPanel: Panel;
+  diagnosticsPanel: DiagnosticsPanel;
+  diagnosticsDock: Panel;
+  referencesList: LocationList;
+  referencesDock: Panel;
+  keymapPanel: KeymapPanel;
+  keymapDock: Panel;
+  bottomDock: BottomDock;
+}
 
 export class AppWindow {
   private readonly app: Application;
@@ -89,10 +144,12 @@ export class AppWindow {
   // tab's content widget (the `.is-panel-child`); a WeakMap so closed tabs drop.
   private readonly focusMemory = new WeakMap<Widget, Widget>();
 
-  // The splittable center: a tree of editor groups. Each tab hosts one
-  // TextEditor, mapped from its root widget so the active child can be resolved
-  // back to its editor regardless of which split it lives in.
-  private readonly center: PanelGroup;
+  // The splittable center of the *active* layout: a tree of editor groups. Each
+  // tab hosts one TextEditor, mapped from its root widget so the active child can
+  // be resolved back to its editor regardless of which split it lives in.
+  // Reassigned when the active layout changes (see activateLayout).
+  private center!: PanelGroup;
+  private activeOwner: 'user' | AgentTerminal = 'user';
   private readonly editors = new Map<Widget, TextEditor>();
   // Terminal tabs share the center panel with editors; tracked separately so the
   // active child can be resolved back to its Terminal (it has no vim state).
@@ -101,20 +158,18 @@ export class AppWindow {
   // The left dock: Source Control on top, file tree in the middle, agent list at
   // the bottom (nested vertical splits). Kept as fields so the pane-switching
   // commands can move focus between the docks.
-  private readonly leftPanel: Panel;
-  private readonly fileTree: FileTree;
-  private readonly agentList: AgentList;
-  private readonly gitPanel: GitPanel;
-  // The agent-list dock (left column, below the file/git panel) and the vertical
-  // paned holding both, kept as fields so a dock that collapsed when emptied can
-  // be re-attached on demand (its reveal/focus path re-adds it).
-  private readonly agentPanel: Panel;
-  private leftPaned!: InstanceType<typeof Gtk.Paned>;
+  private leftPanel!: Panel;
+  private fileTree!: FileTree;
+  private readonly layoutList: LayoutList;
+  // The top-level split whose start child is the layout sidebar; its position is
+  // the sidebar width (toggled between expanded / collapsed by the robot button).
+  private sidebarSplit!: InstanceType<typeof Gtk.Paned>;
+  private gitPanel!: GitPanel;
   // Tab handles for the file tree and Source Control (siblings in `leftPanel`),
   // so the focus commands can reveal either tab. Reassigned when a tab is re-added
   // after the left dock was collapsed (its last tab closed).
-  private filesTab: PanelChild;
-  private gitTab: PanelChild;
+  private filesTab!: PanelChild;
+  private gitTab!: PanelChild;
   // Commit-message editor tabs: the message file each is bound to, so closing the
   // tab can commit (git-style: write the message, save, close to commit).
   private readonly commitEditors = new Map<Widget, { repo: string; msgPath: string }>();
@@ -143,20 +198,27 @@ export class AppWindow {
   // overlay (severity-colored). The log keeps the full history; these come and go.
   private readonly notificationToasts: NotificationToasts;
 
+  // Each person owns a Layout (dock frame) plus the full set of widgets that fill
+  // its slots — see LayoutBundle. Nothing is shared or reparented across layouts;
+  // switching person swaps the whole Layout and reassigns the `this.*` fields below
+  // to that person's instances (see buildLayout / applyBundle / activateLayout).
+  // `layout` / `bottomDock` etc. always refer to the *active* layout's widgets.
+  private layout!: Layout<'user' | AgentTerminal>;
+  private activeBundle!: LayoutBundle;
+  private readonly bundles = new Map<'user' | AgentTerminal, LayoutBundle>();
   // The top/bottom docks are empty by default. The notification log and the
   // Diagnostics list each have their own panel that docks into the bottom slot on
   // toggle (they don't share a panel); `bottomDock` tracks which is shown.
-  private readonly workbench: Workbench;
-  private readonly notificationLog: NotificationLog;
-  private readonly notificationPanel: Panel;
-  private readonly diagnosticsPanel: DiagnosticsPanel;
-  private readonly diagnosticsDock: Panel;
+  private notificationLog!: NotificationLog;
+  private notificationPanel!: Panel;
+  private diagnosticsPanel!: DiagnosticsPanel;
+  private diagnosticsDock!: Panel;
   // The references results list (LSP find-references), its own bottom-dock panel.
-  private readonly referencesList: LocationList;
-  private readonly referencesDock: Panel;
+  private referencesList!: LocationList;
+  private referencesDock!: Panel;
   // The keybinding reference list, its own bottom-dock panel.
-  private readonly keymapPanel: KeymapPanel;
-  private readonly keymapDock: Panel;
+  private keymapPanel!: KeymapPanel;
+  private keymapDock!: Panel;
   private bottomDock: BottomDock = null;
 
   // Git integration for the header-bar branch indicator.
@@ -167,6 +229,8 @@ export class AppWindow {
   // Last-seen upstream "behind" count, to fire the pull notification only on the
   // transition into being behind (not on every status poll while behind).
   private lastBehind = 0;
+  // Background `git fetch` timer (a GLib timeout id; 0 when disabled).
+  private autoFetchTimer = 0;
 
   // Watches the user config file and syncs edits into quilx.config; cancelled on
   // close.
@@ -187,94 +251,35 @@ export class AppWindow {
     this.toastOverlay = new Adw.ToastOverlay();
 
     this.git = openGitRepo(process.cwd());
-    this.branchButton = new BranchButton(this.git);
+    this.branchButton = new BranchButton(this.git, () => openBranchPicker(this.overlay, process.cwd()));
     this.githubButtons = new GithubButtons({ git: this.git, cwd: process.cwd() });
 
-    this.center = new PanelGroup({
-      onActiveChanged: () => this.onActiveTabChanged(),
-      onClosed: (widget) => {
-        // Closing an agent's tab after its process exited retires the agent for
-        // good, so drop it from the agent list. While the process is still alive a
-        // closed tab is just detached (the widget persists and can be reopened via
-        // the agent list), so we keep it registered in that case.
-        const terminal = this.terminals.get(widget);
-        if (terminal instanceof AgentTerminal && terminal.exited) {
-          quilx.agents.remove(terminal);
-        }
-        this.participants.get(widget)?.dispose();
-        this.participants.delete(widget);
-        this.editors.delete(widget);
-        this.editorChildren.delete(widget);
-        this.terminals.delete(widget);
-        this.agentChildren.delete(widget);
-        this.updateModifiedMarker(); // a closed editor no longer counts as unsaved
-        // A closed commit-message tab finalizes the commit (if a message was saved).
-        const commitInfo = this.commitEditors.get(widget);
-        if (commitInfo) {
-          this.commitEditors.delete(widget);
-          this.finishCommit(commitInfo.repo, commitInfo.msgPath);
-        }
-        // The closed agent is gone from the active tab; recompute the highlight.
-        this.updateAgentHighlight();
-      },
-      // No onEmpty/quit: emptying the last panel leaves it showing the empty
-      // state. The app quits via the window close button or `app:quit`.
-    });
+    // Build the user's layout — its own center + Files/Source-Control + bottom
+    // docks — and make it the active one. Agents get their own (openAgent); no
+    // widget is shared across layouts, so a switch reparents nothing.
+    const userBundle = this.buildLayout('user');
+    this.applyBundle(userBundle); // mirrors its widgets onto this.layout/center/fileTree/…
 
-    this.workbench = new Workbench();
-    this.fileTree = new FileTree({
-      rootPath: process.cwd(),
-      onOpenFile: (path) => this.openFile(path),
-      git: this.git,
-    });
-    // Source Control shares the top section with the file tree, as sibling tabs.
-    this.gitPanel = new GitPanel({
-      cwd: process.cwd(),
-      git: this.git,
-      onOpenFile: (path) => this.openFile(path),
-      onCommit: () => this.startCommit(),
-    });
-
-    // The file tree and git panel are tabs in one panel; the tab handles are
-    // kept so the focus commands can reveal (select) either tab. Tab icons are
-    // Nerd Font glyphs embedded in the title (Adw.TabView renders a GIcon, not a
-    // font glyph, so the icon goes in the text — see ui/icons.ts).
-    // A dock panel collapses out of the layout when its last tab closes (rather
-    // than showing the empty-state placeholder, which is reserved for the center
-    // splittable area). The reveal/focus path for each dock re-attaches it.
-    this.leftPanel = new Panel({ onEmpty: () => this.detachDock(this.leftPanel) });
-    this.filesTab = this.leftPanel.add(this.fileTree.root, { title: `${fileIconGlyph('', true)}  Files` });
-    this.gitTab = this.leftPanel.add(this.gitPanel.root, { title: `${Icons.git}  Git` });
-    // add() selects each tab as it's added, so Git (added last) would win. Default to Files.
-    this.filesTab.select();
-
-    // The agent list sits below that tabbed panel in the left dock.
-    this.agentList = new AgentList({
+    // The layout list lives in its own full-height sidebar at the very left of the
+    // window (built into the top-level split below), not in the workbench dock.
+    this.layoutList = new LayoutList({
       onActivate: (agent) => this.showAgent(agent),
+      onActivateUser: () => this.activateOwner('user'), // the user row → user layout
+      onToggleCollapsed: (collapsed) =>
+        this.sidebarSplit.setPosition(collapsed ? LAYOUT_SIDEBAR_COLLAPSED_WIDTH : LAYOUT_SIDEBAR_WIDTH),
       onRestart: (agent) => this.restartAgent(agent),
       onClose: (agent) => this.closeAgent(agent),
       onRename: (agent) => this.renameAgentPrompt(agent),
       onOpenChanges: (agent) => this.openAgentChanges(agent),
     });
-    this.agentPanel = new Panel({ onEmpty: () => this.detachDock(this.agentPanel) });
-    this.agentPanel.add(this.agentList.root, { title: 'Agents' });
 
-    this.leftPaned = new Gtk.Paned({ orientation: Gtk.Orientation.VERTICAL });
-    this.leftPaned.setStartChild(this.leftPanel.root);
-    this.leftPaned.setEndChild(this.agentPanel.root);
-    this.leftPaned.setPosition(LEFT_SPLIT_POSITION);
-    this.leftPaned.setResizeEndChild(false); // window resize grows the tabbed panel, not the agent list
-    this.leftPaned.setShrinkEndChild(false);
-
-    this.workbench.setLeft({ root: this.leftPaned });
-    this.workbench.setCenter(this.center);
-
-    // Session save/restore/autosave. The builders construct (but don't attach) a
-    // tab during restore; PanelGroup.restoreLayout places them into the tree.
+    // Session save/restore/autosave is anchored to the user layout (its center +
+    // file tree). The builders construct (but don't attach) a tab during restore;
+    // PanelGroup.restoreLayout places them into the tree.
     this.sessionController = new SessionController({
       root: process.cwd(),
-      center: this.center,
-      fileTree: this.fileTree,
+      center: userBundle.center,
+      fileTree: userBundle.fileTree,
       serializeChild: (widget) => this.serializeChild(widget),
       createEditorTab: (path, cursor) => this.createEditorTab(path, cursor),
       createTerminalTab: (cwd) => this.createTerminalTab(cwd),
@@ -284,58 +289,41 @@ export class AppWindow {
       },
     });
 
-    // The notification log: built now (so it backfills history), wrapped in its
-    // own Panel for its title tab, docked into the bottom slot only on toggle.
-    this.notificationLog = new NotificationLog();
-    // Each bottom dock is a single persistent view: closing its tab hides the
-    // dock (its toggle brings it back) rather than destroying the page, so the
-    // view's widget/state survive and reopening never shows an empty panel.
-    this.notificationPanel = new Panel({
-      onTabCloseRequest: () => this.hideBottomDock('notifications'),
-    });
-    this.notificationPanel.add(this.notificationLog.root, { title: 'Notifications' });
-    // The Diagnostics list gets its own bottom-dock panel (separate from the log).
-    this.diagnosticsPanel = new DiagnosticsPanel((target) =>
-      this.openOrFocusFile(target.path, [target.line, target.character]),
-    );
-    this.diagnosticsDock = new Panel({
-      onTabCloseRequest: () => this.hideBottomDock('diagnostics'),
-    });
-    this.diagnosticsDock.add(this.diagnosticsPanel.root, { title: 'Diagnostics' });
-    // The references results list shares the shared LocationList component.
-    this.referencesList = new LocationList({
-      emptyText: 'No references',
-      onActivate: (item) => this.openOrFocusFile(item.path, [item.line, item.character]),
-    });
-    this.referencesDock = new Panel({
-      onTabCloseRequest: () => this.hideBottomDock('references'),
-    });
-    this.referencesDock.add(this.referencesList.root, { title: 'References' });
-    // The keybinding reference list (every binding + its source).
-    this.keymapPanel = new KeymapPanel();
-    this.keymapDock = new Panel({
-      onTabCloseRequest: () => this.hideBottomDock('keymap'),
-    });
-    this.keymapDock.add(this.keymapPanel.root, { title: 'Keybindings' });
-
     const toolbarView = new Adw.ToolbarView();
     toolbarView.addTopBar(this.buildHeaderBar());
     // Overlay host for transient widgets (e.g. the fuzzy file picker). It wraps
     // only the content, so the picker floats over the workbench below the header
     // bar rather than over the whole window.
     this.overlay = new Gtk.Overlay();
-    this.overlay.setChild(this.workbench.root);
+    this.overlay.setChild(this.layout.root);
     // Notification toasts float in the bottom-right of the content area.
     this.notificationToasts = new NotificationToasts({ timeout: TOAST_TIMEOUT });
     this.overlay.addOverlay(this.notificationToasts.root);
     toolbarView.setContent(this.overlay);
     this.toastOverlay.setChild(toolbarView);
 
+    // Layout sidebar: a full-height column at the very left of the window, *outside*
+    // the header bar. A top-level horizontal paned splits it from everything else
+    // (the header bar + workbench, wrapped by the toast overlay), so it spans from
+    // the window's top edge to its bottom; its width (the split position) is toggled
+    // between expanded / collapsed by the robot button.
+    const layoutSidebar = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    layoutSidebar.setName('LayoutSidebar'); // selector identity for CSS
+    this.layoutList.root.setHexpand(true);
+    this.layoutList.root.setVexpand(true); // fill the sidebar (height + width)
+    layoutSidebar.append(this.layoutList.root);
+    this.sidebarSplit = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
+    this.sidebarSplit.setStartChild(layoutSidebar);
+    this.sidebarSplit.setEndChild(this.toastOverlay);
+    this.sidebarSplit.setPosition(LAYOUT_SIDEBAR_WIDTH);
+    this.sidebarSplit.setResizeStartChild(false); // window resize grows the content, not the sidebar
+    this.sidebarSplit.setShrinkStartChild(false);
+
     // Bridge the notification manager to the toast stack. Only actionable
-    // severities (warning/error/fatal) pop a transient toast; quieter levels
-    // (trace/info/success) accumulate in the log only, so traces never interrupt.
+    // User-facing severities (info/success/warning/error/fatal) pop a transient
+    // toast; only `trace` (the debug level) is log-only, so traces never interrupt.
     // The manager retains the full history for the log regardless.
-    const TOAST_TYPES = new Set(['warning', 'error', 'fatal']);
+    const TOAST_TYPES = new Set(['info', 'success', 'warning', 'error', 'fatal']);
     quilx.notifications.onDidAddNotification((n) => {
       const notification = n as Notification;
       if (TOAST_TYPES.has(notification.getType())) this.notificationToasts.show(notification);
@@ -347,7 +335,7 @@ export class AppWindow {
     this.window = new Adw.ApplicationWindow({ application: app });
     this.window.setName('AppWindow'); // selector identity for command/keymap rules
     this.window.setDefaultSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
-    this.window.setContent(this.toastOverlay);
+    this.window.setContent(this.sidebarSplit);
     // Track the focused widget per panel tab so each panel can restore focus to
     // exactly where it was when it is re-activated (see focusMemory).
     this.window.on('notify::focus-widget', () => this.rememberFocus());
@@ -382,17 +370,29 @@ export class AppWindow {
 
     // Configure language servers from `lsp.*` config (and on live edits).
     this.configureLsp();
-    for (const key of ['lsp.enable', 'lsp.disabledLanguages', 'lsp.servers']) {
+    for (const key of ['lsp.enable', 'lsp.disabledLanguages', 'lsp.servers', 'lsp.autoInstall']) {
       quilx.config.onDidChange(key, () => this.configureLsp());
     }
 
     // Surface major LSP events (server start/ready/exit/failure) in the
     // notification log; trace-level so they stay out of the way.
-    quilx.lsp.onNotice(({ level, message, detail }) => {
+    quilx.lsp.onNotice(({ level, message, detail, action, replaceKey, sticky, loading }) => {
       const text = `LSP: ${message}`;
-      const opts = detail ? { description: detail } : undefined;
+      // `detail` is the short reason shown under the message in the toast/log
+      // (the `description` field only appears when a log entry is expanded); an
+      // `action` (e.g. "Install") becomes a button; `replaceKey` lets a follow-up
+      // notice reuse the same toast in place; `sticky` keeps it until replaced;
+      // `loading` shows a spinner instead of the icon.
+      const opts = {
+        ...(detail ? { detail } : {}),
+        ...(action ? { buttons: [{ text: action.label, onDidClick: action.run }] } : {}),
+        ...(replaceKey ? { replaceKey } : {}),
+        ...(sticky ? { dismissable: true } : {}),
+        ...(loading ? { loading: true } : {}),
+      };
       if (level === 'error') quilx.notifications.addError(text, opts);
       else if (level === 'warning') quilx.notifications.addWarning(text, opts);
+      else if (level === 'success') quilx.notifications.addSuccess(text, opts);
       else if (level === 'info') quilx.notifications.addInfo(text, opts);
       else quilx.notifications.addTrace(text, opts);
     });
@@ -402,6 +402,7 @@ export class AppWindow {
     // current state so an already-behind repo doesn't toast on launch.
     this.lastBehind = this.git.getAheadBehind()?.behind ?? 0;
     this.git.onChange(() => this.checkUpstream());
+    this.startAutoFetch();
 
     // Closing the window consults the session's modified participants first: an
     // editor with unsaved edits or a running agent blocks the quit behind a
@@ -434,12 +435,13 @@ export class AppWindow {
   // the clean-exit path and, after confirmation, the unsaved-work path.
   private teardownAndQuit() {
     this.sessionController.flush(); // final autosave before the workbench goes away
+    if (this.autoFetchTimer) GLib.sourceRemove(this.autoFetchTimer);
     this.branchButton.dispose();
     this.githubButtons.dispose();
     this.git.dispose();
     this.configWatcher.dispose();
     this.keymapWatcher.dispose();
-    this.agentList.dispose();
+    this.layoutList.dispose();
     this.gitPanel.dispose();
     this.notificationLog.dispose();
     this.keymapPanel.dispose();
@@ -586,17 +588,22 @@ export class AppWindow {
       prompt: options.prompt,
       resume: options.resume,
       title: options.title,
-      // No onExit: when the agent process exits the widget stays put (it prints a
-      // "process exited" notice and flips to an exited status). After that, Enter
-      // closes the agent's current tab.
-      onCloseRequest: () => this.agentChildren.get(agent.root)?.close(),
     });
+    // When the agent process exits, the agent and its layout linger (the terminal
+    // shows an "exited" notice); the user restarts or closes it from the layout list.
+    // The agent gets its own layout: a fresh `Layout` (its own center + Files/Git +
+    // bottom docks) whose center opens the terminal as the initial tab (the user can
+    // open files / split inside it too). Activate (show) the layout *before* adding
+    // the terminal — adding a tab to a detached, unrooted Adw.TabView yields a blank
+    // page.
+    const bundle = this.buildLayout(agent);
+    this.activateLayout(bundle.layout);
+    this.terminals.set(agent.root, agent);
+    const child = bundle.center.add(agent.root, { title: agentTabTitle(agent) });
+    this.agentChildren.set(agent.root, child);
     // A running agent reports as modified, so it's consulted before exit.
     this.participants.set(agent.root, quilx.session.registerParticipant(agent));
-    // One persistent tab binding that updates whichever tab currently shows the
-    // agent (survives close/reopen, since it reads agentChildren on each change).
-    // The tab carries a status glyph prefix + an attention highlight, so it
-    // refreshes on status too.
+    // The agent's tab carries a status glyph prefix + attention highlight.
     agent.onTitleChange(() => this.updateAgentTab(agent));
     // Notify when the agent needs attention while the user isn't looking at it.
     let previousStatus = agent.status;
@@ -608,17 +615,11 @@ export class AppWindow {
     // When the agent edits files, re-check git now instead of waiting for the poll,
     // so its changes surface in Source Control / the branch indicator promptly.
     agent.onDidChangeFiles(() => this.git.refresh());
-    // The list highlight follows focus: recompute it whenever this terminal gains
-    // or loses focus (the highlight is gated on the agent being focused + active —
-    // see updateAgentHighlight).
+    // Track the last-focused agent (the default target for send-to-agent).
     const focus = new Gtk.EventControllerFocus();
-    focus.on('enter', () => {
-      this.lastAgent = agent; // the "current" agent for send-to-agent
-      this.updateAgentHighlight();
-    });
-    focus.on('leave', () => this.updateAgentHighlight());
+    focus.on('enter', () => { this.lastAgent = agent; });
     agent.root.addController(focus);
-    this.showAgent(agent);
+    agent.focus(); // the layout is already active (above); focus the terminal
     return agent;
   }
 
@@ -727,21 +728,15 @@ export class AppWindow {
   // Highlight an agent's row only while its terminal is the focused element AND
   // its tab is the active panel's active tab — so the highlight clears the moment
   // focus leaves the agent (e.g. into the picker) or its panel stops being active.
+  // The sidebar selection follows the active layout's owner (which person you're
+  // viewing), not focus.
   private updateAgentHighlight(): void {
-    const activeChild = this.center.activePanel.activeChild;
-    const terminal = activeChild ? this.terminals.get(activeChild) : undefined;
-    const focused =
-      activeChild && terminal instanceof AgentTerminal && this.isFocusWithin(activeChild)
-        ? terminal
-        : null;
-    this.agentList.selectAgent(focused);
+    this.layoutList.selectAgent(this.activeOwner === 'user' ? null : this.activeOwner);
   }
 
-  /** The agent backing the active center tab, if that tab hosts one. */
+  /** The agent whose layout is active, if any. */
   private get activeAgent(): AgentTerminal | null {
-    const widget = this.center.activePanel.activeChild;
-    const terminal = widget ? this.terminals.get(widget) : undefined;
-    return terminal instanceof AgentTerminal ? terminal : null;
+    return this.activeOwner === 'user' ? null : this.activeOwner;
   }
 
   /** Reveal the agent `delta` steps from the active one (wraps; first if none). */
@@ -762,7 +757,7 @@ export class AppWindow {
     if (current === 'waiting') {
       quilx.notifications.addWarning(`${agent.title} needs your input`, { onDidClick: reveal });
     } else if (current === 'idle' && previous === 'working') {
-      quilx.notifications.addInfo(`${agent.title} finished`, { onDidClick: reveal });
+      quilx.notifications.addTrace(`${agent.title} finished`, { onDidClick: reveal });
     }
   }
 
@@ -828,11 +823,16 @@ export class AppWindow {
     this.openAgent({ resume, title });
   }
 
-  // Close an agent for good: SIGTERM a live child, close its tab, and retire it
-  // from the registry (idempotent — the exited-tab path already retires on close).
+  // Close an agent for good: SIGTERM a live child, drop its layout (returning to
+  // the user's layout if it was active), and retire it from the registry.
   private closeAgent(agent: AgentTerminal): void {
     if (!agent.exited) agent.kill();
-    this.agentChildren.get(agent.root)?.close();
+    if (this.activeOwner === agent) this.activateOwner('user'); // swap away first
+    this.bundles.delete(agent); // its layout (center + Files/Git + bottom + tabs) goes
+    this.participants.get(agent.root)?.dispose();
+    this.participants.delete(agent.root);
+    this.agentChildren.delete(agent.root);
+    this.terminals.delete(agent.root);
     quilx.agents.remove(agent);
   }
 
@@ -853,40 +853,183 @@ export class AppWindow {
     });
   }
 
+  // Build a fresh center (one person's splittable editor area). Every center
+  // shares the same callbacks — they operate on the shared per-widget maps, and
+  // only the *active* center fires interactive events (the others are detached).
+  private makeCenter(): PanelGroup {
+    return new PanelGroup({
+      onActiveChanged: () => this.onActiveTabChanged(),
+      onClosed: (widget) => {
+        // Closing an agent's tab after its process exited retires the agent.
+        const terminal = this.terminals.get(widget);
+        if (terminal instanceof AgentTerminal && terminal.exited) {
+          quilx.agents.remove(terminal);
+        }
+        this.participants.get(widget)?.dispose();
+        this.participants.delete(widget);
+        this.editors.delete(widget);
+        this.editorChildren.delete(widget);
+        this.terminals.delete(widget);
+        this.agentChildren.delete(widget);
+        this.updateModifiedMarker(); // a closed editor no longer counts as unsaved
+        // A closed commit-message tab finalizes the commit (if a message was saved).
+        const commitInfo = this.commitEditors.get(widget);
+        if (commitInfo) {
+          this.commitEditors.delete(widget);
+          this.finishCommit(commitInfo.repo, commitInfo.msgPath);
+        }
+      },
+    });
+  }
+
   /**
-   * Show `agent` in the center: select its existing tab, or — if it has none
-   * (its tab was closed while the process kept running) — reattach its persisted
-   * terminal widget to a fresh tab. Driven by openAgent and the agent list.
+   * Build a person's layout: a `Layout` plus its own center, Files/Source-Control,
+   * and bottom-dock widgets. Nothing here is shared with other layouts, so a switch
+   * never reparents — it only swaps the visible Layout and re-points the `this.*`
+   * fields (applyBundle). Registers and returns the bundle.
    */
-  private showAgent(agent: AgentTerminal): void {
-    // Agent activity brings the agent-list dock back if it had been collapsed.
-    this.ensureAgentDock();
-    // Gate on whether the widget is actually attached to a window, NOT on the
-    // bookkeeping map. The map can desync — a spurious page-detached drops a live
-    // tab's handle, a closed tab can leave a stale one — and trusting it caused
-    // two failures: force-unparenting a still-live tab ("the agent closed for no
-    // reason") and stranding the agent forever ("can't reopen by any mean").
-    //
-    // getRoot() is non-null for any live tab — even an unselected background one —
-    // and null once the tab is closed, even though Adw leaves the widget parented
-    // to a not-yet-finalized "zombie" page (so getParent() alone is unreliable).
-    if (agent.root.getRoot() !== null) {
-      this.agentChildren.get(agent.root)?.select(); // best effort; focus always lands
-      agent.focus();
-      return;
+  private buildLayout(owner: 'user' | AgentTerminal): LayoutBundle {
+    const layout = new Layout<'user' | AgentTerminal>();
+    layout.owner = owner;
+    const center = this.makeCenter();
+    const fileTree = new FileTree({
+      rootPath: process.cwd(),
+      onOpenFile: (path) => this.openFile(path),
+      git: this.git,
+    });
+    // Source Control shares the top section with the file tree, as sibling tabs.
+    const gitPanel = new GitPanel({
+      cwd: process.cwd(),
+      git: this.git,
+      onOpenFile: (path) => this.openFile(path),
+      onCommit: () => this.startCommit(),
+    });
+    // The file tree and git panel are sibling tabs in one panel (Nerd Font glyphs
+    // embedded in the title — Adw.TabView renders a GIcon, not a font glyph). A dock
+    // panel collapses out of the layout when its last tab closes (the reveal/focus
+    // path re-attaches it); the closure captures this bundle's own `leftPanel`.
+    const leftPanel = new Panel({ onEmpty: () => this.detachDock(leftPanel) });
+    const filesTab = leftPanel.add(fileTree.root, { title: `${fileIconGlyph('', true)}  Files` });
+    const gitTab = leftPanel.add(gitPanel.root, { title: `${Icons.git}  Git` });
+    filesTab.select(); // add() selects each tab as added; default to Files, not Git
+
+    // Each bottom dock is a single persistent view: closing its tab hides the dock
+    // (its toggle brings it back) rather than destroying the page, so its widget/
+    // state survive and reopening never shows an empty panel. hideBottomDock acts on
+    // the active layout — the only one whose tab can be interactively closed.
+    const notificationLog = new NotificationLog();
+    const notificationPanel = new Panel({ onTabCloseRequest: () => this.hideBottomDock('notifications') });
+    notificationPanel.add(notificationLog.root, { title: 'Notifications' });
+    const diagnosticsPanel = new DiagnosticsPanel((target) =>
+      this.openOrFocusFile(target.path, [target.line, target.character]),
+    );
+    const diagnosticsDock = new Panel({ onTabCloseRequest: () => this.hideBottomDock('diagnostics') });
+    diagnosticsDock.add(diagnosticsPanel.root, { title: 'Diagnostics' });
+    const referencesList = new LocationList({
+      emptyText: 'No references',
+      onActivate: (item) => this.openOrFocusFile(item.path, [item.line, item.character]),
+    });
+    const referencesDock = new Panel({ onTabCloseRequest: () => this.hideBottomDock('references') });
+    referencesDock.add(referencesList.root, { title: 'References' });
+    const keymapPanel = new KeymapPanel();
+    const keymapDock = new Panel({ onTabCloseRequest: () => this.hideBottomDock('keymap') });
+    keymapDock.add(keymapPanel.root, { title: 'Keybindings' });
+
+    // The center is splittable. The user's layout shows Files/Source-Control in the
+    // RIGHT dock; an agent's layout opens *without* it (just the terminal) — the
+    // panel is still built so reveal-on-demand (file-tree:focus / git commands) and
+    // the active-layout `this.*` fields keep working. The bottom slot is empty until
+    // a dock is toggled (per-layout); the left dock stays empty.
+    if (owner === 'user') layout.setRight({ root: leftPanel.root });
+    layout.setCenter(center);
+
+    const bundle: LayoutBundle = {
+      owner, layout, center, fileTree, gitPanel, leftPanel, filesTab, gitTab,
+      notificationLog, notificationPanel, diagnosticsPanel, diagnosticsDock,
+      referencesList, referencesDock, keymapPanel, keymapDock, bottomDock: null,
+    };
+    this.bundles.set(owner, bundle);
+    return bundle;
+  }
+
+  // Mirror a bundle's widgets onto the `this.*` fields so the rest of AppWindow
+  // addresses "the active layout" without knowing which person owns it.
+  private applyBundle(bundle: LayoutBundle): void {
+    this.activeBundle = bundle;
+    this.activeOwner = bundle.owner;
+    this.layout = bundle.layout;
+    this.center = bundle.center;
+    this.fileTree = bundle.fileTree;
+    this.gitPanel = bundle.gitPanel;
+    this.leftPanel = bundle.leftPanel;
+    this.filesTab = bundle.filesTab;
+    this.gitTab = bundle.gitTab;
+    this.notificationLog = bundle.notificationLog;
+    this.notificationPanel = bundle.notificationPanel;
+    this.diagnosticsPanel = bundle.diagnosticsPanel;
+    this.diagnosticsDock = bundle.diagnosticsDock;
+    this.referencesList = bundle.referencesList;
+    this.referencesDock = bundle.referencesDock;
+    this.keymapPanel = bundle.keymapPanel;
+    this.keymapDock = bundle.keymapDock;
+    this.bottomDock = bundle.bottomDock;
+  }
+
+  // Write the mutable per-layout state back into the active bundle before switching
+  // away (reveal/toggle reassign filesTab/gitTab/bottomDock while a layout is live).
+  private saveActiveBundle(): void {
+    if (!this.activeBundle) return;
+    this.activeBundle.filesTab = this.filesTab;
+    this.activeBundle.gitTab = this.gitTab;
+    this.activeBundle.bottomDock = this.bottomDock;
+  }
+
+  /** Activate the layout owned by `owner` (resolves to its `Layout`). */
+  private activateOwner(owner: 'user' | AgentTerminal): void {
+    const bundle = this.bundles.get(owner);
+    if (bundle) this.activateLayout(bundle.layout);
+  }
+
+  // Step the active layout by `step` (−1 / +1) through the layout-list order
+  // ([user, …agents]), wrapping around. No-op when the user is the only person.
+  private cycleLayout(step: number): void {
+    const owners: Array<'user' | AgentTerminal> = ['user', ...quilx.agents.getAgents()];
+    if (owners.length < 2) return;
+    const current = owners.indexOf(this.activeOwner);
+    const next = (current + step + owners.length) % owners.length;
+    this.activateOwner(owners[next]);
+  }
+
+  /**
+   * Activate `layout`: show it and re-point the `this.*` fields to its widgets
+   * (applyBundle). Nothing is reparented — every slot already belongs to this
+   * layout; the previously-active layout is detached but alive (its tabs/terminal/
+   * state persist). Driven by the LayoutList / openAgent.
+   */
+  private activateLayout(layout: Layout<'user' | AgentTerminal>): void {
+    const bundle = this.bundles.get(layout.owner);
+    if (!bundle) return;
+    this.saveActiveBundle();
+    this.applyBundle(bundle);
+    this.overlay.setChild(layout.root); // show this layout
+    this.layoutList.selectAgent(bundle.owner === 'user' ? null : bundle.owner);
+    this.focusActivePane();
+  }
+
+  // The Panel currently shown in the bottom dock (`this.bottomDock`), or null.
+  private bottomDockPanel(): { root: Widget } | null {
+    switch (this.bottomDock) {
+      case 'notifications': return this.notificationPanel;
+      case 'diagnostics': return this.diagnosticsDock;
+      case 'references': return this.referencesDock;
+      case 'keymap': return this.keymapDock;
+      default: return null;
     }
+  }
 
-    // Closed (or never shown): reattach to a fresh tab. Only now is unparenting
-    // safe — getRoot() is null, so we're detaching from a dead zombie page rather
-    // than ripping the widget out of a live tab.
-    this.agentChildren.delete(agent.root);
-    if (agent.root.getParent()) agent.root.unparent();
-
-    this.terminals.set(agent.root, agent);
-    const child = this.center.add(agent.root, { title: agentTabTitle(agent) });
-    this.agentChildren.set(agent.root, child);
-    this.updateAgentTab(agent);
-    agent.focus();
+  /** Show `agent`: activate its layout (its terminal lives there). */
+  private showAgent(agent: AgentTerminal): void {
+    this.activateOwner(agent);
   }
 
   // Refresh the agent's tab: its glyph-prefixed title, plus Adw's accent-coloured
@@ -915,6 +1058,7 @@ export class AppWindow {
   private buildHeaderBar() {
     const header = new Adw.HeaderBar();
     header.setName('Header'); // CSS identity (#Header)
+    // The branch button and the GitHub PR pill are separate controls.
     header.packStart(this.branchButton.root);
     header.packStart(this.githubButtons.root);
 
@@ -965,18 +1109,18 @@ export class AppWindow {
     // foreground when the theme defines no explicit muted color.
     const muted = theme.ui.textMuted ?? `alpha(${theme.ui.fg}, 0.55)`;
     const rules = [
-      `#Header {
+      `#Header, #LayoutList .layout-header {
         background: ${bg};
         box-shadow: none;
         border-bottom: 1px solid ${border};
       }`,
       `#FileTree, #FileTree listview { background-color: ${bg}; }`,
       `#NotificationLog, #NotificationLog list { background-color: ${bg}; }`,
-      `#KeymapPanel, #KeymapPanel list { background-color: ${bg}; }`,
+      `#KeymapPanel, #KeymapPanel viewport { background-color: ${bg}; }`,
       `#LocationList, #LocationList list { background-color: ${bg}; }`,
-      `#AgentList, #AgentList list { background-color: ${bg}; }`,
+      `#LayoutList, #LayoutList list { background-color: ${bg}; }`,
       `#GitPanel, #GitPanel list { background-color: ${bg}; }`,
-      `#AgentRow { padding: 2px 12px; }`,
+      `#LayoutRow { padding: 2px 12px; }`,
       `#Panel tabbar .box,
        #Panel tabbar tabbox,
        #Panel tabbar tab { background-color: ${bg}; }`,
@@ -1025,7 +1169,7 @@ export class AppWindow {
       rules.push(
         `#FileTree:focus-within listview row:selected,
          #PickerList row:selected,
-         #AgentList list row:selected { background-color: ${selectedBg}; }`,
+         #LayoutList list row:selected { background-color: ${selectedBg}; }`,
       );
     }
 
@@ -1104,7 +1248,9 @@ export class AppWindow {
       'pane:focus-next': 'Cycle to the next pane',
       'file-tree:focus': 'Focus the file tree',
       'git-panel:focus': 'Focus Source Control',
-      'agent-list:focus': 'Focus the agent list',
+      'layout-list:focus': 'Focus the layout sidebar',
+      'layout:previous': 'Switch to the previous layout',
+      'layout:next': 'Switch to the next layout',
       // Tabs
       'tab:next': 'Next tab',
       'tab:previous': 'Previous tab',
@@ -1147,6 +1293,13 @@ export class AppWindow {
       'git:pull': 'Pull from upstream (fast-forward)',
       'git:push': 'Push to the remote',
       'git:switch-branch': 'Switch or create a branch…',
+      'git:delete-branch': 'Delete a branch…',
+      'git:merge-branch': 'Merge a branch into current…',
+      'git:rename-branch': 'Rename the current branch…',
+      'git:stash-push': 'Stash changes',
+      'git:stash-pop': 'Pop a stash…',
+      'git:stash-apply': 'Apply a stash…',
+      'git:stash-drop': 'Drop a stash…',
       'git:commit': 'Commit staged changes',
       'git:discard': 'Discard changes',
       'git:stage': 'Stage changes',
@@ -1158,7 +1311,11 @@ export class AppWindow {
       'lsp:go-to-implementation': 'Go to implementation',
       'lsp:find-references': 'Find references',
       'lsp:hover': 'Show hover (type / docs)',
+      'lsp:code-action': 'Code action / quick fix…',
+      'lsp:rename': 'Rename symbol…',
+      'lsp:format': 'Format document',
       'lsp:toggle-diagnostics-panel': 'Toggle the Diagnostics panel',
+      'lsp:install-server': 'Install a language server…',
       'keymap:show': 'Show all keybindings and their source',
       // Notifications / config / session
       'notifications:toggle-log': 'Toggle the notification log',
@@ -1184,7 +1341,10 @@ export class AppWindow {
       // collapsed away by closing its last tab).
       'file-tree:focus': () => this.revealLeftTab('files'),
       'git-panel:focus': () => this.revealLeftTab('git'),
-      'agent-list:focus': () => this.agentList.focus(),
+      'layout-list:focus': () => this.layoutList.focus(),
+      // Cycle the active layout through [user, …agents] (the layout-list order).
+      'layout:previous': () => this.cycleLayout(-1),
+      'layout:next': () => this.cycleLayout(1),
     });
   }
 
@@ -1198,8 +1358,32 @@ export class AppWindow {
       'lsp:go-to-implementation': () => void this.goto('implementation'),
       'lsp:find-references': () => void this.findReferences(),
       'lsp:hover': () => void this.activeEditor?.hover(),
+      'lsp:code-action': () => void this.codeActionMenu(),
+      'lsp:rename': () => this.renamePrompt(),
+      'lsp:format': () => void this.formatActive(),
       'lsp:toggle-diagnostics-panel': () => this.toggleDiagnosticsPanel(),
+      'lsp:install-server': () => this.installServerPicker(),
       'keymap:show': () => this.toggleKeymapPanel(),
+    });
+  }
+
+  // Pick a language server to install (into the quilx-managed dir). Already-
+  // installed and in-progress servers are shown dimmed with a status note.
+  private installServerPicker() {
+    const items = quilx.lsp.installableServers().map((s) => {
+      const status = s.installing ? 'installing…' : s.installed ? 'installed' : 'not installed';
+      const text = `${s.name}  ${status}`;
+      return {
+        value: s.name,
+        text,
+        display: { main: [0, s.name.length] as [number, number], detail: [s.name.length + 2, text.length] as [number, number] },
+      };
+    });
+    openPicker({
+      host: this.overlay,
+      placeholder: 'Install language server',
+      items,
+      onSelect: (name) => void quilx.lsp.installByName(name),
     });
   }
 
@@ -1223,16 +1407,11 @@ export class AppWindow {
     }
   }
 
-  // Dock the given panel into the bottom slot (or clear it), tracking which is shown.
+  // Dock the given panel into the active layout's bottom slot (or clear it),
+  // tracking which is shown. The dock follows the user across layout switches.
   private setBottomDock(which: BottomDock) {
     this.bottomDock = which;
-    const panel =
-      which === 'notifications' ? this.notificationPanel :
-      which === 'diagnostics' ? this.diagnosticsDock :
-      which === 'references' ? this.referencesDock :
-      which === 'keymap' ? this.keymapDock :
-      null;
-    this.workbench.setBottom(panel);
+    this.layout.setBottom(this.bottomDockPanel());
   }
 
   // Hide the named bottom dock if it's the one shown (its tab-close request), and
@@ -1248,15 +1427,13 @@ export class AppWindow {
     return false;
   }
 
-  // Detach a collapsed left-column dock (its last tab was closed) from its
-  // vertical paned, so the sibling reclaims the space instead of the dock showing
-  // the empty-state placeholder. The reveal/focus path re-attaches and repopulates
-  // it. Runs from onEmpty (page-detached, after the close completes), where the
-  // reparent is safe and synchronous (no one-frame flash of the empty state).
+  // Collapse the left dock when its last tab is closed, so the center reclaims the
+  // space instead of showing the empty-state placeholder. The reveal/focus path
+  // re-attaches and repopulates it. Runs from onEmpty (page-detached, after the
+  // close completes), where the reparent is safe and synchronous (no one-frame
+  // flash of the empty state).
   private detachDock(panel: Panel) {
-    const widget = panel.root;
-    if (this.leftPaned.getStartChild() === widget) this.leftPaned.setStartChild(null);
-    else if (this.leftPaned.getEndChild() === widget) this.leftPaned.setEndChild(null);
+    if (panel === this.leftPanel) this.layout.setRight(null);
   }
 
   // Reveal a left-dock tab, re-attaching the left panel and re-adding the tab if
@@ -1264,8 +1441,8 @@ export class AppWindow {
   // panel is re-attached (rooted) *before* any re-add: adding to a detached,
   // unrooted Adw.TabView yields a blank page.
   private revealLeftTab(which: 'files' | 'git') {
-    if (this.leftPanel.root.getParent() !== this.leftPaned)
-      this.leftPaned.setStartChild(this.leftPanel.root);
+    if (this.leftPanel.root.getParent() === null)
+      this.layout.setRight({ root: this.leftPanel.root });
     const present = this.leftPanel.getChildren();
     if (which === 'files') {
       if (!present.includes(this.fileTree.root)) {
@@ -1286,24 +1463,13 @@ export class AppWindow {
     }
   }
 
-  // Ensure the agent-list dock is attached and populated, so agent activity brings
-  // the list back after it was collapsed. Re-attach (root) before re-adding the
-  // tab so the add never targets a detached, unrooted tab view.
-  private ensureAgentDock() {
-    if (this.agentPanel.root.getParent() !== this.leftPaned)
-      this.leftPaned.setEndChild(this.agentPanel.root);
-    if (this.agentPanel.tabCount === 0) {
-      if (this.agentList.root.getParent()) this.agentList.root.unparent();
-      this.agentPanel.add(this.agentList.root, { title: 'Agents' });
-    }
-  }
-
   // Apply `lsp.*` config to the language-server manager.
   private configureLsp() {
     quilx.lsp.configure({
       enable: quilx.config.get('lsp.enable') as boolean,
       disabledLanguages: quilx.config.get('lsp.disabledLanguages') as string[],
       serverOverrides: quilx.config.get('lsp.servers') as LspConfig['serverOverrides'],
+      autoInstall: quilx.config.get('lsp.autoInstall') as boolean,
     });
   }
 
@@ -1339,6 +1505,115 @@ export class AppWindow {
     this.referencesList.focus();
   }
 
+  // Offer code actions / quick-fixes at the cursor in a picker; apply the chosen one.
+  private async codeActionMenu() {
+    const editor = this.activeEditor;
+    if (!editor || !editor.currentFile) return;
+    const actions = await quilx.lsp.codeActions(editor.lsp);
+    if (actions.length === 0) {
+      quilx.notifications.addInfo('No code actions available');
+      return;
+    }
+    openPicker({
+      host: this.overlay,
+      placeholder: 'Code action',
+      items: actions.map((a, i) => ({ value: String(i), text: a.title })),
+      onSelect: (value) => void this.runCodeAction(editor, actions[Number(value)]),
+    });
+  }
+
+  // Apply a chosen code action: resolve its lazy edit, then apply it. Command-only
+  // actions (workspace/executeCommand) and file resource ops aren't wired yet.
+  private async runCodeAction(editor: TextEditor, action: Command | CodeAction) {
+    const isBareCommand = typeof (action as Command).command === 'string' && !('kind' in action) && !('edit' in action);
+    if (isBareCommand) {
+      quilx.notifications.addWarning(`LSP: "${action.title}" needs command execution (not yet supported)`);
+      return;
+    }
+    const resolved = await quilx.lsp.resolveCodeAction(editor.lsp, action as CodeAction);
+    if (!resolved.edit) {
+      quilx.notifications.addWarning(`LSP: "${action.title}" needs command execution (not yet supported)`);
+      return;
+    }
+    const encoding = quilx.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16';
+    const { resourceOps } = this.applyWorkspaceEdit(resolved.edit, encoding);
+    if (resourceOps > 0) {
+      quilx.notifications.addWarning(`LSP: "${action.title}" includes ${resourceOps} file operation(s) not yet applied`);
+    }
+  }
+
+  // Prompt for a new name (prefilled with the symbol under the cursor) and rename.
+  private renamePrompt() {
+    const editor = this.activeEditor;
+    if (!editor || !editor.currentFile) return;
+    if (!quilx.lsp.canRename(editor.lsp)) {
+      quilx.notifications.addInfo('Rename is not available here');
+      return;
+    }
+    openPicker({
+      host: this.overlay,
+      placeholder: 'New name',
+      query: wordUnderCursor(editor.lsp),
+      items: [],
+      actionWhenEmpty: true,
+      onSelect: () => {}, // no items — the action row drives the rename
+      action: { label: (q) => `Rename to "${q}"`, run: (q) => void this.runRename(editor, q.trim()) },
+    });
+  }
+
+  private async runRename(editor: TextEditor, newName: string) {
+    if (!newName) return;
+    const edit = await quilx.lsp.rename(editor.lsp, newName);
+    if (!edit) {
+      quilx.notifications.addInfo('Rename produced no changes');
+      return;
+    }
+    const encoding = quilx.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16';
+    const { applied, resourceOps } = this.applyWorkspaceEdit(edit, encoding);
+    if (resourceOps > 0) quilx.notifications.addWarning(`Rename: ${resourceOps} file operation(s) not yet applied`);
+    else quilx.notifications.addInfo(`Renamed across ${applied} file${applied === 1 ? '' : 's'}`);
+  }
+
+  // Format the active document and apply the edits to its buffer.
+  private async formatActive() {
+    const editor = this.activeEditor;
+    if (!editor || !editor.currentFile) return;
+    const options = {
+      tabSize: (quilx.config.get('editor.tabLength') as number) ?? 2,
+      insertSpaces: (quilx.config.get('editor.insertSpaces') as boolean) ?? true,
+    };
+    const edits = await quilx.lsp.format(editor.lsp, options);
+    if (edits.length === 0) {
+      quilx.notifications.addInfo('No formatting changes');
+      return;
+    }
+    editor.applyLspEdits(edits, quilx.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16');
+  }
+
+  /**
+   * Apply an LSP `WorkspaceEdit`: open editors are edited in their buffer (single
+   * undo group, decorations refresh); files with no open editor are edited on
+   * disk. Returns how many files were touched and how many resource operations
+   * (create/rename/delete) were skipped. Shared by code actions / rename.
+   */
+  private applyWorkspaceEdit(edit: WorkspaceEdit, encoding: PositionEncoding): { applied: number; resourceOps: number } {
+    const { files, resourceOps } = normalizeWorkspaceEdit(edit);
+    for (const { uri, edits } of files) {
+      const path = uriToPath(uri);
+      const open = [...this.editors.values()].find((e) => e.currentFile === path);
+      if (open) {
+        open.applyLspEdits(edits, encoding);
+      } else {
+        try {
+          Fs.writeFileSync(path, applyTextEdits(Fs.readFileSync(path, 'utf8'), edits, encoding));
+        } catch {
+          // unreadable / unwritable — skip
+        }
+      }
+    }
+    return { applied: files.length, resourceOps };
+  }
+
   // Open `path` (revealing an already-open tab, since openFile dedupes) and place
   // the cursor. Used by location jumps (diagnostics, go-to-definition, search).
   private openOrFocusFile(path: string, cursor: [number, number]): void {
@@ -1348,7 +1623,7 @@ export class AppWindow {
   // Focus whichever left-dock tab is currently active (file tree or Source
   // Control); reveal Files if the dock had been collapsed away.
   private focusSidePanel() {
-    if (this.leftPanel.root.getParent() !== this.leftPaned || this.leftPanel.tabCount === 0) {
+    if (this.leftPanel.root.getParent() === null || this.leftPanel.tabCount === 0) {
       this.revealLeftTab('files');
       return;
     }
@@ -1367,8 +1642,38 @@ export class AppWindow {
       // Save commands only apply with an editor open.
       'file:save': { didDispatch: () => this.saveActive(), when: () => this.activeEditor !== null },
       'file:save-as': { didDispatch: () => this.saveAsDialog(), when: () => this.activeEditor !== null },
+      'git:diff-current': {
+        didDispatch: () => this.diffActiveAgainstHead(),
+        description: 'Diff the current file (working tree vs HEAD)',
+        when: () => this.activeEditor?.currentFile != null,
+      },
       'app:quit': () => this.onQuit(),
       'command-palette:toggle': () => openCommandPicker(this.overlay),
+    });
+  }
+
+  /** Open a read-only diff of the active file (working tree vs git HEAD) in a tab. */
+  private diffActiveAgainstHead(): void {
+    const editor = this.activeEditor;
+    const path = editor?.currentFile;
+    if (!editor || !path) return;
+    const root = repoRoot(Path.dirname(path));
+    if (!root) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const current = editor.getText();
+    const rel = Path.relative(root, path);
+    git(root, ['show', `HEAD:${rel}`], (ok, stdout) => {
+      const head = ok ? stdout : ''; // untracked / new file → empty base (all added)
+      const model = computeDiff(head, current);
+      if (model.hunks.length === 0) {
+        this.toast('No changes against HEAD');
+        return;
+      }
+      const name = Path.basename(path);
+      const viewer = new DiffViewer(model, { title: `${name} (working tree ↔ HEAD)`, languagePath: path });
+      this.center.add(viewer.root, { title: `± ${name}`, requireTabBar: true });
     });
   }
 
@@ -1420,11 +1725,81 @@ export class AppWindow {
         didDispatch: () => openBranchPicker(this.overlay, process.cwd()),
         when: () => this.git.getBranch() !== null,
       },
+      'git:delete-branch': {
+        didDispatch: () => openDeleteBranchPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
+      'git:merge-branch': {
+        didDispatch: () => openMergeBranchPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
+      'git:rename-branch': {
+        didDispatch: () => openRenameBranchPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
+      'git:stash-push': {
+        didDispatch: () => this.stashChanges(),
+        when: () => this.git.getBranch() !== null,
+      },
+      'git:stash-pop': {
+        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'pop'),
+        when: () => this.git.getBranch() !== null,
+      },
+      'git:stash-apply': {
+        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'apply'),
+        when: () => this.git.getBranch() !== null,
+      },
+      'git:stash-drop': {
+        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'drop'),
+        when: () => this.git.getBranch() !== null,
+      },
+      'github:issue-picker': {
+        didDispatch: () => openGithubIssuePicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
+      'github:failed-ci-picker': {
+        didDispatch: () => openGithubFailedCIPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
+      'github:pr-open': {
+        didDispatch: () => openGithubPrPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
+      'github:pr-checkout': {
+        didDispatch: () => checkoutGithubPrPicker(this.overlay, process.cwd()),
+        when: () => this.git.getBranch() !== null,
+      },
     });
   }
 
   private runGit(args: string[], label: string) {
-    this.git.run(args, (ok) => this.toast(ok ? `${label} succeeded` : `${label} failed`));
+    // Success is quiet (a trace, recorded in the log only); failures pop a toast.
+    this.git.run(args, (ok) => {
+      if (ok) quilx.notifications.addTrace(`${label} succeeded`);
+      else quilx.notifications.addError(`${label} failed`);
+    });
+  }
+
+  // Like `runGit`, but surfaces progress as a single in-place toast: a sticky
+  // loading notice that transforms into success/error when the operation finishes
+  // (the LSP install flow). All three share one `replaceKey` so the prompt that
+  // triggered it, the spinner, and the result are the same card.
+  private runGitWithProgress(args: string[], label: string, replaceKey: string) {
+    quilx.notifications.addInfo(`${label}…`, { replaceKey, loading: true, dismissable: true });
+    this.git.run(args, (ok) => {
+      if (ok) quilx.notifications.addSuccess(`${label} succeeded`, { replaceKey });
+      else quilx.notifications.addError(`${label} failed`, { replaceKey });
+    });
+  }
+
+  // Stash the working-tree changes (visible success, since it's a manual action).
+  private stashChanges() {
+    const root = repoRoot(process.cwd());
+    if (!root) return;
+    stashPush(root, (ok, _out, stderr) => {
+      if (ok) quilx.notifications.addSuccess('Stashed changes');
+      else quilx.notifications.addError('Stash failed', { detail: stderr.trim() });
+    });
   }
 
   // Start a commit: open the message file (`.git/COMMIT_EDITMSG`) in an editor
@@ -1470,12 +1845,30 @@ export class AppWindow {
     const behind = this.git.getAheadBehind()?.behind ?? 0;
     if (behind > 0 && this.lastBehind === 0) {
       const commits = behind === 1 ? 'commit' : 'commits';
+      // Sticky + a shared `replaceKey` so the prompt persists until acted on and
+      // clicking Pull transforms this same toast into pulling…→pulled (mirrors the
+      // LSP install flow).
       quilx.notifications.addInfo(`Upstream is ahead by ${behind} ${commits}`, {
         detail: 'Your branch is behind its upstream — pull to update.',
-        buttons: [{ text: 'Pull', onDidClick: () => this.runGit(['pull', '--ff-only'], 'Pull') }],
+        replaceKey: PULL_NOTICE_KEY,
+        dismissable: true,
+        buttons: [{ text: 'Pull', onDidClick: () => this.runGitWithProgress(['pull', '--ff-only'], 'Pull', PULL_NOTICE_KEY) }],
       });
     }
     this.lastBehind = behind;
+  }
+
+  // Periodically `git fetch` in the background so the upstream-behind check sees
+  // remote activity. Quiet (no success notification); the resulting onChange
+  // drives the branch button and `checkUpstream`. `git.autoFetchMinutes` of 0
+  // disables it. (Read once at startup.)
+  private startAutoFetch() {
+    const minutes = Number(quilx.config.get('git.autoFetchMinutes') ?? 0);
+    if (!(minutes > 0)) return;
+    this.autoFetchTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, minutes * 60_000, () => {
+      if (this.git.getBranch() !== null) this.git.run(['fetch']);
+      return true; // keep fetching
+    });
   }
 
   // Notification log: show/hide the bottom-dock history, and clear it. Handlers
@@ -1569,7 +1962,7 @@ export class AppWindow {
   // The dock panel (left / agent / bottom) that currently holds keyboard focus, or
   // null when focus is in the center or nowhere.
   private focusedDockPanel(): Panel | null {
-    const docks: Panel[] = [this.leftPanel, this.agentPanel];
+    const docks: Panel[] = [this.leftPanel];
     if (this.bottomDock === 'notifications') docks.push(this.notificationPanel);
     else if (this.bottomDock === 'diagnostics') docks.push(this.diagnosticsDock);
     else if (this.bottomDock === 'references') docks.push(this.referencesDock);
@@ -1586,13 +1979,9 @@ export class AppWindow {
       // The file tree and Source Control are tabs in one panel (one zone); entering
       // it focuses whichever tab is active.
       { root: this.leftPanel.root, focus: () => this.focusSidePanel() },
-      {
-        root: this.agentList.root,
-        focus: () => {
-          this.ensureAgentDock(); // restore the dock if it had been hidden
-          this.focusDock(this.agentPanel, () => this.agentList.focus());
-        },
-      },
+      // The agent list is its own full-height sidebar (left of everything); its
+      // geometry makes it the leftmost zone for directional pane navigation.
+      { root: this.layoutList.root, focus: () => this.layoutList.focus() },
       { root: this.center.root, focus: () => this.focusActivePane() },
     ];
     if (this.bottomDock === 'notifications')
@@ -1718,7 +2107,7 @@ export class AppWindow {
   // zones), or null if unavailable.
   private rectOf(widget: Widget): { x: number; y: number; w: number; h: number } | null {
     try {
-      const result: any = (widget as any).computeBounds(this.workbench.root);
+      const result: any = (widget as any).computeBounds(this.layout.root);
       const rect = Array.isArray(result) ? result[1] : result;
       if (!rect) return null;
       return { x: rect.getX(), y: rect.getY(), w: rect.getWidth(), h: rect.getHeight() };
@@ -1847,14 +2236,14 @@ function span(a0: number, aLen: number, b0: number, bLen: number): number {
   return Math.min(a0 + aLen, b0 + bLen) - Math.max(a0, b0);
 }
 
-// The same indicators the AgentList uses: nf-md-cog-sync while working, else a
+// The same indicators the LayoutList uses: nf-md-cog-sync while working, else a
 // round dot. Adw tab titles are plain text (no markup, no colour), so the dot
 // can't be colour-coded like the sidebar — the waiting state instead drives Adw's
 // native `needs-attention` tab highlight (see updateAgentTab).
 const AGENT_WORKING_GLYPH = String.fromCodePoint(0xf1978);
 const AGENT_STATUS_DOT = '●';
 
-/** An agent tab's title: the AgentList status glyph prefixed to the agent's name. */
+/** An agent tab's title: the LayoutList status glyph prefixed to the agent's name. */
 function agentTabTitle(agent: AgentTerminal): string {
   const glyph = agent.status === 'working' ? AGENT_WORKING_GLYPH : AGENT_STATUS_DOT;
   return `${glyph} ${agent.title}`;

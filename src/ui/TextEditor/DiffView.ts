@@ -25,7 +25,9 @@ export class DiffView {
   private hunkIndex = -1;
 
   constructor(model: DiffModel, options: { languagePath?: string } = {}) {
-    const text = model.lines.map((line) => line.text).join('\n');
+    // Trailing newline so the last content line is terminated — otherwise an empty
+    // last changed line has no character/newline to carry its line background.
+    const text = model.lines.map((line) => line.text).join('\n') + '\n';
     this.editor = new TextEditor({
       buffer: { readOnly: true, initialText: text, languagePath: options.languagePath },
     });

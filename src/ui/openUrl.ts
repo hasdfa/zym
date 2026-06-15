@@ -1,0 +1,14 @@
+/*
+ * openUrl — open a URI in the user's default handler (browser), reporting a
+ * failure through the notification manager. Shared by the GitHub buttons/pickers.
+ */
+import { Gio } from '../gi.ts';
+import { quilx } from '../quilx.ts';
+
+export function openUrl(url: string): void {
+  try {
+    Gio.AppInfo.launchDefaultForUri(url, null);
+  } catch (error) {
+    quilx.notifications.addError('Could not open link', { detail: (error as Error).message });
+  }
+}

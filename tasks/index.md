@@ -56,17 +56,19 @@ See [git/index.md](git/index.md) for the architecture plan.
 
 See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the design and decisions.
 
-- [ ] **Restructure (next):** unify grammar + LSP into a `LanguageRegistry` (the plugin seam); curated hand-authored built-in language pack; drop the runtime Helix fetch; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusivity groups. See [code-editing/language-config.md](code-editing/language-config.md).
-- [x] LSP client + server-config abstraction (Helix `languages.toml`, fetched/cached), per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging of major events to the notification log. Full-text document sync. See `src/lsp/`.
-- [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, and a "Diagnostics" panel (shared `LocationList`).
+- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored built-in pack (`src/lang/builtin.ts`); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
+- [x] LSP client + per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging. **Incremental** document sync (full-text fallback). Correct LSP `languageId` (`.tsx`→typescriptreact, `.js`→javascript, …). See `src/lsp/`.
+- [x] Server→client requests answered: `workspace/configuration` (from `ServerDef.settings`), `client/(un)registerCapability`, `workDoneProgress/create`; `window/showMessage` surfaced, error `logMessage` to the trace log. File watching: dynamically-registered `workspace/didChangeWatchedFiles` via a per-dir `WorkspaceWatcher` (excludes node_modules/.git).
+- [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, a "Diagnostics" panel (shared `LocationList`). Namespaced by `(server, path)` and merged.
 - [x] Go to shortcuts — definition/declaration/type-definition/implementation + find-references (`space l d`/`D`/`t`/`i`/`r`); jumps reveal an already-open tab.
 - [x] Hover tooltips — `space l k` / vim `K`; markdown card above the cursor, code blocks syntax-highlighted by reusing tree-sitter, in the editor monospace.
-- [x] Server install — `ServerDef.install` (npm / raw command) → `lsp/installer.ts` installs into a managed dir (`$XDG_DATA_HOME/quilx/lsp/<server>`), searched + on the spawn PATH. Triggers: "Install" button on the missing-server warning, `lsp:install-server` picker, and `lsp.autoInstall` (default off). Missing servers are skipped (not crash-looped); the warning names the exact missing binary. See language-config.md.
-- [ ] Code actions — `textDocument/codeAction` → pick + apply a `WorkspaceEdit` (diagnostic quick-fixes, auto-imports, refactors). Needs the shared `WorkspaceEdit` applier.
-- [ ] Formatting — `textDocument/formatting` / range formatting (applies `TextEdit`s; on-demand and optionally on save).
-- [ ] Rename — `textDocument/rename` (+ `prepareRename`) → `WorkspaceEdit`.
-- [ ] Completion — `textDocument/completion` popup (trigger chars, filtering).
-- [ ] Later: signature help, document symbols (outline), inlay hints, incremental sync, formatting-on-save.
+- [x] Server install — `ServerDef.install` (npm / raw command) → `lsp/installer.ts` installs into a managed dir (`$XDG_DATA_HOME/quilx/lsp/<server>`), searched + on the spawn PATH. Triggers: "Install" button on the missing-server warning, `lsp:install-server` picker, and `lsp.autoInstall` (default off). Missing servers are skipped (not crash-looped); the warning names the exact missing binary.
+- [x] Code actions — `textDocument/codeAction` (+ resolve) → pick (`space l a`) and apply via the shared `WorkspaceEdit` applier (`lsp/workspaceEdit.ts`: `applyTextEdits`/`normalizeWorkspaceEdit`; open editors edited in-buffer, others on disk).
+- [x] Rename — `textDocument/rename` (+ `prepareRename`); `space l R` prompts (prefilled with the symbol) → applies the multi-file `WorkspaceEdit`.
+- [x] Formatting — `textDocument/formatting` (+ range); `space l f` applies the edits to the buffer. Options from `editor.tabLength`/`insertSpaces`.
+- [x] Completion — `textDocument/completion` (+ resolve, auto-import `additionalTextEdits`, `textEdit` ranges). See the Autocompletion section.
+- [x] Signature help — `textDocument/signatureHelp`; floating card while typing call args, anchored at the callee name, active parameter bold, syntax-highlighted. Backend in `src/lsp/`; card in `TextEditor`.
+- [ ] Later: document symbols (outline), workspace symbols, inlay hints, semantic tokens, document highlight, format-on-save, command-only code actions (`workspace/executeCommand`) + `WorkspaceEdit` resource ops (create/rename/delete file).
 
 ### Grammar
 
@@ -83,26 +85,27 @@ See [code-editing/autocompletion.md](code-editing/autocompletion.md).
 - [x] LSP source (`createLspCompletionSource`): `textDocument/completion` via the primary server → framework items (kind, detail, `documentation` feeds the doc pane). `LanguageServer.completion`/`hasCompletion`/`completionTriggerCharacters`; `LspManager.completion`. Trigger-character support added to the controller (`.`/`::` etc., sourced from the server) so member completion fires on an empty prefix.
 - [x] Source ranking: `CompletionSource.priority` (default 0); a higher-priority source ranks entirely above lower ones (score/`sortText` order within a source). LSP is `priority: 100`, so it sits above buffer-words — which also keeps the buffer-words fallback out of the way on empty-prefix member completion.
 - [x] Per-item source tag (`CompletionItem.source`, stamped by the controller) shown dimmed in the popup — debug aid for which source produced each candidate.
+- [x] Auto-imports: an accepted item's `additionalEdits` (LSP `additionalTextEdits`, fetched via resolve) apply on accept — e.g. the `import` line for a cross-module symbol (tsserver `includeCompletionsForModuleExports`). Honors `textEdit` ranges via `replaceRange`.
 - [ ] More sources: Copilot (ghost text).
 - [ ] Widget polish: kind icons, scroll-into-view, mouse, flip-above.
-- [ ] Behavior: snippet insertion, eagerness config; honor LSP `textEdit` ranges; de-dupe identical labels across sources.
+- [ ] Behavior: snippet insertion, eagerness config; de-dupe identical labels across sources.
 
 ### Text editor
 
 See [code-editing/text-editor.md](code-editing/text-editor.md) for the widget evaluation (GtkSourceView vs. custom/Rust), the shared editor-layer primitives, and the prioritized "What's next".
 
-**Recommended next:** buffer-only editor mode (for the Git commit-message editor), then multi-cursor. (The vim `:` ex-command line is **won't-do** — see text-editor.md.)
+**Recommended next:** buffer-only editor mode and multi-cursor are **done** (see below). Remaining editor-side work is mostly diff/Git integration and small vim polish (`=` auto-indent needs a real indent source). (The vim `:` ex-command line is **won't-do** — see text-editor.md.)
 
 Shared primitives now in place (in `EditorModel` / `DecorationController`):
 
-- [x] Buffer change events (`EditorModel.onDidChangeText`, Atom shape) — drives LSP didChange, vim undo/redo, future multi-cursor edit-replay.
+- [x] Buffer change events (`EditorModel.onDidChangeText`, Atom shape) — drives LSP didChange, vim undo/redo, and multi-cursor live edit-replication.
 - [x] Viewport + pixel geometry (`getFirst/LastVisibleScreenRow`, `pixelRectForBufferPosition`) — for hover/code-action popovers, vim H/M/L, scroll commands. (Realized-view paths need interactive verification.)
 - [x] Inline decoration surface (`editor.decorations` — clearable tag layers) — for search highlights and inline diff. (Diagnostic squiggles are custom-drawn via `UnderlineOverlay`; gutter icons + virtual text land with their consumers.)
 
 Features:
 
-- [ ] Consider a custom widget or a fork of GtkSourceView for better control and features. Research how to implement features like multiple cursors, rectangular selection, and better performance with large files. Consider a JS widget, or a Rust widget with a JS wrapper.
-- [ ] Diff display (inline/unified + side-by-side). See [code-editing/diff.md](code-editing/diff.md) — editor-side needs investigated: synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines); real data comes from the Git workstream.
+- [~] Consider a custom widget or a fork of GtkSourceView for better control and features. Research how to implement features like multiple cursors, rectangular selection, and better performance with large files. Consider a JS widget, or a Rust widget with a JS wrapper. — **Decided: stay on GtkSourceView and emulate (Option A).** Multi-cursor + blockwise are now built on top (virtual selection/cursor mark pairs via `MarkerLayer`, surfaced through the array-shaped `getCursors()`/`getSelections()`); see Vim mode below. A custom/Rust widget remains a gated escape hatch only if long single lines become intolerable (see text-editor.md).
+- [~] Diff display (inline/unified + side-by-side) — **mostly done**. See [code-editing/diff.md](code-editing/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). Built: `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; `git:diff-current` command (`space g d`) → working-tree vs HEAD in a tab. Remaining: fold-unchanged, more git diff sources (staged/commit/PR), and the bigger Git-workstream integration. (Try it: `node scripts/diff-demo.ts`.)
 - [x] Search interface — `SearchBar` (top-right) + `SearchController` over `EditorModel.scan`: case/regex toggles, replace + replace-all, highlights via `editor.decorations`. Bound to vim `/` `?` `n` `N`.
 
 #### Vim mode
@@ -118,8 +121,9 @@ It replaced `GtkSource.VimIMContext` and is now the default (no flag).
 - [x] Make custom vim the default; remove GtkSource.VimIMContext
 - [~] `:` ex-command line — **won't do** (save/close/open/search reachable via `space w` / `tab:close` / `space o` / SearchBar; see text-editor.md)
 - [x] `/` `?` `n` `N` search via the `SearchBar` (incremental highlight, case/regex, replace)
-- [ ] visual-blockwise (ctrl-v) and multiple cursors (need overlay marks + rendering; see Text editor)
-- [ ] Polish: `=` auto-indent, H/M/L screen motions, scroll/fold/flash niceties
+- [x] Occurrence — operator-modifier `o`/`O` (`c o p`, `d o p`, `g U o w`; subword via `O`) and preset occurrence `g o`/`g O`/`g .` (persistent highlighted markers any later operator restricts itself to). Real `OccurrenceManager` over `MarkerLayer` + a `DecorationController` highlight layer. (`occurrence.test.ts`.)
+- [x] visual-blockwise (`ctrl-v`) and multiple cursors — emulated on `MarkerLayer` mark pairs surfaced through the array-shaped `getCursors()`/`getSelections()`. Entry points: blockwise `ctrl-v` (I/A/c/d/yank/paste), occurrence `c o p`, and persistent `ctrl-alt-↑/↓` (add cursor above/below; `escape` collapses). Extra-caret rendering (reverse-video block tags in normal/visual; host-drawn beam carets in insert); multi-cursor operations undo as one step; insert is incrementally replicated to every cursor live. (`blockwise.test.ts`, `multicursor.test.ts`.) Caret visuals + `ctrl-alt-arrow` keys need in-app verification (headless can't realize the view).
+- [ ] Polish: `=` auto-indent (needs a real indent source), scroll/fold/flash niceties. (H/M/L screen motions + ctrl-f/b/d/u/e/y scrolling are done.)
 
 ## Session management
 
@@ -142,7 +146,8 @@ See [agents.md](agents.md) for the architecture plan.
 - [x] Resume / continue past conversations (transcript enumeration + `--resume`/`--continue`); capture session id for restore
 - [x] More management UX: restart (resume conversation), rename, close — keyboard/command driven (`r`/`R`/`X`); status glyph in the tab title
 - [x] File-change awareness: a PostToolUse hook records edited files; agent-list "✎ N" badge (tooltip), click/`o` opens them (newest first), and edits trigger an immediate git refresh
-- [x] Agents sidebar moved to its own full-height column at the very left of the window (left of the header bar) — a top-level horizontal `Gtk.Paned` (sidebar | header-bar+workbench), no longer a workbench left-dock panel. Its top is an `Adw.HeaderBar` (robot glyph only); the list's first row is the **user** (default-selected pseudo-agent), the rest are agents; never empty (no empty state). Files/Source-Control moved to the **right** dock (fixed 220px); the left dock is empty/hidden at startup
+- [x] **Per-person layouts** — `Workbench` is now `Layout` (`src/ui/Layout.ts`, with an `owner` field naming its person), and **each person owns a fully self-contained `Layout`**: its own splittable center, its own Files/Source-Control (right), and its own bottom docks. **Nothing is shared or reparented on switch.** `buildLayout(owner)` constructs the whole bundle (`LayoutBundle`); `activateLayout(layout)` shows it (`overlay.setChild(layout.root)`) and re-points the `this.*` fields to that layout's widgets (`applyBundle`), writing the active layout's mutable state back first (`saveActiveBundle`). Detached layouts stay alive (tabs/terminal/editors persist — verified). An agent's layout opens terminal-only (no Files/Source-Control shown — the panel is still built, so `file-tree:focus`/git commands reveal it on demand); any layout can open/edit files. **Now worktree-ready** (each agent's Files/Git is its own — just needs a per-worktree root/`GitRepo`). Defer: per-worktree roots; session restore of agent layouts (only the user layout is serialized); per-layout NotificationLog/KeymapPanel subscribe to global signals and aren't disposed on close (minor leak, few agents)
+- [x] **LayoutSidebar / LayoutList** (renamed from agent sidebar / AgentList): its own full-height column at the very left of the window (left of the header bar) — a top-level horizontal `Gtk.Paned` (sidebar | header-bar+workbench), no longer a workbench dock. Top is a themed `Adw.HeaderBar` whose only content is a flat **logo button** (square placeholder for now; styled like the git branch button) that toggles collapse (icons-only / icons+text). The first row is the **user** (default-selected pseudo-agent), the rest are agents; never empty; each row is one header-bar tall. Each entry will be associated with a workbench layout (planned). Files/Source-Control moved to the **right** dock (fixed 220px); the left dock is empty/hidden at startup
 - [x] Modal terminal input (Terminal & AgentTerminal): normal/insert modes — `Escape`↔`i`; normal frees the `space` leader / `ctrl-w` window-nav, `ctrl-[` sends a literal Escape to the child. Implemented by wrapping the Vte in a focusable container that *steals* focus in normal mode (Vte un-focused → cursor idles, no keys reach it — no key-swallowing guard needed); clicking the Vte re-enters insert
 - [ ] **Review an agent's work** (next; design in agents.md): per-agent baselines (PreToolUse snapshot → `.baseline/`) make one agent's diff well-defined even in a tree shared by several agents; an "Agent Changes" diff panel (baseline→current), live while it works + after exit; overlap warning when two live agents edit the same file. Needs the editor Diff renderer first
 - [ ] Live activity timeline: tail the agent's transcript JSONL (already parsed for resume) into a structured feed (tools used, files touched, messages)

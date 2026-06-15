@@ -31,7 +31,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space a a': 'agent:switch', // open the agent picker
-  'space a l': 'agent-list:focus', // focus the agent list (sidebar)
+  'space a l': 'layout-list:focus', // focus the layout sidebar
   'space a n': 'agent:new', // launch a new agent
   'space a r': 'agent:resume', // resume a past conversation (picker)
   'space a c': 'agent:continue', // continue the latest conversation in this folder
@@ -49,16 +49,37 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space ,': 'config:open', // preferences (GNOME-style comma == settings)
   'space f f': 'file-tree:focus', // focus the Files tab
   'space g g': 'git-panel:focus', // focus the git (Source Control) tab
-  'space g b b': 'git:switch-branch', // "b"ranch picker (switch / create)
+  'space g f': 'git:fetch',
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
   'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
+  // Branch (space g b …): switch / delete / merge / rename.
+  'space g b b': 'git:switch-branch', // "b"ranch picker (switch / create)
+  'space g b d': 'git:delete-branch',
+  'space g b m': 'git:merge-branch', // merge a branch into the current one
+  'space g b r': 'git:rename-branch', // rename the current branch
+  // Stash (space g s …): push / pop / apply / drop.
+  'space g s s': 'git:stash-push',
+  'space g s p': 'git:stash-pop',
+  'space g s a': 'git:stash-apply',
+  'space g s d': 'git:stash-drop',
+  // GitHub (space g h …): repo / actions / issues / PR open / PR checkout / new PR / failed CI.
+  'space g h r': 'github:open-repository',
+  'space g h a': 'github:open-actions',
+  'space g h i': 'github:issue-picker',
+  'space g h p': 'github:pr-open',
+  'space g h c': 'github:pr-checkout',
+  'space g h n': 'github:create-pr', // "n"ew pull request
+  'space g h f': 'github:failed-ci-picker',
   'space l d': 'lsp:go-to-definition', // "l"sp "d"efinition
   'space l D': 'lsp:go-to-declaration', // declaration
   'space l t': 'lsp:go-to-type-definition', // "t"ype definition
   'space l i': 'lsp:go-to-implementation', // "i"mplementation
   'space l r': 'lsp:find-references', // "r"eferences
   'space l k': 'lsp:hover', // hover (type / docs)
+  'space l a': 'lsp:code-action', // "a"ction (quick fix / refactor)
+  'space l R': 'lsp:rename', // "R"ename symbol
+  'space l f': 'lsp:format', // "f"ormat document
   'space l l': 'lsp:toggle-diagnostics-panel', // "l"sp problems "l"ist
   'space s s': 'session:save', // save the workspace session
   'space s r': 'session:restore', // restore the saved session
@@ -104,6 +125,10 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'ctrl-w w': 'pane:focus-next',
     'ctrl-w ctrl-w': 'pane:focus-next',
 
+    // Cycle the active layout (the user / each agent) — previous / next.
+    'super-,': 'layout:previous',
+    'super-.': 'layout:next',
+
     ...SPACE_COMMANDS,
   },
 
@@ -134,9 +159,9 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'c c': 'git:commit', // commit: edit the message in a tab, save+close to commit
   },
 
-  // Agent list: shared list navigation (l reveals the selected agent's terminal)
-  // plus lifecycle keys acting on the selected agent.
-  '#AgentList': {
+  // Layout list (the left sidebar): shared list navigation (l reveals the selected
+  // agent's terminal) plus lifecycle keys acting on the selected agent.
+  '#LayoutList': {
     ...LIST_NAV, // j/k, g g, G, l (l reveals the selected agent's terminal)
     r: 'agent:restart', // restart the selected agent (resume its conversation)
     R: 'agent:rename', // rename the selected agent

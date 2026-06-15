@@ -12,9 +12,11 @@
  * ordering via `sortText`.
  */
 import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver-protocol';
-import type { CompletionItem as LspCompletionItem, MarkupContent, Range as LspRange } from 'vscode-languageserver-protocol';
+import type {
+  CompletionItem as LspCompletionItem, MarkupContent, Range as LspRange, TextEdit,
+} from 'vscode-languageserver-protocol';
 import type { LspManager, LspDocument } from '../../lsp/LspManager.ts';
-import { positionToPoint } from '../../lsp/position.ts';
+import { positionToPoint, lspToRange } from '../../lsp/position.ts';
 import type { PositionEncoding } from '../../lsp/position.ts';
 import { Range } from '../../text/Range.ts';
 import type { CompletionContext, CompletionItem, CompletionSource } from './CompletionSource.ts';
@@ -98,6 +100,18 @@ function editReplaceRange(
   );
 }
 
+/** Convert an item's `additionalTextEdits` (e.g. an auto-import line) to buffer edits. */
+function additionalEdits(
+  lsp: LspCompletionItem,
+  doc: LspDocument,
+  encoding: PositionEncoding,
+): { range: Range; newText: string }[] | undefined {
+  const edits = lsp.additionalTextEdits;
+  if (!edits || edits.length === 0) return undefined;
+  const lineAt = (row: number) => doc.lineTextForRow(row);
+  return edits.map((e: TextEdit) => ({ range: lspToRange(e.range, lineAt, encoding), newText: e.newText }));
+}
+
 export function createLspCompletionSource(
   lsp: LspCompletionApi,
   getDocument: () => LspDocument | null,
@@ -121,11 +135,23 @@ export function createLspCompletionSource(
         // Honor the server's textEdit range, so a trigger-char completion (e.g.
         // after `.`, whose insertText re-includes the dot) replaces exactly what
         // the server intends instead of duplicating the trigger.
-        if (encoding) item.replaceRange = editReplaceRange(raw, doc, encoding);
-        // Most servers (tsserver, …) send documentation only on resolve. Attach a
-        // lazy resolver the controller calls when the item is selected.
-        if (item.documentation === undefined) {
-          item.resolve = () => lsp.resolveCompletion(doc, raw).then(toCompletionItem);
+        if (encoding) {
+          item.replaceRange = editReplaceRange(raw, doc, encoding);
+          item.additionalEdits = additionalEdits(raw, doc, encoding);
+        }
+        // Most servers (tsserver, …) send documentation AND auto-import edits only
+        // on resolve. Attach a lazy resolver the controller calls when the item is
+        // selected / accepted; it fills documentation and additionalEdits. (Only
+        // bother for imports when we have an encoding to convert their ranges.)
+        const needsDoc = item.documentation === undefined;
+        const mayHaveImports = !!encoding && item.additionalEdits === undefined;
+        if (needsDoc || mayHaveImports) {
+          item.resolve = () =>
+            lsp.resolveCompletion(doc, raw).then((full) => {
+              const mapped = toCompletionItem(full);
+              if (encoding) mapped.additionalEdits = additionalEdits(full, doc, encoding);
+              return mapped;
+            });
         }
         return item;
       });

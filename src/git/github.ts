@@ -150,3 +150,134 @@ export function fetchPullRequest(cwd: string, onDone: (pr: PullRequest | null) =
     },
   );
 }
+
+/** A failed CI check on a PR: its display name and the run/job page URL. */
+export interface FailedCheck {
+  name: string;
+  url: string;
+}
+
+/**
+ * The current branch PR's failed CI checks (name + run URL), via `gh pr checks`.
+ * Empty when gh is unavailable, the branch has no PR, or nothing failed. (gh
+ * exits non-zero when checks fail/pending, but still prints the JSON.)
+ */
+export function fetchFailedChecks(cwd: string, onDone: (checks: FailedCheck[]) => void): void {
+  execFile(
+    'gh',
+    ['pr', 'checks', '--json', 'name,link,bucket'],
+    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    (_err, stdout) => {
+      try {
+        const data = JSON.parse(stdout);
+        if (!Array.isArray(data)) {
+          onDone([]);
+          return;
+        }
+        const seen = new Set<string>();
+        const checks: FailedCheck[] = [];
+        for (const c of data) {
+          if (!c || c.bucket !== 'fail' || typeof c.link !== 'string' || !c.link) continue;
+          if (seen.has(c.link)) continue; // dedupe by URL
+          seen.add(c.link);
+          checks.push({ name: typeof c.name === 'string' && c.name ? c.name : c.link, url: c.link });
+        }
+        onDone(checks);
+      } catch {
+        onDone([]); // no PR / not authed / gh missing
+      }
+    },
+  );
+}
+
+/** A pull request or issue in a list (for the PR / issue pickers). */
+export interface GithubListItem {
+  number: number;
+  title: string;
+  url: string;
+  author: string; // login, or '' if unknown
+  state: PrState; // gh reports MERGED only for PRs; issues are open/closed
+}
+
+/**
+ * Pull requests in the repo, via `gh pr list`. Lists every state (open, closed,
+ * and merged) so the picker can show each PR's status; defaults to open-only
+ * unless `state` is given.
+ */
+export function fetchPullRequests(
+  cwd: string,
+  onDone: (items: GithubListItem[]) => void,
+  state: PrState | 'all' = 'all',
+): void {
+  fetchList(
+    cwd,
+    ['pr', 'list', '--state', state, '--json', 'number,title,url,author,state', '--limit', '100'],
+    onDone,
+  );
+}
+
+/** Open issues in the repo, via `gh issue list`. */
+export function fetchIssues(cwd: string, onDone: (items: GithubListItem[]) => void): void {
+  fetchList(cwd, ['issue', 'list', '--json', 'number,title,url,author,state', '--limit', '100'], onDone);
+}
+
+// Run a `gh … list --json number,title,url,author,state` and parse it. Empty when
+// gh is unavailable or there are none.
+function fetchList(cwd: string, args: string[], onDone: (items: GithubListItem[]) => void): void {
+  execFile('gh', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    if (err) {
+      onDone([]);
+      return;
+    }
+    try {
+      const data = JSON.parse(stdout);
+      if (!Array.isArray(data)) {
+        onDone([]);
+        return;
+      }
+      const items: GithubListItem[] = [];
+      for (const it of data) {
+        if (!it || typeof it.url !== 'string' || typeof it.number !== 'number') continue;
+        const raw = typeof it.state === 'string' ? it.state.toUpperCase() : '';
+        const state: PrState = raw === 'MERGED' ? 'merged' : raw === 'CLOSED' ? 'closed' : 'open';
+        items.push({
+          number: it.number,
+          title: typeof it.title === 'string' ? it.title : '',
+          url: it.url,
+          author: typeof it.author?.login === 'string' ? it.author.login : '',
+          state,
+        });
+      }
+      onDone(items);
+    } catch {
+      onDone([]);
+    }
+  });
+}
+
+/** Open the "create pull request" page in the browser for the current branch. */
+export function createPullRequestWeb(cwd: string, onDone: (ok: boolean, stderr: string) => void): void {
+  execFile(
+    'gh',
+    ['pr', 'create', '--web'],
+    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
+  );
+}
+
+/**
+ * Check out a PR's branch via `gh pr checkout` (fetches it, handling forks).
+ * Reports (ok, stderr).
+ */
+export function checkoutPullRequest(
+  cwd: string,
+  number: number,
+  onDone: (ok: boolean, stderr: string) => void,
+): void {
+  execFile(
+    'gh',
+    ['pr', 'checkout', String(number)],
+    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
+  );
+}

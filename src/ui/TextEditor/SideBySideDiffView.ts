@@ -95,8 +95,10 @@ export class SideBySideDiffView {
 
 /** A read-only pane for one side, with per-line diff backgrounds applied. */
 function makePane(lines: SideLine[], languagePath?: string): TextEditor {
+  // Trailing newline terminates the last line so an empty last row can still carry
+  // its line background (and both panes stay equal-height for scroll-sync).
   const editor = new TextEditor({
-    buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n'), languagePath },
+    buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n') + '\n', languagePath },
   });
   applyDiffDecorations(editor.decorations.layer('diff'), lines);
   return editor;

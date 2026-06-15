@@ -141,9 +141,22 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
      option (`SyntaxController.setLanguageForPath` after the text is set);
      `DiffView`/`SideBySide`/`DiffViewer` take it and the demo passes the new
      file's path. Needs `preloadGrammars()` first (the demo awaits it).
+   - [x] `DiffViewer` polish — icon-only unified/side-by-side toggle + compact flat
+     prev/next-change buttons (Nerd Font glyphs).
+   - [x] Side-by-side pane focus — `Tab` switches between the two panes
+     (`diff:focus-other-pane` command + keymap, selector-scoped to the diff views;
+     `ctrl-w` stays app-pane nav). Read-only panes start unfocused (no caret until
+     focused — fixes both panes showing a caret at creation).
+   - [x] Empty-line backgrounds — synthesized buffers append a trailing newline so
+     an empty last changed line is still terminated/taggable. (If empty *interior*
+     lines ever lack a background, that's a GtkTextView tag limitation needing a
+     custom line-background draw — not yet hit.)
    - [ ] Fold unchanged regions (collapse large context blocks).
-   - [ ] **Wire real data** — `GitRepo` diff (working-tree/staged/commit) →
-     `DiffModel`, and surface `DiffViewer` in a tab/command (sequences with Git).
+   - [x] **Wire real data (working tree)** — `git:diff-current` (`space g d`)
+     diffs the active file's working tree against its HEAD blob (`git show
+     HEAD:<rel>`) → `DiffModel` → `DiffViewer` in a new tab.
+   - [ ] More diff sources — staged / arbitrary commit / PR, and surfacing them
+     (sequences with the Git workstream).
 
 Net: no new widget primitive is strictly required — the synthesized-buffer
 approach turns "diff" into "read-only buffer + decorations + a gutter + scroll

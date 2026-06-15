@@ -43,6 +43,19 @@ function asIter(r: any): any {
 // glyphs don't pile up at the collapsed fold position.
 export const FOLD_HIDDEN_TAG_NAME = 'ts:fold-hidden';
 
+// tree-sitter node types that count as a function/method across the grammars we
+// ship. Most contain "function"/"method"; a few (Go/Rust/lambdas) don't.
+const FUNCTION_NODE_TYPES = new Set([
+  'func_literal',
+  'lambda',
+  'lambda_expression',
+  'closure_expression',
+  'arrow_function',
+]);
+function isFunctionNodeType(type: string): boolean {
+  return /function|method|constructor/.test(type) || FUNCTION_NODE_TYPES.has(type);
+}
+
 /** Whether buffer `line` is hidden inside a fold (any gutter renderer can call this). */
 export function isLineFolded(buffer: any, line: number): boolean {
   const tag = buffer.getTagTable().lookup(FOLD_HIDDEN_TAG_NAME);
@@ -474,6 +487,41 @@ export class SyntaxController {
     for (const region of this.foldsByHeaderLine.values()) {
       if (region.folded && row > region.startLine && row < region.endLine) this.toggleFold(region);
     }
+  }
+
+  /** Every foldable region's inclusive line span (header → close), for the vim
+   *  fold motions and the `iz`/`az` text object. */
+  foldRegions(): Array<{ startRow: number; endRow: number }> {
+    return [...this.foldsByHeaderLine.values()].map((r) => ({ startRow: r.startLine, endRow: r.endLine }));
+  }
+
+  /**
+   * The function/method enclosing `(row, column)`, as outer (whole definition)
+   * and inner (body statements) line spans — for the vim `if`/`af` text object.
+   * Walks the tree-sitter tree up from the cursor to the nearest function-like
+   * node; the inner span is its `body` field's named children (delimiter-agnostic,
+   * so it works for both brace and indentation languages). Null when off a
+   * function or with no parse tree.
+   */
+  functionRangeAt(
+    row: number,
+    column: number,
+  ): { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } } | null {
+    if (!this.tree) return null;
+    let node: any = this.tree.rootNode.descendantForPosition({ row, column });
+    while (node && !isFunctionNodeType(node.type)) node = node.parent;
+    if (!node) return null;
+
+    const outer = { startRow: node.startPosition.row, endRow: node.endPosition.row };
+    let inner = outer;
+    const body = node.childForFieldName ? node.childForFieldName('body') : null;
+    if (body) {
+      const stmts = (body.namedChildren || []).filter(Boolean);
+      inner = stmts.length
+        ? { startRow: stmts[0].startPosition.row, endRow: stmts[stmts.length - 1].endPosition.row }
+        : { startRow: body.startPosition.row, endRow: body.endPosition.row };
+    }
+    return { outer, inner };
   }
 
   /** Digit width to pad line numbers to, so the gutter doesn't jitter while scrolling. */

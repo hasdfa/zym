@@ -172,6 +172,19 @@ Verified end-to-end against tsserver. **Not yet wired:** command-only code actio
 (`workspace/executeCommand`), resource operations (create/rename/delete file), and
 range-formatting from the selection (the backend supports it).
 
+## Signature help
+
+`LanguageServer.signatureHelp` + `hasSignatureHelp` + `signatureHelpTriggerCharacters`
+(capability advertised with labelOffset + activeParameter support);
+`LspManager.signatureHelp(doc)` targets the primary server (timeout-bounded). The
+UI card (in `TextEditor`) shows while typing a call's arguments: triggered when a
+trigger char (`(`/`,`) appears in the *typed text* (not the char before the cursor,
+which autopair leaves as the inserted `)`), debounced so the autopair edits settle,
+and re-requested on cursor moves while open (so a type-over of `)` closes it). It's
+anchored once at the callee name (`callNameStartColumn` walks to the active call's
+open paren, depth-aware, then back over the `obj.method` chain) and stays put as
+arguments are typed; the active parameter is bolded and the label syntax-highlighted.
+
 ## Document sync (incremental)
 
 `LanguageServer.didChange` takes LSP `contentChanges`; `LspManager.didChange`
