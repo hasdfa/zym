@@ -8,12 +8,12 @@
  * A header-bar switcher flips between the unified and side-by-side renderers.
  */
 import * as Fs from 'node:fs';
-import { Adw, Gio, GLib, Gtk, startLoop } from '../src/gi.ts';
+import * as Path from 'node:path';
+import { Adw, Gio, GLib, startLoop } from '../src/gi.ts';
 import { registerBundledFonts } from '../src/fonts.ts';
 import { installStyles } from '../src/styles.ts';
 import { computeDiff } from '../src/util/DiffModel.ts';
-import { DiffView } from '../src/ui/TextEditor/DiffView.ts';
-import { SideBySideDiffView } from '../src/ui/TextEditor/SideBySideDiffView.ts';
+import { DiffViewer } from '../src/ui/TextEditor/DiffViewer.ts';
 
 const SAMPLE_OLD = `function greet(name) {
   const msg = "hi, " + name;
@@ -45,21 +45,12 @@ app.on('activate', () => {
   installStyles();
 
   const model = computeDiff(oldText, newText);
-  const unified = new DiffView(model);
-  const sideBySide = new SideBySideDiffView(model);
-
-  const stack = new Gtk.Stack();
-  stack.addTitled(unified.root, 'unified', 'Unified');
-  stack.addTitled(sideBySide.root, 'sbs', 'Side by side');
-
-  const switcher = new Gtk.StackSwitcher();
-  switcher.setStack(stack);
-  const header = new Adw.HeaderBar();
-  header.setTitleWidget(switcher);
+  const title = newPath ? Path.basename(newPath) : 'sample diff';
+  const viewer = new DiffViewer(model, { title });
 
   const toolbar = new Adw.ToolbarView();
-  toolbar.addTopBar(header);
-  toolbar.setContent(stack);
+  toolbar.addTopBar(new Adw.HeaderBar());
+  toolbar.setContent(viewer.root);
 
   const win = new Adw.ApplicationWindow({ application: app, defaultWidth: 1000, defaultHeight: 600 });
   (win as any).setContent(toolbar);

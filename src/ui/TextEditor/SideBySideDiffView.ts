@@ -13,6 +13,7 @@ import { Gtk, type SourceView } from '../../gi.ts';
 import { TextEditor } from './TextEditor.ts';
 import { DiffGutter } from './DiffGutter.ts';
 import { applyDiffDecorations } from './applyDiffDecorations.ts';
+import { revealRow, changeStartRows } from './diffNav.ts';
 import { splitSides, type DiffModel, type SideLine } from '../../util/DiffModel.ts';
 
 export class SideBySideDiffView {
@@ -20,12 +21,17 @@ export class SideBySideDiffView {
   private readonly left: TextEditor;
   private readonly right: TextEditor;
   private readonly gutters: DiffGutter[];
+  // Hunk navigation: padded-buffer rows where each changed region starts (left and
+  // right are aligned, so the same row applies to both). `hunkIndex` last revealed.
+  private readonly hunkRows: number[];
+  private hunkIndex = -1;
 
   constructor(model: DiffModel) {
     const { left, right } = splitSides(model);
     this.left = makePane(left);
     this.right = makePane(right);
     this.gutters = [new DiffGutter(this.left.sourceView, left), new DiffGutter(this.right.sourceView, right)];
+    this.hunkRows = changeStartRows(left.map((line) => line.kind));
 
     syncScroll(this.left.sourceView, this.right.sourceView);
 
@@ -35,6 +41,26 @@ export class SideBySideDiffView {
     this.root.setResizeStartChild(true);
     this.root.setResizeEndChild(true);
     this.root.setWideHandle(true);
+  }
+
+  get hunkCount(): number {
+    return this.hunkRows.length;
+  }
+
+  nextHunk(): void {
+    this.gotoHunk(this.hunkIndex + 1);
+  }
+
+  prevHunk(): void {
+    this.gotoHunk(this.hunkIndex - 1);
+  }
+
+  private gotoHunk(index: number): void {
+    if (this.hunkRows.length === 0) return;
+    const n = this.hunkRows.length;
+    this.hunkIndex = ((index % n) + n) % n;
+    // Reveal on the left; the scroll-sync carries the right pane along.
+    revealRow(this.left.sourceView, this.hunkRows[this.hunkIndex]);
   }
 
   dispose(): void {

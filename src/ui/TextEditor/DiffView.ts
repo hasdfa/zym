@@ -12,12 +12,17 @@ import type { Gtk } from '../../gi.ts';
 import { TextEditor } from './TextEditor.ts';
 import { DiffGutter } from './DiffGutter.ts';
 import { applyDiffDecorations } from './applyDiffDecorations.ts';
+import { revealRow } from './diffNav.ts';
 import type { DiffModel } from '../../util/DiffModel.ts';
 
 export class DiffView {
   readonly root: InstanceType<typeof Gtk.Box>;
   private readonly editor: TextEditor;
   private readonly gutter: DiffGutter;
+  // Hunk navigation: the unified buffer row each hunk starts on; `hunkIndex` is
+  // the last-revealed hunk (-1 before any navigation).
+  private readonly hunkRows: number[];
+  private hunkIndex = -1;
 
   constructor(model: DiffModel) {
     const text = model.lines.map((line) => line.text).join('\n');
@@ -26,6 +31,26 @@ export class DiffView {
 
     applyDiffDecorations(this.editor.decorations.layer('diff'), model.lines);
     this.gutter = new DiffGutter(this.editor.sourceView, model.lines);
+    this.hunkRows = model.hunks.map((hunk) => hunk.startRow);
+  }
+
+  get hunkCount(): number {
+    return this.hunkRows.length;
+  }
+
+  nextHunk(): void {
+    this.gotoHunk(this.hunkIndex + 1);
+  }
+
+  prevHunk(): void {
+    this.gotoHunk(this.hunkIndex - 1);
+  }
+
+  private gotoHunk(index: number): void {
+    if (this.hunkRows.length === 0) return;
+    const n = this.hunkRows.length;
+    this.hunkIndex = ((index % n) + n) % n;
+    revealRow(this.editor.sourceView, this.hunkRows[this.hunkIndex]);
   }
 
   dispose(): void {

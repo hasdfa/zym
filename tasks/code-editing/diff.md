@@ -131,11 +131,15 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
    - [x] Full-line (paragraph) backgrounds — `added`/`removed`/`filler` now paint
      full-width via `paragraph-background` (a `DecorationController` `LINE_STYLES`
      split).
-   - [ ] Hunk navigation (`next-change`/`prev-change` over `model.hunks`).
-   - [ ] Fold unchanged regions; syntax highlighting in panes; header/stat line;
-     unified↔side-by-side toggle.
+   - [x] Hunk navigation — `next/prevHunk()` on both views (jump cursor + scroll
+     to each changed region via `diffNav.revealRow`; side-by-side scrolls the left,
+     the sync carries the right). `changeStartRows` unit-tested.
+   - [x] `DiffViewer` (`src/ui/TextEditor/DiffViewer.ts`) — the embeddable widget:
+     header with title + `+N −M` stats + prev/next-change + a unified↔side-by-side
+     toggle, over a stack of the two renderers. `scripts/diff-demo.ts` uses it.
+   - [ ] Fold unchanged regions; per-pane syntax highlighting.
    - [ ] **Wire real data** — `GitRepo` diff (working-tree/staged/commit) →
-     `DiffModel`, and surface the views in a tab/command (sequences with Git).
+     `DiffModel`, and surface `DiffViewer` in a tab/command (sequences with Git).
 
 Net: no new widget primitive is strictly required — the synthesized-buffer
 approach turns "diff" into "read-only buffer + decorations + a gutter + scroll
