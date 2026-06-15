@@ -34,6 +34,8 @@ import {
   HoverRequest,
   CompletionRequest,
   CompletionResolveRequest,
+  CodeActionRequest,
+  CodeActionResolveRequest,
   TextDocumentSyncKind,
   MessageType,
   type ClientCapabilities,
@@ -48,6 +50,9 @@ import {
   type CompletionList,
   type CompletionItem,
   type CompletionContext,
+  type CodeAction,
+  type Command,
+  type CodeActionContext,
 } from 'vscode-languageserver-protocol';
 import { Emitter, Disposable } from '../util/eventKit.ts';
 import { LspClient } from './LspClient.ts';
@@ -377,6 +382,39 @@ export class LanguageServer {
     return this.client.sendRequest(CompletionResolveRequest.type, item);
   }
 
+  /** Whether the server advertised support for code actions. */
+  get hasCodeActions(): boolean {
+    return !!this.capabilities.codeActionProvider;
+  }
+
+  /** Whether code actions are resolved lazily (`codeAction/resolve` fills the `edit`). */
+  get hasCodeActionResolve(): boolean {
+    const provider = this.capabilities.codeActionProvider;
+    return typeof provider === 'object' && !!provider.resolveProvider;
+  }
+
+  /** Code actions (quick-fixes, refactors, …) for `range`, given its diagnostics. */
+  async codeAction(
+    path: string,
+    range: LspRange,
+    context: CodeActionContext,
+  ): Promise<(Command | CodeAction)[] | null> {
+    if (!this.hasCodeActions) return null;
+    await this.start();
+    return this.client.sendRequest(CodeActionRequest.type, {
+      textDocument: { uri: pathToUri(path) },
+      range,
+      context,
+    });
+  }
+
+  /** Resolve a code action's lazy `edit` (servers often omit it from the list). */
+  async resolveCodeAction(action: CodeAction): Promise<CodeAction> {
+    if (!this.hasCodeActionResolve || action.edit) return action;
+    await this.start();
+    return this.client.sendRequest(CodeActionResolveRequest.type, action);
+  }
+
   // --- events ----------------------------------------------------------------
 
   onDiagnostics(handler: (event: DiagnosticsEvent) => void): Disposable {
@@ -450,6 +488,19 @@ const CLIENT_CAPABILITIES: ClientCapabilities = {
         documentationFormat: ['markdown', 'plaintext'],
         labelDetailsSupport: true,
       },
+    },
+    codeAction: {
+      dynamicRegistration: false,
+      // Accept CodeAction literals (with kinds) rather than only Commands, and
+      // resolve their `edit` lazily — many servers omit it from the list.
+      codeActionLiteralSupport: {
+        codeActionKind: {
+          valueSet: ['quickfix', 'refactor', 'refactor.extract', 'refactor.inline',
+            'refactor.rewrite', 'source', 'source.organizeImports', 'source.fixAll'],
+        },
+      },
+      resolveSupport: { properties: ['edit'] },
+      dataSupport: true,
     },
   },
   workspace: {

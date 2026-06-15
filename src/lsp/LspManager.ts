@@ -22,9 +22,11 @@ import * as Path from 'node:path';
 import { CompletionTriggerKind, MessageType } from 'vscode-languageserver-protocol';
 import type {
   Definition, LocationLink, Location, Position, Hover, CompletionItem,
+  CodeAction, Command, Range as LspRange,
 } from 'vscode-languageserver-protocol';
 import { Emitter, Disposable } from '../util/eventKit.ts';
 import { Point } from '../text/Point.ts';
+import { Range } from '../text/Range.ts';
 import { languages } from '../lang/index.ts';
 import type { ServerDef, ActiveServer, ServerOverrides, InstallSpec } from '../lang/types.ts';
 import { LanguageServer, serverKey, type NavigationKind } from './LanguageServer.ts';
@@ -32,7 +34,7 @@ export type { NavigationKind } from './LanguageServer.ts';
 import { DiagnosticsStore } from './diagnostics/DiagnosticsStore.ts';
 import { nodeModulesBinDirs, resolveCommand } from './which.ts';
 import { installServer, managedBinDir } from './installer.ts';
-import { pointToPosition, positionToPoint, advancePosition, uriToPath } from './position.ts';
+import { pointToPosition, positionToPoint, advancePosition, rangeToLsp, uriToPath } from './position.ts';
 import type { PositionEncoding } from './position.ts';
 
 /** The minimal editor surface the manager needs. Implemented by a TextEditor adapter. */
@@ -353,6 +355,35 @@ export class LspManager {
     return this.primaryServerForPath(path)?.positionEncoding ?? null;
   }
 
+  /**
+   * Code actions (quick-fixes, refactors, organize-imports, …) for `range` — or
+   * the cursor when omitted — from the primary server. The diagnostics overlapping
+   * the range are passed as context so the server can offer their quick-fixes.
+   */
+  async codeActions(doc: LspDocument, range?: Range): Promise<(Command | CodeAction)[]> {
+    if (!this.enabled) return [];
+    const path = doc.getPath();
+    if (!path) return [];
+    const server = this.primaryServerForPath(path);
+    if (!server || !server.hasCodeActions) return [];
+    const enc = server.positionEncoding;
+    const cursor = doc.getCursorBufferPosition();
+    const lspRange = rangeToLsp(range ?? new Range(cursor, cursor), (r) => doc.lineTextForRow(r), enc);
+    const diagnostics = this.diagnostics
+      .get(path)
+      .map((e) => e.diagnostic)
+      .filter((d) => rangesOverlap(d.range, lspRange));
+    const result = await server.codeAction(path, lspRange, { diagnostics });
+    return result ?? [];
+  }
+
+  /** Resolve a code action's lazy `edit` against the file's primary server. */
+  async resolveCodeAction(doc: LspDocument, action: CodeAction): Promise<CodeAction> {
+    const path = doc.getPath();
+    if (!path) return action;
+    return this.primaryServerForPath(path)?.resolveCodeAction(action) ?? action;
+  }
+
   // --- server management -----------------------------------------------------
 
   /** Already-running servers for a path (no spawn), in resolution order. */
@@ -652,6 +683,13 @@ export function incrementalChange(
   const start = pointToPosition(edit.start, doc.lineTextForRow(edit.start.row), encoding);
   const end = advancePosition(start, edit.oldText, encoding);
   return { range: { start, end }, text: edit.newText };
+}
+
+// Whether two LSP ranges overlap (touching endpoints count, so an empty cursor
+// range at a diagnostic's edge still picks up its quick-fixes).
+function rangesOverlap(a: LspRange, b: LspRange): boolean {
+  const before = (p: Position, q: Position) => p.line < q.line || (p.line === q.line && p.character < q.character);
+  return !before(a.end, b.start) && !before(b.end, a.start);
 }
 
 /** Map an LSP `window/showMessage` MessageType to a notice level. */

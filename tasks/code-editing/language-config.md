@@ -147,6 +147,25 @@ eslint server that may predate **flat-config** (`eslint.config.*`) support; agai
 a flat-config-only project it stays idle (no error). A flat-config-capable eslint
 LSP is the fix there, independent of this client handling.
 
+## Code actions & the WorkspaceEdit applier
+
+`lsp/workspaceEdit.ts` is the shared, pure core (also for rename/formatting):
+`applyTextEdits(text, edits, enc)` applies LSP `TextEdit`s to a string (resolves
+each to a UTF-16 offset, splices from the end so offsets stay valid;
+encoding-aware), and `normalizeWorkspaceEdit` flattens a `WorkspaceEdit`'s
+`changes`/`documentChanges` to per-file edits (resource create/rename/delete ops
+are counted, applied by the UI later).
+
+`LanguageServer.codeAction(path, range, context)` + `resolveCodeAction` (servers
+omit the `edit` from the list; advertised via `codeActionLiteralSupport` +
+`resolveSupport`). `LspManager.codeActions(doc, range?)` targets the primary
+server, passing the overlapping diagnostics as context. Verified end-to-end
+against tsserver (Organize Imports → resolve → normalize → apply).
+
+**UI follow-up (not yet wired):** a `lsp:code-action` command + picker, and
+applying the chosen edit to live buffers / disk (open editor writes vs on-disk
+files, plus the resource operations).
+
 ## Document sync (incremental)
 
 `LanguageServer.didChange` takes LSP `contentChanges`; `LspManager.didChange`
