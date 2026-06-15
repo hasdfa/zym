@@ -36,6 +36,9 @@ export class CursorStyleManager {
       editor.setCursorDisplayPoint(null);
     }
     editor.refreshCursorStyle();
+    // Repaint the visual-block member rows (secondary selections). Cheap and
+    // idempotent; clears when there are none (left blockwise / other modes).
+    editor.renderExtraSelections();
     editor.scrollCursorOnscreen();
   }
 }

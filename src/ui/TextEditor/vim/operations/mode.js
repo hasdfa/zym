@@ -36,4 +36,17 @@ class ActivateLinewiseVisualMode extends Base {
 }
 ActivateLinewiseVisualMode.register()
 
-export { ActivateNormalMode, ActivateCharacterwiseVisualMode, ActivateLinewiseVisualMode }
+class ActivateBlockwiseVisualMode extends Base {
+  static operationKind = 'misc-command'
+  execute() {
+    this.vimState.activate('visual', 'blockwise')
+  }
+}
+ActivateBlockwiseVisualMode.register()
+
+export {
+  ActivateNormalMode,
+  ActivateCharacterwiseVisualMode,
+  ActivateLinewiseVisualMode,
+  ActivateBlockwiseVisualMode,
+}

@@ -27,8 +27,7 @@ export class Cursor {
   }
 
   getBufferPosition(): Point {
-    const { buffer } = this.editor;
-    return this.editor.pointAtIter(unwrapIter(buffer.getIterAtMark(buffer.getInsert())));
+    return this.selection.getHeadBufferPosition();
   }
 
   /** Screen and buffer positions coincide (no soft-wrap / folds). */
@@ -47,13 +46,11 @@ export class Cursor {
    */
   setBufferPosition(point: PointLike, _options?: unknown): void {
     this.goalColumn = null;
-    if (this.selection.modifying) {
-      // Extend: move only the head (insert) mark, keeping the tail anchored.
-      const { buffer } = this.editor;
-      buffer.moveMark(buffer.getInsert(), this.editor.iterAtPoint(point));
-    } else {
-      this.editor.setCursorBufferPosition(point);
-    }
+    const iter = this.editor.iterAtPoint(point);
+    // Extend (move only the head) while a motion is targeting a selection;
+    // otherwise collapse the selection onto the point.
+    if (this.selection.modifying) this.selection.moveHead(iter);
+    else this.selection.collapseTo(iter);
   }
 
   /** The non-word characters for this cursor (used to build word regexes). */
@@ -174,7 +171,11 @@ export class Cursor {
 
     const row = clamp(position.row + delta, 0, this.editor.getLastBufferRow());
     const column = Math.min(goal, this.editor.lineTextForBufferRow(row).length);
-    this.editor.setCursorBufferPosition(new Point(row, column));
-    this.goalColumn = goal; // setCursorBufferPosition doesn't touch it; be explicit
+    const iter = this.editor.iterAtPoint(new Point(row, column));
+    // Respect a targeting motion (extend) vs a plain move (collapse); works for
+    // secondary selections too.
+    if (this.selection.modifying) this.selection.moveHead(iter);
+    else this.selection.collapseTo(iter);
+    this.goalColumn = goal; // the moves above clear it; restore explicitly
   }
 }

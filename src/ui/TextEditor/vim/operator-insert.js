@@ -24,11 +24,7 @@ class ActivateInsertModeBase extends Operator {
   // Thats' why I save topCursor's position to @topCursorPositionAtInsertionStart to compare traversal to deletionStart
   // Why I use topCursor's change? Just because it's easy to use first change returned by getChangeSinceCheckpoint().
   getChangeSinceCheckpoint (purpose) {
-    // GtkTextBuffer has no change-since-checkpoint API. This is used only to
-    // record inserted text for dot-repeat of insert; returning undefined leaves
-    // the insert-repeat text empty (callers all guard on a falsy change). Real
-    // change tracking is deferred to when dot-repeat lands.
-    return undefined
+    return this.editor.getChangeSinceCheckpoint(this.getBufferCheckpoint(purpose))
   }
 
   // [BUG-BUT-OK] Replaying text-deletion-operation is not compatible to pure Vim.
@@ -141,6 +137,19 @@ class ActivateInsertModeBase extends Operator {
         textByUserInput = change.newText
       }
       this.vimState.register.set('.', {text: textByUserInput}) // Last inserted text
+
+      // quilx: there is no native multi-cursor, so the just-typed text only
+      // reached the primary selection. Replicate it to the block's other cursors
+      // — this is plain Vim's blockwise-insert behavior, which mirrors the typed
+      // text to every row on leaving insert mode. Then collapse to one cursor,
+      // since quilx doesn't keep persistent multi-cursors.
+      if (textByUserInput && this.editor.getSelections().length > 1) {
+        for (const selection of this.editor.getSelections()) {
+          if (selection.isPrimary) continue
+          selection.insertText(textByOperator + textByUserInput, {autoIndent: false})
+        }
+        this.vimState.clearSelections()
+      }
 
       while (insertionCount) {
         insertionCount--

@@ -46,6 +46,7 @@ const MODE_BINDINGS: Record<string, string> = {
 const VISUAL_BINDINGS: Record<string, string> = {
   v: 'ActivateCharacterwiseVisualMode',
   V: 'ActivateLinewiseVisualMode',
+  'ctrl-v': 'ActivateBlockwiseVisualMode',
 };
 
 // Single-key motions, available while NOT in insert mode.

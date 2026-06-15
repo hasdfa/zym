@@ -1,16 +1,19 @@
 /*
- * Selection — the span between the buffer's "insert" (head) and
- * "selection-bound" (tail) marks, plus its Cursor.
+ * Selection — the span between a "head" (cursor) and "tail" (anchor) mark, plus
+ * its Cursor. A selection is *reversed* when the head sits before the tail (it
+ * grew leftward/upward). All mutation routes through `EditorModel` so it shares
+ * the one undo-grouping path.
  *
- * GtkTextBuffer supports a single selection, so an EditorModel owns exactly one
- * Selection, surfaced through `getSelections()` as a one-element array. The head
- * is where the cursor is and the tail is the fixed anchor; a selection is
- * *reversed* when the head sits before the tail (it grew leftward/upward). All
- * mutation routes through `EditorModel` so it shares the one undo-grouping path.
+ * The *primary* selection is backed by GtkTextBuffer's native "insert" /
+ * "selection-bound" marks (so GtkTextView renders it). *Secondary* selections —
+ * used for visual-block (one per block row) and, later, multi-cursor — carry
+ * their own anonymous marks and are rendered by `EditorModel` as decorations.
+ * The two cases differ only in how the marks move (native `placeCursor`/
+ * `selectRange` for the primary; `moveMark` for secondaries).
  */
 import { Point } from '../../text/Point.ts';
-import { Range } from '../../text/Range.ts';
-import { unwrapIter } from './iter.ts';
+import { Range, type RangeLike } from '../../text/Range.ts';
+import { unwrapIter, type TextIter, type TextMark } from './iter.ts';
 import { Cursor } from './Cursor.ts';
 import type { EditorModel } from './EditorModel.ts';
 
@@ -22,21 +25,46 @@ export interface SetBufferRangeOptions {
 export class Selection {
   readonly editor: EditorModel;
   readonly cursor: Cursor;
+  // Whether this selection is backed by the buffer's native insert/selection-bound
+  // marks (so GtkTextView renders it). Not `readonly`: when the primary is removed
+  // while secondaries remain, primary-ness is transferred onto a survivor — see
+  // `EditorModel.promoteAnotherToPrimary`.
+  isPrimary: boolean;
   goalColumn: number | null = null;
 
   // While true, moving the cursor extends the selection (moves the head mark
   // only) instead of collapsing it. Set during `modifySelection`.
   modifying = false;
 
-  constructor(editor: EditorModel) {
+  private headMark: TextMark;
+  private tailMark: TextMark;
+  private destroyed = false;
+  // Captured on destroy so position queries still answer afterwards (matching
+  // Atom, where a destroyed marker keeps reporting its last range). The vim layer
+  // reads member cursors in an `onDidFinishOperation` hook that runs *after* a
+  // blockwise mutation has torn the member selections down.
+  private lastHeadPosition?: Point;
+  private lastTailPosition?: Point;
+
+  /** Without `marks`, this is the primary selection (native insert/bound). */
+  constructor(editor: EditorModel, marks?: { head: TextMark; tail: TextMark }) {
     this.editor = editor;
+    if (marks) {
+      this.headMark = marks.head;
+      this.tailMark = marks.tail;
+      this.isPrimary = false;
+    } else {
+      this.headMark = editor.buffer.getInsert();
+      this.tailMark = editor.buffer.getSelectionBound();
+      this.isPrimary = true;
+    }
     this.cursor = new Cursor(editor, this);
   }
 
   /**
    * Run `fn` while extending the selection: cursor moves inside `fn` move the
-   * head (insert mark) and leave the tail (anchor) put. This is how a motion
-   * grows an operator's target range (e.g. the `w` in `dw`).
+   * head mark and leave the tail (anchor) put. This is how a motion grows an
+   * operator's target range (e.g. the `w` in `dw`).
    */
   modifySelection(fn: () => void): void {
     const wasModifying = this.modifying;
@@ -48,14 +76,48 @@ export class Selection {
     }
   }
 
+  getHeadIter(): TextIter {
+    return unwrapIter(this.editor.buffer.getIterAtMark(this.headMark));
+  }
+
+  getTailIter(): TextIter {
+    return unwrapIter(this.editor.buffer.getIterAtMark(this.tailMark));
+  }
+
   getHeadBufferPosition(): Point {
-    const { buffer } = this.editor;
-    return this.editor.pointAtIter(unwrapIter(buffer.getIterAtMark(buffer.getInsert())));
+    if (this.destroyed) return this.lastHeadPosition!;
+    return this.editor.pointAtIter(this.getHeadIter());
   }
 
   getTailBufferPosition(): Point {
-    const { buffer } = this.editor;
-    return this.editor.pointAtIter(unwrapIter(buffer.getIterAtMark(buffer.getSelectionBound())));
+    if (this.destroyed) return this.lastTailPosition!;
+    return this.editor.pointAtIter(this.getTailIter());
+  }
+
+  // --- Mark movement (primary uses native selection; secondary moves marks) --
+
+  /** Move the head mark to `iter`, keeping the tail anchored (extends). */
+  moveHead(iter: TextIter): void {
+    this.editor.buffer.moveMark(this.headMark, iter);
+  }
+
+  /** Collapse the selection onto `iter` (both marks). */
+  collapseTo(iter: TextIter): void {
+    if (this.isPrimary) {
+      this.editor.buffer.placeCursor(iter);
+    } else {
+      this.editor.buffer.moveMark(this.headMark, iter);
+      this.editor.buffer.moveMark(this.tailMark, iter);
+    }
+  }
+
+  private setHeadTail(headIter: TextIter, tailIter: TextIter): void {
+    if (this.isPrimary) {
+      this.editor.buffer.selectRange(headIter, tailIter); // first iter becomes the head
+    } else {
+      this.editor.buffer.moveMark(this.headMark, headIter);
+      this.editor.buffer.moveMark(this.tailMark, tailIter);
+    }
   }
 
   getBufferRange(): Range {
@@ -72,36 +134,69 @@ export class Selection {
     return this.getHeadBufferPosition().isEqual(this.getTailBufferPosition());
   }
 
-  /** With a single selection, it is always the last one. */
   isLastSelection(): boolean {
-    return true;
+    return this.editor.getLastSelection() === this;
   }
 
-  /**
-   * Atom destroys transient extra selections; GtkTextBuffer has only one, which
-   * persists, so this is a no-op. (The mutation manager only destroys selections
-   * created after the `will-select` checkpoint, which the lone selection isn't.)
-   */
-  destroy(): void {}
+  /** @internal The mark pair currently backing this selection. */
+  getMarkPair(): { head: TextMark; tail: TextMark } {
+    return { head: this.headMark, tail: this.tailMark };
+  }
+
+  /** @internal Re-back this selection with a different mark pair and role. Used
+   *  by `EditorModel.promoteAnotherToPrimary` to move the native marks (and the
+   *  rendered caret) from a removed primary onto a surviving selection. */
+  rebindMarks(head: TextMark, tail: TextMark, isPrimary: boolean): void {
+    this.headMark = head;
+    this.tailMark = tail;
+    this.isPrimary = isPrimary;
+  }
+
+  /** Destroy this selection (drop it from the editor, free its marks). The
+   *  primary owns the buffer's native marks, which can't be deleted; when it is
+   *  removed while secondaries remain, primary-ness is first transferred onto a
+   *  survivor (this selection then holds that survivor's freed anonymous marks).
+   *  If the primary is the only selection, this is a no-op — it persists. */
+  destroy(): void {
+    if (this.destroyed) return;
+    // Snapshot before any mark juggling (promotion rebinds this husk's marks),
+    // so post-destroy position reads return this selection's actual last range.
+    this.lastHeadPosition = this.getHeadBufferPosition();
+    this.lastTailPosition = this.getTailBufferPosition();
+    if (this.isPrimary && !this.editor.promoteAnotherToPrimary(this)) return;
+    this.destroyed = true;
+    this.editor.buffer.deleteMark(this.headMark);
+    this.editor.buffer.deleteMark(this.tailMark);
+    this.editor.removeExtraSelection(this);
+  }
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
+  /** Scroll the view to keep this selection's head on screen. */
+  autoscroll(_options?: unknown): void {
+    this.editor.scrollCursorOnscreen();
+  }
 
   /** True when the head is before the tail (the selection grew backward). */
   isReversed(): boolean {
     return !this.isEmpty() && this.getHeadBufferPosition().isLessThan(this.getTailBufferPosition());
   }
 
-  setBufferRange(range: Range, options: SetBufferRangeOptions = {}): void {
-    const { buffer } = this.editor;
+  setBufferRange(range: RangeLike, options: SetBufferRangeOptions = {}): void {
+    // Coerce — the vim layer (e.g. BlockwiseSelection) passes `[[r,c],[r,c]]`.
+    const r = Range.fromObject(range);
     // Matching Atom: when `reversed` isn't given, preserve the selection's
     // current orientation. The vim layer relies on this — linewise visual
     // re-expands (applyWise) and re-normalizes the selection without re-stating
     // reversed each time, so forcing head-at-end here would flip an upward
     // (reversed) selection and collapse its far end on the next motion.
     const reversed = options.reversed ?? this.isReversed();
-    const startIter = this.editor.iterAtPoint(range.start);
-    const endIter = this.editor.iterAtPoint(range.end);
-    // selectRange(insert, bound): the first iter becomes the head (cursor).
-    if (reversed) buffer.selectRange(startIter, endIter);
-    else buffer.selectRange(endIter, startIter);
+    const startIter = this.editor.iterAtPoint(r.start);
+    const endIter = this.editor.iterAtPoint(r.end);
+    if (reversed) this.setHeadTail(startIter, endIter);
+    else this.setHeadTail(endIter, startIter);
   }
 
   getText(): string {
@@ -110,13 +205,13 @@ export class Selection {
 
   /** Collapse the selection to its head, leaving the cursor there. */
   clear(): void {
-    this.editor.setCursorBufferPosition(this.getHeadBufferPosition());
+    this.collapseTo(this.getHeadIter());
   }
 
   /** Replace the selected text with `text`, leaving the cursor after it. */
   insertText(text: string): Range {
     const range = this.editor.setTextInBufferRange(this.getBufferRange(), text);
-    this.editor.setCursorBufferPosition(range.end);
+    this.collapseTo(this.editor.iterAtPoint(range.end));
     return range;
   }
 

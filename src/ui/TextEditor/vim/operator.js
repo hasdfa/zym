@@ -205,6 +205,35 @@ class Operator extends Base {
     }
 
     const wise = this.occurrenceSelected ? this.occurrenceWise : this.target.wise
+
+    // Blockwise: each member row calls this once, top-to-bottom (the order
+    // `mutateSelections` iterates). Accumulate the rows and flush them once, on
+    // the last (bottom) row, as a single blockwise-typed register value — paste
+    // reconstructs the columns from it. (Upstream leans on Atom's per-selection
+    // clipboard + native multi-cursor here; quilx has neither, so it stores the
+    // whole block in the register.)
+    if (wise === 'blockwise') {
+      if (!this.blockwiseRegisterRows) this.blockwiseRegisterRows = []
+      this.blockwiseRegisterRows.push(text)
+      if (!selection.isLastSelection()) return
+      const blockText = this.blockwiseRegisterRows.join('\n')
+      this.blockwiseRegisterRows = null
+      const value = () => ({text: blockText, type: 'blockwise', selection})
+      this.vimState.register.set(null, value())
+      if (this.vimState.register.isUnnamed()) {
+        if (this.instanceof('Yank')) this.vimState.register.set('0', value())
+        else if (this.instanceof('Delete') || this.instanceof('Change')) this.vimState.register.set('1', value())
+      }
+      // The default register routes through the system clipboard, which carries
+      // only plain text (wise is otherwise inferred from a trailing newline).
+      // Remember this exact text as blockwise so paste can still column-restore
+      // it; cleared by the next non-blockwise yank/delete below.
+      this.vimState.register.lastBlockwiseText = blockText
+      return
+    }
+
+    this.vimState.register.lastBlockwiseText = null
+
     if (wise === 'linewise' && !text.endsWith('\n')) {
       text += '\n'
     }
@@ -748,7 +777,12 @@ class PutBefore extends Operator {
       return
     }
 
-    const textToPaste = value.text.repeat(this.getCount())
+    // `value.type` is lost when the register round-trips through the clipboard,
+    // so also treat text matching the last blockwise yank/delete as blockwise.
+    this.blockwisePaste =
+      value.type === 'blockwise' ||
+      (this.vimState.register.lastBlockwiseText != null && value.text === this.vimState.register.lastBlockwiseText)
+    const textToPaste = this.blockwisePaste ? value.text : value.text.repeat(this.getCount())
     this.linewisePaste = value.type === 'linewise' || this.isMode('visual', 'linewise')
     const newRange = this.paste(selection, textToPaste, {linewisePaste: this.linewisePaste})
     this.mutationsBySelection.set(selection, newRange)
@@ -759,11 +793,40 @@ class PutBefore extends Operator {
   paste (selection, text, {linewisePaste}) {
     if (this.sequentialPaste) {
       return this.pasteCharacterwise(selection, text)
+    } else if (this.blockwisePaste) {
+      return this.pasteBlockwise(selection, text)
     } else if (linewisePaste) {
       return this.pasteLinewise(selection, text)
     } else {
       return this.pasteCharacterwise(selection, text)
     }
+  }
+
+  // Paste a blockwise register: each yanked row goes onto a successive buffer
+  // row at the cursor's column, padding short rows with spaces and appending new
+  // rows past end-of-buffer. (`p` inserts after the cursor column, `P` before.)
+  pasteBlockwise (selection, text) {
+    const lines = text.split('\n')
+    const count = this.getCount()
+    const {row, column} = selection.cursor.getBufferPosition()
+    const startColumn = this.location === 'after' && !this.isEmptyRow(row) ? column + 1 : column
+
+    let firstStart = null
+    let lastEnd = null
+    for (let i = 0; i < lines.length; i++) {
+      const targetRow = row + i
+      while (targetRow > this.editor.getLastBufferRow()) {
+        const eof = this.editor.bufferRangeForBufferRow(this.editor.getLastBufferRow()).end
+        this.utils.insertTextAtBufferPosition(this.editor, eof, '\n')
+      }
+      const lineLength = this.editor.lineTextForBufferRow(targetRow).length
+      const pad = lineLength < startColumn ? ' '.repeat(startColumn - lineLength) : ''
+      const insertColumn = Math.min(startColumn, lineLength)
+      const range = this.utils.insertTextAtBufferPosition(this.editor, [targetRow, insertColumn], pad + lines[i].repeat(count))
+      if (!firstStart) firstStart = range.start
+      lastEnd = range.end
+    }
+    return new Range(firstStart, lastEnd)
   }
 
   pasteCharacterwise (selection, text) {
