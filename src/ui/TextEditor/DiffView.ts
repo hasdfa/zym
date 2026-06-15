@@ -24,9 +24,11 @@ export class DiffView {
   private readonly hunkRows: number[];
   private hunkIndex = -1;
 
-  constructor(model: DiffModel) {
+  constructor(model: DiffModel, options: { languagePath?: string } = {}) {
     const text = model.lines.map((line) => line.text).join('\n');
-    this.editor = new TextEditor({ buffer: { readOnly: true, initialText: text } });
+    this.editor = new TextEditor({
+      buffer: { readOnly: true, initialText: text, languagePath: options.languagePath },
+    });
     this.root = this.editor.root;
 
     applyDiffDecorations(this.editor.decorations.layer('diff'), model.lines);

@@ -26,10 +26,10 @@ export class SideBySideDiffView {
   private readonly hunkRows: number[];
   private hunkIndex = -1;
 
-  constructor(model: DiffModel) {
+  constructor(model: DiffModel, options: { languagePath?: string } = {}) {
     const { left, right } = splitSides(model);
-    this.left = makePane(left);
-    this.right = makePane(right);
+    this.left = makePane(left, options.languagePath);
+    this.right = makePane(right, options.languagePath);
     this.gutters = [new DiffGutter(this.left.sourceView, left), new DiffGutter(this.right.sourceView, right)];
     this.hunkRows = changeStartRows(left.map((line) => line.kind));
 
@@ -69,8 +69,10 @@ export class SideBySideDiffView {
 }
 
 /** A read-only pane for one side, with per-line diff backgrounds applied. */
-function makePane(lines: SideLine[]): TextEditor {
-  const editor = new TextEditor({ buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n') } });
+function makePane(lines: SideLine[], languagePath?: string): TextEditor {
+  const editor = new TextEditor({
+    buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n'), languagePath },
+  });
   applyDiffDecorations(editor.decorations.layer('diff'), lines);
   return editor;
 }

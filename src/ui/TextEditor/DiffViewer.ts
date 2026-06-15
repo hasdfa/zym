@@ -24,6 +24,8 @@ addStyles(`
 interface DiffViewerOptions {
   /** Shown at the left of the header (e.g. the file path). */
   title?: string;
+  /** A file path/name selecting the grammar for syntax highlighting in the panes. */
+  languagePath?: string;
 }
 
 export class DiffViewer {
@@ -33,8 +35,8 @@ export class DiffViewer {
   private readonly stack: InstanceType<typeof Gtk.Stack>;
 
   constructor(model: DiffModel, options: DiffViewerOptions = {}) {
-    this.unified = new DiffView(model);
-    this.sideBySide = new SideBySideDiffView(model);
+    this.unified = new DiffView(model, { languagePath: options.languagePath });
+    this.sideBySide = new SideBySideDiffView(model, { languagePath: options.languagePath });
 
     this.stack = new Gtk.Stack();
     this.stack.setVexpand(true);

@@ -137,7 +137,11 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
    - [x] `DiffViewer` (`src/ui/TextEditor/DiffViewer.ts`) — the embeddable widget:
      header with title + `+N −M` stats + prev/next-change + a unified↔side-by-side
      toggle, over a stack of the two renderers. `scripts/diff-demo.ts` uses it.
-   - [ ] Fold unchanged regions; per-pane syntax highlighting.
+   - [x] Per-pane syntax highlighting — buffer-only mode gained a `languagePath`
+     option (`SyntaxController.setLanguageForPath` after the text is set);
+     `DiffView`/`SideBySide`/`DiffViewer` take it and the demo passes the new
+     file's path. Needs `preloadGrammars()` first (the demo awaits it).
+   - [ ] Fold unchanged regions (collapse large context blocks).
    - [ ] **Wire real data** — `GitRepo` diff (working-tree/staged/commit) →
      `DiffModel`, and surface `DiffViewer` in a tab/command (sequences with Git).
 

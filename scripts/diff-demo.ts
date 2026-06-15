@@ -12,6 +12,7 @@ import * as Path from 'node:path';
 import { Adw, Gio, GLib, startLoop } from '../src/gi.ts';
 import { registerBundledFonts } from '../src/fonts.ts';
 import { installStyles } from '../src/styles.ts';
+import { preloadGrammars } from '../src/syntax/grammar.ts';
 import { computeDiff } from '../src/util/DiffModel.ts';
 import { DiffViewer } from '../src/ui/TextEditor/DiffViewer.ts';
 
@@ -46,7 +47,9 @@ app.on('activate', () => {
 
   const model = computeDiff(oldText, newText);
   const title = newPath ? Path.basename(newPath) : 'sample diff';
-  const viewer = new DiffViewer(model, { title });
+  // Highlight as the new file's type; the sample is JS/TS-ish.
+  const languagePath = newPath ?? 'sample.ts';
+  const viewer = new DiffViewer(model, { title, languagePath });
 
   const toolbar = new Adw.ToolbarView();
   toolbar.addTopBar(new Adw.HeaderBar());
@@ -60,4 +63,5 @@ app.on('activate', () => {
   loop.run();
 });
 
+await preloadGrammars(); // grammars must be ready before setLanguageForPath
 app.run([]);

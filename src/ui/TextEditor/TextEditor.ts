@@ -148,6 +148,9 @@ export interface BufferEditorOptions {
   onSubmit?: (text: string) => void;
   /** Non-editable view (vim navigation only) — for diff panes and other viewers. */
   readOnly?: boolean;
+  /** A file path/name whose extension selects the tree-sitter grammar, so an
+   *  embedded buffer (e.g. a diff pane) still gets syntax highlighting. */
+  languagePath?: string;
 }
 
 export class TextEditor {
@@ -254,6 +257,9 @@ export class TextEditor {
   private installBufferMode(mode: BufferEditorOptions): void {
     if (mode.initialText) this.setText(mode.initialText);
     this.placeholderLabel?.setVisible(this.buffer.getCharCount() === 0);
+    // Tree-sitter highlighting from the compared file's type (after the text is set,
+    // so the first parse sees it). Grammars must be preloaded (preloadGrammars).
+    if (mode.languagePath) this.syntax.setLanguageForPath(mode.languagePath);
     // Read-only viewer (e.g. a diff pane): block edits at the view; vim normal-mode
     // navigation still works, and insert-mode keystrokes simply do nothing.
     if (mode.readOnly) this.view.setEditable(false);
