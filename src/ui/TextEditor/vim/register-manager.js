@@ -2,7 +2,7 @@
 // `atom.clipboard` is replaced by quilx's GTK-backed `clipboard` (see
 // ./clipboard.ts); register logic is otherwise unchanged.
 import { normalizeIndent } from './utils.js'
-import clipboard from './clipboard.ts'
+import clipboard, { primaryClipboard } from './clipboard.ts'
 
 const REGISTERS_REGEX = /[-0-9a-zA-Z*+%_".]/
 const READ_ONLY_REGISTERS_REGEX = /[%_]/
@@ -61,15 +61,21 @@ export default class RegisterManager {
     return value && value.text != null ? value.text : ''
   }
 
-  readClipboard (selection) {
+  // `*` targets the PRIMARY selection; `+` (and the clipboard-as-default unnamed
+  // register) targets the regular CLIPBOARD.
+  clipboardForName (name) {
+    return name === '*' ? primaryClipboard : clipboard
+  }
+
+  readClipboard (selection, name) {
     if (selection && selection.editor.hasMultipleCursors() && this.clipboardBySelection.has(selection)) {
       return this.clipboardBySelection.get(selection)
     } else {
-      return clipboard.read()
+      return this.clipboardForName(name).read()
     }
   }
 
-  writeClipboard (selection, text) {
+  writeClipboard (selection, text, name) {
     if (selection && selection.editor.hasMultipleCursors() && !this.clipboardBySelection.has(selection)) {
       this.subscriptionBySelection.set(
         selection,
@@ -81,7 +87,7 @@ export default class RegisterManager {
     }
 
     if (!selection || selection.isLastSelection()) {
-      clipboard.write(text)
+      this.clipboardForName(name).write(text)
     }
 
     if (selection) {
@@ -141,7 +147,7 @@ export default class RegisterManager {
 
     // There is no diff between "*" and "+"(pure vim distinguish it only if X11 systems, but vmp not).
     if (this.shouldUseClipBoard(name)) {
-      return this.normalizeValue({text: this.readClipboard(selection)})
+      return this.normalizeValue({text: this.readClipboard(selection, name)})
     } else if (name === '%') {
       return this.normalizeValue({text: this.vimState.editor.getURI()})
     } else if (name === '_') {
@@ -175,7 +181,7 @@ export default class RegisterManager {
     }
 
     if (this.shouldUseClipBoard(name)) {
-      this.writeClipboard(selection, value.text)
+      this.writeClipboard(selection, value.text, name)
     } else if (/^[A-Z]$/.test(name)) {
       name = name.toLowerCase()
       const oldValue = this.data[name]

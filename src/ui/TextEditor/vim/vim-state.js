@@ -192,6 +192,12 @@ export default class VimState {
   onDidResetOperationStack (fn) { return this.subscribe(this.emitter.on('did-reset-operation-stack', fn)) } // prettier-ignore
   emitDidResetOperationStack () { this.emitter.emit('did-reset-operation-stack') } // prettier-ignore
 
+  // Search highlights are owned by the host editor's SearchController (the vmp
+  // highlight-search manager is not ported), so reset-normal-mode signals the
+  // host to clear them rather than touching globalState.
+  onDidRequestClearSearchHighlight (fn) { return this.subscribe(this.emitter.on('did-request-clear-search-highlight', fn)) } // prettier-ignore
+  emitDidRequestClearSearchHighlight () { this.emitter.emit('did-request-clear-search-highlight') } // prettier-ignore
+
   // Events
   // -------------------------
   onWillActivateMode (fn) { return this.emitter.on('will-activate-mode', fn) } // prettier-ignore
@@ -364,7 +370,7 @@ export default class VimState {
         this.occurrenceManager.resetPatterns()
       }
       if (this.getConfig('clearHighlightSearchOnResetNormalMode')) {
-        this.globalState.set('highlightSearchPattern', null)
+        this.emitDidRequestClearSearchHighlight()
       }
     } else {
       this.clearSelections()

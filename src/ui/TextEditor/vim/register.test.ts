@@ -5,7 +5,7 @@ import { EditorModel } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
 import VimState from './vim-state.js';
 import { StatusBarManager } from './stubs.ts';
-import clipboard from './clipboard.ts';
+import clipboard, { primaryClipboard } from './clipboard.ts';
 import './operations/mode.js';
 import './operator.js';
 import './operator-insert.js';
@@ -63,6 +63,16 @@ test('"+ writes to the system clipboard', () => {
   reg('+');
   run('YankLine');
   assert.equal(clipboard.read(), 'clip me\n');
+});
+
+test('"* targets the PRIMARY selection, distinct from "+ (CLIPBOARD)', () => {
+  const { run, at, reg } = setup('primary me\n');
+  clipboard.write('clipboard-untouched');
+  at(0, 0);
+  reg('*');
+  run('YankLine'); // "*yy
+  assert.equal(primaryClipboard.read(), 'primary me\n'); // landed in PRIMARY
+  assert.equal(clipboard.read(), 'clipboard-untouched'); // CLIPBOARD left alone
 });
 
 test('"_ is the blackhole register (delete without touching the clipboard)', () => {
