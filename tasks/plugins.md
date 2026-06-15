@@ -7,7 +7,9 @@ the core, and can be activated/deactivated cleanly at runtime.
 
 The TypeScript support was the first thing extracted: it used to be the in-process
 "built-in pack" (`src/lang/builtin.ts`); it is now `src/plugins/typescript/`, the
-reference plugin.
+reference plugin. **Markdown** (`src/plugins/markdown/`) is the second — a language
+with an LSP server and a config schema but *no* grammar, showing a plugin can
+contribute any subset of the points (see Bundled plugins below).
 
 ## Model
 
@@ -90,6 +92,22 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
 - `src/plugin/PluginRegistry.ts` — `PluginRegistry`, `PluginInfo`.
 - `src/plugin/index.ts` — the `plugins` singleton + `registerBuiltinPlugins()`.
 - `src/plugins/typescript/` — the TypeScript plugin (`index.ts`, `queries/`, `typescript.test.ts`).
+- `src/plugins/markdown/` — the Markdown plugin (`index.ts`, `markdown.test.ts`).
+
+## Bundled plugins
+
+- **typescript** — TS/JS/TSX detection, tree-sitter grammars (vendored under
+  `queries/`), and the flow/tsserver/deno/eslint server candidates. Exercises the
+  `languages` surface.
+- **markdown** — detection (`.md`/`.markdown`/…), the **marksman** language
+  server (single-file; skipped gracefully if not on PATH), and a `markdown.*`
+  config schema (authoring preferences, surfaced in the settings UI). Exercises
+  `registerConfig` — the surface TypeScript didn't. It contributes **no
+  tree-sitter grammar** (the bundled `tree-sitter-wasms` pack ships none for
+  Markdown), so Markdown gets LSP features without tree-sitter highlighting until
+  a Markdown wasm is vendored — at which point one `registerGrammar` call lights
+  it up. A good demonstration that a language plugin can supply any subset of the
+  contribution points.
 
 ## What's next
 

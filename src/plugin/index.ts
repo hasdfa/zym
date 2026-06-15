@@ -13,6 +13,7 @@ import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PluginRegistry } from './PluginRegistry.ts';
 import { typescriptPlugin } from '../plugins/typescript/index.ts';
+import { markdownPlugin } from '../plugins/markdown/index.ts';
 
 export { PluginRegistry } from './PluginRegistry.ts';
 export type { PluginInfo } from './PluginRegistry.ts';
@@ -27,4 +28,5 @@ const BUILTINS_DIR = Path.resolve(Path.dirname(fileURLToPath(import.meta.url)), 
 /** Register the plugins quilx ships with (inactive until `plugins.activateAll`). */
 export function registerBuiltinPlugins(): void {
   plugins.register(typescriptPlugin, Path.join(BUILTINS_DIR, 'typescript'));
+  plugins.register(markdownPlugin, Path.join(BUILTINS_DIR, 'markdown'));
 }
