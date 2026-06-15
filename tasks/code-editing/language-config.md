@@ -147,6 +147,22 @@ eslint server that may predate **flat-config** (`eslint.config.*`) support; agai
 a flat-config-only project it stays idle (no error). A flat-config-capable eslint
 LSP is the fix there, independent of this client handling.
 
+## Document sync (incremental)
+
+`LanguageServer.didChange` takes LSP `contentChanges`; `LspManager.didChange`
+chooses per server. A server that negotiated `TextDocumentSyncKind.Incremental`
+(`supportsIncrementalSync`) and got a single edit receives just that delta;
+otherwise (full-only server, or a multi-edit event whose sequential coordinates
+are ambiguous) it gets the full text — always correct.
+
+The editor adapter maps its buffer-change events to `DocumentEdit`s (pre-edit
+`start` Point + `oldText` + `newText`), keeping this layer GTK-free.
+`incrementalChange` converts the start with the unchanged prefix of its current
+line and derives the range end from `start + oldText` via `advancePosition`
+(encoding-aware) — so the change lands in the server's pre-change coordinates
+without needing the old line text. Verified end-to-end against tsserver (an
+incremental edit raised the expected type error; the inverse edit cleared it).
+
 ## File watching (workspace/didChangeWatchedFiles)
 
 We advertise `workspace.didChangeWatchedFiles.dynamicRegistration`, so servers

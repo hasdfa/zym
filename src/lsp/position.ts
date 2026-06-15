@@ -78,6 +78,27 @@ export function characterToColumn(lineText: string, character: number, enc: Posi
   return cp;
 }
 
+/** Length of single-line `text` in `enc` units (utf-16 code units / utf-8 bytes / codepoints). */
+function measureUnits(text: string, enc: PositionEncoding): number {
+  let units = 0;
+  for (const ch of text) units += unitsFor(ch, enc);
+  return units;
+}
+
+/**
+ * The LSP position reached by writing `text` starting at `start` — i.e. the end
+ * of a range whose replaced content was `text`. Used to derive an incremental
+ * change's `range.end` from its start + the old text, without the pre-edit line.
+ */
+export function advancePosition(start: Position, text: string, enc: PositionEncoding): Position {
+  const newline = text.lastIndexOf('\n');
+  if (newline === -1) {
+    return { line: start.line, character: start.character + measureUnits(text, enc) };
+  }
+  const addedLines = text.split('\n').length - 1;
+  return { line: start.line + addedLines, character: measureUnits(text.slice(newline + 1), enc) };
+}
+
 /** A `Point` and the text of its row → LSP `Position`. */
 export function pointToPosition(point: Point, lineText: string, enc: PositionEncoding): Position {
   return { line: point.row, character: columnToCharacter(lineText, point.column, enc) };

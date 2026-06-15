@@ -40,6 +40,7 @@ import {
   type ServerCapabilities,
   type Diagnostic,
   type Position,
+  type Range as LspRange,
   type Location,
   type Definition,
   type LocationLink,
@@ -61,6 +62,9 @@ export interface DiagnosticsEvent {
   uri: string;
   diagnostics: Diagnostic[];
 }
+
+/** One `didChange` content change: full-text (`{ text }`) or incremental (`+ range`). */
+export type ContentChange = { text: string; range?: LspRange };
 
 /** A `client/registerCapability` entry for `workspace/didChangeWatchedFiles`. */
 interface WatcherRegistration {
@@ -243,7 +247,14 @@ export class LanguageServer {
     return typeof provider === 'object' && !!provider.resolveProvider;
   }
 
-  // --- document sync (full-text) --------------------------------------------
+  /** Whether the server negotiated incremental document sync (vs full-text). */
+  get supportsIncrementalSync(): boolean {
+    const sync = this.capabilities.textDocumentSync;
+    const kind = typeof sync === 'object' ? sync.change : sync;
+    return kind === TextDocumentSyncKind.Incremental;
+  }
+
+  // --- document sync --------------------------------------------------------
 
   // Defer a document notification until the initialize handshake has completed,
   // so notifications never reach the server before `initialized` (LSP ordering).
@@ -264,8 +275,12 @@ export class LanguageServer {
     );
   }
 
-  /** Full-text sync: send the entire buffer as a single change. */
-  didChange(path: string, text: string): void {
+  /**
+   * Sync a buffer change. `contentChanges` is either a single full-text entry
+   * (`[{ text }]`) or incremental entries (`[{ range, text }, …]`); the caller
+   * picks based on `supportsIncrementalSync`. Versions bump monotonically.
+   */
+  didChange(path: string, contentChanges: ContentChange[]): void {
     const uri = pathToUri(path);
     if (!this.versions.has(uri)) return; // not open
     const version = (this.versions.get(uri) ?? 1) + 1;
@@ -273,7 +288,7 @@ export class LanguageServer {
     this.send(() =>
       this.client.sendNotification(DidChangeTextDocumentNotification.type, {
         textDocument: { uri, version },
-        contentChanges: [{ text }],
+        contentChanges,
       }),
     );
   }

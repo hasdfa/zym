@@ -11,6 +11,7 @@ import {
   positionToPoint,
   rangeToLsp,
   lspToRange,
+  advancePosition,
 } from './position.ts';
 
 test('pathToUri / uriToPath round-trip, including spaces', () => {
@@ -67,4 +68,23 @@ test('Range <-> LSP Range across multiple lines', () => {
   assert.deepEqual(lsp, { start: { line: 0, character: 4 }, end: { line: 1, character: 3 } });
   const back = lspToRange(lsp, lineAt, 'utf-16');
   assert.deepEqual([back.start.toArray(), back.end.toArray()], [[0, 4], [1, 2]]);
+});
+
+test('advancePosition: single-line text advances the character (encoding-aware)', () => {
+  // utf-16: a surrogate pair (😀) is 2 code units; the line stays the same.
+  assert.deepEqual(advancePosition({ line: 3, character: 5 }, 'abc', 'utf-16'), { line: 3, character: 8 });
+  assert.deepEqual(advancePosition({ line: 3, character: 5 }, '😀', 'utf-16'), { line: 3, character: 7 });
+  assert.deepEqual(advancePosition({ line: 3, character: 5 }, '😀', 'utf-8'), { line: 3, character: 9 }); // 4 bytes
+  assert.deepEqual(advancePosition({ line: 3, character: 5 }, '😀', 'utf-32'), { line: 3, character: 6 }); // 1 codepoint
+});
+
+test('advancePosition: multi-line text moves to a new line, char measured on the last line', () => {
+  // Two newlines → +2 lines; the end character is the last line measured fresh.
+  assert.deepEqual(advancePosition({ line: 1, character: 4 }, 'x\nyy\nzzz', 'utf-16'), { line: 3, character: 3 });
+  // A trailing newline lands at column 0 of the next line.
+  assert.deepEqual(advancePosition({ line: 0, character: 2 }, 'ab\n', 'utf-16'), { line: 1, character: 0 });
+});
+
+test('advancePosition: empty text (pure insertion range) is a no-op end == start', () => {
+  assert.deepEqual(advancePosition({ line: 2, character: 7 }, '', 'utf-16'), { line: 2, character: 7 });
 });

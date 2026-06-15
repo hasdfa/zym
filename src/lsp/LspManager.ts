@@ -32,7 +32,7 @@ export type { NavigationKind } from './LanguageServer.ts';
 import { DiagnosticsStore } from './diagnostics/DiagnosticsStore.ts';
 import { nodeModulesBinDirs, resolveCommand } from './which.ts';
 import { installServer, managedBinDir } from './installer.ts';
-import { pointToPosition, positionToPoint, uriToPath } from './position.ts';
+import { pointToPosition, positionToPoint, advancePosition, uriToPath } from './position.ts';
 import type { PositionEncoding } from './position.ts';
 
 /** The minimal editor surface the manager needs. Implemented by a TextEditor adapter. */
@@ -45,6 +45,19 @@ export interface LspDocument {
   lineTextForRow(row: number): string;
   /** Current cursor position. */
   getCursorBufferPosition(): Point;
+}
+
+/**
+ * One text edit in pre-edit coordinates, for incremental document sync. `start`
+ * is where the replaced range began (quilx `Point`); `oldText` is what was there
+ * (used to derive the replaced range's end); `newText` is the replacement. The
+ * editor adapter maps its buffer-change events to these, keeping this layer
+ * GTK-free.
+ */
+export interface DocumentEdit {
+  start: Point;
+  oldText: string;
+  newText: string;
 }
 
 /** A resolved navigation/location target with its line text (for previews). */
@@ -195,12 +208,25 @@ export class LspManager {
     }
   }
 
-  didChange(doc: LspDocument): void {
+  /**
+   * Sync a buffer change to every open server. `edits` (pre-edit coordinates,
+   * from the editor adapter) enable incremental sync; a server that negotiated it
+   * and got a single edit receives just that delta, otherwise the full text.
+   */
+  didChange(doc: LspDocument, edits?: DocumentEdit[]): void {
     const path = doc.getPath();
     if (!path) return;
-    const text = doc.getText();
+    let fullText: string | null = null; // computed once, only if a server needs it
     for (const server of this.runningServersForPath(path)) {
-      if (server.isOpen(path)) server.didChange(path, text);
+      if (!server.isOpen(path)) continue;
+      // Incremental needs a single edit (multiple edits per event have ambiguous
+      // sequential coordinates — fall back to full, which is always correct).
+      if (server.supportsIncrementalSync && edits?.length === 1) {
+        server.didChange(path, [incrementalChange(edits[0], doc, server.positionEncoding)]);
+      } else {
+        if (fullText === null) fullText = doc.getText();
+        server.didChange(path, [{ text: fullText }]);
+      }
     }
   }
 
@@ -609,6 +635,23 @@ function describeInstall(spec: InstallSpec): string {
 /** Shared transient-toast key for a server's install lifecycle (prompt → installing → done). */
 function installNoticeKey(server: ServerDef): string {
   return `lsp-install:${server.name}`;
+}
+
+/**
+ * Build an incremental `didChange` content change from a single edit. The
+ * replaced range's start is converted with the (unchanged) prefix of its current
+ * line; its end is derived from start + `oldText` (encoding-aware), so it lands in
+ * the server's pre-change coordinates without needing the old line text. Exported
+ * for testing.
+ */
+export function incrementalChange(
+  edit: DocumentEdit,
+  doc: Pick<LspDocument, 'lineTextForRow'>,
+  encoding: PositionEncoding,
+): { range: { start: Position; end: Position }; text: string } {
+  const start = pointToPosition(edit.start, doc.lineTextForRow(edit.start.row), encoding);
+  const end = advancePosition(start, edit.oldText, encoding);
+  return { range: { start, end }, text: edit.newText };
 }
 
 /** Map an LSP `window/showMessage` MessageType to a notice level. */

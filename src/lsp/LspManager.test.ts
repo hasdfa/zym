@@ -4,7 +4,7 @@ import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Point } from '../text/Point.ts';
-import { resolveRootDir, locationToTarget, primaryKeyOf, type LspDocument } from './LspManager.ts';
+import { resolveRootDir, locationToTarget, primaryKeyOf, incrementalChange, type LspDocument } from './LspManager.ts';
 import { serverKey } from './LanguageServer.ts';
 import type { ActiveServer } from '../lang/types.ts';
 import { pathToUri } from './position.ts';
@@ -104,4 +104,32 @@ test('locationToTarget reads a different file from disk', () => {
   assert.equal(target.path, other);
   assert.deepEqual(target.point.toArray(), [1, 6]);
   Fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('incrementalChange: insertion is an empty range at the start, with the new text', () => {
+  const doc = { lineTextForRow: () => 'const a = 1' };
+  const change = incrementalChange({ start: new Point(0, 9), oldText: '', newText: '2' }, doc, 'utf-16');
+  assert.deepEqual(change, { range: { start: { line: 0, character: 9 }, end: { line: 0, character: 9 } }, text: '2' });
+});
+
+test('incrementalChange: deletion spans the old text; replacement carries the new', () => {
+  const doc = { lineTextForRow: () => 'abcdef' };
+  // delete "cd" at column 2
+  assert.deepEqual(incrementalChange({ start: new Point(0, 2), oldText: 'cd', newText: '' }, doc, 'utf-16').range, {
+    start: { line: 0, character: 2 },
+    end: { line: 0, character: 4 },
+  });
+});
+
+test('incrementalChange: multi-line old text moves the range end down', () => {
+  const doc = { lineTextForRow: (r: number) => (r === 1 ? 'let x = foo' : '') };
+  const change = incrementalChange({ start: new Point(1, 8), oldText: 'foo\nbar', newText: 'Z' }, doc, 'utf-16');
+  assert.deepEqual(change, { range: { start: { line: 1, character: 8 }, end: { line: 2, character: 3 } }, text: 'Z' });
+});
+
+test('incrementalChange: start char honors the encoding via the line prefix', () => {
+  const doc = { lineTextForRow: () => 'b\u{1F600}cd' }; // emoji = 2 utf-16 units
+  // column 3 (after b, emoji, c) → utf-16 character 4
+  const change = incrementalChange({ start: new Point(0, 3), oldText: '', newText: '!' }, doc, 'utf-16');
+  assert.equal(change.range.start.character, 4);
 });
