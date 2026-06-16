@@ -9,7 +9,7 @@
   Node.js under the hood — the full npm ecosystem.</b>
 </p>
 
-A keyboard-driven, Vim-style code editor for the Linux desktop, with `claude`
+A keyboard-driven, modern, neovim-style code editor, with `claude`
 and other coding agents living right inside the workbench — each tracked live,
 so you always know which agent is working, waiting, or done.
 
