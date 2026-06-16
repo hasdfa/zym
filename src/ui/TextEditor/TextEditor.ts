@@ -721,6 +721,12 @@ export class TextEditor {
     return this.decorationController;
   }
 
+  /** The editor model (Atom-`TextEditor`-shaped buffer API) — for features and
+   *  plugins that scan or observe text, e.g. the color-preview plugin's tinting. */
+  get model(): EditorModel {
+    return this.editorModel;
+  }
+
   /** The inline-block surface (virtual content between lines, e.g. the diff fold
    *  placeholder) — overlay widgets in a reserved gap, zero buffer footprint. */
   get inlineBlocks(): InlineBlockController {

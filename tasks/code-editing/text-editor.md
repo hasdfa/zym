@@ -50,6 +50,7 @@ the *backing* (one mark pair) and *rendering* (one native caret) are single-curs
 | Minimap | **Native** | `GtkSource.Map` (already used). |
 | Multiple cursors | **Emulate** | No native support — `GtkTextBuffer` has one mark pair. Proven on-top (see Option A). |
 | Rectangular / block / column selection | **Emulate** | No native support; depends on the same multi-cursor infra. |
+| Multiple *views* of one buffer (split, peek) | **Own the model (A2)** | A shared `GtkTextBuffer` renders *all* buffer-level state — tags, marks, selection, cursor, current-line, folds — identically in every `GtkTextView`. The fix is to give each view its **own** buffer, synced from a Document-level text model. See "Document-model direction (A2)". |
 | Large line *counts* (M+ lines) | **Native, fine** | Only visible paragraphs are laid out. |
 | Pathological long *single* lines (minified) | **Unfixable** | The one hard wall — see constraints. |
 | IME / bidi / a11y / clipboard / DnD | **Native, free** | The expensive-to-rebuild subsystems all come for free here. |
@@ -229,12 +230,90 @@ Option C gate before committing to any rewrite. Related friction evidence:
 [inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),
 [virtual-lines.md](virtual-lines.md).
 
+## Document-model direction (A2): own the model, keep per-view GtkSourceViews
+
+*(Decided to prototype, 2026-06-16, after the document-registry work hit the
+"everything is shared across views" wall above.)*
+
+A **third path** between Option A (one shared buffer, emulate everything per view)
+and Option C (own the whole widget): keep GtkSourceView as the **renderer**, but make
+**our model the source of truth for text** and give **each view its own
+`GtkSource.Buffer` + `GtkSource.View`**, kept in sync from the model. The buffer stops
+being the model and becomes pure presentation — the exact "presentation isn't
+separable from the buffer" separation the Revisiting section is about, done for the
+multi-view case without a from-scratch widget.
+
+This is **how Atom works** (and our vim layer is a port of Atom's vim-mode-plus):
+`TextBuffer` is a pure model; N `TextEditor` views project from it. VS Code
+(`TextModel` ↔ editors) and CodeMirror 6 (state ↔ views) are the same. The
+`EditorModel` is already "Atom-`TextEditor`-shaped" — the missing piece is making the
+*text* independent of any one `GtkTextBuffer`.
+
+**What it fixes (all the multi-view friction, natively):**
+- Per-view **caret, selection, current-line, search, bracket** become native again
+  (each buffer has its own marks/tags) → **delete `ViewDecorations`, the Phase-2
+  emulated cursor marks, the native-mark mirror, and focus-gating.** Native rendering
+  is more robust than the custom Cairo (no reverse-video glyph redraw to verify).
+- **Per-view folding** — *impossible* with a shared buffer (one `invisible` tag), free
+  with per-view buffers.
+- **Native inline widgets / `GtkSourceAnnotations` / markers per view** — what the
+  inline-widgets + virtual-lines roadmap wants, and what the shared buffer blocked.
+- LSP `didChange` fires once from the model (no "gate to the active view" hack).
+
+**What it does NOT fix** (still GtkTextView, below us): long single lines (per-paragraph
+Pango layout) and native multi-cursor *within* one view (still one mark pair per buffer
+→ extra cursors stay emulated, but now leak-free since each view has its own buffer).
+So A2 is the targeted fix for **multi-view**, not a substitute for the Option C
+endgame on long-lines / native-N-cursor — and it doesn't preclude C later.
+
+**Mechanics + the undo trick.** The new work is all Document-level: text authority +
+edit propagation + undo.
+- **Propagation:** an edit in any view → apply to the model → mirror to the other view
+  buffers, with a reentrancy guard so the mirror's own `insert-text` doesn't re-fire.
+  Careful around IME commit and the exact `(offset, deleted, inserted)` mirroring.
+- **Undo (the crux):** native `GtkSourceBuffer` undo is per-buffer, so it'd desync
+  views. Clean trick — make the **Document's buffer a headless model buffer** (never
+  shown; just text + the one native undo manager + the LSP text source). View buffers
+  are dumb mirrors with native undo **off**. `u` → `model.undo()` → the model emits the
+  inverse edit → propagate to all views. Native undo kept, just relocated to the unseen
+  authority. Syntax stays per-view (N parses, as today; the model buffer isn't shown).
+
+**Risks:** reverts the v1 emulated-cursor + `ViewDecorations` work (sunk cost, not a
+reason to keep a worse design); **buffer drift** if propagation has a bug (needs guards
++ maybe a debug consistency check); propagation perf (N buffer edits + N reparses per
+keystroke — fine for 2–3 views, untested at scale); edge cases (IME preedit,
+multi-cursor edit-replay across the mirror, very large pastes).
+
+**Prototype plan (the gate before migrating).** Spike two views on one Document with
+the headless-model-buffer + mirror, validating the three hard things:
+1. **Edit propagation stays in sync** under typing / paste / undo / redo (and an
+   assertion that the mirrors equal the model).
+2. **Per-view folding + a native annotation** work independently in each view.
+3. **Propagation perf** is acceptable (typing + paste latency with 2–3 mirrors).
+
+What stays regardless: the `DocumentRegistry`, `Document`, multi-host/active-view
+routing, ref-counting, and the peek/split entry points (all on the
+`refactor/document-registry` branch). Easiest first proof: convert the **read-only
+peek** to a one-way-synced separate buffer (no undo, no bidirectional) — immediate
+native folding/decorations, validates the rendering win cheaply.
+
 ## Constraints carried from the research (cited; mark-uncertain noted)
 
 - **Single mark pair.** `GtkTextBuffer` has exactly `insert` + `selection_bound`
   — one cursor, one selection — unchanged in GTK4. No native multi-cursor or
   rectangular selection. (docs.gtk.org `class.TextBuffer`; GtkSourceView
   PainPoints wiki.)
+- **All buffer-level state renders identically in every view of a buffer.** *(Ours,
+  proven building the document registry — two `GtkTextView`s on one `GtkTextBuffer`
+  for split-view + the see-definition peek.)* The *buffer* owns nearly everything
+  visible — `GtkTextTag`s (syntax, search, bracket, diff, a cursor block tag), the
+  `insert`/`selection_bound` marks (native caret **and** selection highlight),
+  `highlight-current-line` (follows the shared insert mark), and the `invisible` fold
+  tag. The *view* owns only scroll + child widgets/overlays. So two views of one buffer
+  show the **same** cursor, selection, current line, brackets, search, and folds. v1
+  worked around it by custom-drawing those per view (`ViewDecorations`, a Cairo
+  overlay); **per-view folding stayed impossible** (line visibility is a buffer tag).
+  The clean fix is to stop sharing the buffer — see "Document-model direction (A2)".
 - **Multi-cursor is proven on top, and fragile.** GNOME Builder's `ide-cursor.c`
   (parallel mark pairs + per-cursor edit replay). GNOME Text Editor still lacks
   it; described upstream as needing "deep changes into GtkSourceView"

@@ -10,6 +10,9 @@
  * everywhere files are opened, not a per-call concern.
  */
 
+import { Disposable, type DisposableLike } from './util/eventKit.ts';
+import type { TextEditor } from './ui/TextEditor/index.ts';
+
 export interface OpenFileOptions {
   /** Place the cursor at this `[row, column]` after opening/revealing. */
   cursor?: [number, number];
@@ -17,12 +20,71 @@ export interface OpenFileOptions {
 
 type Opener = (path: string, options?: OpenFileOptions) => void;
 
+/** A subscriber registered through `observeTextEditors`, plus the per-editor
+ *  Disposables its callback returned (torn down on editor close / unobserve). */
+interface EditorObserver {
+  callback: (editor: TextEditor) => DisposableLike | void;
+  perEditor: Map<TextEditor, DisposableLike | null>;
+}
+
 export class Workspace {
   private opener: Opener | null = null;
+  private readonly editors = new Set<TextEditor>();
+  private readonly observers = new Set<EditorObserver>();
 
   /** Wire the concrete file opener (the AppWindow does this on construction). */
   setOpener(opener: Opener): void {
     this.opener = opener;
+  }
+
+  // --- text-editor registry --------------------------------------------------
+
+  /**
+   * Register a newly-created editor: notify every observer, and return a
+   * Disposable that deregisters it (the host calls this when the tab closes). The
+   * counterpart to `observeTextEditors`; the AppWindow wires both ends.
+   */
+  addTextEditor(editor: TextEditor): Disposable {
+    this.editors.add(editor);
+    for (const observer of this.observers) this.invoke(observer, editor);
+    return new Disposable(() => this.removeTextEditor(editor));
+  }
+
+  /**
+   * Observe text editors: `callback` runs for every editor already open and each
+   * one opened later. A Disposable it returns is torn down when that editor
+   * closes or this observation is disposed (e.g. a plugin deactivating). Atom's
+   * `observeTextEditors` shape — the seam decoration plugins (color preview, and
+   * later error lens / code lens) plug into.
+   */
+  observeTextEditors(callback: (editor: TextEditor) => DisposableLike | void): Disposable {
+    const observer: EditorObserver = { callback, perEditor: new Map() };
+    this.observers.add(observer);
+    for (const editor of this.editors) this.invoke(observer, editor);
+    return new Disposable(() => {
+      this.observers.delete(observer);
+      for (const sub of observer.perEditor.values()) sub?.dispose();
+      observer.perEditor.clear();
+    });
+  }
+
+  private removeTextEditor(editor: TextEditor): void {
+    if (!this.editors.delete(editor)) return;
+    for (const observer of this.observers) {
+      observer.perEditor.get(editor)?.dispose();
+      observer.perEditor.delete(editor);
+    }
+  }
+
+  /** Run one observer's callback for one editor, isolating a thrown callback so a
+   *  buggy plugin can't break editor creation. */
+  private invoke(observer: EditorObserver, editor: TextEditor): void {
+    try {
+      observer.perEditor.set(editor, observer.callback(editor) ?? null);
+    } catch (error) {
+      console.error('observeTextEditors callback failed:', error);
+      observer.perEditor.set(editor, null);
+    }
   }
 
   /**

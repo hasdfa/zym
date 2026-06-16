@@ -92,7 +92,10 @@ export class DecorationLayer {
   private readonly editor: EditorModel;
   private readonly buffer: SourceBuffer;
   private readonly name: string;
-  private readonly tags = new Map<DecorationStyle, InstanceType<typeof Gtk.TextTag>>();
+  // Tags created lazily, keyed by a string (the built-in style, or a tint's
+  // colors), so a repeated style/color reuses its tag and the whole layer clears
+  // in one pass.
+  private readonly tags = new Map<string, InstanceType<typeof Gtk.TextTag>>();
 
   constructor(editor: EditorModel, buffer: SourceBuffer, name: string) {
     this.editor = editor;
@@ -100,11 +103,17 @@ export class DecorationLayer {
     this.name = name;
   }
 
-  /** Paint `style` over `range`. Empty ranges decorate nothing. */
+  /** Paint a built-in `style` over `range`. Empty ranges decorate nothing. */
   decorate(range: RangeLike, style: DecorationStyle): void {
-    const r = Range.fromObject(range);
-    const tag = this.tagFor(style);
-    this.buffer.applyTag(tag, this.editor.iterAtPoint(r.start), this.editor.iterAtPoint(r.end));
+    this.apply(range, this.tagForStyle(style));
+  }
+
+  /** Paint an arbitrary background (+ optional foreground) over a char range — for
+   *  producers whose colors aren't a fixed `DecorationStyle` (e.g. the color-preview
+   *  plugin tinting a literal with the color it represents). Colors are any string
+   *  `Gdk.RGBA.parse` accepts (`#rrggbb(aa)`, `rgb()/rgba()`, …). */
+  tint(range: RangeLike, colors: { background: string; foreground?: string }): void {
+    this.apply(range, this.tagForColors(colors));
   }
 
   /** Remove every decoration this layer has applied (the re-sync reset). */
@@ -113,19 +122,44 @@ export class DecorationLayer {
     for (const tag of this.tags.values()) this.buffer.removeTag(tag, start, end);
   }
 
-  private tagFor(style: DecorationStyle): InstanceType<typeof Gtk.TextTag> {
-    let tag = this.tags.get(style);
-    if (tag) return tag;
+  private apply(range: RangeLike, tag: InstanceType<typeof Gtk.TextTag>): void {
+    const r = Range.fromObject(range);
+    this.buffer.applyTag(tag, this.editor.iterAtPoint(r.start), this.editor.iterAtPoint(r.end));
+  }
 
-    tag = new Gtk.TextTag({ name: `deco:${this.name}:${style}` } as any);
-    // Line styles use paragraph-background (full-width); spans use char background.
-    if (LINE_STYLES.has(style)) (tag as any).paragraphBackgroundRgba = parseColor(STYLE_BACKGROUND[style]);
-    else (tag as any).backgroundRgba = parseColor(STYLE_BACKGROUND[style]);
+  private tagForStyle(style: DecorationStyle): InstanceType<typeof Gtk.TextTag> {
+    // Map key namespaced so it can't collide with a tint; tag *name* unchanged
+    // (`deco:<layer>:<style>`) — consumers/tests look these up by name.
+    return this.tagFor(`style:${style}`, `deco:${this.name}:${style}`, (tag) => {
+      // Line styles use paragraph-background (full-width); spans use char background.
+      if (LINE_STYLES.has(style)) (tag as any).paragraphBackgroundRgba = parseColor(STYLE_BACKGROUND[style]);
+      else (tag as any).backgroundRgba = parseColor(STYLE_BACKGROUND[style]);
+    });
+  }
+
+  private tagForColors(colors: { background: string; foreground?: string }): InstanceType<typeof Gtk.TextTag> {
+    const key = `tint:${colors.background}|${colors.foreground ?? ''}`;
+    return this.tagFor(key, `deco:${this.name}:${key}`, (tag) => {
+      (tag as any).backgroundRgba = parseColor(colors.background);
+      if (colors.foreground) (tag as any).foregroundRgba = parseColor(colors.foreground);
+    });
+  }
+
+  /** Get (or lazily create + configure) the tag for `key` (named `name`), raised
+   *  above syntax. */
+  private tagFor(
+    key: string,
+    name: string,
+    configure: (tag: InstanceType<typeof Gtk.TextTag>) => void,
+  ): InstanceType<typeof Gtk.TextTag> {
+    let tag = this.tags.get(key);
+    if (tag) return tag;
+    tag = new Gtk.TextTag({ name } as any);
+    configure(tag);
     const table = this.buffer.getTagTable();
     table.add(tag);
-    // Sit above the syntax tags so the decoration wins overlaps.
-    tag.setPriority(table.getSize() - 1);
-    this.tags.set(style, tag);
+    tag.setPriority(table.getSize() - 1); // sit above syntax tags so the decoration wins overlaps
+    this.tags.set(key, tag);
     return tag;
   }
 }

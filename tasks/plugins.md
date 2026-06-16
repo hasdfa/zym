@@ -39,6 +39,7 @@ This mirrors Atom: `activate()` + a `CompositeDisposable` of subscriptions.
 | `ctx.registerCommands(target, commands)` | commands on a `#id`/widget | `quilx.commands` |
 | `ctx.registerConfig(schema)` | config-schema entries (full dotted keys) | `quilx.config` |
 | `ctx.registerStyles(css)` | a stylesheet | `styles` (StyleManager) |
+| `ctx.observeTextEditors(cb)` | per-editor behavior/decorations (`cb(editor)→Disposable?`, run for every open + future editor) | `Workspace` editor registry |
 | `ctx.add(disposable)` | escape hatch for anything else | — |
 | `ctx.resolve(rel)` | absolute path to a bundled asset | plugin `dir` |
 
@@ -46,6 +47,17 @@ Assets (grammar wasm, `.scm` queries) are resolved against the plugin's own
 directory via `ctx.resolve`, so a plugin is self-contained and relocatable. A
 grammar's wasm may be an absolute path or a `node_modules` module specifier
 (`tree-sitter-wasms/out/…`).
+
+**`observeTextEditors`** is the per-editor decoration seam (Atom's
+`atom.workspace.observeTextEditors`): the callback runs for every editor already
+open and each one opened later, and the Disposable it returns is torn down when
+that editor closes *or* the plugin deactivates. Backed by an editor registry on
+`Workspace` (`quilx.workspace.addTextEditor`/`observeTextEditors`); the AppWindow
+registers/deregisters each file editor over its tab lifecycle. The editor it hands
+back exposes `editor.decorations` (the `DecorationController` tag surface, now with
+a `layer.tint(range, {background, foreground})` for arbitrary colors) and
+`editor.model` (the `EditorModel`: `scan`, `onDidChangeText`, …). This is the seam
+the **color-preview** plugin and the future error-lens / code-lens plugins build on.
 
 ### Registry & lifecycle
 
@@ -95,6 +107,11 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
 - `src/plugins/markdown/` — the Markdown plugin (`index.ts`, `markdown.test.ts`).
 - `src/plugins/css/` — the CSS plugin (`index.ts`, `queries/`, vendored `grammars/`,
   `build-grammars.sh`, `css.test.ts`, `grammar.test.ts`).
+- `src/plugins/color-preview/` — the color-preview plugin (`index.ts` editor wiring +
+  `colors.ts` pure parser/contrast, `colors.test.ts`); the `observeTextEditors`
+  reference consumer.
+- `src/Workspace.ts` — the `observeTextEditors`/`addTextEditor` editor registry the
+  seam is backed by (beyond the file-opener it already held).
 
 ## Bundled plugins
 
@@ -118,6 +135,15 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
   it. `vscode-css-language-server` (from `vscode-langservers-extracted`, the eslint
   sibling) serves CSS + SCSS; **SomeSass** serves indented Sass (optional, skipped
   if absent).
+- **color-preview** — the first **`observeTextEditors`** consumer (no language layer at
+  all). Background-tints color literals — hex (`#rgb`…`#rrggbbaa`), `rgb()/rgba()`,
+  `hsl()/hsla()` — with the color they represent, contrast-picking black/white
+  text. Language-agnostic (scans buffer text, so colors light up in CSS, JS, HTML).
+  Pure parsing/contrast in `colors.ts` (unit-tested); the editor wiring re-syncs a
+  `color-preview` decoration layer on edits (debounced). A clickable swatch / color
+  picker is a later focusable-overlay feature; named colors await tree-sitter
+  scoping (a bare-word regex would tint identifiers). See
+  [code-editing/inline-widgets.md](code-editing/inline-widgets.md).
 
 ## What's next
 

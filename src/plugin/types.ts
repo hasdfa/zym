@@ -10,8 +10,9 @@
  * automatic teardown, so a plugin rarely has to manage disposables itself. New
  * contribution kinds are added here and on `PluginContext` (see PluginContext.ts).
  */
-import type { Disposable } from '../util/eventKit.ts';
+import type { Disposable, DisposableLike } from '../util/eventKit.ts';
 import type { Gtk } from '../gi.ts';
+import type { TextEditor } from '../ui/TextEditor/index.ts';
 import type { LanguageDef, GrammarDef, ServerDef } from '../lang/types.ts';
 import type { ConfigSchema } from '../util/Config.ts';
 import type { CommandMap } from '../CommandManager.ts';
@@ -65,6 +66,12 @@ export interface PluginContext {
   registerConfig(schema: Record<string, ConfigSchema>): Disposable;
   /** Contribute a stylesheet (CSS), removed again on deactivation. */
   registerStyles(css: string): Disposable;
+
+  /** Observe text editors: `callback` runs for every editor already open and each
+   *  newly opened one; a Disposable it returns is torn down on editor close or
+   *  plugin deactivate. The per-editor decoration seam (color preview, error lens,
+   *  …) — Atom's `observeTextEditors`. */
+  observeTextEditors(callback: (editor: TextEditor) => DisposableLike | void): Disposable;
 
   /** Track an arbitrary Disposable for teardown on deactivate (escape hatch). */
   add(disposable: Disposable): void;

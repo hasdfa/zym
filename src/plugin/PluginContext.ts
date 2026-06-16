@@ -9,7 +9,8 @@
  * directory via `resolve`, so a plugin is self-contained and relocatable.
  */
 import * as Path from 'node:path';
-import { Disposable, CompositeDisposable } from '../util/eventKit.ts';
+import { Disposable, CompositeDisposable, type DisposableLike } from '../util/eventKit.ts';
+import type { TextEditor } from '../ui/TextEditor/index.ts';
 import { languages } from '../lang/index.ts';
 import { clearGrammar } from '../syntax/grammar.ts';
 import { quilx } from '../quilx.ts';
@@ -85,6 +86,10 @@ export class PluginContextImpl implements PluginContext {
 
   registerStyles(css: string): Disposable {
     return this.track(styles.addRemovable(css));
+  }
+
+  observeTextEditors(callback: (editor: TextEditor) => DisposableLike | void): Disposable {
+    return this.track(quilx.workspace.observeTextEditors(callback));
   }
 
   /** Dispose every tracked contribution (called by the registry on deactivate). */

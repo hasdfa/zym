@@ -77,7 +77,7 @@ import type { WorkspaceEdit, CodeAction, Command } from 'vscode-languageserver-p
 import { NotificationToasts } from './NotificationToasts.ts';
 import { loadKeymaps } from '../keymaps/load.ts';
 import { loadConfig, configPath } from '../config/load.ts';
-import { type DisposableLike } from '../util/eventKit.ts';
+import { type Disposable, type DisposableLike } from '../util/eventKit.ts';
 import { styles, addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 
@@ -131,6 +131,9 @@ export class AppWindow {
   // Editor tabs in the active workbench's center, mapped from their root widget so the
   // active child can be resolved back to its editor regardless of which split it's in.
   private readonly editors = new Map<Widget, TextEditor>();
+  // Per-editor `quilx.workspace` registration (drives plugin `observeTextEditors`);
+  // disposed when the tab closes (see disposeChild).
+  private readonly editorRegistrations = new Map<Widget, Disposable>();
   // Terminal tabs share the center panel with editors; tracked separately so the
   // active child can be resolved back to its Terminal (it has no vim state).
   private readonly terminals = new Map<Widget, Terminal>();
@@ -534,6 +537,9 @@ export class AppWindow {
     this.participants.set(editor.root, quilx.session.registerParticipant(editor));
     editor.loadFile(path);
     if (cursor) editor.restoreCursor(cursor);
+    // Announce to the workspace so editor-observing plugins (color preview, …) can
+    // attach; registered after load so their first pass sees the file's content.
+    this.editorRegistrations.set(editor.root, quilx.workspace.addTextEditor(editor));
     return {
       widget: editor.root,
       title: this.editorTabTitle(editor),
@@ -938,6 +944,8 @@ export class AppWindow {
   private disposeChild(widget: Widget): void {
     this.participants.get(widget)?.dispose();
     this.participants.delete(widget);
+    this.editorRegistrations.get(widget)?.dispose(); // detach observing plugins
+    this.editorRegistrations.delete(widget);
     this.editors.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
