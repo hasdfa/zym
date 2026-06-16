@@ -5,7 +5,7 @@
  * — with a cursor (the selected row) driven by vim-style keys: j/k move, l opens
  * the file, s/u stage/unstage, X discards, and `c c` starts a commit. The mouse
  * works too: a click selects, a double-click opens the file. Reads and
- * mutations go through `git/cli.ts` (node `git` CLI); the panel refreshes on its
+ * mutations go through the git facade (`git.ts`, node `git` CLI); the panel refreshes on its
  * own operations and on `GitRepo.onChange` (external edits). Failures surface
  * through `quilx.notifications`.
  *
@@ -33,7 +33,7 @@ import {
   unstageAll,
   discard,
   clean,
-} from '../git/cli.ts';
+} from '../git.ts';
 
 export interface GitPanelOptions {
   cwd: string;

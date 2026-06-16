@@ -99,25 +99,38 @@ test('untracked insertions: text counted (incl. no trailing newline), binary →
   }
 });
 
-test('beginOperation toggles busy, notifies, and is idempotent', () => {
+test('a coordinated mutation sets busy synchronously, clears + notifies + applies on completion', async () => {
   const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-op-'));
   try {
-    execFileSync('git', ['init', '-b', 'main'], { cwd: d });
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: d, encoding: 'utf8' });
+    g('init', '-b', 'main');
+    g('config', 'user.email', 't@e.x');
+    g('config', 'user.name', 'T');
+    g('config', 'commit.gpgsign', 'false');
+    Fs.writeFileSync(Path.join(d, 'a.txt'), 'x\n');
+    g('add', '-A');
+    g('commit', '-m', 'init');
+
     const r = openGitRepo(d);
     let notifications = 0;
     const unsub = r.onChange(() => notifications++);
 
     assert.equal(r.isBusy(), false);
-    const end = r.beginOperation();
-    assert.equal(r.isBusy(), true);
-    assert.ok(notifications >= 1, 'onChange fires on the busy transition');
+    await new Promise<void>((resolve, reject) => {
+      r.createBranch('feature', (ok) => {
+        try {
+          assert.ok(ok, 'createBranch succeeded');
+          assert.equal(r.isBusy(), false, 'busy cleared on completion');
+          resolve();
+        } catch (e) {
+          reject(e as Error);
+        }
+      });
+      assert.equal(r.isBusy(), true, 'busy set synchronously when the op starts');
+    });
 
-    end();
-    assert.equal(r.isBusy(), false);
-    const after = notifications;
-    end(); // idempotent — no further busy change/notify
-    assert.equal(r.isBusy(), false);
-    assert.equal(notifications, after);
+    assert.ok(notifications >= 1, 'onChange fired (busy transition + refresh)');
+    assert.equal(g('branch', '--show-current').trim(), 'feature', 'the branch actually switched');
 
     unsub();
     r.dispose();

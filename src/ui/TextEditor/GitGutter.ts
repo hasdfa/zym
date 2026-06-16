@@ -16,7 +16,7 @@ import { GLib, Gtk, GtkSource, registerClass, type SourceView } from '../../gi.t
 import { theme } from '../../theme/theme.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { diffLines } from '../../util/lineDiff.ts';
-import { git, repoRoot } from '../../git/cli.ts';
+import { git, repoRoot } from '../../git.ts';
 import { isLineFolded } from '../../syntax/syntax-controller.ts';
 import type { GitRepo } from '../../git.ts';
 

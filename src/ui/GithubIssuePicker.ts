@@ -1,7 +1,7 @@
 /*
  * GitHub issue picker — pick an open issue to open in the browser.
  *
- * Lists open issues via `gh` (see git/github.ts) and opens the fuzzy picker over
+ * Lists open issues via `gh` (see github.ts) and opens the fuzzy picker over
  * "#<n> <title>" with the author as a muted detail. Notifies when gh is
  * unavailable or there are no open issues.
  */
@@ -10,8 +10,8 @@ import { openPicker } from './Picker.ts';
 import { proseMarkup } from './proseMarkup.ts';
 import { openUrl } from './openUrl.ts';
 import { quilx } from '../quilx.ts';
-import { repoRoot } from '../git/cli.ts';
-import { fetchIssues } from '../git/github.ts';
+import { repoRoot } from '../git.ts';
+import { fetchIssues } from '../github.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 

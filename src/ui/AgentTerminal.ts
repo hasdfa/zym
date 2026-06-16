@@ -27,13 +27,13 @@ import * as Path from 'node:path';
 import { Gdk } from '../gi.ts';
 import { Terminal, type TerminalOptions } from './Terminal.ts';
 import { ClaudeSession, type AgentMode, type AgentResume, type AgentStatus, type ClaudeHost } from './claudeAgent.ts';
-import { worktreeInfo, type WorktreeInfo } from '../git/cli.ts';
+import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import type { TabState } from '../SessionManager.ts';
 
 export type { AgentMode, AgentResume, AgentStatus } from './claudeAgent.ts';
-export type { WorktreeInfo } from '../git/cli.ts';
+export type { WorktreeInfo } from '../git.ts';
 
 export interface AgentTerminalOptions extends TerminalOptions {
   /** An initial prompt to launch the agent with (appended to its argv). */

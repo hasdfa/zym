@@ -15,7 +15,7 @@ import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { Icons } from './icons.ts';
 import { escapeMarkup } from './proseMarkup.ts';
-import type { AgentMode, AgentStatus, AgentTerminal, WorktreeInfo } from './AgentTerminal.ts';
+import type { AgentStatus, AgentTerminal, WorktreeInfo } from './AgentTerminal.ts';
 
 export const STATUS_DOT = '●';
 export const WORKING_GLYPH = String.fromCodePoint(0xf1978); // nf-md-cog-sync
@@ -86,57 +86,6 @@ export function agentStatusMarkup(status: AgentStatus): string {
     return `<span foreground="${color}" font_family="${ICON_FONT_FAMILY}">${WORKING_GLYPH}</span>`;
   }
   return `<span foreground="${color}">${STATUS_DOT}</span>`;
-}
-
-// --- Permission mode --------------------------------------------------------
-
-// The agent's permission mode, shown as a small glyph badge next to the status
-// dot. `default` (the normal "ask" mode) gets no badge — only the auto-ish modes
-// are flagged, in a safe→caution color gradient: plan (info) → acceptEdits
-// (accent) → auto/dontAsk/bypassPermissions (warning). The exact mode is in the
-// tooltip. Glyphs: list (plan), pencil (acceptEdits), bolt (auto-allow).
-const MODE_BADGE: Partial<Record<AgentMode, { glyph: string; color: string; label: string }>> = {
-  plan: { glyph: String.fromCodePoint(0xf03a), color: theme.ui.info, label: 'plan' },
-  acceptEdits: { glyph: Icons.pencil, color: theme.ui.textAccent, label: 'accept edits' },
-  auto: { glyph: String.fromCodePoint(0xf0e7), color: theme.ui.warning, label: 'auto-accept' },
-  dontAsk: { glyph: String.fromCodePoint(0xf0e7), color: theme.ui.warning, label: "don't ask" },
-  bypassPermissions: { glyph: String.fromCodePoint(0xf0e7), color: theme.ui.warning, label: 'bypass permissions' },
-};
-
-/** Pango markup for an agent's permission-mode badge, or null for `default`
- *  (no badge — the normal asking mode is unremarkable). */
-export function agentModeMarkup(mode: AgentMode): string | null {
-  const badge = MODE_BADGE[mode];
-  if (!badge) return null;
-  return `<span foreground="${badge.color}" font_family="${ICON_FONT_FAMILY}">${badge.glyph}</span>`;
-}
-
-/** Human label for a permission mode (tooltip text), or null for `default`. */
-export function agentModeLabel(mode: AgentMode): string | null {
-  return MODE_BADGE[mode]?.label ?? null;
-}
-
-/**
- * A live permission-mode badge for `agent`: a Gtk.Label that re-renders (and
- * hides itself in `default` mode) as the mode changes. Call `dispose` to
- * unsubscribe. Shares its glyphs/colors with `agentModeMarkup` (the picker).
- */
-export function createAgentModeBadge(agent: AgentTerminal): {
-  widget: InstanceType<typeof Gtk.Label>;
-  dispose: () => void;
-} {
-  const label = new Gtk.Label({ useMarkup: true });
-  const update = () => {
-    const markup = agentModeMarkup(agent.permissionMode);
-    label.setVisible(markup !== null);
-    if (markup) {
-      label.setMarkup(markup);
-      label.setTooltipText(`Permission mode: ${agentModeLabel(agent.permissionMode)}`);
-    }
-  };
-  update();
-  const dispose = agent.onDidChangePermissionMode(update);
-  return { widget: label, dispose };
 }
 
 // --- Worktree ---------------------------------------------------------------

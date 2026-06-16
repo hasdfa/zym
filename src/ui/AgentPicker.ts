@@ -16,7 +16,7 @@
 import { Gtk } from '../gi.ts';
 import { openPicker, type PickerItem } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
-import { agentStatusMarkup, agentModeMarkup, agentWorktreeMarkup } from './agentStatusIcon.ts';
+import { agentStatusMarkup, agentWorktreeMarkup } from './agentStatusIcon.ts';
 import { listAgentSessions, relativeTime, type AgentSession } from '../agentSessions.ts';
 import { quilx } from '../quilx.ts';
 import type { AgentTerminal } from './AgentTerminal.ts';
@@ -71,13 +71,11 @@ export function openAgentPicker(host: Overlay, options: AgentPickerOptions): voi
     formatMain: (item, positions) => {
       const entry = byValue.get(item.value);
       if (entry?.kind === 'agent') {
-        // The shared status indicator before the title (and a permission-mode
-        // badge when not in `default`); the title can carry `backtick` spans
-        // (claude reports them), rendered as prose. A linked-worktree badge, when
-        // present, is shown right-aligned as the detail.
-        const mode = agentModeMarkup(entry.agent.permissionMode);
+        // The shared status indicator before the title; the title can carry
+        // `backtick` spans (claude reports them), rendered as prose. A linked-
+        // worktree badge, when present, is shown right-aligned as the detail.
         const worktree = agentWorktreeMarkup(entry.agent.worktree);
-        const lead = mode ? `${agentStatusMarkup(entry.agent.status)} ${mode}` : agentStatusMarkup(entry.agent.status);
+        const lead = agentStatusMarkup(entry.agent.status);
         return {
           main: `${lead} ${proseMarkup(item.text, positions)}`,
           ...(worktree ? { detail: `<span face="Sans" line_height="${PROSE_LINE_HEIGHT}">${worktree}</span>` } : {}),

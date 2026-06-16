@@ -22,8 +22,18 @@
 import * as Path from 'node:path';
 import * as Fs from 'node:fs';
 import { GLib, Gio } from './gi.ts';
-import { gitSync, git, repoRoot } from './git/cli.ts';
+import * as cli from './git/cli.ts';
+import { checkoutPullRequest as ghCheckoutPullRequest } from './github.ts';
 import { parseStatus, parseNumstat, parseLsFiles, type LineDelta, type ParsedStatus } from './git/status.ts';
+
+// Public facade: `src/git/` is internal (cli.ts, status.ts) — the rest of the
+// codebase imports git operations from here, never from `git/cli.ts` directly.
+// Re-export the CLI surface (status/staging/branch/stash/commit helpers + types)
+// alongside the `GitRepo` reactive layer below.
+export * from './git/cli.ts';
+
+/** Result callback for a coordinated mutation: success flag + git/gh stderr. */
+export type GitOpDone = (ok: boolean, stderr: string) => void;
 
 type FileMonitor = InstanceType<typeof Gio.FileMonitor>;
 
@@ -86,21 +96,37 @@ export interface GitRepo {
   getTrackedPaths(): Set<string>;
   /** Whether a git operation (run via `run`) is currently in flight. */
   isBusy(): boolean;
-  /**
-   * Run a git subcommand (e.g. `['fetch']`) asynchronously and report whether it
-   * exited cleanly. `isBusy()` is true for the duration and `onChange` fires on
-   * the busy transitions and again when the refreshed state lands.
-   */
-  run(args: string[], onDone?: (ok: boolean) => void): void;
-  /**
-   * Mark the repo busy while a repo-mutating operation that does *not* go through
-   * `run()` is in flight — a `gh` command (e.g. `gh pr checkout`), a branch switch,
-   * a stash, a commit. Returns an `end()` to call on completion, which clears the
-   * busy state and forces a refresh (so the UI reflects whatever the op changed,
-   * immediately rather than waiting on the HEAD monitor / poll). `isBusy()` is true
-   * and `onChange` fires for the duration, exactly like `run()`.
-   */
-  beginOperation(): () => void;
+
+  // Coordinated mutations. Each marks the repo busy (the branch indicator spins),
+  // runs the git/gh command, then refreshes and reports `(ok, stderr)`. These are
+  // the only mutation entry points — the busy/refresh primitives behind them are
+  // private to the implementation.
+  /** `git fetch`. */
+  fetch(onDone?: GitOpDone): void;
+  /** `git pull --ff-only`. */
+  pull(onDone?: GitOpDone): void;
+  /** `git push`. */
+  push(onDone?: GitOpDone): void;
+  /** Commit the message in `messageFile` (`git commit -F`). */
+  commit(messageFile: string, onDone?: GitOpDone): void;
+  /** Stash the working-tree changes (`git stash push`). */
+  stash(onDone?: GitOpDone): void;
+  /** Pop / apply / drop a stash by ref ("stash@{N}"). */
+  stashPop(ref: string, onDone?: GitOpDone): void;
+  stashApply(ref: string, onDone?: GitOpDone): void;
+  stashDrop(ref: string, onDone?: GitOpDone): void;
+  /** Switch to an existing branch (`git switch`). */
+  switchBranch(name: string, onDone?: GitOpDone): void;
+  /** Create a branch off HEAD and switch to it (`git switch -c`). */
+  createBranch(name: string, onDone?: GitOpDone): void;
+  /** Delete a branch (`git branch -d`). */
+  deleteBranch(name: string, onDone?: GitOpDone): void;
+  /** Merge a branch into the current one (`git merge`). */
+  mergeBranch(name: string, onDone?: GitOpDone): void;
+  /** Rename the current branch (`git branch -m`). */
+  renameBranch(name: string, onDone?: GitOpDone): void;
+  /** Check out a pull request's branch (`gh pr checkout`). */
+  checkoutPullRequest(number: number, onDone?: GitOpDone): void;
   /** Subscribe to branch / working-tree / busy changes. Returns an unsubscribe fn. */
   onChange(callback: () => void): () => void;
   /** Re-check the working tree now (and fire `onChange` if it moved) instead of
@@ -155,7 +181,7 @@ class CliGitRepo implements GitRepo {
 
   constructor(cwd: string) {
     this.cwd = cwd;
-    this.root = repoRoot(cwd);
+    this.root = cli.repoRoot(cwd);
     if (this.root) {
       this.gitDir = this.trySync(['rev-parse', '--absolute-git-dir'])?.trim() || null;
       this.seed();
@@ -186,35 +212,50 @@ class CliGitRepo implements GitRepo {
     return this.busyCount > 0;
   }
 
-  // --- mutations -------------------------------------------------------------
+  // --- mutations (coordinated: busy + refresh; see `mutate`) -----------------
 
-  run(args: string[], onDone?: (ok: boolean) => void): void {
-    if (!this.root) {
-      onDone?.(false);
-      return;
-    }
-    this.enterBusy();
-    git(this.root, args, (ok) => {
-      this.leaveBusy();
-      // The op may have moved HEAD / refs / the index; force a rebuild so the
-      // refresh reflects the new state even if the working-tree signature is
-      // unchanged (e.g. a fetch that only moved remote-tracking refs).
-      this.lastSignature = '';
-      this.pollOnce();
-      onDone?.(ok);
-    });
+  fetch(onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.git(root, ['fetch'], done), onDone);
   }
-
-  beginOperation(): () => void {
-    this.enterBusy();
-    let ended = false;
-    return () => {
-      if (ended) return; // idempotent — safe to call from an error path too
-      ended = true;
-      this.lastSignature = ''; // the op may have moved anything — force a rebuild
-      this.pollOnce();
-      this.leaveBusy();
-    };
+  pull(onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.git(root, ['pull', '--ff-only'], done), onDone);
+  }
+  push(onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.git(root, ['push'], done), onDone);
+  }
+  commit(messageFile: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.commit(root, messageFile, done), onDone);
+  }
+  stash(onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.stashPush(root, done), onDone);
+  }
+  stashPop(ref: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.stashPop(root, ref, done), onDone);
+  }
+  stashApply(ref: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.stashApply(root, ref, done), onDone);
+  }
+  stashDrop(ref: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.stashDrop(root, ref, done), onDone);
+  }
+  switchBranch(name: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.switchBranch(root, name, done), onDone);
+  }
+  createBranch(name: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.createBranch(root, name, done), onDone);
+  }
+  deleteBranch(name: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.deleteBranch(root, name, done), onDone);
+  }
+  mergeBranch(name: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.mergeBranch(root, name, done), onDone);
+  }
+  renameBranch(name: string, onDone?: GitOpDone): void {
+    this.mutate((root, done) => cli.renameBranch(root, name, done), onDone);
+  }
+  checkoutPullRequest(number: number, onDone?: GitOpDone): void {
+    // `gh pr checkout` reports (ok, stderr); adapt to the cli `GitDone` shape.
+    this.mutate((root, done) => ghCheckoutPullRequest(root, number, (ok, stderr) => done(ok, '', stderr)), onDone);
   }
 
   // --- subscription + lifecycle ----------------------------------------------
@@ -243,7 +284,7 @@ class CliGitRepo implements GitRepo {
 
   private trySync(args: string[]): string | null {
     try {
-      return gitSync(this.root!, args);
+      return cli.gitSync(this.root!, args);
     } catch {
       return null;
     }
@@ -288,12 +329,12 @@ class CliGitRepo implements GitRepo {
   private pollOnce(): void {
     if (!this.root || this.reading) return;
     this.reading = true;
-    git(this.root, STATUS_ARGS, (ok, statusOut) => {
+    cli.git(this.root, STATUS_ARGS, (ok, statusOut) => {
       if (!ok) {
         this.reading = false; // transient failure — keep the last good state
         return;
       }
-      git(this.root!, NUMSTAT_ARGS, (numOk, numstatOut) => {
+      cli.git(this.root!, NUMSTAT_ARGS, (numOk, numstatOut) => {
         const parsed = parseStatus(statusOut);
         const numstat = numOk ? parseNumstat(numstatOut) : new Map<string, LineDelta>();
         const untrackedAdded = this.untrackedInsertions(parsed);
@@ -305,7 +346,7 @@ class CliGitRepo implements GitRepo {
         // Something changed — the tracked set may have too (add/rm/commit), so
         // refresh ls-files before rebuilding. (Plain working-tree edits don't
         // change the set, but they're cheap relative to the rebuild + repaint.)
-        git(this.root!, LSFILES_ARGS, (lsOk, lsOut) => {
+        cli.git(this.root!, LSFILES_ARGS, (lsOk, lsOut) => {
           const tracked = lsOk ? parseLsFiles(lsOut) : [...this.state.tracked];
           this.state = this.buildState(parsed, numstat, tracked, untrackedAdded, lsOk);
           this.lastSignature = sig;
@@ -369,6 +410,37 @@ class CliGitRepo implements GitRepo {
       if (e.untracked) total += countNewLines(Path.join(this.root!, e.relPath));
     }
     return total;
+  }
+
+  // Coordinate a repo-mutating operation: mark busy (spinner on), run the actual
+  // git/gh CLI call against the repo root, then end — clearing busy and forcing a
+  // refresh (the op may have moved HEAD/refs/index even if the working-tree
+  // signature is unchanged, e.g. a fetch). The single internal entry point behind
+  // every public mutation method; `run`/`beginOperation` are deliberately NOT on
+  // the public interface so callers can't bypass this coordination.
+  private mutate(op: (root: string, done: cli.GitDone) => void, onDone?: GitOpDone): void {
+    if (!this.root) {
+      onDone?.(false, 'not a git repository');
+      return;
+    }
+    const end = this.begin();
+    op(this.root, (ok, _stdout, stderr) => {
+      end();
+      onDone?.(ok, stderr ?? '');
+    });
+  }
+
+  /** Enter the busy state; the returned `end()` (idempotent) leaves it and refreshes. */
+  private begin(): () => void {
+    this.enterBusy();
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      this.lastSignature = ''; // the op may have moved anything — force a rebuild
+      this.pollOnce();
+      this.leaveBusy();
+    };
   }
 
   // Busy is reference-counted so overlapping operations stay busy until the last

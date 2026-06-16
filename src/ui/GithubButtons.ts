@@ -21,7 +21,7 @@ import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import { openUrl } from './openUrl.ts';
-import { repoRoot } from '../git/cli.ts';
+import { repoRoot } from '../git.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { stateGlyphMarkup } from './GithubPrPicker.ts';
 import {
@@ -33,7 +33,7 @@ import {
   type GithubRepo,
   type PrState,
   type CiStatus,
-} from '../git/github.ts';
+} from '../github.ts';
 import type { GitRepo } from '../git.ts';
 
 // CI status glyph + colour (bundled icon font): check / dot / times, drawn in

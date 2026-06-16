@@ -2,7 +2,7 @@
  * GitHub failed-CI picker — pick a failed CI run of the current branch's PR to
  * open in the browser.
  *
- * Fetches the failed checks via `gh` (see git/github.ts). With none, it notifies;
+ * Fetches the failed checks via `gh` (see github.ts). With none, it notifies;
  * with exactly one, it opens it directly (no picker); with several, it opens the
  * fuzzy picker over the check names and opens the chosen run.
  */
@@ -10,8 +10,8 @@ import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
 import { openUrl } from './openUrl.ts';
 import { quilx } from '../quilx.ts';
-import { repoRoot } from '../git/cli.ts';
-import { fetchFailedChecks } from '../git/github.ts';
+import { repoRoot } from '../git.ts';
+import { fetchFailedChecks } from '../github.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 

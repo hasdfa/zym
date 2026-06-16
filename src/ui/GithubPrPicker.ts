@@ -3,7 +3,7 @@
  * checkout`).
  *
  * Fetches PR matches in every state (open / closed / merged) from `gh` as the
- * user types — a debounced server-side search (see git/github.ts). Filtering is
+ * user types — a debounced server-side search (see github.ts). Filtering is
  * entirely server-side (a GitHub search and local fzy disagree on matches, so
  * the picker's local refine is off). Rows show "#<n> <title>" prefixed with a
  * colour-coded state glyph, the author as a muted detail. The host wires it to a
@@ -13,10 +13,10 @@ import { Gtk } from '../gi.ts';
 import { openPicker, type PickerItem } from './Picker.ts';
 import { proseMarkup, escapeMarkup } from './proseMarkup.ts';
 import { quilx } from '../quilx.ts';
-import { repoRoot } from '../git/cli.ts';
+import { repoRoot } from '../git.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { Icons } from './icons.ts';
-import { searchPullRequests, checkoutPullRequest, type GithubListItem, type PrState } from '../git/github.ts';
+import { searchPullRequests, type GithubListItem, type PrState } from '../github.ts';
 import type { GitRepo } from '../git.ts';
 import { theme } from '../theme/theme.ts';
 
@@ -86,12 +86,9 @@ export function switchToGithubPrPicker(host: Overlay, cwd: string, git: GitRepo)
     onSelect: (_value, item) => {
       const { pr } = item as PrPickerItem;
       if (!pr) return;
-      // A `gh pr checkout` mutates the repo (switches branch, fetches forks) and
-      // can take seconds — mark the repo busy so the branch indicator spins, and
-      // refresh on completion rather than waiting on the HEAD monitor.
-      const end = git.beginOperation();
-      checkoutPullRequest(root, pr.number, (ok, stderr) => {
-        end();
+      // `git.checkoutPullRequest` runs `gh pr checkout` with busy + refresh
+      // coordination (it can take seconds — switches branch, fetches forks).
+      git.checkoutPullRequest(pr.number, (ok, stderr) => {
         if (ok) quilx.notifications.addSuccess(`Switched to PR #${pr.number}`);
         else quilx.notifications.addError('Could not switch to pull request', { detail: stderr.trim() });
       });

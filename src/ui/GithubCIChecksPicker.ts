@@ -3,7 +3,7 @@
  * the browser.
  *
  * The picker opens immediately (with a loading state) and fills in once `gh pr
- * checks` resolves (see git/github.ts). Each row is prefixed with a state glyph
+ * checks` resolves (see github.ts). Each row is prefixed with a state glyph
  * (failed ✗ red / pending ● amber / passed ✓ green); failed runs are weighted to
  * the top (then pending, then passed). Choosing a run opens its page in the
  * browser. The GitHub mark is the prompt icon (and the loading spinner's home).
@@ -12,11 +12,11 @@ import { Gtk } from '../gi.ts';
 import { openPicker, highlightMarkup, type PickerItem } from './Picker.ts';
 import { openUrl } from './openUrl.ts';
 import { quilx } from '../quilx.ts';
-import { repoRoot } from '../git/cli.ts';
+import { repoRoot } from '../git.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { Icons } from './icons.ts';
 import { escapeMarkup } from './proseMarkup.ts';
-import { fetchChecks, type CiCheck, type CheckState } from '../git/github.ts';
+import { fetchChecks, type CiCheck, type CheckState } from '../github.ts';
 import { theme } from '../theme/theme.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;

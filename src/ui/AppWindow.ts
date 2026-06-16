@@ -37,7 +37,7 @@ import { Icons, iconLabel } from './icons.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { openGitRepo, type GitRepo } from '../git.ts';
-import { git, repoRoot, commitMsgPath, commit, stashPush } from '../git/cli.ts';
+import { git, repoRoot, commitMsgPath } from '../git.ts';
 import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import { Workbench, type BottomDock } from './Workbench.ts';
@@ -80,9 +80,6 @@ import { loadConfig, configPath } from '../config/load.ts';
 import { type Disposable, type DisposableLike } from '../util/eventKit.ts';
 import { styles, addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-
-// The unsaved/modified marker (a small dot) — warning-colored in the header bar.
-addStyles(`.quilx-modified-dot { color: ${theme.ui.warning}; }`);
 
 // The identifier under the cursor (for prefilling the rename prompt). Codepoint-
 // aware: columns are codepoints, so index the line as codepoints.
@@ -154,8 +151,6 @@ export class AppWindow {
   private quitting = false;
   // The most recently focused agent — the default target for send-to-agent.
   private lastAgent: AgentTerminal | null = null;
-  // Header-bar unsaved marker: visible whenever any open editor is modified.
-  private modifiedDot!: InstanceType<typeof Gtk.Label>;
   private readonly toastOverlay: ToastOverlay;
   // Content-area overlay: hosts the active workbench (swapped on agent switch) and
   // the notification toasts — floats below the header bar, right of the sidebar.
@@ -1108,21 +1103,8 @@ export class AppWindow {
     header.packStart(this.branchButton.root);
     header.packStart(this.githubButtons.root);
 
-    // Unsaved marker — a warning-colored dot shown next to the title when any open
-    // editor is modified. Toggled via opacity (not visibility) so its slot is
-    // always reserved and the title never shifts when it appears/disappears.
-    this.modifiedDot = iconLabel(Icons.modified);
-    this.modifiedDot.addCssClass('quilx-modified-dot');
-    this.modifiedDot.setTooltipText('Unsaved changes');
-    this.modifiedDot.setOpacity(0);
-    this.modifiedDot.setCanTarget(false); // no stray tooltip while invisible
-
-    // The project name now lives in the sidebar (WorkbenchList) header; the center
-    // title slot carries only the unsaved-changes marker for now.
-    const title = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    title.setHalign(Gtk.Align.CENTER);
-    title.append(this.modifiedDot);
-    header.setTitleWidget(title);
+    // The project name and the unsaved-changes marker both live in the sidebar
+    // (WorkbenchList) header now, so the center header bar has no title widget.
     return header;
   }
 
@@ -1133,11 +1115,10 @@ export class AppWindow {
     return editor.isModified() ? `${Icons.modified} ${editor.title}` : editor.title;
   }
 
-  /** Show the header-bar unsaved dot when any open editor has unsaved edits. */
+  /** Show the sidebar-header unsaved dot when any open editor has unsaved edits. */
   private updateModifiedMarker() {
     const modified = [...this.editors.values()].some((e) => e.isModified());
-    this.modifiedDot.setOpacity(modified ? 1 : 0); // opacity keeps the title fixed
-    this.modifiedDot.setCanTarget(modified);
+    this.workbenchList.setModified(modified);
   }
 
   // --- Theme chrome ----------------------------------------------------------
@@ -1884,9 +1865,9 @@ export class AppWindow {
   private registerGitCommands() {
     quilx.commands.add('#AppWindow', {
       // Git commands only apply inside a repository (a resolvable branch).
-      'git:fetch': { didDispatch: () => this.runGit(['fetch'], 'Fetch'), when: () => this.git.getBranch() !== null },
-      'git:pull': { didDispatch: () => this.runGit(['pull', '--ff-only'], 'Pull'), when: () => this.git.getBranch() !== null },
-      'git:push': { didDispatch: () => this.runGit(['push'], 'Push'), when: () => this.git.getBranch() !== null },
+      'git:fetch': { didDispatch: () => this.runGit((d) => this.git.fetch(d), 'Fetch'), when: () => this.git.getBranch() !== null },
+      'git:pull': { didDispatch: () => this.runGit((d) => this.git.pull(d), 'Pull'), when: () => this.git.getBranch() !== null },
+      'git:push': { didDispatch: () => this.runGit((d) => this.git.push(d), 'Push'), when: () => this.git.getBranch() !== null },
       'git:branch-switch': {
         didDispatch: () => openBranchPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
@@ -1938,9 +1919,10 @@ export class AppWindow {
     });
   }
 
-  private runGit(args: string[], label: string) {
-    // Success is quiet (a trace, recorded in the log only); failures pop a toast.
-    this.git.run(args, (ok) => {
+  // Run a coordinated git operation (e.g. `(d) => this.git.fetch(d)`) and report.
+  // Success is quiet (a trace, recorded in the log only); failures pop a toast.
+  private runGit(op: (done: (ok: boolean, stderr: string) => void) => void, label: string) {
+    op((ok) => {
       if (ok) quilx.notifications.addTrace(`${label} succeeded`);
       else quilx.notifications.addError(`${label} failed`);
     });
@@ -1950,9 +1932,13 @@ export class AppWindow {
   // loading notice that transforms into success/error when the operation finishes
   // (the LSP install flow). All three share one `replaceKey` so the prompt that
   // triggered it, the spinner, and the result are the same card.
-  private runGitWithProgress(args: string[], label: string, replaceKey: string) {
+  private runGitWithProgress(
+    op: (done: (ok: boolean, stderr: string) => void) => void,
+    label: string,
+    replaceKey: string,
+  ) {
     quilx.notifications.addInfo(`${label}…`, { replaceKey, loading: true, dismissable: true });
-    this.git.run(args, (ok) => {
+    op((ok) => {
       if (ok) quilx.notifications.addSuccess(`${label} succeeded`, { replaceKey });
       else quilx.notifications.addError(`${label} failed`, { replaceKey });
     });
@@ -1960,11 +1946,7 @@ export class AppWindow {
 
   // Stash the working-tree changes (visible success, since it's a manual action).
   private stashChanges() {
-    const root = repoRoot(process.cwd());
-    if (!root) return;
-    const end = this.git.beginOperation(); // mutates the working tree → busy + refresh
-    stashPush(root, (ok, _out, stderr) => {
-      end();
+    this.git.stash((ok, stderr) => {
       if (ok) quilx.notifications.addSuccess('Stashed changes');
       else quilx.notifications.addError('Stash failed', { detail: stderr.trim() });
     });
@@ -2000,11 +1982,9 @@ export class AppWindow {
       quilx.notifications.addInfo('Commit aborted (empty message)');
       return;
     }
-    const end = this.git.beginOperation(); // moves HEAD → busy + refresh
-    commit(repo, msgPath, (ok, _out, err) => {
-      end();
+    this.git.commit(msgPath, (ok, stderr) => {
       if (ok) quilx.notifications.addSuccess('Committed');
-      else quilx.notifications.addError('Commit failed', { detail: err.trim() });
+      else quilx.notifications.addError('Commit failed', { detail: stderr.trim() });
     });
   }
 
@@ -2022,7 +2002,7 @@ export class AppWindow {
         detail: 'Your branch is behind its upstream — pull to update.',
         replaceKey: PULL_NOTICE_KEY,
         dismissable: true,
-        buttons: [{ text: 'Pull', onDidClick: () => this.runGitWithProgress(['pull', '--ff-only'], 'Pull', PULL_NOTICE_KEY) }],
+        buttons: [{ text: 'Pull', onDidClick: () => this.runGitWithProgress((d) => this.git.pull(d), 'Pull', PULL_NOTICE_KEY) }],
       });
     }
     this.lastBehind = behind;
@@ -2036,7 +2016,7 @@ export class AppWindow {
     const minutes = Number(quilx.config.get('git.autoFetchMinutes') ?? 0);
     if (!(minutes > 0)) return;
     this.autoFetchTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, minutes * 60_000, () => {
-      if (this.git.getBranch() !== null) this.git.run(['fetch']);
+      if (this.git.getBranch() !== null) this.git.fetch();
       return true; // keep fetching
     });
   }

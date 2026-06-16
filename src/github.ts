@@ -8,7 +8,11 @@
  * unauthenticated, or the branch has no PR.
  */
 import { execFile } from 'node:child_process';
-import { currentBranch, gitSync } from './cli.ts';
+// github.ts is a public facade alongside git.ts; it may use the internal git CLI
+// helpers directly. It deliberately imports from `git/cli.ts` (pure node) rather
+// than the public `git.ts` so it stays GTK-free and testable in isolation — the
+// rest of the codebase still imports git helpers only via git.ts / github.ts.
+import { currentBranch, gitSync } from './git/cli.ts';
 
 export interface GithubRepo {
   host: string; // always 'github.com' (GitHub.com only, for now)

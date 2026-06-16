@@ -59,7 +59,24 @@ Constraints carried from the codebase:
 - **One main component per file** under `src/ui`, camel-cased after the
   component.
 
-## Backend: the git CLI helper — `src/git/cli.ts` (done)
+## Module boundary (public API)
+
+The rest of the codebase imports git/GitHub functionality from exactly **two**
+modules: **`src/git.ts`** and **`src/github.ts`**. Everything under **`src/git/`**
+(`cli.ts`, `status.ts`) is internal:
+
+- `src/git.ts` is the git facade — the reactive `GitRepo` (below) plus a
+  `export * from './git/cli.ts'` that re-exports the CLI surface (status/staging/
+  branch/stash/commit helpers + types). Callers do `import { … } from '../git.ts'`.
+- `src/github.ts` is the GitHub facade (`gh`-backed PR/issue/CI reads). It's the
+  one other module allowed to use the internal `git/cli.ts` directly (it imports
+  `gitSync`/`currentBranch` from there) — deliberately, so it stays GTK-free and
+  unit-testable, while the rest of the codebase still only sees `git.ts`/`github.ts`.
+
+Invariant (grep-checkable): nothing outside `git.ts`/`github.ts` imports
+`git/cli.ts` or `git/status.ts`.
+
+## Backend: the git CLI helper — `src/git/cli.ts` (done, internal)
 
 The git operations use **`node:child_process` + the `git` CLI** rather than
 extending the libgit2 `GitRepo`. The CLI gives us exactly what `git status`/`git
@@ -169,7 +186,7 @@ refresh.
 Not done: amend, sign-off, amend-prefill from `git log -1 --format=%B`,
 commit-message ruler/length hint, branch-name placeholder.
 
-## Feature: forge links — `src/git/github.ts` + `src/ui/Github*.ts` (GitHub done)
+## Feature: forge links — `src/github.ts` + `src/ui/Github*.ts` (GitHub done)
 
 Implemented as a concrete **GitHub** integration driven by the `gh` CLI (not the
 abstract `Forge` interface that was sketched — `GitLabForge` etc. can be factored
@@ -180,7 +197,7 @@ out if/when a second provider lands).
   `parseGithubRemote` → `{ host, owner, repo }`. Order is **`upstream` then
   `origin`**, both from config (`git.remotes.upstream` / `git.remotes.origin`,
   registered in `src/quilx.ts`, defaulting to `upstream`/`origin`).
-- **`src/git/github.ts`** — `gh`-backed reads: `fetchPullRequest` (number, url,
+- **`src/github.ts`** — `gh`-backed reads: `fetchPullRequest` (number, url,
   title, state, CI rollup, linked issue), `fetchChecks` / `fetchFailedChecks`
   (CI status buckets), `searchPullRequests`, `fetchIssues`, `fetchDefaultBranch`,
   `createPullRequestWeb`, `checkoutPullRequest`. `repoWebUrl` builds the base URL.
@@ -211,26 +228,29 @@ Not done: `#123`-in-text / branch-name / selection detection (offer *Open #123*)
   buffer against the HEAD blob (debounced, generation-guarded against stale async
   results).
 
-## Busy/refresh coordination for non-`git` mutations
+## Mutations: coordinated methods on `GitRepo`
 
-`GitRepo.run()` marks the repo busy + refreshes for `git` subcommands
-(fetch/pull/push). But several mutations run through `git/cli.ts` or `git/github.ts`
-directly and so **bypassed** the busy state (no branch-indicator spinner) and the
-explicit refresh. `GitRepo.beginOperation()` closes that: it returns an `end()`
-token — `isBusy()` is true and `onChange` fires for the duration, and `end()`
-forces an immediate refresh.
+Every repo mutation goes through a **named method on `GitRepo`** that marks the
+repo busy (the branch indicator spins), runs the git/gh command, then refreshes
+and reports `(ok, stderr)` via the `GitOpDone` callback:
 
-- **Done:** `gh pr checkout` (the PR picker) wraps the checkout in
-  `beginOperation()` — the indicator now spins through the (multi-second, fork-
-  fetching) checkout and refreshes on completion instead of waiting on the HEAD
-  monitor. The picker takes the `GitRepo` for this.
-- **Also fixed:** `GithubButtons.refresh()` resolved the GitHub remote (two sync
-  `git` spawns) on *every* `onChange`; now cached once per session.
-- **Also done:** `BranchPicker` (switch/create/delete/merge/rename), `StashPicker`
-  (pop/apply/drop), and `AppWindow`'s `stashChanges`/`finishCommit` now wrap their
-  `git/cli.ts` mutations in `beginOperation()` too — every repo mutation (git or gh)
-  now spins the indicator and refreshes on completion. The pickers take the
-  `GitRepo`; BranchPicker's old `report()` helper became `runOp(git, success, run)`.
+- git: `fetch`, `pull`, `push`, `commit(messageFile)`, `stash`, `stashPop/Apply/
+  Drop(ref)`, `switchBranch/createBranch/deleteBranch/mergeBranch/renameBranch(name)`
+- gh: `checkoutPullRequest(number)` — git.ts wraps github.ts's raw `gh pr checkout`.
+
+The UI calls these (e.g. `git.switchBranch(name, report)`); it never manages busy
+state itself. The coordination primitives are **private to `CliGitRepo`**: a single
+`mutate(op, onDone)` brackets the op with `begin()`/end (busy + forced refresh).
+`run`/`beginOperation` are **not** on the public interface — callers can't bypass
+the coordination (type-enforced).
+
+This (a) fixes the prior bypass where `BranchPicker`/`StashPicker`/commit/`gh pr
+checkout` ran CLI mutations directly with no spinner/refresh, and (b) means a
+multi-second `gh pr checkout` (switches branch, fetches forks) spins the indicator
+and refreshes on completion instead of waiting on the HEAD monitor.
+
+Also fixed alongside: `GithubButtons.refresh()` resolved the GitHub remote (two
+sync `git` spawns) on *every* `onChange`; now cached once per session.
 
 ## Config: default git workflow (done)
 
@@ -418,8 +438,8 @@ bounded by the 64 MiB `maxBuffer`.
 - [x] Diff gutter in the editor (added/modified/deleted per line)
 - [ ] In-panel diffs / hunk-level staging
 - [ ] More git diff sources (staged / commit / PR) — see code-editing/diff.md
-- [x] `GitRepo.beginOperation()` busy/refresh token; `gh pr checkout` wrapped; GithubButtons remote-resolve cached — see "Busy/refresh coordination" above
-- [x] Wrapped BranchPicker / StashPicker / commit / stash-push mutations in `beginOperation()` too — every repo mutation now spins + refreshes
+- [x] Mutations are coordinated `GitRepo` methods (fetch/pull/push/commit/stash*/branch*/checkoutPullRequest); busy+refresh primitives private to the impl — see "Mutations: coordinated methods" above
+- [x] Two-module boundary: rest of codebase imports only `git.ts`/`github.ts`; `src/git/` internal — see "Module boundary" above
 - [x] Mitigate the Ggit/node-gtk leak in `src/git.ts` (cache repo + memoize reads) — see "Known issue" above
 - [x] Migrate off Ggit → CLI-backed `GitRepo` (see "Migration design" above; node-gtk#446):
   - [x] `src/git/status.ts`: pure `parseStatus` (porcelain v2) + `parseNumstat` + `parseLsFiles`, with unit tests (`status.test.ts`, 14)

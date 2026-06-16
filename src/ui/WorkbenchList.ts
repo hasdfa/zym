@@ -24,7 +24,8 @@ import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
-import { createAgentStatusIcon, createAgentModeBadge, agentWorktreeMarkup } from './agentStatusIcon.ts';
+import { createAgentStatusIcon, agentWorktreeMarkup } from './agentStatusIcon.ts';
+import { Icons, iconLabel } from './icons.ts';
 import type { AgentTerminal } from './AgentTerminal.ts';
 
 const USER_GLYPH = String.fromCodePoint(0xf007); // nf-fa-user (the default/user entry)
@@ -36,6 +37,8 @@ const PROJECT_NAME = Path.basename(process.cwd());
 const ROW_TRANSITION_MS = 200;
 
 addStyles(`
+  /* The unsaved-changes marker (a small dot) next to the project title — warning-colored. */
+  .quilx-modified-dot { color: ${theme.ui.warning}; }
   /* A transparent left border keeps the row content from shifting when the active
      row gains its accent indicator; a subtle bottom border separates the rows.
      The row height itself lives on the content box (#WorkbenchRow) rather than the
@@ -133,6 +136,10 @@ export class WorkbenchList {
   // The project-name title in the header bar; hidden while collapsed (the bar is
   // too narrow to show it).
   private headerTitle: InstanceType<typeof Adw.WindowTitle> | null = null;
+  // The unsaved-changes marker shown after the project title; toggled via opacity
+  // (slot always reserved) and hidden while collapsed. `modified` is the last state.
+  private modifiedDot: InstanceType<typeof Gtk.Label> | null = null;
+  private modified = false;
   private readonly subs = new CompositeDisposable();
 
   constructor(options: WorkbenchListOptions = {}) {
@@ -186,7 +193,31 @@ export class WorkbenchList {
     this.headerTitle = new Adw.WindowTitle({ title: PROJECT_NAME });
     this.headerTitle.setTooltipText(process.cwd());
     bar.packStart(this.headerTitle);
+
+    // Unsaved-changes marker — a warning-colored dot right after the project title,
+    // shown when any open editor has unsaved edits (driven by the host via
+    // `setModified`). Toggled with opacity so its slot never shifts the title.
+    this.modifiedDot = iconLabel(Icons.modified);
+    this.modifiedDot.addCssClass('quilx-modified-dot');
+    this.modifiedDot.setTooltipText('Unsaved changes');
+    this.modifiedDot.setCanTarget(false);
+    this.updateModifiedDot();
+    bar.packStart(this.modifiedDot);
     return bar;
+  }
+
+  /** Reflect whether any open editor has unsaved edits (the host computes this). */
+  setModified(modified: boolean): void {
+    this.modified = modified;
+    this.updateModifiedDot();
+  }
+
+  // The dot shows only when there are unsaved edits and the sidebar is expanded
+  // (collapsed has no room — the title is hidden too). Opacity keeps the slot fixed.
+  private updateModifiedDot(): void {
+    const visible = this.modified && !this.collapsed;
+    this.modifiedDot?.setOpacity(visible ? 1 : 0);
+    this.modifiedDot?.setCanTarget(visible);
   }
 
   // Toggle collapsed (icons only) ↔ expanded (icons + text): re-render the rows and
@@ -194,6 +225,7 @@ export class WorkbenchList {
   private toggleCollapsed(): void {
     this.collapsed = !this.collapsed;
     this.headerTitle?.setVisible(!this.collapsed); // no room for the title at 48px
+    this.updateModifiedDot(); // hide the marker too while collapsed
     this.rebuild();
     this.options.onToggleCollapsed?.(this.collapsed);
   }
@@ -346,10 +378,6 @@ export class WorkbenchList {
 
     if (this.collapsed) return this.rowContent(dot); // icon only
 
-    // Permission-mode badge (plan/acceptEdits/auto/…), hidden in `default` mode.
-    const mode = createAgentModeBadge(agent);
-    unsubs.push(mode.dispose);
-
     const label = new Gtk.Label({ xalign: 0, hexpand: true, ellipsize: Pango.EllipsizeMode.END });
     label.setText(agent.title);
     unsubs.push(agent.onTitleChange(() => label.setText(agent.title)));
@@ -373,7 +401,7 @@ export class WorkbenchList {
     updateFiles();
     unsubs.push(agent.onDidChangeFiles(updateFiles));
 
-    const trailing = [mode.widget, label, ...(worktree ? [worktree] : []), files];
+    const trailing = [label, ...(worktree ? [worktree] : []), files];
     return this.rowContent(dot, ...trailing);
   }
 

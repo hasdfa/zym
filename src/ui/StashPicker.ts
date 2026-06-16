@@ -2,30 +2,23 @@
  * Stash picker — pick a stash to pop, apply, or drop.
  *
  * Lists stashes (`git stash list`) in the fuzzy picker and runs the chosen
- * action via `git/cli.ts`. Notifies when there are none, and reports the result.
+ * action via the git facade (`git.ts`). Notifies when there are none, and reports the result.
  * (Stashing changes is the separate `git:stash-push` command.)
  */
 import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
 import { Icons } from './icons.ts';
 import { quilx } from '../quilx.ts';
-import {
-  repoRoot,
-  listStashes,
-  stashPop,
-  stashApply,
-  stashDrop,
-  type GitDone,
-} from '../git/cli.ts';
-import type { GitRepo } from '../git.ts';
+import { repoRoot, listStashes, type GitRepo, type GitOpDone } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 type StashAction = 'pop' | 'apply' | 'drop';
 
-const RUN: Record<StashAction, (root: string, ref: string, onDone: GitDone) => void> = {
-  pop: stashPop,
-  apply: stashApply,
-  drop: stashDrop,
+// Each action maps to the coordinated GitRepo method (busy + refresh handled there).
+const RUN: Record<StashAction, (git: GitRepo, ref: string, onDone: GitOpDone) => void> = {
+  pop: (git, ref, done) => git.stashPop(ref, done),
+  apply: (git, ref, done) => git.stashApply(ref, done),
+  drop: (git, ref, done) => git.stashDrop(ref, done),
 };
 const PAST: Record<StashAction, string> = { pop: 'popped', apply: 'applied', drop: 'dropped' };
 
@@ -61,11 +54,7 @@ export function openStashPicker(host: Overlay, cwd: string, action: StashAction,
     onSelect: (label) => {
       const ref = refByLabel.get(label);
       if (!ref) return;
-      // pop/apply/drop mutate the working tree (or stash list) — mark the repo busy
-      // and refresh on completion (see GitRepo.beginOperation).
-      const end = git.beginOperation();
-      RUN[action](root, ref, (ok, _out, stderr) => {
-        end();
+      RUN[action](git, ref, (ok, stderr) => {
         if (ok) quilx.notifications.addSuccess(`Stash ${PAST[action]}`);
         else quilx.notifications.addError(`Stash ${action} failed`, { detail: stderr.trim() });
       });
