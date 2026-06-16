@@ -9,9 +9,7 @@
   Node.js under the hood — the full npm ecosystem.</b>
 </p>
 
-A keyboard-driven, modern, neovim-style code editor, with `claude`
-and other coding agents living right inside the workbench — each tracked live,
-so you always know which agent is working, waiting, or done.
+A keyboard-driven, modern code editor — blending the best from neovim, atom, zed, vscode, and so many others — with coding agents living right alongside you — each tracked live, so you always know which agent is working, waiting, or done.
 
 ![quilx running a coding agent side by side with the editor, file tree, and a fuzzy command palette](img/demo-agent-workflow.png)
 
