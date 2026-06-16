@@ -16,6 +16,7 @@ import { typescriptPlugin } from '../plugins/typescript/index.ts';
 import { markdownPlugin } from '../plugins/markdown/index.ts';
 import { htmlPlugin } from '../plugins/html/index.ts';
 import { cssPlugin } from '../plugins/css/index.ts';
+import { jsonPlugin } from '../plugins/json/index.ts';
 import { colorPreviewPlugin } from '../plugins/color-preview/index.ts';
 
 export { PluginRegistry } from './PluginRegistry.ts';
@@ -34,5 +35,6 @@ export function registerBuiltinPlugins(): void {
   plugins.register(markdownPlugin, Path.join(BUILTINS_DIR, 'markdown'));
   plugins.register(htmlPlugin, Path.join(BUILTINS_DIR, 'html'));
   plugins.register(cssPlugin, Path.join(BUILTINS_DIR, 'css'));
+  plugins.register(jsonPlugin, Path.join(BUILTINS_DIR, 'json'));
   plugins.register(colorPreviewPlugin, Path.join(BUILTINS_DIR, 'color-preview'));
 }

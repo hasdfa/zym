@@ -107,6 +107,8 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
 - `src/plugins/markdown/` — the Markdown plugin (`index.ts`, `markdown.test.ts`).
 - `src/plugins/css/` — the CSS plugin (`index.ts`, `queries/`, vendored `grammars/`,
   `build-grammars.sh`, `css.test.ts`, `grammar.test.ts`).
+- `src/plugins/json/` — the JSON plugin (`index.ts`, `queries/`, `json.test.ts`,
+  `grammar.test.ts`).
 - `src/plugins/color-preview/` — the color-preview plugin (`index.ts` editor wiring +
   `colors.ts` pure parser/contrast, `colors.test.ts`); the `observeTextEditors`
   reference consumer.
@@ -135,6 +137,11 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
   it. `vscode-css-language-server` (from `vscode-langservers-extracted`, the eslint
   sibling) serves CSS + SCSS; **SomeSass** serves indented Sass (optional, skipped
   if absent).
+- **json** — JSON/JSONC detection, the bundled `tree-sitter-json` grammar
+  (highlighting + folding), and `vscode-json-language-server` (the same
+  `vscode-langservers-extracted` package as the eslint/css servers). One grammar
+  backs both dialects — it parses `//`/block comments as `(comment)` nodes — and a
+  single ServerDef serves the `json` / `jsonc` languageIds.
 - **color-preview** — the first **`observeTextEditors`** consumer (no language layer at
   all). Background-tints color literals — hex (`#rgb`…`#rrggbbaa`), `rgb()/rgba()`,
   `hsl()/hsla()` — with the color they represent, contrast-picking black/white
