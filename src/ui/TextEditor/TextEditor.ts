@@ -54,17 +54,12 @@ import type { TabState } from '../../SessionManager.ts';
 import {
   Adw,
   Gdk,
-  Gio,
   GLib,
   Gtk,
   GtkSource,
   type SourceBuffer,
   type SourceView,
 } from '../../gi.ts';
-
-// node-gtk quirk: Gio.File instance methods are undefined on the concrete
-// instance, so reach them through the prototype (see config/load.ts).
-const GioFileProto = (Gio.File as any).prototype;
 
 addStyles(`
   .quilx-editor { color: ${theme.ui.fg}; caret-color: ${theme.ui.fg}; }
