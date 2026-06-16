@@ -1,15 +1,13 @@
 # quilx
 
-**A keyboard-driven, Vim-style code editor for the Linux desktop — with AI
-coding agents living right inside the workbench.**
+**neovim meets agent workflow. Native GTK 4 — no Electron. Node.js
+under the hood — the full npm ecosystem.**
 
-quilx pairs modal editing and a `Space`-leader command scheme with a native
-GTK 4 / Adwaita interface that feels at home on GNOME. Split your windows like
-Vim, drive everything from the keyboard, and run terminal coding agents (like
-`claude`) side by side with your code — each tracked live with its own status,
+A keyboard-driven, Vim-style code editor for the Linux desktop, with `claude`
+and other coding agents living right inside the workbench — each tracked live,
 so you always know which agent is working, waiting, or done.
 
-![quilx editor with file tree, agent management UI, and config panels](img/example-1.png)
+![quilx running a coding agent side by side with the editor, file tree, and a fuzzy command palette](img/demo-agent-workflow.png)
 
 ## Highlights
 
@@ -29,6 +27,52 @@ so you always know which agent is working, waiting, or done.
 Jump to the details: [Keybindings](#keybindings) ·
 [Notifications](#notifications) · [Agents](#agents) ·
 [Configuration](#configuration)
+
+## In action
+
+### Coding agents
+
+Run `claude` and friends in the workbench, branch and switch between them from a
+fuzzy command palette, and drive everything without leaving the keyboard.
+
+![Fuzzy command palette listing the agent: commands](img/demo-command-palette.png)
+
+### Code intelligence (LSP)
+
+Language servers power completion, hover docs, and diagnostics — and quilx
+offers to install a missing server for you.
+
+![Autocomplete popup with documentation for the selected entry](img/demo-lsp-autocomplete.png)
+![Hover tooltip showing an inferred type](img/demo-lsp-hover.png)
+![Toast offering to install a missing language server](img/demo-lsp-autoinstall.png)
+
+### Navigation & search
+
+Jump to any symbol, search the project with ripgrep, or find-and-replace with
+regex in the current file.
+
+![Symbol picker filtering workspace symbols](img/demo-symbol-picker.png)
+![Project-wide ripgrep picker with live results](img/demo-ripgrep-picker.png)
+![In-buffer regex search and replace](img/demo-search-regex.png)
+
+### Project sidebar
+
+A file tree and a live git status view sit side by side in the left dock.
+
+![File tree in the sidebar](img/demo-sidebar-files.png)
+![Git status view listing staged and unstaged changes](img/demo-sidebar-git.png)
+
+### Git & GitHub
+
+Open pull requests, watch CI checks, and create or track PRs for the current
+branch — all from inside the editor.
+
+![Pull request picker listing open PRs](img/demo-github-pr-branch-picker.png)
+![Pull request picker filtered by author](img/demo-github-pr-branch-filter.png)
+![Creating a pull request from the current branch](img/demo-github-pr-create.png)
+![Current branch linked to a merged pull request](img/demo-github-pr-merged.png)
+![CI check picker with passing and failing checks](img/demo-github-ci.png)
+![CI checks all passing for a branch](img/demo-github-ci-success.png)
 
 ## Requirements
 
