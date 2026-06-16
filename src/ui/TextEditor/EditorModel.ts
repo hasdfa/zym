@@ -29,6 +29,15 @@ import { Gtk, type SourceBuffer, type SourceView } from '../../gi.ts';
 /** Cursor shapes the vim layer switches between per mode. */
 export const CursorType = { BEAM: 'beam', BLOCK: 'block', UNDERLINE: 'underline' } as const;
 
+/** What undo/redo + undo-grouping route to. A `GtkSource.Buffer` satisfies it natively
+ *  (buffer-only editors); a document-backed view points it at the `Document` model. */
+export interface UndoTarget {
+  undo(): void;
+  redo(): void;
+  beginUserAction(): void;
+  endUserAction(): void;
+}
+
 // Fallback line height (px) when the view isn't realized, so the scroll math has
 // a non-zero divisor in headless contexts.
 const DEFAULT_LINE_HEIGHT = 18;
@@ -78,6 +87,10 @@ export class EditorModel {
 
   readonly view: SourceView;
   readonly buffer: SourceBuffer;
+  // Where undo grouping + undo/redo go. For a buffer-only editor it's the view buffer
+  // (native undo); for a document-backed view it's the Document (the model owns undo,
+  // view buffers have native undo off), set via `setUndoTarget`.
+  private undoTarget: UndoTarget;
 
   // The primary Selection is backed by the buffer's native insert/selection-bound
   // pair. Secondary selections (visual-block rows; later multi-cursor) carry their
@@ -133,9 +146,16 @@ export class EditorModel {
   // with no glyph to cover are drawn by the host here. Empty array clears them.
   onExtraCursors?: (carets: Array<{ iter: TextIter; beam: boolean }>) => void;
 
+  /** Route undo/redo + undo-grouping to a different target than the view buffer — the
+   *  `Document` model, for a document-backed view (whose buffer has native undo off). */
+  setUndoTarget(target: UndoTarget): void {
+    this.undoTarget = target;
+  }
+
   constructor(view: SourceView, buffer: SourceBuffer) {
     this.view = view;
     this.buffer = buffer;
+    this.undoTarget = buffer; // default: the view buffer's native undo (buffer-only editors)
     // Selector identity for command/keymap rules: the view is the focused widget
     // and carries the mode CSS classes, so keymaps target it as `#TextEditor`
     // (e.g. `#TextEditor.normal-mode`) instead of the raw `GtkSourceView` type tag.
@@ -724,11 +744,11 @@ export class EditorModel {
 
   /** Run `fn`, coalescing every buffer change it makes into a single undo step. */
   transact<T>(fn: () => T): T {
-    this.buffer.beginUserAction();
+    this.undoTarget.beginUserAction();
     try {
       return fn();
     } finally {
-      this.buffer.endUserAction();
+      this.undoTarget.endUserAction();
     }
   }
 
@@ -791,11 +811,11 @@ export class EditorModel {
   }
 
   undo(): void {
-    this.buffer.undo();
+    this.undoTarget.undo();
   }
 
   redo(): void {
-    this.buffer.redo();
+    this.undoTarget.redo();
   }
 
   /**
@@ -1060,7 +1080,7 @@ export class EditorModel {
   beginMultiCursorEditReplication(): void {
     if (this.multiCursorReplication) return;
     this.multiCursorReplication = true;
-    this.buffer.beginUserAction();
+    this.undoTarget.beginUserAction();
     this.replicationSub = this.onDidChangeText((event) => {
       if (this.replicatingEdit || this.extraSelections.length === 0) return;
       this.replicationQueue.push(...event.changes);
@@ -1077,7 +1097,7 @@ export class EditorModel {
     this.multiCursorReplication = false;
     this.replicationSub?.dispose();
     this.replicationSub = undefined;
-    this.buffer.endUserAction(); // close the session-wide undo group opened on begin
+    this.undoTarget.endUserAction(); // close the session-wide undo group opened on begin
   }
 
   /** Whether live multi-cursor replication is active (the vim layer skips its

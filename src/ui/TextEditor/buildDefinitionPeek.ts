@@ -40,18 +40,17 @@ export interface DefinitionTarget {
   point: { row: number; column: number };
 }
 
-/** Build the peek card. `onClose` is wired to the × button. Returns the widget and
- *  the px height to reserve for it (so the gap matches). */
-export function buildDefinitionPeek(
+/** Px height for the live peek (a fixed window of `SPAN` lines around the def). */
+export const LIVE_PEEK_HEIGHT = 30 + SPAN * 20;
+
+/** Wrap a body widget in the peek card chrome (header `file:line` + × close, Escape to
+ *  dismiss). Shared by the snapshot peek and the live (shared-document) peek. */
+export function wrapPeekBody(
   target: DefinitionTarget,
-  fileContent: string,
+  body: InstanceType<typeof Gtk.Widget>,
+  height: number,
   onClose: () => void,
 ): { widget: InstanceType<typeof Gtk.Box>; height: number } {
-  const lines = fileContent.split('\n');
-  const start = Math.max(0, target.point.row - LEAD);
-  const end = Math.min(lines.length, start + SPAN);
-  const slice = lines.slice(start, end).join('\n');
-
   const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   card.addCssClass('peek-card');
 
@@ -67,12 +66,8 @@ export function buildDefinitionPeek(
   header.append(close);
   card.append(header);
 
-  // Body: a read-only, highlighted view of the definition slice.
-  const editor = new TextEditor({
-    buffer: { readOnly: true, initialText: slice, languagePath: target.path, folding: false },
-  });
-  editor.root.setVexpand(true);
-  card.append(editor.root);
+  body.setVexpand(true);
+  card.append(body);
 
   // Escape closes the peek (capture phase, so it fires before the nested editor's
   // vim layer consumes it). Other keys fall through to the nested editor.
@@ -84,7 +79,23 @@ export function buildDefinitionPeek(
   });
   card.addController(keys);
 
-  // Height ≈ header + the shown lines (line height ~ 20px; capped by SPAN).
-  const height = 30 + (end - start) * 20;
   return { widget: card, height };
+}
+
+/** Build the snapshot peek card: a read-only, highlighted slice of the file's text
+ *  (used when the file is NOT open — no live document to share). */
+export function buildDefinitionPeek(
+  target: DefinitionTarget,
+  fileContent: string,
+  onClose: () => void,
+): { widget: InstanceType<typeof Gtk.Box>; height: number } {
+  const lines = fileContent.split('\n');
+  const start = Math.max(0, target.point.row - LEAD);
+  const end = Math.min(lines.length, start + SPAN);
+  const slice = lines.slice(start, end).join('\n');
+
+  const editor = new TextEditor({
+    buffer: { readOnly: true, initialText: slice, languagePath: target.path, folding: false },
+  });
+  return wrapPeekBody(target, editor.root, 30 + (end - start) * 20, onClose);
 }

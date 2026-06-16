@@ -22,6 +22,7 @@ import { theme } from '../../theme/theme.ts';
 import { createSourceScheme } from '../../theme/createSourceScheme.ts';
 import { addStyles } from '../../styles.ts';
 import { EditorModel } from './EditorModel.ts';
+import { Document, type DocumentHost } from './Document.ts';
 import { attachVim } from './vim/index.ts';
 import { quilx } from '../../quilx.ts';
 import { DiagnosticsView } from '../../lsp/diagnostics/DiagnosticsView.ts';
@@ -173,6 +174,15 @@ export interface TextEditorOptions {
   buffer?: BufferEditorOptions;
   /** When given, draws a git change bar in the gutter (vs HEAD). File mode only. */
   git?: GitRepo;
+  /** The shared `Document` this view attaches to (from `quilx.documents`). When given,
+   *  this view is one of N onto it and releases its ref on teardown via
+   *  `onReleaseDocument`; when omitted, the editor owns a private scratch document. */
+  document?: Document;
+  /** Called on teardown for a registry-owned `document` (drop this view's ref). */
+  onReleaseDocument?: () => void;
+  /** Read-only, compact view onto the given `document` — the live see-definition peek
+   *  (a second view of an open file). Requires `document`. */
+  peek?: boolean;
 }
 
 export interface BufferEditorOptions {
@@ -259,9 +269,15 @@ export interface FoldProvider {
   revealLine(row: number): void;
 }
 
-export class TextEditor {
+export class TextEditor implements DocumentHost {
   readonly root: InstanceType<typeof Gtk.Box>;
 
+  // The document this editor is a *view* onto (owns the text model + undo + file I/O +
+  // LSP). `this.buffer` is this view's own GtkSource.Buffer, kept in sync by the
+  // document — separate from other views' buffers, so cursor/selection/folds/decorations
+  // are native and independent per view (the A2 document-model architecture).
+  private readonly document: Document;
+  private readonly releaseDocument: (() => void) | null;
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
   private readonly syntax: SyntaxController;
@@ -318,45 +334,45 @@ export class TextEditor {
   // Buffer-only mode config (null = a normal file editor), and the placeholder
   // label shown over the empty buffer (only built when a placeholder is given).
   private readonly bufferMode: BufferEditorOptions | null;
+  // A read-only, compact view onto a shared Document — the live see-definition peek (a
+  // second view of an open file). File-backed (unlike bufferMode), but not edited.
+  private readonly peekMode: boolean;
   private readonly gitRepo: GitRepo | null;
   private placeholderLabel: InstanceType<typeof Gtk.Label> | null = null;
 
-  private _currentFile: string | null = null;
-  /** mtime (ms) of `_currentFile` as of the last load/save — guards against
-   *  clobbering an edit made on disk while the file was open here. */
-  private diskMtimeMs: number | null = null;
-  /** How `_currentFile` relates to disk right now: in sync, modified out from
-   *  under us, or deleted. Drives the tab warning icon and the reload prompt. */
-  private diskState: 'synced' | 'changed' | 'deleted' = 'synced';
-  /** Whether the user has already been prompted about the current disk change —
-   *  keeps a focus toggle from re-popping the same notification. */
-  private diskChangePrompted = false;
-  /** GIO monitor on `_currentFile` (re-created on every load/save). */
-  private fileMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  /** Pending re-check after the file appeared to vanish — atomic saves unlink
-   *  then re-create, so we confirm a deletion after a short beat. */
-  private deletionCheckTimer = 0;
-  private readonly titleHandlers: Array<() => void> = [];
-  private readonly modifiedHandlers: Array<() => void> = [];
+  // File I/O, disk-watching, modified-state, title, and the LSP document all live on
+  // `this.document` now; this getter keeps the many `_currentFile` read sites unchanged.
+  private get _currentFile(): string | null {
+    return this.document.currentFile;
+  }
+  // Caret captured before a silent reload (so the post-load host hook restores it).
+  private pendingReloadCaret: [number, number] | null = null;
 
   constructor(options: TextEditorOptions = {}) {
     this.onToast = options.onToast ?? (() => {});
     this.bufferMode = options.buffer ?? null;
+    this.peekMode = options.peek ?? false;
     this.gitRepo = options.git ?? null;
 
-    this.buffer = this.createBuffer();
-    // Surface the buffer's modified flag toggling (drives the tab/header dot).
-    this.buffer.on('modified-changed', () => {
-      for (const callback of this.modifiedHandlers) callback();
-    });
+    // A registry-owned document is shared (this view releases its ref on teardown); a
+    // buffer-only editor owns a private scratch document. Either way this view gets its
+    // OWN buffer from the document, kept in sync with the model and the other views.
+    this.document = options.document ?? new Document();
+    this.releaseDocument = options.document ? (options.onReleaseDocument ?? null) : null;
+    this.buffer = this.document.createView();
+    this.lspDocument = this.document.lspDocument;
     this.view = this.createView(this.buffer);
-    // Tree-sitter highlighting + folding for this view/buffer.
+    // Tree-sitter highlighting + folding for this view/buffer. A buffer-only or peek
+    // view is compact: no line-number gutter, folding off.
+    const compact = !!this.bufferMode || this.peekMode;
     this.syntax = new SyntaxController(this.view, this.buffer, {
-      lineNumbers: !this.bufferMode,
-      folding: this.bufferMode?.folding,
+      lineNumbers: !compact,
+      folding: this.bufferMode?.folding ?? (this.peekMode ? false : undefined),
     });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
+    // Undo/redo run on the document model (this view's buffer has native undo off).
+    this.editorModel.setUndoTarget(this.document);
     // Real (tree-sitter) indent source for `=`/paste-reindent/new lines.
     this.editorModel.setIndentSource((row) => this.syntax.indentLevelForRow(row));
     // Default indentation from config; `loadFile` detects and overrides per file.
@@ -394,10 +410,20 @@ export class TextEditor {
     this.installCursorOverlay();
     this.installShowcmd();
     this.followSystemColorScheme();
+    // The document routes load/save reactions + the LSP cursor here; this view becomes
+    // active on focus. A document can have several views (split / peek).
+    this.document.addHost(this);
     this.installLsp();
     this.installGitGutter();
     this.installSearch();
     if (this.bufferMode) this.installBufferMode(this.bufferMode);
+    if (this.peekMode) {
+      // Read-only viewer onto the shared buffer; start unfocused so it shows no caret
+      // until the user clicks into it.
+      this.view.setEditable(false);
+      this.editorModel.setFocused(false);
+    }
+    this.root.on('destroy', () => this.dispose());
   }
 
   // --- Buffer-only mode ------------------------------------------------------
@@ -407,11 +433,11 @@ export class TextEditor {
     return this.editorModel.getText();
   }
 
-  /** Replace the buffer text (clears the modified flag, cursor to start). */
+  /** Replace the text (clears the modified flag, cursor to start). Routes through the
+   *  document so the model + every view + the modified flag stay consistent. */
   setText(text: string): void {
-    this.buffer.setText(text, -1);
-    this.buffer.setModified(false);
-    this.buffer.placeCursor(this.buffer.getStartIter());
+    this.document.setText(text);
+    this.editorModel.setCursorBufferPosition({ row: 0, column: 0 });
   }
 
   /** Switch tree-sitter highlighting to match `path`'s file type (buffer/preview mode). */
@@ -519,29 +545,17 @@ export class TextEditor {
 
   private installLsp() {
     if (this.bufferMode) return; // no file, no language server
-    this.lspDocument = {
-      getPath: () => this._currentFile,
-      getText: () => this.editorModel.getText(),
-      lineTextForRow: (row) => this.editorModel.lineTextForBufferRow(row),
-      getCursorBufferPosition: () => this.editorModel.getCursorBufferPosition(),
-    };
+    // The LSP document lives on `this.document` (one per file; didOpen/didChange/
+    // didClose are driven there off the model). This view contributes the diagnostics
+    // renderer and signature help.
     this.diagnostics = new DiagnosticsView(this.view, this.underlineOverlay, this.editorModel, () => this._currentFile);
-    // Sync edits to the server; pass per-change deltas so a server that
-    // negotiated incremental sync gets just the change (else full text).
-    this.editorModel.onDidChangeText((event) => {
-      quilx.lsp.didChange(
-        this.lspDocument,
-        event.changes.map((c) => ({ start: c.oldRange.start, oldText: c.oldText, newText: c.newText })),
-      );
-      this.maybeSignatureHelp(event);
-    });
+    // Signature help is a per-view concern (the active view shows the card while
+    // typing); the document drives didChange, so this only triggers signature help.
+    this.editorModel.onDidChangeText((event) => this.maybeSignatureHelp(event));
     // The hover popover is anchored to a fixed cursor position; dismiss it once
     // the cursor moves or the view scrolls (both no-ops when nothing is showing).
     this.buffer.on('notify::cursor-position', () => {
       this.dismissHover();
-      // While the card is up, follow the cursor: re-request so it updates the
-      // active parameter and closes once the cursor leaves the call (e.g. after
-      // an autopair type-over of `)`, which moves the cursor without a text edit).
       if (this.signatureCard.getVisible()) this.scheduleSignatureRequest();
     });
     this.view.getVadjustment()?.on('value-changed', () => {
@@ -552,17 +566,19 @@ export class TextEditor {
     this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {
       if (mode !== 'insert') this.dismissSignature();
     });
-    // Tear down with the widget: close the document and drop diagnostics.
-    this.root.on('destroy', () => {
-      this.dismissHover();
-      this.dismissSignature();
-      this.fileMonitor?.cancel();
-      this.fileMonitor = null;
-      if (this.deletionCheckTimer) GLib.sourceRemove(this.deletionCheckTimer);
-      this.deletionCheckTimer = 0;
-      quilx.lsp.didClose(this.lspDocument);
-      this.diagnostics.dispose();
-    });
+  }
+
+  /** Tear this view down: detach from the document (the registry disposes it — closing
+   *  the shared LSP doc + file monitor — only when the last view goes; a scratch
+   *  buffer-only document is disposed directly), and drop the diagnostics renderer. */
+  private dispose(): void {
+    this.dismissHover();
+    this.dismissSignature();
+    this.document.removeHost(this);
+    this.document.removeView(this.buffer);
+    if (this.releaseDocument) this.releaseDocument();
+    else this.document.dispose();
+    this.diagnostics?.dispose(); // undefined for a buffer-only editor (installLsp skipped)
   }
 
   // Request signature help when typing inside a call. Triggered when a trigger
@@ -746,6 +762,22 @@ export class TextEditor {
     this.inlinePeek.close();
   }
 
+  /** Reveal `row` near the top of this (peek) view. `map` fires before the first
+   *  layout pass (line geometry is still 0), so scroll on a tick callback that retries
+   *  until the view has a real height. */
+  revealPeekRow(row: number): void {
+    this.editorModel.setCursorBufferPosition({ row, column: 0 });
+    let frames = 0;
+    const tick = () => {
+      if (this.view.getRealized() && this.view.getHeight() > 0) {
+        this.editorModel.scrollToBufferPosition({ row, column: 0 });
+        return false; // G_SOURCE_REMOVE
+      }
+      return ++frames < 120; // keep trying ~2s then give up
+    };
+    (this.view as any).on('map', () => (this.view as any).addTickCallback(tick));
+  }
+
   /** Whether an inline peek is currently open. */
   get peekOpen(): boolean {
     return this.inlinePeek.isOpen;
@@ -758,12 +790,6 @@ export class TextEditor {
   }
 
   // --- Source view & buffer --------------------------------------------------
-
-  private createBuffer(): SourceBuffer {
-    const buffer = new GtkSource.Buffer();
-    buffer.setHighlightSyntax(true);
-    return buffer;
-  }
 
   /** Whether the current file's language uses JSX/HTML tags (gates tag auto-close
    *  — so plain `.ts` generics like `Array<T>` never auto-close). */
@@ -1012,8 +1038,11 @@ export class TextEditor {
     const focus = new Gtk.EventControllerFocus();
     focus.on('enter', () => {
       this.editorModel.setFocused(true);
+      // This view is now the active one of its (possibly shared) document, so the LSP
+      // cursor / dialogs / load-save reactions route here.
+      this.document.setActiveHost(this);
       // Gaining focus is the moment to surface a disk change we noticed earlier.
-      if (this.diskState !== 'synced') this.promptDiskChange();
+      if (this.document.hasDiskChange()) this.document.promptDiskChange();
     });
     focus.on('leave', () => {
       // The search bar is part of the editor: while it holds focus, keep the
@@ -1245,226 +1274,96 @@ export class TextEditor {
     this.editorModel.setIndentation({ useSpaces: detected.useSpaces, width });
   }
 
+  // --- File I/O (delegated to the document) ----------------------------------
+
   loadFile(path: string, opts: { silent?: boolean } = {}) {
     if (this.bufferMode) return; // buffer-only editors have no file
-    try {
-      // Close any previously-open document first; the setText below then fires a
-      // change against the (now closed) old doc, which the manager ignores.
-      quilx.lsp.didClose(this.lspDocument);
-      const content = Fs.readFileSync(path, 'utf8');
-      // A silent reload (external change, no local edits) keeps the caret where
-      // it was; a fresh open resets it to the top.
-      const caret = opts.silent ? this.editorModel.getCursorBufferPosition() : null;
-      this.buffer.setText(content, -1);
-      if (caret) this.restoreCursor([caret.row, caret.column]);
-      else this.buffer.placeCursor(this.buffer.getStartIter());
-      // setText marks the buffer modified; the freshly-loaded content matches
-      // disk, so clear the flag — `isModified()` then tracks genuine edits.
-      this.buffer.setModified(false);
-      this._currentFile = path;
-      this.diskMtimeMs = this.statMtimeMs(path);
-      this.setDiskState('synced'); // freshly in sync with disk
-      this.watchFile(path);
-      this.applyDetectedIndentation(content);
-      if (!opts.silent) this.view.grabFocus(); // a background reload mustn't steal focus
-
-      // Prefer tree-sitter; fall back to GtkSourceView's `.lang` engine for
-      // languages we don't have a grammar for.
-      const handled = this.syntax.setLanguageForPath(path);
-      if (handled) {
-        this.buffer.setLanguage(null); // ensure the .lang engine stays off
-      } else {
-        const langManager = GtkSource.LanguageManager.getDefault();
-        this.buffer.setHighlightSyntax(true);
-        this.buffer.setLanguage(langManager.guessLanguage(path, null));
-      }
-      // Open the document with the language server and refresh diagnostics (clears
-      // any tags carried over from a previously-loaded file).
-      quilx.lsp.didOpen(this.lspDocument);
-      this.diagnostics.render();
-      this.gitGutter?.refresh();
-      this.emitTitleChange();
-    } catch (error) {
-      this.onToast(`Could not open ${Path.basename(path)}: ${(error as Error).message}`);
-    }
+    this.document.loadFile(path, opts);
   }
-
-  /** Save to the current file. No-op if the editor has no file yet. */
   save() {
-    if (this._currentFile) this.saveAs(this._currentFile);
+    this.document.save();
   }
-
   saveAs(path: string) {
-    const content = this.buffer.getText(
-      this.buffer.getStartIter(),
-      this.buffer.getEndIter(),
-      false,
-    );
-    // Refuse to silently clobber the current file if it was changed on disk
-    // since we last loaded/saved it — confirm with the user first.
-    if (path === this._currentFile && this.hasExternalChange()) {
-      this.confirmOverwriteThenSave(path, content);
-      return;
+    this.document.saveAs(path);
+  }
+  /** True once the open file has been changed or deleted on disk underneath us. */
+  hasDiskChange(): boolean {
+    return this.document.hasDiskChange();
+  }
+
+  // --- DocumentHost (the active view's reactions to load/save) ---------------
+
+  /** @internal Capture the caret before a silent reload so didLoad can restore it. */
+  willReplaceContent(reload: boolean): void {
+    this.pendingReloadCaret = reload
+      ? ((c) => [c.row, c.column] as [number, number])(this.editorModel.getCursorBufferPosition())
+      : null;
+  }
+
+  /** @internal View-side setup after the document loaded content: cursor, indentation,
+   *  syntax language, diagnostics, git gutter, focus. (Syntax follows the buffer too.) */
+  didLoad(content: string, path: string, reload: boolean): void {
+    if (reload && this.pendingReloadCaret) this.restoreCursor(this.pendingReloadCaret);
+    else this.editorModel.setCursorBufferPosition({ row: 0, column: 0 });
+    this.pendingReloadCaret = null;
+    this.applyDetectedIndentation(content);
+    if (!reload) this.view.grabFocus(); // a background reload mustn't steal focus
+    this.applyViewSyntaxForPath(path);
+    this.diagnostics.render();
+    this.gitGutter?.refresh();
+  }
+
+  /** Set up this view for an already-loaded shared `Document` — a second view (split /
+   *  peek) onto a file open elsewhere. Its buffer is seeded by `createView`; this only
+   *  does the per-view work the load reactions would: pick the grammar, place the
+   *  cursor, render diagnostics, focus. No text load (the model already has it). */
+  attachToLoadedDocument(): void {
+    const path = this.document.currentFile;
+    if (!path) return;
+    this.applyViewSyntaxForPath(path);
+    this.editorModel.setCursorBufferPosition({ row: 0, column: 0 });
+    this.applyDetectedIndentation(this.getText());
+    this.diagnostics?.render();
+    this.gitGutter?.refresh();
+    this.view.grabFocus();
+  }
+
+  /** Pick this view's grammar for `path` — tree-sitter when we have it, else the
+   *  GtkSourceView `.lang` engine. (Per-view buffer, so its tags are its own.) */
+  private applyViewSyntaxForPath(path: string): void {
+    const handled = this.syntax.setLanguageForPath(path);
+    if (handled) {
+      this.buffer.setLanguage(null); // keep the .lang engine off
+    } else {
+      const langManager = GtkSource.LanguageManager.getDefault();
+      this.buffer.setHighlightSyntax(true);
+      this.buffer.setLanguage(langManager.guessLanguage(path, null));
     }
-    this.writeFile(path, content);
   }
 
-  /** mtime of `path` in ms, or `null` if it can't be stat'd (e.g. doesn't exist). */
-  private statMtimeMs(path: string): number | null {
-    try {
-      return Fs.statSync(path).mtimeMs;
-    } catch {
-      return null;
-    }
+  /** @internal Refresh the git gutter after a save (LSP didSave is document-level). */
+  didSave(_path: string): void {
+    this.gitGutter?.refresh();
   }
 
-  /** True when the current file's on-disk mtime no longer matches what we
-   *  recorded at load/save time (an external write happened). */
-  private hasExternalChange(): boolean {
-    if (this.diskMtimeMs === null || !this._currentFile) return false;
-    const onDisk = this.statMtimeMs(this._currentFile);
-    return onDisk !== null && onDisk !== this.diskMtimeMs;
-  }
-
-  private confirmOverwriteThenSave(path: string, content: string) {
-    const dialog = new Adw.AlertDialog({
-      heading: 'File changed on disk',
-      body:
-        `${Path.basename(path)} has changed on disk since it was opened. ` +
-        `Saving will overwrite those changes.`,
-    });
-    dialog.addResponse('cancel', 'Cancel');
-    dialog.addResponse('reload', 'Reload from Disk');
-    dialog.addResponse('overwrite', 'Overwrite');
-    dialog.setResponseAppearance('overwrite', Adw.ResponseAppearance.DESTRUCTIVE);
-    dialog.setDefaultResponse('cancel');
-    dialog.setCloseResponse('cancel');
-    dialog.on('response', (response: string) => {
-      if (response === 'overwrite') this.writeFile(path, content);
-      else if (response === 'reload') this.loadFile(path);
-    });
+  /** @internal Present a modal dialog parented to this editor. */
+  presentDialog(dialog: InstanceType<typeof Adw.AlertDialog>): void {
     dialog.present(this.root);
   }
 
-  /** Write `content` to `path` and stamp the new on-disk mtime. */
-  private writeFile(path: string, content: string) {
-    try {
-      const wasDeleted = this.diskState === 'deleted';
-      Fs.writeFileSync(path, content);
-      this.diskMtimeMs = this.statMtimeMs(path);
-      this.setDiskState('synced'); // our own write reconciles us with disk
-      this.buffer.setModified(false);
-      const pathChanged = path !== this._currentFile;
-      this._currentFile = path;
-      // Retarget the monitor on "Save As", or re-arm it when re-creating a file
-      // that had been deleted (the old monitor on the gone path may be stale).
-      if (pathChanged || wasDeleted) this.watchFile(path);
-      quilx.lsp.didSave(this.lspDocument);
-      this.gitGutter?.refresh();
-      this.emitTitleChange();
-      // Routine and frequent — log-only (trace) so saving doesn't pop a toast.
-      quilx.notifications.addTrace(`Saved ${Path.basename(path)}`);
-    } catch (error) {
-      this.onToast(`Could not save: ${(error as Error).message}`);
-    }
+  /** @internal Whether this view currently holds focus. */
+  hasFocus(): boolean {
+    return (this.view as any).hasFocus();
   }
 
-  // --- On-disk change detection ----------------------------------------------
-
-  /** Watch `path` for external modifications, replacing any prior monitor. */
-  private watchFile(path: string) {
-    this.fileMonitor?.cancel();
-    this.fileMonitor = null;
-    try {
-      const file = Gio.File.newForPath(path);
-      const monitor = GioFileProto.monitorFile.call(
-        file,
-        Gio.FileMonitorFlags.WATCH_MOVES,
-        null,
-      ) as InstanceType<typeof Gio.FileMonitor>;
-      monitor.on('changed', () => this.onDiskChanged());
-      this.fileMonitor = monitor;
-    } catch (error) {
-      // Watching is best-effort; the save-time guard still catches clobbers.
-      console.warn(`[editor] could not watch ${path}: ${(error as Error).message}`);
-    }
+  /** @internal Surface a load/save error. */
+  toast(message: string): void {
+    this.onToast(message);
   }
 
-  /** Monitor callback: classify the change against disk and surface it. Our own
-   *  writes already reconciled `diskMtimeMs`, so they compare equal and no-op. */
-  private onDiskChanged() {
-    if (!this._currentFile) return;
-    const onDisk = this.statMtimeMs(this._currentFile);
-    if (onDisk === null) {
-      // The file looks gone — but an atomic save (write temp + rename) unlinks it
-      // for a moment, so confirm after a beat before declaring it deleted.
-      this.scheduleDeletionCheck();
-      return;
-    }
-    if (this.diskMtimeMs === null || onDisk === this.diskMtimeMs) return; // our write / unchanged
-    // No local edits to lose — silently adopt the new on-disk content instead of
-    // prompting; only a conflict with unsaved changes warrants a warning.
-    if (!this.isModified()) {
-      this.loadFile(this._currentFile, { silent: true });
-      return;
-    }
-    this.setDiskState('changed');
-  }
-
-  /** Re-stat the file shortly; if still missing, mark it deleted. */
-  private scheduleDeletionCheck() {
-    if (this.deletionCheckTimer) return; // a check is already pending
-    this.deletionCheckTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 200, () => {
-      this.deletionCheckTimer = 0;
-      if (this._currentFile && this.statMtimeMs(this._currentFile) === null) {
-        this.setDiskState('deleted');
-      } else if (this._currentFile) {
-        // It came back (atomic rename) — treat as a normal external change.
-        this.onDiskChanged();
-      }
-      return GLib.SOURCE_REMOVE;
-    });
-  }
-
-  /** Move to a new disk state, repainting the tab and (re)prompting as needed. */
-  private setDiskState(state: 'synced' | 'changed' | 'deleted') {
-    if (state === this.diskState) return;
-    this.diskState = state;
-    this.diskChangePrompted = false;
-    this.emitTitleChange(); // tab repaints with / without the warning icon
-    if (state === 'synced') return;
-    // If the user is already looking at this editor, prompt right away; otherwise
-    // wait until it (re)gains focus.
-    if ((this.view as any).hasFocus()) this.promptDiskChange();
-  }
-
-  /** True once the open file has been changed or deleted on disk underneath us. */
-  hasDiskChange(): boolean {
-    return this.diskState !== 'synced';
-  }
-
-  /** Warn about the out-of-sync file and offer to reconcile (reload, or re-save
-   *  a deleted file). A no-op while in sync or already prompted for this change. */
-  private promptDiskChange() {
-    const path = this._currentFile;
-    if (!path || this.diskState === 'synced' || this.diskChangePrompted) return;
-    this.diskChangePrompted = true;
-    const name = Path.basename(path);
-    if (this.diskState === 'deleted') {
-      quilx.notifications.addWarning(`${name} was deleted on disk`, {
-        detail: path,
-        dismissable: true,
-        onDidClick: () => this.save(),
-        buttons: [{ text: 'Save', onDidClick: () => this.save() }],
-      });
-    } else {
-      quilx.notifications.addWarning(`${name} changed on disk`, {
-        detail: path,
-        dismissable: true,
-        onDidClick: () => this.loadFile(path),
-        buttons: [{ text: 'Reload', onDidClick: () => this.loadFile(path) }],
-      });
-    }
+  /** @internal The cursor for an LSP request (anchors completion/hover at this view). */
+  lspCursor(): Point {
+    return this.editorModel.getCursorBufferPosition();
   }
 
   // --- Identity --------------------------------------------------------------
@@ -1480,7 +1379,7 @@ export class TextEditor {
 
   /** The tab/window title for this editor (file basename, or "Untitled"). */
   get title(): string {
-    return this._currentFile ? Path.basename(this._currentFile) : 'Untitled';
+    return this.document.title;
   }
 
   focus() {
@@ -1502,9 +1401,9 @@ export class TextEditor {
     this.view.scrollToMark(this.buffer.getInsert(), 0, true, 0.5, 0.5);
   }
 
-  /** True while the buffer holds unsaved edits — drives the exit prompt. */
+  /** True while the document holds unsaved edits — drives the exit prompt. */
   isModified(): boolean {
-    return this.buffer.getModified();
+    return this.document.isModified();
   }
 
   /** Exit-prompt label, e.g. "foo.ts (unsaved)". */
@@ -1517,17 +1416,13 @@ export class TextEditor {
     this.save();
   }
 
-  /** Subscribe to title changes (fired when the editor's file changes). */
+  /** Subscribe to title changes (the document's file / disk state changing). */
   onTitleChange(callback: () => void) {
-    this.titleHandlers.push(callback);
+    this.document.onTitleChange(callback);
   }
 
-  private emitTitleChange() {
-    for (const callback of this.titleHandlers) callback();
-  }
-
-  /** Subscribe to modified-state changes (the buffer's modified flag toggling). */
+  /** Subscribe to modified-state changes (the document's modified flag toggling). */
   onModifiedChange(callback: () => void) {
-    this.modifiedHandlers.push(callback);
+    this.document.onModifiedChange(callback);
   }
 }
