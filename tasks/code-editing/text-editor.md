@@ -320,7 +320,47 @@ three gates, then the full integration landed:
   **`AppWindow` split** opens a real 2nd view sharing the `Document`; the **live
   see-definition peek** (`peek: true`) is a read-only 2nd view on the open document.
 - **Per-view folding works** — the wall the shared buffer hit. 576/576 tests; verified
-  in-app (split: independent cursors/folds + shared edits/undo; live peek).
+  in-app (split: independent cursors/folds + shared edits/undo; live peek). Merged to
+  master (`cdfb797`).
+
+### Deferred polish (A2; not blockers)
+
+- **Undo grouping feel** — relies on GTK's native coalescing of consecutive inserts on
+  the model buffer (word-ish). If too granular/coarse in use, wrap vim operations in
+  explicit `Document.beginUserAction`/`endUserAction`.
+- **IME under heavy multi-view load** — preedit is correctly local-until-commit, but
+  real IME + live propagation to 2+ panes wasn't stress-tested.
+- **Extreme pastes / multi-line replace** — fuzz-tested (500 random + 1000 inserts),
+  not at pathological scale.
+- **Linked scroll for split** — panes scroll independently (the right default); a
+  side-by-side "follow" mode isn't built.
+- **Double parse** — each view runs its own `SyntaxController` (N parses for N views);
+  inherent to separate buffers. A shared parse would need cross-buffer tag copying.
+  Fine for typical 2–3 views.
+- **Cleanup** — the superseded `refactor/document-registry` branch (shared-buffer +
+  `ViewDecorations` + emulated cursor) was deleted; its learnings live in this doc.
+
+### Unblocked by A2 (buffer is pure presentation; we own the model)
+
+Delivered: per-view folding, split-view of one file, live see-definition peek. Newly
+*possible* (not yet built):
+
+- **Native inline widgets / `GtkSourceAnnotations` per view** — the whole
+  [virtual-lines](virtual-lines.md) / [inline-widgets](inline-widgets.md) roadmap (inlay
+  hints, error lens, git blame, code lens, AI ghost text, inline diff) can use
+  GtkSourceView's native per-view annotation API instead of fighting a shared buffer.
+  **Highest-leverage next step.**
+- **Native per-view decorations** — search / diff / flash are per-buffer tags now (no
+  cross-view leak, no custom Cairo layer to maintain).
+- **Document-level LSP** — one `didOpen`/`didChange`/`didClose` off the model; clean
+  multi-view diagnostics/hover with no per-view gating.
+- **The model as a single authoritative edit stream** — a foundation for collaborative
+  editing / CRDT, AI edits applied at the model layer, macro recording, or a
+  history/time-travel UI; undo is model-owned and correct across views.
+- **New view types** — minimap-as-view, "compare against unsaved", experimental
+  multi-pane layouts: adding a view is just `Document.createView()`.
+- **Cleaner path to Option C** (custom widget) if ever needed — the `Document` model
+  layer ports unchanged; only the GtkSourceView views get swapped.
 
 ## Constraints carried from the research (cited; mark-uncertain noted)
 
