@@ -23,11 +23,12 @@ exact status.
 
 The pre-existing primitives that were reused, not rebuilt:
 
-- **`src/git.ts` — `GitRepo`** (libgit2 via Ggit). Synchronous reads
-  (`getBranch`, `getStatus` ±lines, `getAheadBehind`, `getFileStatuses`,
-  `getTrackedPaths`), an async mutation path (`run(args, onDone)` via
-  `Gio.Subprocess`, non-blocking, GLib-native), `isBusy`, and `onChange`
-  (HEAD file-monitor + 1.5s working-tree poll keyed on a `signature()`).
+- **`src/git.ts` — `GitRepo`** (CLI-backed `CliGitRepo`; was libgit2/Ggit, see
+  "Resolved" below). Synchronous reads (`getBranch`, `getStatus` ±lines,
+  `getAheadBehind`, `getFileStatuses`, `getTrackedPaths`) served from cached poll
+  state, an async mutation path (`run(args, onDone)`), `isBusy`, and `onChange`
+  (HEAD file-monitor + 1.5s working-tree poll keyed on a `signature()`). Parsers
+  live in `src/git/status.ts`.
 - **`GitBranchButton`** — header indicator (branch, ±lines, ↑↓, busy spinner). Its
   own comment notes it is meant to grow into a branch switcher popover.
 - **`FileTree`** — per-file status (untracked / ±lines) and a hide-untracked
@@ -240,6 +241,145 @@ push remote, auto-fetch interval, …) can be added as we iterate.
   (`.quilx-diff-added/-removed`, the `theme.ui.success/error/...` keys).
 - **Destructive ops** (discard, force) confirm first and never run implicitly.
 
+## Resolved: Ggit retired → CLI-backed `GitRepo`
+
+**Done.** `src/git.ts` is now `CliGitRepo` (backed by `src/git/cli.ts` + the pure
+parsers in `src/git/status.ts`); the `GitRepo` interface is byte-for-byte the same,
+so no consumer changed. `Ggit` is gone from the tree (`git.ts`, `gi.ts`, and the
+`generate-types` script) — the leak probe now reports **zero `Ggit*` objects**.
+
+**Why it had to go.** Ggit handed back GObjects via GI `<Type>.new()` /
+transfer-full returns, and **node-gtk never frees those** — upstream bug
+[romgrk/node-gtk#446](https://github.com/romgrk/node-gtk/issues/446) (GObjects from
+GI function returns are never GC'd, vs `new <Type>()` which is). The 1.5 s poll
+created several per tick (`Repository`, `Diff`, `Tree`, `Ref`, …), so the live heap
+grew without bound and every V8 major-GC mark got slower — surfacing as
+increasingly long, high-CPU UI hangs the longer quilx ran. (An interim mitigation
+— cache one `Repository`, cache `DiffOptions`, memoize ref/index reads — cut the
+churn to a single residual `GgitDiff`; the migration removes even that. A related
+leak was also fixed in `TextEditor.ts`: `followSystemColorScheme` now disconnects
+its global `Adw.StyleManager` `notify::dark` handler on `destroy`.)
+
+How the replacement satisfies the synchronous-read contract and the design details
+are in **"Migration design"** below; the short version: an async background poll
+(`git status --porcelain=v2 --branch -z` + `diff --numstat` + `ls-files`) updates
+cached state and fires `onChange`, and the getters return those cached fields with
+no I/O. `getStatus()` preserves the old totals — tracked `--numstat` **plus**
+untracked files counted as insertions (the branch indicator's `+` relies on this;
+binary and oversized untracked files count as 0) — read once per poll and folded
+into both the change-signature and the cached state.
+
+## Migration design: CLI-backed `GitRepo` (the way off Ggit)
+
+Goal: a clean, stable, performant, correct replacement for the libgit2 reads,
+**keeping the `GitRepo` interface byte-for-byte** so no consumer changes. `git.ts`
++ `gi.ts:26` are the *only* `Ggit` references in the tree, so this is contained.
+
+### The one hard constraint: reads must be available *synchronously*
+
+These call sites read git state on the synchronous path and cannot await:
+
+- `AppWindow` command predicates — `when: () => this.git.getBranch() !== null`
+  (evaluated synchronously every time the palette/keymap re-checks availability).
+- `GitBranchButton.refresh()` / `FileTree.refreshStatuses()` — render synchronously
+  inside an `onChange` callback (`getBranch`, `hasConflicts`, `isBusy`, `getStatus`,
+  `getAheadBehind`, `getFileStatuses`, `getTrackedPaths`).
+
+So we **cannot** make the getters async, and we **must not** make them block:
+`execFileSync` per getter would freeze the GLib main loop (and the UI) for the
+git command's duration (tens of ms on a big repo), on a hot path called per poll
+*and* per palette keystroke.
+
+### Architecture: async background poll → cached state → synchronous getters
+
+```
+                 ┌─ git status --porcelain=v2 --branch -z ─┐  (one spawn)
+ 1.5s poll  ──►  ├─ git diff --numstat -z HEAD ────────────┤  execFile (async,
+ (+ HEAD mon)    └─ git ls-files -z  (only when index/HEAD moved) ┘  callback)
+                                   │
+                                   ▼  parse (pure fns, unit-tested)
+                         this.state = { branch, ahead, behind, conflicts,
+                                        added, removed, fileStatuses, tracked }
+                                   │ fire onChange iff signature changed
+   getBranch()/getStatus()/… ◄────┘  return cached fields synchronously (no I/O)
+```
+
+- **Background poll uses `git(cwd, args, cb)`** (execFile callback form — proven
+  to fire promptly under the loop; promises are the only starved primitive). It
+  never blocks the UI.
+- **Getters return cached fields** — pure field reads, zero I/O, zero allocation
+  of native objects. This is what makes it both synchronous *and* performant.
+- **Seed once at construction** with `gitSync` (a single `git status --porcelain=v2
+  --branch` + `ls-files`) so the first paint and the first `when:` check are
+  correct before the first async poll lands. One short synchronous call at
+  startup is acceptable; the steady state is fully async.
+
+### Command mapping (libgit2 read → git CLI → parse)
+
+| `GitRepo` getter | git command(s) | notes |
+| --- | --- | --- |
+| `getBranch()` | `# branch.head` line of `status --porcelain=v2 --branch` | `(detached)` → use `# branch.oid` short SHA to match libgit2 shorthand |
+| `getAheadBehind()` | `# branch.ab +A -B` line (same status call) | line absent (no upstream/detached) → `null` |
+| `hasConflicts()` | any `u ` (unmerged) entry in the same status call | |
+| `getFileStatuses()` | file entries of the same status call, joined with `diff --numstat -z HEAD` | tracked → `{modified, added, removed}`; `?` → `{untracked}` (no ±, matches today) |
+| `getStatus()` (totals) | sum of `--numstat` adds/dels **+** line counts of untracked files | libgit2 used `SHOW_UNTRACKED_CONTENT` (untracked counted as insertions); replicate by reading untracked files (cap size; they're usually few/small) |
+| `getTrackedPaths()` | `git ls-files -z` → absolute paths | changes only on add/rm/commit → refresh on index/HEAD move, not every poll |
+
+**One status call covers branch + ahead/behind + conflicts + the file set.** Only
+`--numstat` (±) and `ls-files` (tracked) are extra; `ls-files` runs on low
+frequency. So a steady poll is **1–2 async spawns / 1.5 s**, none blocking.
+
+### Change detection (`onChange`)
+
+- Keep the **`Gio.FileMonitor` on `HEAD`** for instant branch-switch reaction
+  (single long-lived GObject — not part of the leak).
+- Keep the **1.5 s working-tree poll**, but compute the signature from the
+  porcelain output (branch + ab + per-file XY states + ± totals).
+- **Fixes the known staging gap for free:** porcelain v2 includes the staged (X)
+  state, so an external `git add` now moves the signature and fires `onChange`
+  (the old libgit2 `signature()` only saw HEAD→workdir totals).
+- Optional perf: only poll while the window is focused/mapped.
+
+### Mutations & `run()`
+
+`run(args, onDone)` keeps its contract (busy-count + `onChange` on transition and
+completion) but routes through `cli.ts`'s `git()` instead of `Gio.Subprocess` —
+one fewer subprocess mechanism, same async behaviour.
+
+### Correctness edge cases to preserve (cover with tests)
+
+Not-a-repo → all null/empty (`repoRoot` null short-circuits); detached HEAD →
+branch = short SHA, ahead/behind null; **unborn branch** (no commits) → `diff HEAD`
+fails, treat everything as untracked/added; renames (porcelain `2 `) consume the
+trailing original-path token; worktrees/submodules resolve via `cwd`; huge output
+bounded by the 64 MiB `maxBuffer`.
+
+### Migration phases (low-risk, incremental — interface never changes)
+
+1. **Parsers first (pure, testable).** Add `src/git/status.ts`: `parseStatus`
+   (porcelain v2 → `{branch, ahead, behind, conflicts, files}`) and `parseNumstat`.
+   Unit-test with fixtures + a temp-repo integration test (mkdtemp, like the LSP
+   tests). This is where "correct" is earned.
+2. **`CliGitRepo implements GitRepo`** in `src/git.ts` (or `src/git/repo.ts`):
+   sync seed + async poll + cached getters + HEAD monitor + `run()`. No consumer
+   touches it — they use the `openGitRepo` factory and the interface.
+3. **Flip the factory** `openGitRepo` to construct `CliGitRepo`. Smoke-test the
+   live app (branch button, file tree ±, fetch/pull/push, panel refresh).
+4. **Delete Ggit:** remove the `GgitRepo` class, `Ggit.init()`, `gi.ts:26`, and
+   `Ggit-1.0` from the `generate-types` script. Re-run the headless leak probe to
+   confirm zero `Ggit*` objects remain.
+
+### Why this satisfies the four goals
+
+- **Clean** — one small interface, backed by the CLI layer already used everywhere
+  else; deletes the entire libgit2/GObject code path.
+- **Stable** — no node-gtk object-lifecycle exposure at all (kills node-gtk#446
+  for git); `git` is the source of truth and honours the user's config/hooks.
+- **Performant** — steady state is 1–2 async spawns/1.5 s off the UI thread;
+  getters are cached field reads; no per-poll native allocation.
+- **Correct** — porcelain v2 is git's own machine format; parsers are pure and
+  unit-tested; the staging-signature gap is fixed as a side effect.
+
 ## Phasing
 
 - [x] Backend: `src/git/cli.ts` helper (`gitSync` / `git`) + `git status --porcelain=v2` parsing
@@ -257,6 +397,12 @@ push remote, auto-fetch interval, …) can be added as we iterate.
 - [x] Diff gutter in the editor (added/modified/deleted per line)
 - [ ] In-panel diffs / hunk-level staging
 - [ ] More git diff sources (staged / commit / PR) — see code-editing/diff.md
+- [x] Mitigate the Ggit/node-gtk leak in `src/git.ts` (cache repo + memoize reads) — see "Known issue" above
+- [x] Migrate off Ggit → CLI-backed `GitRepo` (see "Migration design" above; node-gtk#446):
+  - [x] `src/git/status.ts`: pure `parseStatus` (porcelain v2) + `parseNumstat` + `parseLsFiles`, with unit tests (`status.test.ts`, 14)
+  - [x] `CliGitRepo implements GitRepo`: sync seed + async poll + cached sync getters + HEAD monitor + `run()`; temp-repo integration test (`git.test.ts`, 7)
+  - [x] Flipped `openGitRepo` to `CliGitRepo`; live poll + HEAD-monitor verified under the app loop (edit → `getStatus` updates, branch switch → `getBranch` updates)
+  - [x] Deleted `GgitRepo` + `Ggit.init()` + `gi.ts` Ggit export + `Ggit-1.0` from `generate-types`; leak probe shows zero `Ggit*` objects
 
 ## Decisions (as built)
 
