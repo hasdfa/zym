@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { PluginRegistry } from './PluginRegistry.ts';
 import { typescriptPlugin } from '../plugins/typescript/index.ts';
 import { markdownPlugin } from '../plugins/markdown/index.ts';
+import { htmlPlugin } from '../plugins/html/index.ts';
+import { cssPlugin } from '../plugins/css/index.ts';
 
 export { PluginRegistry } from './PluginRegistry.ts';
 export type { PluginInfo } from './PluginRegistry.ts';
@@ -29,4 +31,6 @@ const BUILTINS_DIR = Path.resolve(Path.dirname(fileURLToPath(import.meta.url)), 
 export function registerBuiltinPlugins(): void {
   plugins.register(typescriptPlugin, Path.join(BUILTINS_DIR, 'typescript'));
   plugins.register(markdownPlugin, Path.join(BUILTINS_DIR, 'markdown'));
+  plugins.register(htmlPlugin, Path.join(BUILTINS_DIR, 'html'));
+  plugins.register(cssPlugin, Path.join(BUILTINS_DIR, 'css'));
 }
