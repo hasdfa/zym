@@ -56,9 +56,6 @@ regex in the current file.
 
 ### Git & GitHub
 
-Open pull requests, watch CI checks, and create or track PRs for the current
-branch — all from inside the editor.
-
 Checkout a pull request branch without leaving your editor. Filter as if you were on GitHub.
 
 ![Pull request picker filtered by author](img/demo-github-pr-branch-filter.png)
