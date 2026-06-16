@@ -273,6 +273,11 @@ export interface FoldProvider {
 export class TextEditor implements DocumentHost {
   readonly root: InstanceType<typeof Gtk.Box>;
 
+  // Guards dispose(): cleanup may be driven both explicitly (the tab-close path
+  // calls dispose() directly) and by the GTK `destroy` signal fallback below, so
+  // tearing down twice must be a no-op.
+  private disposed = false;
+
   // The document this editor is a *view* onto (owns the text model + undo + file I/O +
   // LSP). `this.buffer` is this view's own GtkSource.Buffer, kept in sync by the
   // document — separate from other views' buffers, so cursor/selection/folds/decorations
@@ -425,6 +430,8 @@ export class TextEditor implements DocumentHost {
       this.view.setEditable(false);
       this.editorModel.setFocused(false);
     }
+    // Fallback teardown: the tab-close path disposes us explicitly, but also tear
+    // down if the widget is destroyed by any other route (dispose() is idempotent).
     this.root.on('destroy', () => this.dispose());
   }
 
@@ -579,7 +586,9 @@ export class TextEditor implements DocumentHost {
   /** Tear this view down: detach from the document (the registry disposes it — closing
    *  the shared LSP doc + file monitor — only when the last view goes; a scratch
    *  buffer-only document is disposed directly), and drop the diagnostics renderer. */
-  private dispose(): void {
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.dismissHover();
     this.dismissSignature();
     this.syntax.dispose(); // detach buffer/view signal handlers + free the tree-sitter tree

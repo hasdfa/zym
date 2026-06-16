@@ -950,6 +950,7 @@ export class AppWindow {
     this.participants.delete(widget);
     this.editorRegistrations.get(widget)?.dispose(); // detach observing plugins
     this.editorRegistrations.delete(widget);
+    this.editors.get(widget)?.dispose(); // explicit teardown, not reliant on the GTK destroy signal
     this.editors.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
