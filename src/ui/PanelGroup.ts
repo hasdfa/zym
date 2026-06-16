@@ -95,6 +95,13 @@ export class PanelGroup {
   private readonly options: PanelGroupOptions;
   private rootNode: Node;
   private active: Leaf;
+  // The pinned "agent panel": a leaf that can't be split, never takes other tabs,
+  // and is never collapsed. Set via `pinChild` (an agent center pins its terminal);
+  // null for an ordinary center, where every leaf is equal.
+  private pinned: Leaf | null = null;
+  // The most recently active non-pinned leaf — the work area opens land in when the
+  // pinned panel itself is active. Stale entries (a collapsed leaf) are filtered out.
+  private lastWorkArea: Leaf | null = null;
 
   constructor(options: PanelGroupOptions = {}) {
     this.options = options;
@@ -113,14 +120,50 @@ export class PanelGroup {
 
   // --- Active leaf / tab access ---------------------------------------------
 
-  /** The `Panel` backing the active leaf — where new tabs are added. */
+  /** The `Panel` backing the active leaf — where keyboard focus sits. */
   get activePanel(): Panel {
     return this.active.panel;
   }
 
-  /** Add `child` as a new tab in the active leaf and select it. */
+  /**
+   * The `Panel` a new open should land in: the active leaf, except when the active
+   * leaf is the pinned agent panel — then the work area beside it (created on demand
+   * by splitting the agent panel to the right). For an ordinary center this is just
+   * `activePanel`.
+   */
+  get openPanel(): Panel {
+    if (this.pinned && this.active === this.pinned) return this.ensureWorkArea().panel;
+    return this.active.panel;
+  }
+
+  /** Add `child` as a new tab in the open panel and select it. Routes around the
+   *  pinned agent panel (see `openPanel`). */
   add(child: Widget, options: { title?: string; requireTabBar?: boolean } = {}): PanelChild {
+    return this.openPanel.add(child, options);
+  }
+
+  /**
+   * Pin `child` into the root leaf as the agent panel: a single tab in a leaf that
+   * can't be split, takes no other tabs, and is never collapsed. Must be called on a
+   * fresh center (the active leaf is the lone root leaf), before any split or add.
+   */
+  pinChild(child: Widget, options: { title?: string; requireTabBar?: boolean } = {}): PanelChild {
+    this.pinned = this.active;
     return this.active.panel.add(child, options);
+  }
+
+  // The work area for opens while the agent panel is active: reuse the most recent
+  // non-pinned leaf if one survives, otherwise split the agent panel to the right to
+  // birth one. Always returns an active leaf (splitLeaf activates the new one).
+  private ensureWorkArea(): Leaf {
+    const others = this.leaves().filter((leaf) => leaf !== this.pinned);
+    if (others.length === 0) return this.splitLeaf(this.pinned!, 'right');
+    const leaf =
+      this.lastWorkArea && others.includes(this.lastWorkArea)
+        ? this.lastWorkArea
+        : others[others.length - 1];
+    this.setActive(leaf);
+    return leaf;
   }
 
   // --- Splitting ------------------------------------------------------------
@@ -129,14 +172,29 @@ export class PanelGroup {
    * Split the active leaf, placing a fresh empty leaf on the given side, and
    * make that new leaf active. Returns the new `Panel` so the host can populate
    * it. `left`/`right` produce a side-by-side split; `up`/`down` a stacked one.
+   *
+   * The pinned agent panel is never subdivided: a split from it instead opens the
+   * work area beside it (created to the right if absent, else focused and split in
+   * the requested direction).
    */
   split(direction: Direction): Panel {
+    if (this.pinned && this.active === this.pinned) {
+      const others = this.leaves().filter((leaf) => leaf !== this.pinned);
+      if (others.length === 0) return this.splitLeaf(this.pinned, 'right').panel;
+      const work = this.ensureWorkArea(); // reuse + activate an existing work area
+      return this.splitLeaf(work, direction).panel;
+    }
+    return this.splitLeaf(this.active, direction).panel;
+  }
+
+  // Split `target`, seating a fresh empty leaf on the given side, and make the new
+  // leaf active. Returns the new leaf.
+  private splitLeaf(target: Leaf, direction: Direction): Leaf {
     const horizontal = direction === 'left' || direction === 'right';
     const orientation = horizontal
       ? Gtk.Orientation.HORIZONTAL
       : Gtk.Orientation.VERTICAL;
 
-    const target = this.active;
     const parent = target.parent;
     const wasStart = parent ? parent.start === target : false;
 
@@ -168,7 +226,7 @@ export class PanelGroup {
     if (size > 0) paned.setPosition(Math.floor(size / 2));
 
     this.setActive(newLeaf);
-    return newLeaf.panel;
+    return newLeaf;
   }
 
   // --- Closing / collapsing -------------------------------------------------
@@ -177,6 +235,8 @@ export class PanelGroup {
    *  collapses so its sibling reclaims the space; the root leaf stays put and
    *  shows its empty state. */
   closeActivePanel(): void {
+    // The pinned agent panel is never closed (its terminal tab-close is vetoed too).
+    if (this.pinned && this.active === this.pinned) return;
     // An already-empty pane has no tabs to close, so closeAll would be a no-op.
     // Route it through onLeafEmpty directly so `pane:close` still collapses an
     // empty non-root pane (the root leaf stays put — there's no sibling to
@@ -195,6 +255,7 @@ export class PanelGroup {
   // so its sibling reclaims the freed space.
   private onLeafEmpty(leaf: Leaf): void {
     if (this.rootNode === leaf) return;
+    if (leaf === this.pinned) return; // the agent panel stays put even if somehow emptied
     this.collapse(leaf);
   }
 
@@ -408,6 +469,7 @@ export class PanelGroup {
       onActivate: () => {
         if (this.active === leaf) return;
         this.active = leaf;
+        if (this.pinned && leaf !== this.pinned) this.lastWorkArea = leaf;
         this.options.onActiveChanged?.(leaf.panel.activeChild);
       },
     });

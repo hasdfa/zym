@@ -17,6 +17,7 @@
  * The assembled widget (header bar + scrollable list) is exposed via `root`.
  */
 import * as Os from 'node:os';
+import * as Path from 'node:path';
 import { Adw, GLib, Gtk, Pango } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
@@ -27,10 +28,9 @@ import { createAgentStatusIcon, createAgentModeBadge, agentWorktreeMarkup } from
 import type { AgentTerminal } from './AgentTerminal.ts';
 
 const USER_GLYPH = String.fromCodePoint(0xf007); // nf-fa-user (the default/user entry)
-// Header logo placeholder (also the collapse toggle): a solid square glyph (so
-// width == height) until there's a real logo. `LOGO_SIZE` makes the widget square.
-const LOGO_GLYPH = '■'; // U+25A0 black square — placeholder
 const CHANGED_GLYPH = String.fromCodePoint(0xf040); // nf-fa-pencil (changed-files badge)
+// Project name shown in the sidebar header: the last path component of the cwd.
+const PROJECT_NAME = Path.basename(process.cwd());
 // Add/remove animation duration: each row rides in/out inside a Gtk.Revealer that
 // slides its height open (on launch) or shut (on close).
 const ROW_TRANSITION_MS = 200;
@@ -56,11 +56,6 @@ addStyles(`
     color: ${theme.ui.fg};
     background-color: ${theme.ui.bg};
     border-left-color: ${theme.ui.info};
-  }
-  /* Logo placeholder (also the collapse toggle): a solid square glyph, accent-
-     colored. Swap for the real logo image when there is one. */
-  #WorkbenchList .workbenchlist-logo {
-    color: ${theme.ui.fg};
   }
   /* Per-row edited-files count — a flat, muted button (click opens the files). */
   #WorkbenchRow .workbenchrow-files {
@@ -133,8 +128,11 @@ export class WorkbenchList {
   // user row by default. Reflects the last-focused agent; see AppWindow.
   private selected: AgentTerminal | null = null;
   // Collapsed = icons only (narrow); expanded = icons + text. Toggled by the
-  // header-bar logo button.
+  // header-bar sidebar toggle button.
   private collapsed = false;
+  // The project-name title in the header bar; hidden while collapsed (the bar is
+  // too narrow to show it).
+  private headerTitle: InstanceType<typeof Adw.WindowTitle> | null = null;
   private readonly subs = new CompositeDisposable();
 
   constructor(options: WorkbenchListOptions = {}) {
@@ -174,27 +172,20 @@ export class WorkbenchList {
   }
 
   // The sidebar header bar: an Adw.HeaderBar (so its height/chrome matches the
-  // window header bar beside it) whose only content is a left-aligned logo button
-  // — styled flat like the git branch button — that toggles collapse. The logo is
-  // a square placeholder for now (no asset yet). `.workbench-header` lets the chrome
-  // theme the bar.
+  // window header bar beside it) showing the project name as its centered title.
+  // `.workbench-header` lets the chrome theme the bar.
   private buildHeader(): InstanceType<typeof Adw.HeaderBar> {
     const bar = new Adw.HeaderBar();
     bar.addCssClass('workbench-header');
     bar.setShowStartTitleButtons(false);
     bar.setShowEndTitleButtons(false);
-    bar.setTitleWidget(new Gtk.Box()); // clear the centered title — logo only
 
-    const logo = new Gtk.Label({ label: LOGO_GLYPH }); // placeholder; swap for the real logo
-    logo.addCssClass('workbenchlist-logo');
-    logo.setValign(Gtk.Align.CENTER);
-    logo.setHalign(Gtk.Align.CENTER);
-    const button = new Gtk.Button();
-    button.setChild(logo);
-    button.addCssClass('flat'); // same flat style as the git branch button
-    button.setTooltipText('Collapse / expand the sidebar');
-    button.on('clicked', () => this.toggleCollapsed());
-    bar.packStart(button);
+    // The project name (cwd basename); hidden when collapsed (no room in 48px).
+    // Packed at the start (not the centered title slot) so it aligns left.
+    bar.setTitleWidget(new Gtk.Box()); // clear the centered title slot
+    this.headerTitle = new Adw.WindowTitle({ title: PROJECT_NAME });
+    this.headerTitle.setTooltipText(process.cwd());
+    bar.packStart(this.headerTitle);
     return bar;
   }
 
@@ -202,6 +193,7 @@ export class WorkbenchList {
   // let the host resize the sidebar.
   private toggleCollapsed(): void {
     this.collapsed = !this.collapsed;
+    this.headerTitle?.setVisible(!this.collapsed); // no room for the title at 48px
     this.rebuild();
     this.options.onToggleCollapsed?.(this.collapsed);
   }

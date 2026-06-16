@@ -17,6 +17,7 @@ import {
   stashDrop,
   type GitDone,
 } from '../git/cli.ts';
+import type { GitRepo } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 type StashAction = 'pop' | 'apply' | 'drop';
@@ -28,7 +29,7 @@ const RUN: Record<StashAction, (root: string, ref: string, onDone: GitDone) => v
 };
 const PAST: Record<StashAction, string> = { pop: 'popped', apply: 'applied', drop: 'dropped' };
 
-export function openStashPicker(host: Overlay, cwd: string, action: StashAction): void {
+export function openStashPicker(host: Overlay, cwd: string, action: StashAction, git: GitRepo): void {
   const root = repoRoot(cwd);
   if (!root) {
     openPicker({
@@ -60,7 +61,11 @@ export function openStashPicker(host: Overlay, cwd: string, action: StashAction)
     onSelect: (label) => {
       const ref = refByLabel.get(label);
       if (!ref) return;
+      // pop/apply/drop mutate the working tree (or stash list) — mark the repo busy
+      // and refresh on completion (see GitRepo.beginOperation).
+      const end = git.beginOperation();
       RUN[action](root, ref, (ok, _out, stderr) => {
+        end();
         if (ok) quilx.notifications.addSuccess(`Stash ${PAST[action]}`);
         else quilx.notifications.addError(`Stash ${action} failed`, { detail: stderr.trim() });
       });

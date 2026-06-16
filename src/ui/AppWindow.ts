@@ -20,7 +20,6 @@ import {
   type Application,
   type ApplicationWindow,
   type ToastOverlay,
-  type WindowTitle,
 } from '../gi.ts';
 import { FileTree } from './FileTree.ts';
 import { Panel, type PanelChild } from './Panel.ts';
@@ -97,8 +96,6 @@ function wordUnderCursor(doc: LspDocument): string {
   return cp.slice(start, end).join('');
 }
 
-// The header-bar title is the project name: the last path component of the cwd.
-const PROJECT_NAME = Path.basename(process.cwd());
 const DEFAULT_WIDTH = 1400;
 const DEFAULT_HEIGHT = 950;
 const TOAST_TIMEOUT = 15;
@@ -122,12 +119,6 @@ export class AppWindow {
   // widget (e.g. an editor's search bar, not just the editor view). Keyed by the
   // tab's content widget (the `.is-panel-child`); a WeakMap so closed tabs drop.
   private readonly focusMemory = new WeakMap<Widget, Widget>();
-
-  // The panel that last held a *focused* text editor — where the next file-open
-  // lands when focus has since moved to a non-editor zone (file tree, a picker).
-  // Lets a new file follow the last active editor into the right-dock review pane
-  // instead of always opening in the center. Updated in rememberFocus.
-  private lastEditorPanel: Panel | null = null;
 
   // Editor tabs in the active workbench's center, mapped from their root widget so the
   // active child can be resolved back to its editor regardless of which split it's in.
@@ -163,7 +154,6 @@ export class AppWindow {
   private quitting = false;
   // The most recently focused agent — the default target for send-to-agent.
   private lastAgent: AgentTerminal | null = null;
-  private readonly windowTitle: WindowTitle;
   // Header-bar unsaved marker: visible whenever any open editor is modified.
   private modifiedDot!: InstanceType<typeof Gtk.Label>;
   private readonly toastOverlay: ToastOverlay;
@@ -214,11 +204,10 @@ export class AppWindow {
     this.app = app;
     this.onQuit = onQuit;
 
-    this.windowTitle = new Adw.WindowTitle({ title: PROJECT_NAME });
     this.toastOverlay = new Adw.ToastOverlay();
 
     this.git = openGitRepo(process.cwd());
-    this.branchButton = new GitBranchButton(this.git, () => openBranchPicker(this.overlay, process.cwd()));
+    this.branchButton = new GitBranchButton(this.git, () => openBranchPicker(this.overlay, process.cwd(), this.git));
     this.githubButtons = new GithubButtons({
       git: this.git,
       cwd: process.cwd(),
@@ -483,23 +472,13 @@ export class AppWindow {
     return this.openFileIn(path, this.targetPanelForNewFile());
   }
 
-  // Where a newly-opened file should land: the panel that last held a focused
-  // editor when that's the right-dock review pane (still docked in the visible
-  // workbench and showing an editor) — so files opened while focus sits in the
-  // file tree or a picker follow the file being reviewed into the side dock. Every
-  // other case uses the center's active split, which already covers a freshly
-  // split empty pane (it becomes the active panel).
+  // Where a newly-opened file should land: the center's open panel — the active
+  // split, or (in an agent workbench, when the agent panel itself is active) the
+  // work area beside it, created on demand. Files opened while focus sits in the
+  // file tree or a picker still follow the last active center split, since focusing
+  // those docks doesn't change which center leaf is active.
   private targetPanelForNewFile(): Panel {
-    const panel = this.lastEditorPanel;
-    if (
-      panel === this.workbench.rightEditors &&
-      panel.root.getRoot() !== null && // the right pane is actually docked, not detached
-      panel.activeChild !== null &&
-      this.editors.has(panel.activeChild) // and still shows an editor, not emptied
-    ) {
-      return panel;
-    }
-    return this.workbench.center.activePanel;
+    return this.workbench.center.openPanel;
   }
 
   // Open `path` as a tab in `panel` (the center's active leaf, or the right-dock
@@ -625,14 +604,14 @@ export class AppWindow {
     // When the agent process exits, the agent and its workbench linger (the terminal
     // shows an "exited" notice); the user restarts or closes it from the workbench list.
     // The agent gets its own workbench: a fresh `Workbench` (its own center + Files/Git +
-    // bottom docks) whose center opens the terminal as the initial tab (the user can
-    // open files / split inside it too). Activate (show) the workbench *before* adding
-    // the terminal — adding a tab to a detached, unrooted Adw.TabView yields a blank
-    // page.
+    // bottom docks) whose center pins the terminal as the agent panel — an unsplittable
+    // leaf that takes no other tabs; everything the agent opens (reviewed files, etc.)
+    // lands in a split to its right. Activate (show) the workbench *before* adding the
+    // terminal — adding a tab to a detached, unrooted Adw.TabView yields a blank page.
     const workbench = this.buildWorkbench(agent);
     this.activateWorkbench(workbench);
     this.terminals.set(agent.root, agent);
-    const child = workbench.center.add(agent.root, { title: agentTabTitle(agent) });
+    const child = workbench.center.pinChild(agent.root, { title: agentTabTitle(agent) });
     this.agentChildren.set(agent.root, child);
     // A running agent reports as modified, so it's consulted before exit.
     this.participants.set(agent.root, quilx.session.registerParticipant(agent));
@@ -830,6 +809,25 @@ export class AppWindow {
     if (agent) this.closeAgent(agent);
   }
 
+  // Branch the current agent: open a NEW agent/workbench whose claude session is
+  // forked off the current agent's conversation (`--resume <id> --fork-session`).
+  // The fork is a transcript copy, so the original agent keeps running, intact and
+  // independent. Requires a claude agent that has reported its session id (the
+  // fork has nothing to branch from otherwise).
+  private branchCurrentAgent(): void {
+    const agent = this.currentAgent();
+    if (!agent) return;
+    const sessionId = agent.sessionId;
+    if (!sessionId) {
+      quilx.notifications.addWarning('No conversation to branch yet');
+      return;
+    }
+    this.openAgent({
+      resume: { sessionId, fork: true },
+      title: `${agent.title} (branch)`,
+    });
+  }
+
   private renameCurrentAgent(): void {
     const agent = this.currentAgent();
     if (agent) this.renameAgentPrompt(agent);
@@ -841,8 +839,8 @@ export class AppWindow {
   }
 
   // Review the files an agent has edited this session: switch to its workbench and
-  // open every edited file as a tab in the right dock, opened to half the editor
-  // width so the files sit beside the agent's terminal.
+  // open every edited file as a tab in the work area split beside the agent panel
+  // (created on demand, to the right of the terminal).
   private openAgentChanges(agent: AgentTerminal): void {
     const files = agent.changedFiles;
     if (files.length === 0) {
@@ -850,13 +848,10 @@ export class AppWindow {
       return;
     }
     this.showAgent(agent); // this.workbench is now the agent's
-    const panel = this.workbench.rightEditors;
-    // Dock (or re-size) the right pane at 1/3, then fill it. Re-applying the
-    // fraction on every click re-opens it third-width even if it was dragged narrow.
-    this.workbench.setRightPane({ root: panel.root }, 1 / 3);
+    const panel = this.workbench.center.openPanel; // the work area (split right of the agent)
     // Open without focusing each in turn, then reveal the first one that landed in
-    // the pane. A file already open elsewhere is revealed in place (one editor per
-    // file), so it may not join the pane — skip it when choosing what to focus.
+    // the work area. A file already open elsewhere is revealed in place (one editor
+    // per file), so it may not join the work area — skip it when choosing what to focus.
     let firstInPane: TextEditor | null = null;
     for (const path of files) {
       const editor = this.openFileIn(path, panel, { focus: false });
@@ -868,20 +863,17 @@ export class AppWindow {
     }
   }
 
-  // Auto-open a file the agent just edited in *its own* workbench's right dock,
+  // Auto-open a file the agent just edited in *its own* workbench's work area,
   // without switching to that workbench. Mirrors openAgentChanges but targets a
   // (possibly inactive) workbench and never steals focus. A file already open
-  // anywhere keeps its single editor (and we don't dock an empty pane for it).
+  // anywhere keeps its single editor.
   private autoOpenChangedFile(agent: AgentTerminal, path: string): void {
     const workbench = this.workbenches.get(agent);
     if (!workbench) return;
     if ([...this.editors.values()].some((editor) => editor.currentFile === path)) return;
-    const panel = workbench.rightEditors;
-    // Dock the right pane (at 1/3) only when it's empty — re-applying the fraction
-    // on later files would undo a width the user dragged. Docking must precede the
-    // add: a tab added to a detached, unrooted TabView yields a blank page.
-    if (panel.getChildren().length === 0) workbench.setRightPane({ root: panel.root }, 1 / 3);
-    this.openFileIn(path, panel, { focus: false });
+    // openPanel splits the agent panel to the right on the first file, then reuses
+    // that work area for the rest.
+    this.openFileIn(path, workbench.center.openPanel, { focus: false });
   }
 
   // Restart an agent: retire the old one and relaunch with the same cwd, resuming
@@ -1027,21 +1019,12 @@ export class AppWindow {
     const keymapDock = new Panel({ onTabCloseRequest: () => this.hideBottomDock('keymap') });
     keymapDock.add(keymapPanel.root, { title: 'Keybindings' });
 
-    // The right-dock editor group: holds the edited-file tabs opened by the
-    // "edited files" button. Shares the editor lifecycle (active-tab tracking,
-    // close cleanup) with the center; emptying it collapses the dock away.
-    const rightEditors = new Panel({
-      onActiveChanged: () => this.onActiveTabChanged(),
-      onClosed: (widget) => this.disposeChild(widget),
-      onEmpty: () => this.detachRightPane(rightEditors),
-    });
-
     const workbench = new Workbench<'user' | AgentTerminal>(
       owner,
       {
         center, fileTree, gitPanel, leftPanel, filesTab, gitTab,
         notificationLog, notificationPanel, diagnosticsPanel, diagnosticsDock,
-        referencesList, referencesDock, keymapPanel, keymapDock, rightEditors,
+        referencesList, referencesDock, keymapPanel, keymapDock,
       },
       { showSideDock: owner === 'user' },
     );
@@ -1134,9 +1117,10 @@ export class AppWindow {
     this.modifiedDot.setOpacity(0);
     this.modifiedDot.setCanTarget(false); // no stray tooltip while invisible
 
+    // The project name now lives in the sidebar (WorkbenchList) header; the center
+    // title slot carries only the unsaved-changes marker for now.
     const title = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     title.setHalign(Gtk.Align.CENTER);
-    title.append(this.windowTitle);
     title.append(this.modifiedDot);
     header.setTitleWidget(title);
     return header;
@@ -1341,6 +1325,7 @@ export class AppWindow {
       'agent:resume': 'Resume the stopped agent',
       'agent:resume-conversation': 'Resume a past conversation…',
       'agent:continue': 'Continue the latest conversation',
+      'agent:branch': 'Branch the agent into a new forked agent',
       'agent:stop': 'Stop the active agent',
       'agent:restart': 'Restart the agent (resume its conversation)',
       'agent:rename': 'Rename the agent',
@@ -1510,13 +1495,6 @@ export class AppWindow {
   // flash of the empty state).
   private detachDock(panel: Panel) {
     if (panel === this.workbench.leftPanel) this.workbench.setRight(null);
-  }
-
-  // Collapse the right-dock editor group when its last edited-file tab is closed,
-  // so the center reclaims the half-width it held. Mirrors detachDock; onEmpty
-  // fires from the active workbench, the only one whose tabs can be closed.
-  private detachRightPane(panel: Panel) {
-    if (panel === this.workbench.rightEditors) this.workbench.setRightPane(null);
   }
 
   // Reveal a left-dock tab, re-attaching the left panel and re-adding the tab if
@@ -1871,6 +1849,10 @@ export class AppWindow {
       'agent:resume': { didDispatch: () => this.resumeCurrentAgent(), when: () => this.currentAgent()?.exited === true },
       'agent:resume-conversation': () => this.resumeAgentPicker(),
       'agent:continue': () => this.openAgent({ resume: { continue: true } }),
+      // Branch the current agent into a new agent/workbench: a fresh session
+      // forked off its conversation (`--resume <id> --fork-session`), so the
+      // original agent is left running and untouched.
+      'agent:branch': { didDispatch: () => this.branchCurrentAgent(), when: () => this.currentAgent() !== null },
       // Lifecycle / navigation for the active agent. Stop SIGTERMs the child (the widget
       // lingers as exited, resumable); next/prev cycle through the running agents.
       // Closing an agent's tab never retires it — it just backgrounds it (the agent stays
@@ -1906,19 +1888,19 @@ export class AppWindow {
       'git:pull': { didDispatch: () => this.runGit(['pull', '--ff-only'], 'Pull'), when: () => this.git.getBranch() !== null },
       'git:push': { didDispatch: () => this.runGit(['push'], 'Push'), when: () => this.git.getBranch() !== null },
       'git:branch-switch': {
-        didDispatch: () => openBranchPicker(this.overlay, process.cwd()),
+        didDispatch: () => openBranchPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
       },
       'git:branch-delete': {
-        didDispatch: () => openDeleteBranchPicker(this.overlay, process.cwd()),
+        didDispatch: () => openDeleteBranchPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
       },
       'git:branch-merge': {
-        didDispatch: () => openMergeBranchPicker(this.overlay, process.cwd()),
+        didDispatch: () => openMergeBranchPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
       },
       'git:branch-rename': {
-        didDispatch: () => openRenameBranchPicker(this.overlay, process.cwd()),
+        didDispatch: () => openRenameBranchPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
       },
       'git:stash-push': {
@@ -1926,15 +1908,15 @@ export class AppWindow {
         when: () => this.git.getBranch() !== null,
       },
       'git:stash-pop': {
-        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'pop'),
+        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'pop', this.git),
         when: () => this.git.getBranch() !== null,
       },
       'git:stash-apply': {
-        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'apply'),
+        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'apply', this.git),
         when: () => this.git.getBranch() !== null,
       },
       'git:stash-drop': {
-        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'drop'),
+        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'drop', this.git),
         when: () => this.git.getBranch() !== null,
       },
       'github:issue-picker': {
@@ -1950,7 +1932,7 @@ export class AppWindow {
         when: () => this.git.getBranch() !== null,
       },
       'github:pull-request-checkout': {
-        didDispatch: () => switchToGithubPrPicker(this.overlay, process.cwd()),
+        didDispatch: () => switchToGithubPrPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
       },
     });
@@ -1980,7 +1962,9 @@ export class AppWindow {
   private stashChanges() {
     const root = repoRoot(process.cwd());
     if (!root) return;
+    const end = this.git.beginOperation(); // mutates the working tree → busy + refresh
     stashPush(root, (ok, _out, stderr) => {
+      end();
       if (ok) quilx.notifications.addSuccess('Stashed changes');
       else quilx.notifications.addError('Stash failed', { detail: stderr.trim() });
     });
@@ -2016,7 +2000,9 @@ export class AppWindow {
       quilx.notifications.addInfo('Commit aborted (empty message)');
       return;
     }
+    const end = this.git.beginOperation(); // moves HEAD → busy + refresh
     commit(repo, msgPath, (ok, _out, err) => {
+      end();
       if (ok) quilx.notifications.addSuccess('Committed');
       else quilx.notifications.addError('Commit failed', { detail: err.trim() });
     });
@@ -2334,9 +2320,6 @@ export class AppWindow {
     // session, focusing the child while the mode says normal (see Terminal).
     if (child === focus) this.focusMemory.delete(child);
     else this.focusMemory.set(child, focus);
-    // Remember which panel hosts the focused editor, so a later file-open can
-    // follow it into a side dock (see targetPanelForNewFile).
-    if (this.editors.has(child)) this.lastEditorPanel = Panel.containing(child);
   }
 
   // The panel-tab content widget (`.is-panel-child`, set by Panel.add) that

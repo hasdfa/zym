@@ -23,7 +23,6 @@ export const Gtk = gi.require('Gtk', '4.0');
 export const Adw = gi.require('Adw', '1');
 export const GtkSource = gi.require('GtkSource', '5');
 export const Vte = gi.require('Vte', '3.91');
-export const Ggit = gi.require('Ggit', '1.0');
 
 /** Cooperatively drive GLib's main loop from Node's event loop. */
 export function startLoop(): void {
