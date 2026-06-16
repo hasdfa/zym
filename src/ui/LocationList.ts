@@ -41,8 +41,8 @@ export interface LocationListOptions {
   onActivate: (item: LocationItem) => void;
 }
 
-const MUTED = theme.ui.textMuted ?? '#9a9996';
-const SELECTION = theme.ui.selectedBg ?? '@theme_selected_bg_color';
+const MUTED = theme.ui.textMuted;
+const SELECTION = theme.ui.selectedBg;
 // Row glyphs render a touch smaller than the text (Pango relative size).
 const ICON_SIZE = '85%';
 addStyles(`

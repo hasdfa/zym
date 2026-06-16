@@ -9,8 +9,7 @@
  * through `quilx.notifications`.
  */
 import { Gtk } from '../gi.ts';
-import { openPicker } from './Picker.ts';
-import { proseMarkup } from './proseMarkup.ts';
+import { openPicker, highlightMarkup } from './Picker.ts';
 import { quilx } from '../quilx.ts';
 import {
   repoRoot,
@@ -40,8 +39,10 @@ export function openBranchPicker(host: Overlay, cwd: string): void {
     placeholder: 'Switch branch…',
     items: branches,
     // Highlight the fuzzy match; tag the current branch with a muted "current".
+    // Branch names are identifiers — render them in the picker's (app) monospace
+    // font rather than the prose/sans face.
     formatMain: (item, positions) => {
-      const main = proseMarkup(item.text, positions);
+      const main = highlightMarkup(item.text, positions);
       return item.value === current ? { main, detail: 'current' } : main;
     },
     onSelect: (branch) => {

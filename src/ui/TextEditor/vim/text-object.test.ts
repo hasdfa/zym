@@ -195,3 +195,35 @@ test('cc changes the whole line, keeping it as one (linewise) edit', () => {
   assert.equal(editor.lineTextForBufferRow(1), ''); // line content cleared
   assert.equal(editor.getLineCount(), 4); // line still exists (one\n<empty>\nthree\n)
 });
+
+test('dih deletes the inner LHS of an assignment', () => {
+  const { editor, run, at } = setup('const value = [1, 2]\n');
+  at(0, 16); // anywhere on the line (in the RHS)
+  run('Delete');
+  run('InnerLhs');
+  assert.equal(editor.getText(), ' = [1, 2]\n'); // "const value" gone
+});
+
+test('dil deletes the inner RHS, leaving a trailing semicolon', () => {
+  const { editor, run, at } = setup('let a = foo();\n');
+  at(0, 2);
+  run('Delete');
+  run('InnerRhs');
+  assert.equal(editor.getText(), 'let a = ;\n'); // "foo()" gone, ";" kept
+});
+
+test('dal deletes the separator and the RHS', () => {
+  const { editor, run, at } = setup('let a = foo()\n');
+  at(0, 2);
+  run('Delete');
+  run('ARhs');
+  assert.equal(editor.getText(), 'let a \n'); // "= foo()" gone
+});
+
+test('dah deletes the LHS through the separator', () => {
+  const { editor, run, at } = setup('key: value\n');
+  at(0, 6);
+  run('Delete');
+  run('ALhs');
+  assert.equal(editor.getText(), ' value\n'); // "key:" gone
+});

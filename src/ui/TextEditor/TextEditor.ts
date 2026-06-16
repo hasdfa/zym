@@ -22,14 +22,18 @@ import { attachVim } from './vim/index.ts';
 import { quilx } from '../../quilx.ts';
 import { DiagnosticsView } from '../../lsp/diagnostics/DiagnosticsView.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
-import { monospaceFontFamily } from '../../fonts.ts';
+import { fonts } from '../../fonts.ts';
 import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
 import { langIdForPath } from '../../syntax/grammar.ts';
 import { DecorationController } from './DecorationController.ts';
+import { InlineBlockController } from './InlineBlockController.ts';
+import { InlinePeek, type InlinePeekOptions } from './InlinePeek.ts';
 import { GitGutter } from './GitGutter.ts';
 import { UnderlineOverlay } from './UnderlineOverlay.ts';
+import { IndentGuideOverlay } from './IndentGuideOverlay.ts';
 import { SearchController } from './SearchController.ts';
 import { SearchBar } from './SearchBar.ts';
+import { LeapController, type LeapRequest } from './LeapController.ts';
 import { CompletionController } from './CompletionController.ts';
 import { createBufferWordsSource } from './createBufferWordsSource.ts';
 import { createLspCompletionSource } from './createLspCompletionSource.ts';
@@ -59,7 +63,7 @@ addStyles(`
   .quilx-editor { color: ${theme.ui.fg}; caret-color: ${theme.ui.fg}; }
   /* Pending-command preview ("showcmd"), floated in the editor's bottom-right. */
   .quilx-showcmd {
-    background-color: ${theme.ui.bg ?? '#000'};
+    background-color: ${theme.ui.bg ?? theme.ui.popoverBg};
     color: ${theme.ui.fg};
     opacity: 0.75;
     padding: 1px 6px;
@@ -68,7 +72,7 @@ addStyles(`
   }
   /* Hollow caret shown over the cursor's character while the editor is unfocused. */
   .quilx-unfocused-caret {
-    border: 1.5px solid ${theme.ui.textMuted ?? theme.ui.lineNumber ?? theme.ui.fg};
+    border: 1.5px solid ${theme.ui.textMuted};
     border-radius: 1px;
   }
   /* Filled caret block for positions with no glyph to reverse-video (empty line,
@@ -84,17 +88,17 @@ addStyles(`
   }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
   .quilx-placeholder {
-    color: ${theme.ui.textMuted ?? theme.ui.lineNumber ?? theme.ui.fg};
+    color: ${theme.ui.textMuted};
     opacity: 0.6;
   }
   /* LSP hover card: a floating tooltip over the editor. */
   .quilx-hover {
-    background-color: ${theme.ui.popoverBg ?? theme.ui.bg ?? '#1e1e1e'};
+    background-color: ${theme.ui.popoverBg};
     color: ${theme.ui.fg};
     border: 1px solid alpha(${theme.ui.fg}, 0.2);
     border-radius: 6px;
     padding: 6px 8px;
-    box-shadow: 0 1px 3px alpha(black, 0.3);
+    box-shadow: 0 1px 3px ${theme.ui.shadow};
   }
 `);
 
@@ -121,6 +125,7 @@ interface SearchInputRequest {
   onCancel(): void;
 }
 type VimSearchBridge = { setSearchInput?(provider: (req: SearchInputRequest) => void): void };
+type VimLeapBridge = { setLeapInput?(provider: (req: LeapRequest) => void): void };
 
 // Search keybindings are registered once globally (per-view command handlers are
 // added per editor in installSearch). Normal mode only: `/`/`?` open the bar,
@@ -130,7 +135,7 @@ function registerSearchKeymapsOnce(): void {
   if (searchKeymapsRegistered) return;
   searchKeymapsRegistered = true;
   quilx.keymaps.add('editor-search', {
-    'GtkSourceView.normal-mode': {
+    '#TextEditor.normal-mode': {
       '/': 'editor:search-forward',
       '?': 'editor:search-backward',
       n: 'editor:search-next',
@@ -175,6 +180,9 @@ export interface BufferEditorOptions {
   /** A file path/name whose extension selects the tree-sitter grammar, so an
    *  embedded buffer (e.g. a diff pane) still gets syntax highlighting. */
   languagePath?: string;
+  /** Tree-sitter code folding (chevron gutter). Defaults on; diff panes turn it
+   *  off — they fold by unchanged-region (DiffFold), not by code structure. */
+  folding?: boolean;
 }
 
 // Syntax-highlight a signature fragment (falling back to plain escaped text when
@@ -234,16 +242,32 @@ function signatureMarkup(
   );
 }
 
+/** What the editor's `fold:*` commands drive — SyntaxController by default, or a
+ *  diff pane's DiffFold. (SyntaxController already satisfies this structurally.) */
+export interface FoldProvider {
+  toggleFoldAtCursor(): void;
+  setFoldAtCursor(folded: boolean): void;
+  foldAll(): void;
+  unfoldAll(): void;
+  revealLine(row: number): void;
+}
+
 export class TextEditor {
   readonly root: InstanceType<typeof Gtk.Box>;
 
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
   private readonly syntax: SyntaxController;
+  // What the vim `fold:*` commands drive. Defaults to the tree-sitter folder
+  // (SyntaxController); a diff pane swaps in its own DiffFold (unchanged-region
+  // folds) via `setFoldProvider`, since it runs SyntaxController folding off.
+  private foldProvider: FoldProvider | null = null;
   private readonly editorModel: EditorModel;
   private readonly vimState: VimState;
   private readonly decorationController: DecorationController;
+  private readonly inlineBlockController: InlineBlockController;
   private readonly search: SearchController;
+  private leap!: LeapController; // built in buildEditorArea (needs the overlay)
   private completion!: CompletionController; // built in buildEditorArea (needs the overlay)
   private searchBar!: SearchBar; // built in buildEditorArea (needs the overlay)
   private underlineOverlay!: UnderlineOverlay; // drawn diagnostic squiggles; built in buildEditorArea
@@ -261,6 +285,7 @@ export class TextEditor {
   // Vertical box so the label fills (and wraps to) the card's fixed width.
   private readonly hoverCard = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the hover card
+  private inlinePeek!: InlinePeek; // focusable inline peek (see-definition); built in buildEditorArea
   // The signature-help card: shown live while typing a call's arguments. Same
   // floating-card pattern as hover; `signatureSeq` drops stale async responses.
   private readonly signatureLabel = new Gtk.Label({ useMarkup: true, wrap: true, xalign: 0 });
@@ -276,6 +301,8 @@ export class TextEditor {
   private readonly showcmdLabel = new Gtk.Label({ label: '' });
   private readonly caretLayer = new Gtk.Fixed();
   private readonly caret = new Gtk.Box();
+  // The leap (`g s`) jump-label overlay: floated single-char labels live here.
+  private readonly leapLayer = new Gtk.Fixed();
   // Pool of caret widgets for the extra (multi-cursor) carets, grown on demand
   // and hidden when unused. Driven by `editorModel.onExtraCursors`.
   private readonly extraCarets: InstanceType<typeof Gtk.Box>[] = [];
@@ -317,9 +344,14 @@ export class TextEditor {
     });
     this.view = this.createView(this.buffer);
     // Tree-sitter highlighting + folding for this view/buffer.
-    this.syntax = new SyntaxController(this.view, this.buffer, { lineNumbers: !this.bufferMode });
+    this.syntax = new SyntaxController(this.view, this.buffer, {
+      lineNumbers: !this.bufferMode,
+      folding: this.bufferMode?.folding,
+    });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
+    // Real (tree-sitter) indent source for `=`/paste-reindent/new lines.
+    this.editorModel.setIndentSource((row) => this.syntax.indentLevelForRow(row));
     // Default indentation from config; `loadFile` detects and overrides per file.
     this.editorModel.setIndentation({
       useSpaces: quilx.config.get('editor.insertSpaces') !== false,
@@ -331,6 +363,7 @@ export class TextEditor {
       unfoldRow: (row) => this.syntax.unfoldRow(row),
       foldableRanges: () => this.syntax.foldRegions(),
       functionRangeAt: (row, column) => this.syntax.functionRangeAt(row, column),
+      classRangeAt: (row, column) => this.syntax.classRangeAt(row, column),
     });
 
     // Modal editing runs through the vendored vim-mode-plus core.
@@ -338,11 +371,16 @@ export class TextEditor {
     // Inline decoration surface (search highlights, inline diff) — consumers
     // reach it via `editor.decorations`.
     this.decorationController = new DecorationController(this.editorModel);
+    // Inline block surface (virtual content between lines: the diff fold placeholder).
+    this.inlineBlockController = new InlineBlockController(this.view);
     // Search/replace engine; its `SearchBar` widget is built in buildEditorArea.
     this.search = new SearchController(this.editorModel, this.decorationController);
 
     this.root = this.buildEditorArea();
-    this.root.setName('TextEditor'); // selector identity for command/keymap rules
+    // The inner view is the `#TextEditor` selector subject (it holds focus + the
+    // mode CSS classes — see EditorModel); the wrapping area gets its own name so
+    // the two don't both answer to `#TextEditor`.
+    this.root.setName('TextEditorArea');
 
     this.installFoldCommands();
     this.installAutoPair();
@@ -428,6 +466,17 @@ export class TextEditor {
     // match back to the pending operator.
     (this.vimState as unknown as VimSearchBridge).setSearchInput?.(({ reverse, onConfirm, onCancel }) => {
       this.searchBar.openMotion(Boolean(reverse), { onConfirm, onCancel });
+    });
+
+    // `:noh`-style clear: reset-normal-mode (Esc) drops the search highlights when
+    // `clearHighlightSearchOnResetNormalMode` is on. The query is kept, so `n`/`N`
+    // re-highlight on demand.
+    this.vimState.onDidRequestClearSearchHighlight(() => this.search.clear());
+
+    // Leap (`g s` / `g S`): the vim motion requests a target through this bridge;
+    // the LeapController reads the chars, paints labels, and resolves a Point.
+    (this.vimState as unknown as VimLeapBridge).setLeapInput?.((req) => {
+      void this.leap.start(req);
     });
   }
 
@@ -544,7 +593,7 @@ export class TextEditor {
     const activeParam = sig.activeParameter ?? help.activeParameter ?? undefined;
     const lang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
     this.signatureLabel.setMarkup(
-      `<span face="${monospaceFontFamily()}">${signatureMarkup(sig.label, sig.parameters, activeParam, lang)}</span>`,
+      `<span face="${fonts.monospaceFamily}">${signatureMarkup(sig.label, sig.parameters, activeParam, lang)}</span>`,
     );
     if (!this.signatureAnchored) {
       // Anchor at the callee name's start (fall back to the cursor if not found).
@@ -628,7 +677,7 @@ export class TextEditor {
     const fallbackLang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
     this.hoverLabel.setMarkup(
       markdownToPango(markdown, {
-        codeFontFamily: monospaceFontFamily(),
+        codeFontFamily: fonts.monospaceFamily,
         highlightCode: (code, lang) => highlightToMarkup(code, lang ?? fallbackLang),
       }),
     );
@@ -652,6 +701,30 @@ export class TextEditor {
   /** The inline decoration surface (search highlights, inline diff). */
   get decorations(): DecorationController {
     return this.decorationController;
+  }
+
+  /** The inline-block surface (virtual content between lines, e.g. the diff fold
+   *  placeholder) — overlay widgets in a reserved gap, zero buffer footprint. */
+  get inlineBlocks(): InlineBlockController {
+    return this.inlineBlockController;
+  }
+
+  /** Open a focusable inline peek (e.g. see-definition) below `line` — defaults to
+   *  the cursor's line. Replaces any current peek. Returns nothing; `closePeek()`
+   *  dismisses it (and clicking a close button in `widget` should call it). */
+  showPeek(options: Omit<InlinePeekOptions, 'line'> & { line?: number }): void {
+    const line = options.line ?? this.editorModel.getCursorBufferPosition().row;
+    this.inlinePeek.show({ ...options, line });
+  }
+
+  /** Dismiss the inline peek, if open. */
+  closePeek(): void {
+    this.inlinePeek.close();
+  }
+
+  /** Whether an inline peek is currently open. */
+  get peekOpen(): boolean {
+    return this.inlinePeek.isOpen;
   }
 
   /** The underlying GtkSource.View — for attaching gutter renderers (e.g. the
@@ -691,6 +764,13 @@ export class TextEditor {
       view.setHighlightCurrentLine(true);
       view.setShowRightMargin(true);
       view.setRightMarginPosition(RIGHT_MARGIN);
+      // Soft-wrap (live-toggled by `editor.softWrap`): wrap long lines to the
+      // editor width instead of scrolling horizontally. Vim display-line motion
+      // (j/k, gj/gk) is wrap-aware via EditorModel.displayLineMove.
+      const applyWrap = (v: unknown) =>
+        view.setWrapMode(v === false ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
+      const wrapSub = quilx.config.observe('editor.softWrap', applyWrap);
+      view.on('destroy', () => wrapSub.dispose());
     }
     return view;
   }
@@ -706,6 +786,11 @@ export class TextEditor {
     const overlay = new Gtk.Overlay();
     overlay.setChild(scrolled);
     this.contentOverlay = overlay; // hosts the bottom-aligned hover card
+    // Focusable inline peek (see-definition) — lives in this sibling overlay.
+    this.inlinePeek = new InlinePeek(this.view, overlay);
+
+    // Indent guides sit lowest (behind the squiggles/caret), in the whitespace.
+    overlay.addOverlay(new IndentGuideOverlay(this.view, this.editorModel).widget);
 
     // Built here (after the view is in the ScrolledWindow, so its scroll
     // adjustments exist); fed by DiagnosticsView in installLsp.
@@ -750,6 +835,20 @@ export class TextEditor {
     this.caretLayer.put(this.caret, 0, 0);
     this.caret.setVisible(false);
     overlay.addOverlay(this.caretLayer);
+
+    // Leap jump labels float on their own layer, above the carets. The controller
+    // reads its chars through the vim layer's single-char input (so it shares the
+    // `input-char-waiting` grab) and resolves a target Point to the leap motion.
+    this.leapLayer.setCanTarget(false);
+    overlay.addOverlay(this.leapLayer);
+    this.leap = new LeapController({
+      editor: this.editorModel,
+      labelLayer: this.leapLayer,
+      readChar: () =>
+        new Promise((resolve) =>
+          this.vimState.readChar({ onConfirm: (c: string) => resolve(c), onCancel: () => resolve(null) }),
+        ),
+    });
 
     // LSP hover card: a non-interactive overlay positioned by margins +
     // bottom-left alignment, so the overlay bottom-aligns it (bottom edge at the
@@ -897,7 +996,10 @@ export class TextEditor {
     // before dispatch; after each key we clear once the editor returns to a
     // resting state (no queued keystrokes, empty operation stack, no count or
     // pending register). Only active while this view is focused and not inserting.
-    quilx.keymaps.addListener((key) => {
+    // The listener is global (it sees every key in every widget), so it must be
+    // removed when this view goes away — otherwise each opened editor leaks a
+    // listener that runs on every keystroke for the life of the process.
+    const sub = quilx.keymaps.addListener((key) => {
       if (!(this.view as any).hasFocus() || this.vimState.mode === 'insert') return false;
       if (!key.isModifier() && key.string && key.string.charCodeAt(0) >= 0x20) {
         this.setShowcmd(this.showcmd + key.string);
@@ -908,6 +1010,7 @@ export class TextEditor {
       });
       return false; // never consume; this is display-only
     });
+    this.root.on('destroy', () => sub.dispose());
   }
 
   private isVimIdle(): boolean {
@@ -932,22 +1035,32 @@ export class TextEditor {
 
   private installFoldCommands() {
     // The fold keys live in the vim keymap (normal-mode, z-prefix); they dispatch
-    // these commands on this view, which drive the SyntaxController. Registered
-    // per-view so a keystroke folds the focused editor.
+    // these commands on this view, which drive the fold provider (SyntaxController,
+    // or a diff pane's DiffFold). Registered per-view so a keystroke folds the
+    // focused editor.
     quilx.commands.add(this.view, {
-      'fold:toggle': () => this.syntax.toggleFoldAtCursor(),
-      'fold:open': () => this.syntax.setFoldAtCursor(false),
-      'fold:close': () => this.syntax.setFoldAtCursor(true),
-      'fold:open-all': () => this.syntax.unfoldAll(),
-      'fold:close-all': () => this.syntax.foldAll(),
+      'fold:toggle': () => this.foldController.toggleFoldAtCursor(),
+      'fold:open': () => this.foldController.setFoldAtCursor(false),
+      'fold:close': () => this.foldController.setFoldAtCursor(true),
+      'fold:open-all': () => this.foldController.unfoldAll(),
+      'fold:close-all': () => this.foldController.foldAll(),
     });
 
     // Keep the cursor visible: if a move (w, /, G, a click, …) lands it inside a
     // folded body, open the fold (Vim's `foldopen`). Closing a fold moves the
     // cursor to the still-visible header, so this never fights `fold:close`.
     this.buffer.on('notify::cursor-position', () => {
-      this.syntax.revealLine(this.editorModel.getCursorBufferPosition().row);
+      this.foldController.revealLine(this.editorModel.getCursorBufferPosition().row);
     });
+  }
+
+  /** Swap in a custom fold provider (a diff pane uses its DiffFold). */
+  setFoldProvider(provider: FoldProvider): void {
+    this.foldProvider = provider;
+  }
+
+  private get foldController(): FoldProvider {
+    return this.foldProvider ?? this.syntax;
   }
 
   // --- Auto-close brackets / quotes (insert mode) ----------------------------
@@ -1002,15 +1115,19 @@ export class TextEditor {
     this.editorModel.setIndentation({ useSpaces: detected.useSpaces, width });
   }
 
-  loadFile(path: string) {
+  loadFile(path: string, opts: { silent?: boolean } = {}) {
     if (this.bufferMode) return; // buffer-only editors have no file
     try {
       // Close any previously-open document first; the setText below then fires a
       // change against the (now closed) old doc, which the manager ignores.
       quilx.lsp.didClose(this.lspDocument);
       const content = Fs.readFileSync(path, 'utf8');
+      // A silent reload (external change, no local edits) keeps the caret where
+      // it was; a fresh open resets it to the top.
+      const caret = opts.silent ? this.editorModel.getCursorBufferPosition() : null;
       this.buffer.setText(content, -1);
-      this.buffer.placeCursor(this.buffer.getStartIter());
+      if (caret) this.restoreCursor([caret.row, caret.column]);
+      else this.buffer.placeCursor(this.buffer.getStartIter());
       // setText marks the buffer modified; the freshly-loaded content matches
       // disk, so clear the flag — `isModified()` then tracks genuine edits.
       this.buffer.setModified(false);
@@ -1019,7 +1136,7 @@ export class TextEditor {
       this.setDiskState('synced'); // freshly in sync with disk
       this.watchFile(path);
       this.applyDetectedIndentation(content);
-      this.view.grabFocus();
+      if (!opts.silent) this.view.grabFocus(); // a background reload mustn't steal focus
 
       // Prefer tree-sitter; fall back to GtkSourceView's `.lang` engine for
       // languages we don't have a grammar for.
@@ -1155,6 +1272,12 @@ export class TextEditor {
       return;
     }
     if (this.diskMtimeMs === null || onDisk === this.diskMtimeMs) return; // our write / unchanged
+    // No local edits to lose — silently adopt the new on-disk content instead of
+    // prompting; only a conflict with unsaved changes warrants a warning.
+    if (!this.isModified()) {
+      this.loadFile(this._currentFile, { silent: true });
+      return;
+    }
     this.setDiskState('changed');
   }
 

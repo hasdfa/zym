@@ -67,6 +67,16 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: false,
     description: 'Show the source-map minimap gutter on the right of the editor.',
   },
+  'editor.softWrap': {
+    type: 'boolean',
+    default: true,
+    description: 'Wrap long lines to the editor width instead of scrolling horizontally.',
+  },
+  'editor.indentGuides': {
+    type: 'boolean',
+    default: true,
+    description: 'Draw faint vertical guides marking each indentation level.',
+  },
   'agent.command': {
     type: 'array',
     default: ['claude'],

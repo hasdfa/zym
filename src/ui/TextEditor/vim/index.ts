@@ -4,7 +4,7 @@
  * `attachVim` builds one VimState per editor and registers its commands against
  * that editor's view *instance* (so a keystroke dispatches to the right editor's
  * VimState). The keymaps are registered once, globally, scoped by mode CSS class
- * (`GtkSourceView.normal-mode` / `.insert-mode`); the KeymapManager matches a
+ * (`#TextEditor.normal-mode` / `.insert-mode`); the KeymapManager matches a
  * focused view against them and dispatches the bound command, which the per-view
  * command bundle resolves to `vimState.operationStack.run(<OperationClass>)`.
  *
@@ -174,11 +174,12 @@ const FIND_BINDINGS: Record<string, string> = {
   T: 'TillBackwards',
 };
 
-// `;`/`,` repeat the last find (same / reversed direction). These don't map to
-// an operation class — they replay the recorded find via the operation stack —
-// so they're wired as commands in `attachVim`, not through the class tables.
+// `;`/`,` repeat the last find/leap (same / reversed direction). These don't map
+// to an operation class — they replay the recorded motion via the operation stack
+// — so they're wired as commands in `attachVim`, not through the class tables. `;`
+// repeats whichever of find/leap was used last; `,` reverses the find.
 const REPEAT_FIND_COMMANDS: Record<string, string> = {
-  ';': 'vim-mode-plus:repeat-find',
+  ';': 'vim-mode-plus:repeat-find-or-start-leap',
   ',': 'vim-mode-plus:repeat-find-reverse',
 };
 
@@ -221,6 +222,9 @@ const OPERATOR_BINDINGS: Record<string, string> = {
   x: 'DeleteRight',
   p: 'PutAfter',
   P: 'PutBefore',
+  // Replace-with-register operator (romgrk/replace.vim): `s{motion}` replaces the
+  // target with the register's content; `ss` (same-operator repeat) the line.
+  s: 'ReplaceWithRegister',
 };
 
 // Text objects, used as operator targets / visual selections. Bound only in
@@ -241,6 +245,12 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   'a a': 'AArguments',
   'i i': 'InnerIndentation',
   'a i': 'AIndentation',
+  // LHS/RHS of an assignment (equal.operator): `h` = left side, `l` = right side.
+  // inner trims to the value; `a` keeps the `=`/`:`/`->` separator.
+  'i h': 'InnerLhs',
+  'a h': 'ALhs',
+  'i l': 'InnerRhs',
+  'a l': 'ARhs',
   // whole buffer.
   'i e': 'InnerEntire',
   'a e': 'AEntire',
@@ -250,6 +260,9 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   // function (tree-sitter): `if` body, `af` whole definition.
   'i f': 'InnerFunction',
   'a f': 'AFunction',
+  // class/interface/enum (tree-sitter): `ic` body, `ac` whole definition.
+  'i c': 'InnerClass',
+  'a c': 'AClass',
   // Brackets use the targets.vim-style *AllowForwarding* variants: when the cursor
   // isn't inside a pair, the text object seeks to the next pair on the line (an
   // enclosing pair still wins). `b`/`B` are vim's aliases for ()/{}; either
@@ -319,11 +332,10 @@ const SURROUND_BINDINGS: Record<string, string> = {
 };
 
 // Single-key operator shortcuts with preset targets (so they run immediately):
-// s/x delete then (s) insert, S/C/D change/delete to end-of-line-or-line, Y yanks
+// S replaces the whole line (= `ss`), C/D change/delete to end of line, Y yanks
 // a line, X deletes left. In visual mode they operate on the selection.
 const SHORTCUT_OPERATOR_BINDINGS: Record<string, string> = {
-  s: 'Substitute',
-  S: 'SubstituteLine',
+  S: 'ReplaceLineWithRegister',
   C: 'ChangeToLastCharacterOfLine',
   D: 'DeleteToLastCharacterOfLine',
   Y: 'YankLine',
@@ -336,6 +348,7 @@ const SHORTCUT_OPERATOR_BINDINGS: Record<string, string> = {
 const INDENT_JOIN_BINDINGS: Record<string, string> = {
   '>': 'Indent',
   '<': 'Outdent',
+  '=': 'AutoIndent',
   J: 'Join',
 };
 
@@ -398,11 +411,33 @@ const MULTI_CURSOR_CLEAR: Record<string, string> = {
   escape: 'vim-mode-plus:clear-multiple-cursors',
 };
 
+// Alt-navigation, ported from the user's nvim keymap (`<A-j/k>` = 5gj/5gk,
+// `<A-d/u>` = 12<C-e>/12<C-y>): alt-j/k step 5 display lines; alt-d/u scroll the
+// view 12 lines, keeping the cursor on screen. Each runs an operation class with
+// a preset count, so they're plain commands wired in `attachVim` (like the
+// multi-cursor entries) rather than count-less class-table bindings.
+const ALT_NAV_COMMANDS: Record<string, string> = {
+  'alt-j': 'vim-mode-plus:move-down-5-lines',
+  'alt-k': 'vim-mode-plus:move-up-5-lines',
+  'alt-d': 'vim-mode-plus:scroll-down-12-lines',
+  'alt-u': 'vim-mode-plus:scroll-up-12-lines',
+};
+
+// Leap (leap.nvim-style two-char labeled jump). `g s` / `g S` because plain
+// `s`/`S` are Substitute here. Bound in every non-insert mode so it works as a
+// plain jump (normal), a selection extension (visual), and an operator target
+// (`d g s`). The host (TextEditor's LeapController) supplies the labels + input.
+const LEAP_BINDINGS: Record<string, string> = {
+  'g s': 'Leap',
+  'g S': 'LeapBackwards',
+};
+
 // Motions + operators are bound in every non-insert mode (notably operator-pending,
 // so the motion that follows `d` resolves). Mode-entry keys (i/a) are normal-only.
 const NON_INSERT_BINDINGS: Record<string, string> = {
   ...MOTION_BINDINGS,
   ...SEQUENCE_BINDINGS,
+  ...LEAP_BINDINGS,
   ...SCREEN_MOTION_BINDINGS,
   ...SENTENCE_BINDINGS,
   ...FIND_BINDINGS,
@@ -471,7 +506,7 @@ function registerKeymapsOnce(): void {
     // Mode-entry keys (i/a) are normal-only; v/V activate visual from normal too.
     // Surround sequences (ys/ds/cs) start here; their operator targets resolve
     // through the operator-pending text-object bindings below.
-    'GtkSourceView.normal-mode': {
+    '#TextEditor.normal-mode': {
       ...toKeymap(MODE_BINDINGS),
       ...toKeymap(VISUAL_BINDINGS),
       ...toKeymap(SURROUND_BINDINGS),
@@ -485,9 +520,11 @@ function registerKeymapsOnce(): void {
       // ctrl-alt-↑/↓ add a cursor; escape collapses multi-cursor back to one.
       ...MULTI_CURSOR_COMMANDS,
       ...MULTI_CURSOR_CLEAR,
+      // alt-j/k step 5 lines; alt-d/u scroll the view 12 lines (ported from nvim).
+      ...ALT_NAV_COMMANDS,
     },
     // Motions and operators apply in normal, operator-pending, and visual modes.
-    'GtkSourceView:not(.insert-mode)': {
+    '#TextEditor:not(.insert-mode)': {
       ...toKeymap(NON_INSERT_BINDINGS),
       ...REPEAT_FIND_COMMANDS,
       ...REPEAT_COMMANDS,
@@ -497,7 +534,7 @@ function registerKeymapsOnce(): void {
     },
     // In visual mode: v/V switch wise (or toggle off), text objects select, and
     // `/`/`?` extend the selection to a search match.
-    'GtkSourceView.visual-mode': {
+    '#TextEditor.visual-mode': {
       ...toKeymap(VISUAL_BINDINGS),
       ...toKeymap(VISUAL_COMMAND_BINDINGS),
       ...toKeymap(TEXT_OBJECT_BINDINGS),
@@ -505,17 +542,17 @@ function registerKeymapsOnce(): void {
     },
     // Operator targets in operator-pending mode: text objects, `d/foo` search,
     // and the `o`/`O` occurrence modifiers (`c o p`, `d O w`).
-    'GtkSourceView.operator-pending-mode': {
+    '#TextEditor.operator-pending-mode': {
       ...toKeymap(TEXT_OBJECT_BINDINGS),
       ...toKeymap(SEARCH_MOTION_BINDINGS),
       ...OPERATOR_MODIFIER_COMMANDS,
     },
     // Escape returns to normal mode from insert, operator-pending, and visual.
-    'GtkSourceView:not(.normal-mode)': {
+    '#TextEditor:not(.normal-mode)': {
       escape: 'vim-mode-plus:activate-normal-mode',
     },
     // Insert-mode editing commands (ctrl-w/u/r/a).
-    'GtkSourceView.insert-mode': toKeymap(INSERT_BINDINGS),
+    '#TextEditor.insert-mode': toKeymap(INSERT_BINDINGS),
   });
 
   // `j`/`k` → display-line motion in normal & visual mode, at a higher priority so
@@ -524,8 +561,8 @@ function registerKeymapsOnce(): void {
   quilx.keymaps.add(
     'vim-mode-plus-display-lines',
     {
-      'GtkSourceView.normal-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
-      'GtkSourceView.visual-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
+      '#TextEditor.normal-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
+      '#TextEditor.visual-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
     },
     1,
   );
@@ -555,6 +592,18 @@ export function attachVim(editor: EditorModel): VimState {
     // `;`/`,` replay the recorded find rather than running an operation class.
     'vim-mode-plus:repeat-find': () => {
       vimState.operationStack.runCurrentFind();
+    },
+    // `;` repeats the find when a find (f/F/t/T or a prior `;`) was the last
+    // command; otherwise it starts a fresh leap. So a `;` after `fx` steps the
+    // find, but a standalone `;` is a quick leap.
+    'vim-mode-plus:repeat-find-or-start-leap': () => {
+      const findCommands = ['Find', 'FindBackwards', 'Till', 'TillBackwards'];
+      const lastWasFind = findCommands.includes(vimState.operationStack.getLastCommandName());
+      if (lastWasFind && vimState.globalState.get('currentFind')) {
+        vimState.operationStack.runCurrentFind();
+      } else {
+        vimState.operationStack.run('Leap');
+      }
     },
     'vim-mode-plus:repeat-find-reverse': () => {
       vimState.operationStack.runCurrentFind({ reverse: true });
@@ -588,6 +637,20 @@ export function attachVim(editor: EditorModel): VimState {
       if (!editor.hasMultipleCursors()) return;
       editor.clearExtraSelections();
       editor.renderExtraSelections();
+    },
+    // Alt-navigation: run the underlying motion / mini-scroll with a preset count
+    // (the count rides on the operation instance via `run`'s properties arg).
+    'vim-mode-plus:move-down-5-lines': () => {
+      vimState.operationStack.run('MoveDownDisplayLine', { count: 5 });
+    },
+    'vim-mode-plus:move-up-5-lines': () => {
+      vimState.operationStack.run('MoveUpDisplayLine', { count: 5 });
+    },
+    'vim-mode-plus:scroll-down-12-lines': () => {
+      vimState.operationStack.run('MiniScrollDown', { count: 12 });
+    },
+    'vim-mode-plus:scroll-up-12-lines': () => {
+      vimState.operationStack.run('MiniScrollUp', { count: 12 });
     },
   };
   for (const klass of Object.values(NORMAL_OPERATIONS)) {

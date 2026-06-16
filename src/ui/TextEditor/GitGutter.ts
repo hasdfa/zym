@@ -22,12 +22,12 @@ import type { GitRepo } from '../../git.ts';
 
 type ChangeKind = 'added' | 'modified' | 'removed';
 
-// Bar colors match the rest of the git UI (BranchButton / GitPanel): theme
-// semantic colors, Adwaita fallbacks.
+// Bar colors match the rest of the git UI (GitBranchButton / GitPanel): theme
+// semantic colors.
 const COLORS: Record<ChangeKind, string> = {
-  added: theme.ui.success ?? '#2ec27e',
-  modified: theme.ui.warning ?? '#e5a50a',
-  removed: theme.ui.error ?? '#e01b24',
+  added: theme.ui.success,
+  modified: theme.ui.warning,
+  removed: theme.ui.error,
 };
 // U+258F LEFT ONE EIGHTH BLOCK — the thinnest full-height block glyph (~1px), so
 // stacked lines read as one continuous hairline bar.

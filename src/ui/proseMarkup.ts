@@ -1,12 +1,15 @@
 /*
  * proseMarkup — render a short, markdown-ish label as Pango markup for picker
  * rows: prose in the default sans font with `backtick`-delimited spans in
- * monospace (the backticks themselves hidden). Pango's "Sans"/"Monospace"
- * generic family aliases let each span pick its own face without touching the
- * picker's monospace CSS. Shared by the pickers that show free-text labels
- * (resume conversations, switch/send-to agent).
+ * monospace (the backticks themselves hidden). The prose face is Pango's generic
+ * "Sans" alias (so it overrides the picker card's monospace CSS); the code face
+ * is the app's configured monospace family (from fonts.ts), matching the
+ * monospace used everywhere else rather than Pango's generic "Monospace". Shared
+ * by the pickers that show free-text labels (resume conversations, switch/send-
+ * to agent).
  */
 import { HIGHLIGHT_COLOR } from './Picker.ts';
+import { fonts } from '../fonts.ts';
 
 // Leading factor for picker prose rows; the inline-monospace runs sit taller than
 // the sans prose, so symmetric leading keeps mixed lines vertically centred
@@ -28,7 +31,7 @@ export function proseMarkup(text: string, positions: number[] = [], muted = fals
     const ch = text[i];
     if (ch === '`') { mono = !mono; continue; } // hide the delimiter, flip face
     const attrs = [];
-    if (mono) attrs.push('face="Monospace"');
+    if (mono) attrs.push(`face="${fonts.monospaceFamily}"`);
     // Matched chars carry the accent colour; restore full opacity so the
     // highlight reads even when the row is muted.
     if (matched.has(i)) attrs.push(`foreground="${HIGHLIGHT_COLOR}" weight="bold"${muted ? ' alpha="100%"' : ''}`);

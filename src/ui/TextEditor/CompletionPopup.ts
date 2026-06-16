@@ -12,7 +12,7 @@
 import { Gtk, Pango } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { monospaceFontCss, monospaceFontFamily } from '../../fonts.ts';
+import { fonts } from '../../fonts.ts';
 import { highlightMarkup } from '../Picker.ts';
 import { escapeMarkup } from '../proseMarkup.ts';
 import { iconLabel, completionKindGlyph } from '../icons.ts';
@@ -21,11 +21,10 @@ import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-const POPUP_BG = theme.ui.bg ?? theme.ui.popoverBg ?? '#1e1e1e';
-const SELECTED_BG = theme.ui.selectedBg ?? 'rgba(127, 127, 127, 0.25)';
-const DETAIL_COLOR = theme.ui.textMuted ?? theme.ui.lineNumber ?? theme.ui.fg ?? '#888888';
-const MONO = monospaceFontCss();
-const CODE_FONT_FAMILY = monospaceFontFamily(); // the app's monospace, for doc code spans
+const POPUP_BG = theme.ui.bg ?? theme.ui.popoverBg;
+const SELECTED_BG = theme.ui.selectedBg;
+const DETAIL_COLOR = theme.ui.textMuted;
+fonts.monospace('#CompletionPopup .completion-label'); // labels in the app monospace (reactive)
 const LIST_WIDTH_PX = 420;
 const DOC_WIDTH_PX = 440;
 const MAX_HEIGHT_PX = 240;
@@ -45,7 +44,7 @@ addStyles(`
     background-color: ${POPUP_BG};
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius-small);
-    box-shadow: 0px 6px 20px 8px rgba(0,0,0,0.18);
+    box-shadow: 0px 6px 20px 8px ${theme.ui.shadow};
   }
   /* Inner widgets paint nothing — the card's background shows through, and rows
      get no min-height so a single match is exactly one row tall. */
@@ -58,7 +57,7 @@ addStyles(`
   #CompletionPopup row { padding: 1px ${ROW_PADDING_PX}px; }
   #CompletionPopup row:selected { background-color: ${SELECTED_BG}; border-radius: 0; }
   #CompletionPopup .completion-icon { margin-right: ${ICON_MARGIN_PX}px; color: ${DETAIL_COLOR}; opacity: 0.8; }
-  #CompletionPopup .completion-label { ${MONO.declarations} }
+  /* .completion-label font comes from the font store — see fonts.monospace(...) above. */
   #CompletionPopup .completion-detail { opacity: 0.55; margin-left: 0.5em; }
   #CompletionPopup .completion-description { opacity: 0.45; margin-left: 0.75em; font-size: 0.9em; }
   #CompletionPopup separator.completion-divider { background-color: var(--border-color); }
@@ -240,7 +239,7 @@ export class CompletionPopup {
     // code spans in the app's monospace font (not Pango's generic one) and fenced
     // blocks tree-sitter highlighted — same as the LSP hover card.
     this.docLabel.setMarkup(
-      doc ? markdownToPango(doc, { codeFontFamily: CODE_FONT_FAMILY, highlightCode: this.highlightCode }) : '',
+      doc ? markdownToPango(doc, { codeFontFamily: fonts.monospaceFamily, highlightCode: this.highlightCode }) : '',
     );
     this.divider.setVisible(this.docPaneSticky);
     this.docScroller.setVisible(this.docPaneSticky);

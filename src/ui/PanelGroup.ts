@@ -81,6 +81,12 @@ export interface PanelGroupOptions {
   onActiveChanged?: (child: Widget | null) => void;
   /** Fired when any tab is closed, so the host can drop its bookkeeping. */
   onClosed?: (child: Widget) => void;
+  /**
+   * Asked before a tab closes; return false to veto (keep the page intact). Installed
+   * on every leaf, so it covers whichever split the tab lives in. Omit to let tabs
+   * close normally.
+   */
+  onTabCloseRequest?: (child: Widget) => boolean;
 }
 
 export class PanelGroup {
@@ -392,6 +398,9 @@ export class PanelGroup {
         if (this.active === leaf) this.options.onActiveChanged?.(child);
       },
       onClosed: (child) => this.options.onClosed?.(child),
+      onTabCloseRequest: this.options.onTabCloseRequest
+        ? (child) => this.options.onTabCloseRequest!(child)
+        : undefined,
       onEmpty: () => this.onLeafEmpty(leaf),
       // Focus entering this leaf (a click, or programmatic activation) makes it the
       // active leaf. The Panel owns the single-active-panel rule and the focus

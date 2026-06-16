@@ -151,7 +151,18 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
      an empty last changed line is still terminated/taggable. (If empty *interior*
      lines ever lack a background, that's a GtkTextView tag limitation needing a
      custom line-background draw — not yet hit.)
-   - [ ] Fold unchanged regions (collapse large context blocks).
+   - [x] Fold unchanged regions — `foldUnchanged` (`DiffModel.ts`, pure +
+     unit-tested) returns the collapsible context runs (over real buffer rows),
+     keeping 3 lines of context around each change; `DiffFold` (`DiffFold.ts`)
+     hides each fold's body with an `invisible` tag, draws a ▸/▾ chevron in the
+     gutter (click to toggle), and — while collapsed — renders the
+     `⋯ N unchanged lines` placeholder as an **inline block** (an overlay widget
+     via `InlineBlockController`, zero buffer footprint — not editable/selectable;
+     replaced the old synthesized placeholder line). Regions open collapsed. The
+     two side-by-side panes fold from matching plans in lockstep (context rows
+     align), so the scroll-sync stays valid. Diff panes turn SyntaxController's
+     tree-sitter code folding off (`folding: false`). See
+     [inline-widgets.md](inline-widgets.md) for the inline-block primitive.
    - [x] **Wire real data (working tree)** — `git:diff-current` (`space g d`)
      diffs the active file's working tree against its HEAD blob (`git show
      HEAD:<rel>`) → `DiffModel` → `DiffViewer` in a new tab.

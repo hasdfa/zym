@@ -76,7 +76,7 @@ Core pieces:
   (`{ didDispatch, description?, when? }`), a closure over live state
   (`when: () => this.activeEditor !== null`) — not a string DSL, since commands
   are declared in TS with the state in scope. Applied so far to `file:save`/
-  `save-as`, `git:*`, and `agent:kill`.
+  `save-as`, `git:*`, and `agent:stop`.
 - The `:` ex-command line and richer search are tracked under
   [code-editing](code-editing/text-editor.md) (vim mode), not here — they consume
   this layer rather than extend it.

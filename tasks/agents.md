@@ -17,39 +17,40 @@ This page covers the architecture; per-feature pages can split out later
 
 What already exists and is reused, not rebuilt:
 
-- **Per-person layouts** — `src/ui/Layout.ts` (renamed from `Workbench`) is one
-  person's dock frame (left/right/top/bottom/center) plus an `owner` field naming
-  its person. **Each person in the LayoutList owns a fully self-contained `Layout`** —
-  its own center, its own Files/Source-Control, its own bottom docks. **Nothing is
-  shared or reparented across layouts.** `buildLayout(owner)` builds the whole
-  `LayoutBundle` (the `Layout` + every per-slot widget) and registers it in
-  `AppWindow.bundles` (owner → bundle). `activateLayout(layout)` shows it
-  (`overlay.setChild(layout.root)`) and `applyBundle` mirrors that bundle's widgets
-  onto the `this.*` fields (`center`/`fileTree`/`gitPanel`/`leftPanel`/the four bottom
-  docks/…), so the rest of AppWindow keeps addressing "the active layout" unchanged.
-  `saveActiveBundle` writes the mutable bits (`filesTab`/`gitTab`/`bottomDock`) back
-  before switching out. `activateOwner(owner)` is the convenience that resolves a
-  person → their `Layout`; `cycleLayout(±1)` (bound to `super-,` / `super-.`) steps
-  the active layout through `[user, …agents]` (the layout-list order), wrapping.
-  Detached layouts stay alive, so a terminal's scrollback /
-  open editors survive a switch. An agent's layout opens terminal-only —
-  `buildLayout` only `setRight`s Files/Source-Control for the user; an agent's panel
-  is still built (so `this.fileTree`/`gitPanel` stay valid and `file-tree:focus`/git
-  commands can reveal it) but not shown on open. The terminal auto-opens on creation
-  (`openAgent` → `buildLayout(agent)`); `closeAgent` drops its bundle.
-  **Worktree-ready:** each agent already has its own Files/Git — a per-worktree
-  build just needs a per-bundle root + `GitRepo` in `buildLayout`. **Deferred:**
-  per-worktree roots; session restore of agent layouts (only the user layout is
-  serialized); per-layout `NotificationLog`/`KeymapPanel` subscribe to global
-  signals and aren't disposed on close (minor leak; agents are few).
+- **Per-person workbenches** — `src/ui/Workbench.ts` is a first-class object: one
+  person's dock frame (left/right/top/bottom/center) **plus the widgets that fill its
+  slots** — its own `center`, `fileTree`, Source-Control, `leftPanel`, and the four
+  bottom-dock panels — with an `owner` field naming its person. **Each person in the
+  WorkbenchList owns a fully self-contained `Workbench`; nothing is shared or reparented
+  across workbenches.** `buildWorkbench(owner)` constructs those widgets and hands them
+  to `new Workbench(owner, contents, { showSideDock })` (which docks the center, and
+  Source-Control for the user); it registers the workbench in `AppWindow.workbenches`
+  (owner → `Workbench`). `AppWindow` holds only `this.workbench` (the active one) and
+  reads all per-person state straight off `this.workbench.*` (`this.workbench.center`,
+  `this.workbench.bottomDock`, …) — there is **no mirror struct and no save/restore on
+  switch**. `activateWorkbench(workbench)` just sets `this.workbench`, swaps the overlay
+  child (`overlay.setChild(workbench.root)`), and re-selects the row. `activateOwner(owner)`
+  resolves a person → their `Workbench`; `cycleWorkbench(±1)` (bound to `super-,` /
+  `super-.`) steps the active workbench through `[user, …agents]` (the workbench-list
+  order), wrapping. Detached workbenches stay alive, so a terminal's scrollback / open
+  editors survive a switch. An agent's workbench opens terminal-only — `showSideDock` is
+  false for agents, so Files/Source-Control isn't docked on open; the panel is still built
+  (so `this.workbench.fileTree`/`gitPanel` stay valid and `file-tree:focus`/git commands
+  can reveal it). The terminal auto-opens on creation (`openAgent` → `buildWorkbench(agent)`);
+  `closeAgent` drops it from `workbenches`. **Worktree-ready:** each agent already has its
+  own Files/Git — a per-worktree build just needs a per-workbench root + `GitRepo` in
+  `buildWorkbench`. **Deferred:** per-worktree roots; session restore of agent workbenches
+  (only the user workbench is serialized); per-workbench `NotificationLog`/`KeymapPanel`
+  subscribe to global signals and aren't disposed on close (minor leak; agents are few).
 - **`src/ui/AgentTerminal.ts`** — a `Terminal` subclass that spawns the agent CLI
   (`agent.command` config, default `['claude']`). Notable behaviour:
   - initial title = the agent's program basename until the CLI reports its own
     (OSC) title; `prompt` option appends a launch prompt to argv;
-  - on process exit the widget is **not** torn down and the agent/layout is **not**
+  - on process exit the widget is **not** torn down and the agent/workbench is **not**
     closed — it prints a "process exited" notice, flips to `exited`, and stays
-    listed; the user restarts (`agent:restart`/`r`) or closes (`agent:close`/`X`) it
-    from the layout list when done;
+    listed; the user restarts (`agent:restart`/`r`) or stops (`agent:stop`/`x`) it
+    from the workbench list. Closing its tab (`tab:close`) never retires it — it just
+    backgrounds it (a running agent keeps working); `agent:close`/`d d` retires it;
   - **live status** (`idle | working | waiting | exited`, via `status` /
     `onDidChangeStatus`): for a `claude` agent it injects a per-session
     `--settings` block whose **hooks** write a status word to a file the terminal
@@ -58,11 +59,11 @@ What already exists and is reused, not rebuilt:
     `Stop`/`SessionStart`→idle.
 - **`src/AgentManager.ts` — `quilx.agents`** — the registry: `add`/`remove`/
   `getAgents` (launch order) + `onDidAddAgent`/`onDidRemoveAgent`.
-- **`src/ui/LayoutList.ts`** — the contents of the **LayoutSidebar** (the
+- **`src/ui/WorkbenchList.ts`** — the contents of the **WorkbenchSidebar** (the
   full-height column at the very left of the window, outside/left of the header
   bar; AppWindow wraps everything in a top-level horizontal `Gtk.Paned` —
   `sidebarSplit` — whose start child is the sidebar). Each entry is (will be)
-  associated with a particular **workbench layout**: the first ("default",
+  associated with a particular **workbench**: the first ("default",
   selected-by-default) row is the **user** (person glyph + name, as a pseudo-agent
   — `onActivateUser`), the rest are the running agents (status indicator + title +
   changed-files badge). **Never empty** (the user row is always present → no empty
@@ -153,10 +154,15 @@ hook-based status. So:
 Concrete, mostly small additions on top of what exists:
 
 - **Lifecycle commands** (registered on `AgentList` / `AppWindow`, bound centrally):
-  - `agent:kill` — terminate the process (SIGTERM the VTE child) but keep the
-    widget (it flips to `exited`).
-  - `agent:close` — close the tab; if exited, retire from the registry (today's
-    behaviour) — also expose it as an explicit command/row action.
+  - `agent:stop` — terminate the process (SIGTERM the VTE child) but keep the
+    widget listed (it flips to `exited`, restartable). The list's `X` row action.
+  - Closing the agent's tab (`tab:close`) never retires the agent, whatever its state:
+    the terminal-tab close is vetoed (the terminal stays in its workbench — a running
+    agent keeps working in the background, a stopped one stays listed) and the view falls
+    back to the user's workbench; re-select the agent to bring it back.
+  - `agent:close` — close for good: terminate the child if it's still running, remove its
+    workbench, and retire it from the list (`closeAgent`). The list's `d d` key; acts on the
+    selected row, or the active/last-focused agent from the command palette.
   - `agent:restart` — respawn an exited (or running, after confirm) agent with the
     same profile/cwd; reuse the row.
   - `agent:reveal` / `agent:focus-next` / `agent:focus-prev` — navigation.
@@ -297,7 +303,7 @@ Today the editor is single-rooted (`process.cwd()` feeds `FileTree`, `GitRepo`,
   "workspace folder" switch). Lowest blast radius.
 - **Full — a Workspace/Session concept**: the window holds the active root; viewing
   an agent in another worktree switches the active root (FileTree, GitRepo,
-  BranchButton, title) to it. This is really **Session management** (see that task)
+  GitBranchButton, title) to it. This is really **Session management** (see that task)
   and should be designed with it, not bolted on. Flag the dependency rather than
   duplicating.
 
@@ -326,7 +332,7 @@ exists, so it's cheap and high-value; the rest are bigger or more speculative.
   in-app toasts via `notifyAgentAttention`). Gate on window focus; clicking the
   notification reveals the agent (same `reveal` callback).
 - **Agent interrupt** — `agent:interrupt`: send ESC / `ctrl-c` to the child to stop
-  the current action, a softer alternative to `agent:kill`. Trivial now that the
+  the current action, a softer alternative to `agent:stop`. Trivial now that the
   modal terminal already sends ESC (`feedChild('\x1b')`); ctrl-c is `feedChild('\x03')`.
 - **Jump to an agent's latest edit** — open the file the agent last touched **at the
   exact line** (not just the file). Needs the hook to record a position alongside the
@@ -403,7 +409,7 @@ container that steals focus from the Vte; see index.md).
   but unbounded across a long session — cap by count/size, or rely on git for large
   files? And dedupe baselines when several agents share a worktree + file.
 - **Kill semantics**: SIGTERM the VTE child directly, or `claude`-aware graceful
-  shutdown? And should closing a *running* agent's tab ever kill it, or always
-  detach (today) and require explicit `agent:kill`?
+  shutdown? (Closing a *running* agent's tab does **not** kill it — it backgrounds the
+  agent; only `agent:stop` terminates the child. Resolved.)
 - **Rename vs CLI title**: when the user renames, does the agent's reported (OSC)
   title still override, or is the manual name pinned?

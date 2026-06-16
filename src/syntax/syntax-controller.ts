@@ -16,14 +16,55 @@
  * `foldAll`/`unfoldAll` methods; the editor wires them to `fold:*` commands that
  * the vim keymap's `z`-prefix (za/zo/zc/zR/zM) dispatches.
  */
-import { Gtk, GLib, GtkSource, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
-import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
-import { theme } from '../theme/theme.ts';
+import { Gtk, GLib, GtkSource, Pango, registerClass, type SourceBuffer, type SourceView } from '../gi.ts';
+import { type Grammar, createParser, getGrammar, grammarForName, langIdForPath } from './grammar.ts';
+import { theme, type SyntaxStyle } from '../theme/theme.ts';
+import { computeStyleRuns, type StyleSpan } from './highlightRuns.ts';
+import { findBracketPair } from './bracketMatch.ts';
+import { indentLevelAt, enclosingTypeMatches, enclosingNodeRange } from './indent.ts';
+
+const STRING_COMMENT_RE = /string|comment|char|regex/;
 
 const HIGHLIGHT_DEBOUNCE_MS = 60;
+// Repaint after scrolling settles — snappy, and cheap (no reparse, just a
+// re-query over the new visible range).
+const VIEWPORT_DEBOUNCE_MS = 30;
+// Highlight this many lines above/below the viewport, so scrolling within the
+// band shows highlighted text immediately while a repaint catches up.
+const VIEWPORT_MARGIN_LINES = 80;
+
+// Chars scanned each side of the cursor for the matching bracket — bounds the
+// cost on huge buffers (a far-away or unmatched bracket simply isn't highlighted).
+const BRACKET_SCAN_WINDOW = 5_000;
+
+// How deep language injections nest before we stop (Markdown → inline / fenced
+// code is depth 1; a fenced block whose grammar itself injects would be depth 2).
+// A small bound guards against a pathological self-injecting grammar.
+const MAX_INJECTION_DEPTH = 3;
+
+// One highlight capture flattened to primitives — detached from its tree-sitter
+// node so injected trees can be freed before painting (their nodes would dangle).
+interface RawCapture {
+  name: string;
+  start: number; end: number;
+  sRow: number; sCol: number; eRow: number; eCol: number;
+}
+
+// Outer (whole construct) + inner (body) line spans of a node — for the
+// function/class text objects (`if`/`af`, `ic`/`ac`).
+type NodeRange = { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } };
+
+// The buffer region to highlight: tree-sitter points (for range-limited queries)
+// plus UTF-16 indices (for the injection off-screen check). Null = whole buffer.
+interface VisibleRange {
+  startPoint: { row: number; column: number };
+  endPoint: { row: number; column: number };
+  startIndex: number;
+  endIndex: number;
+}
 
 // Line-number gutter color (muted), matching how syntax colors are themed.
-const LINE_NUMBER_COLOR = theme.ui.lineNumber ?? theme.ui.textMuted ?? theme.ui.fg ?? '#888888';
+const LINE_NUMBER_COLOR = theme.ui.lineNumber;
 
 
 interface FoldRegion {
@@ -56,6 +97,12 @@ function isFunctionNodeType(type: string): boolean {
   return /function|method|constructor/.test(type) || FUNCTION_NODE_TYPES.has(type);
 }
 
+/** Class-like *definitions* (class/interface/enum/struct), for the `ic`/`ac` text
+ *  object — the declaration node, not its `*_body` (whose type also contains "class"). */
+function isClassNodeType(type: string): boolean {
+  return /class|interface|enum|struct|trait|impl/.test(type) && !/_body$/.test(type);
+}
+
 /** Whether buffer `line` is hidden inside a fold (any gutter renderer can call this). */
 export function isLineFolded(buffer: any, line: number): boolean {
   const tag = buffer.getTagTable().lookup(FOLD_HIDDEN_TAG_NAME);
@@ -67,6 +114,40 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
+/** The min/max line span covered by a capture list, or null if empty. */
+function extentOf(captures: RawCapture[]): { fromLine: number; toLine: number } | null {
+  if (captures.length === 0) return null;
+  let fromLine = Infinity, toLine = -1;
+  for (const c of captures) {
+    if (c.sRow < fromLine) fromLine = c.sRow;
+    if (c.eRow > toLine) toLine = c.eRow;
+  }
+  return { fromLine, toLine };
+}
+
+/** A capture's color, resolved by the standard longest-prefix fallback (so e.g.
+ *  `markup.heading.1` inherits `markup.heading`'s color). */
+function resolveColor(name: string): string | undefined {
+  let key: string | undefined = name;
+  while (key) {
+    if (theme.syntax[key]) return theme.syntax[key];
+    const dot = key.lastIndexOf('.');
+    key = dot === -1 ? undefined : key.slice(0, dot);
+  }
+  return undefined;
+}
+
+/** A capture's font style, resolved by longest-prefix fallback (like resolveColor). */
+function resolveStyleFor(name: string): SyntaxStyle | undefined {
+  let key: string | undefined = name;
+  while (key) {
+    if (theme.syntaxStyle[key]) return theme.syntaxStyle[key];
+    const dot = key.lastIndexOf('.');
+    key = dot === -1 ? undefined : key.slice(0, dot);
+  }
+  return undefined;
+}
+
 export class SyntaxController {
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
@@ -74,13 +155,33 @@ export class SyntaxController {
   private grammar: Grammar | null = null;
   private parser: any = null;
   private tree: any = null; // last parse tree, kept for incremental reparsing
+  // One parser per injected guest grammar (Markdown code fences / inline spans),
+  // created lazily and reused across refreshes; their trees are transient.
+  private readonly injectionParsers = new Map<Grammar, any>();
 
+  // Foreground-color tags, one per capture name that resolves to a color.
   private readonly tags = new Map<string, any>();
-  // Memoized capture-name → tag (or null) lookups, including longest-prefix
-  // fallback; see resolveTag. Capture names are a small fixed set, so this
-  // amortizes the per-capture string work on every refresh.
+  // Decoration tags applied additively on top of color so styles *stack*
+  // (nested bold+italic, a code background under recolored tokens, a heading
+  // scale over inline code). Boolean attrs share one tag each; valued attrs
+  // (scale/background) get one tag per distinct value the theme uses.
+  private attrBold: any = null;
+  private attrItalic: any = null;
+  private attrUnderline: any = null;
+  private attrStrike: any = null;
+  private readonly scaleTags = new Map<number, any>();
+  private readonly bgTags = new Map<string, any>();
+  private readonly lineBgTags = new Map<string, any>();
+  // Every highlight tag (color + decorations), for clearing in one pass.
+  private allTags: any[] = [];
+  // Memoized capture-name → color-tag / style (longest-prefix fallback); capture
+  // names are a small fixed set, so this amortizes the per-capture string work.
   private readonly tagCache = new Map<string, any>();
+  private readonly styleCache = new Map<string, SyntaxStyle | null>();
   private readonly invisibleTag: any;
+  // Highlights the bracket under the cursor and its match; cursor-driven, managed
+  // separately from the parse-driven highlight tags (not in `allTags`).
+  private readonly bracketMatchTag: any;
 
   // The fold-aware line-number gutter renderer (null when line numbers are off),
   // and the digit width its size is currently primed for. GtkSourceGutterRendererText
@@ -97,22 +198,70 @@ export class SyntaxController {
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
   private debounceId = 0;
+  private viewportDebounceId = 0;
+  private scrollConnected = false;
+  // Cached buffer text from the last parse, reused by viewport repaints on scroll
+  // (no edit → no reparse, just a re-query + re-paint over the new visible range).
+  private cachedText = '';
+  // The line span our highlight tags currently cover, cleared before the next
+  // paint; null = "unknown, clear the whole buffer".
+  private paintedExtent: { fromLine: number; toLine: number } | null = null;
+  // Whether tree-sitter code folding is active (chevron gutter + fold discovery).
+  // Off for diff panes, which fold by unchanged-region instead (see DiffFold).
+  private readonly foldingEnabled: boolean;
 
-  constructor(view: SourceView, buffer: SourceBuffer, options: { lineNumbers?: boolean } = {}) {
+  constructor(
+    view: SourceView,
+    buffer: SourceBuffer,
+    options: { lineNumbers?: boolean; folding?: boolean } = {},
+  ) {
     this.view = view;
     this.buffer = buffer;
+    this.foldingEnabled = options.folding !== false;
 
-    // One highlight tag per capture, colored from the theme palette. Created in
-    // theme.syntax order so GtkTextTag priority resolves overlaps (see Theme).
-    for (const [name, color] of Object.entries(theme.syntax)) {
-      const tag = new Gtk.TextTag({ name: `ts:${name}`, foreground: color });
-      (buffer as any).getTagTable().add(tag);
-      this.tags.set(name, tag);
+    const table = (buffer as any).getTagTable();
+    const mk = (props: Record<string, unknown>) => { const t = new Gtk.TextTag(props); table.add(t); return t; };
+
+    // Foreground-color tags, one per capture name (over the union of colored and
+    // styled captures, in theme.syntax order) that resolves to a color.
+    const names = new Set([...Object.keys(theme.syntax), ...Object.keys(theme.syntaxStyle)]);
+    for (const name of names) {
+      const color = resolveColor(name);
+      if (color) this.tags.set(name, mk({ name: `ts:${name}`, foreground: color }));
     }
+    // Decoration tags (applied on top of color, additively): shared boolean attrs
+    // and one tag per distinct scale/background value in the theme.
+    this.attrBold = mk({ name: 'ts*bold', weight: Pango.Weight.BOLD });
+    this.attrItalic = mk({ name: 'ts*italic', style: Pango.Style.ITALIC });
+    this.attrUnderline = mk({ name: 'ts*underline', underline: Pango.Underline.SINGLE });
+    this.attrStrike = mk({ name: 'ts*strikethrough', strikethrough: true });
+    for (const style of Object.values(theme.syntaxStyle)) {
+      if (style.scale != null && !this.scaleTags.has(style.scale)) {
+        this.scaleTags.set(style.scale, mk({ name: `ts*scale:${style.scale}`, scale: style.scale }));
+      }
+      if (style.background != null && !this.bgTags.has(style.background)) {
+        this.bgTags.set(style.background, mk({ name: `ts*bg:${style.background}`, background: style.background }));
+      }
+      if (style.lineBackground != null && !this.lineBgTags.has(style.lineBackground)) {
+        this.lineBgTags.set(style.lineBackground,
+          mk({ name: `ts*linebg:${style.lineBackground}`, paragraphBackground: style.lineBackground }));
+      }
+    }
+    this.allTags = [
+      ...this.tags.values(), this.attrBold, this.attrItalic, this.attrUnderline,
+      this.attrStrike, ...this.scaleTags.values(), ...this.bgTags.values(), ...this.lineBgTags.values(),
+    ];
 
     // The tag that performs the actual hiding when a range is folded.
     this.invisibleTag = new Gtk.TextTag({ name: FOLD_HIDDEN_TAG_NAME, invisible: true });
     (buffer as any).getTagTable().add(this.invisibleTag);
+
+    // Bracket-match highlight (subtle box-like background + bold).
+    this.bracketMatchTag = mk({
+      name: 'bracket-match',
+      background: theme.ui.selectedBg ?? theme.ui.popoverBg,
+      weight: Pango.Weight.BOLD,
+    });
 
     // Gutter renderers (safe to instantiate: SyntaxController is built inside the
     // application's activate handler, so vfunc subclasses don't crash). Order:
@@ -129,10 +278,12 @@ export class SyntaxController {
       this.lineNumberRenderer = lineNumbers;
       this.primeLineNumbers();
     }
-    const renderer = new FoldRenderer();
-    (renderer as any).controller = this;
-    renderer.setXpad(4);
-    gutter.insert(renderer, options.lineNumbers ? 1 : 0);
+    if (this.foldingEnabled) {
+      const renderer = new FoldRenderer();
+      (renderer as any).controller = this;
+      renderer.setXpad(4);
+      gutter.insert(renderer, options.lineNumbers ? 1 : 0);
+    }
 
     // Feed edits into the current tree for incremental reparsing. insert-text /
     // delete-range run before the buffer is modified (the default handlers are
@@ -144,6 +295,54 @@ export class SyntaxController {
       this.primeLineNumbers(); // keep the gutter wide enough as the line count grows
       this.scheduleRefresh();
     });
+
+    // Re-highlight the newly-revealed lines as the view scrolls. The vadjustment
+    // is set by the enclosing ScrolledWindow after construction, so connect when
+    // it appears (notify::vadjustment) as well as now if it's already there.
+    const connectScroll = () => {
+      const vadj = (view as any).getVadjustment?.();
+      if (vadj && !this.scrollConnected) {
+        this.scrollConnected = true;
+        (vadj as any).on('value-changed', () => this.scheduleViewportRepaint());
+      }
+    };
+    (view as any).on('notify::vadjustment', connectScroll);
+    connectScroll();
+
+    // Re-highlight the matching bracket whenever the cursor moves (text-based, so
+    // it works regardless of grammar).
+    (buffer as any).on('notify::cursor-position', () => this.updateBracketMatch());
+  }
+
+  /**
+   * Whether `(row, column)` is inside a string, comment, or regex — used to skip
+   * brackets that aren't real code. Walks up the tree from the position; false
+   * when there's no parse tree.
+   */
+  isInStringOrComment(row: number, column: number): boolean {
+    if (!this.grammar || !this.tree) return false;
+    return enclosingTypeMatches(this.tree.rootNode, row, column, STRING_COMMENT_RE);
+  }
+
+  /** Highlight the bracket under (or just before) the cursor and its match. */
+  private updateBracketMatch(): void {
+    const buffer = this.buffer as any;
+    buffer.removeTag(this.bracketMatchTag, buffer.getStartIter(), buffer.getEndIter());
+    const cursor = asIter(buffer.getIterAtMark(buffer.getInsert())).getOffset();
+    const len = buffer.getCharCount();
+    const from = Math.max(0, cursor - BRACKET_SCAN_WINDOW);
+    const to = Math.min(len, cursor + BRACKET_SCAN_WINDOW);
+    const text = buffer.getText(asIter(buffer.getIterAtOffset(from)), asIter(buffer.getIterAtOffset(to)), true);
+    const pair = findBracketPair(text, cursor - from);
+    if (!pair) return;
+    const cells = pair.map((p) => ({
+      a: asIter(buffer.getIterAtOffset(from + p)),
+      b: asIter(buffer.getIterAtOffset(from + p + 1)),
+    }));
+    // Ignore brackets inside strings/comments/regex (e.g. a `)` in a string literal):
+    // they'd throw off matching and shouldn't light up.
+    if (cells.some(({ a }) => this.isInStringOrComment(a.getLine(), a.getLineOffset()))) return;
+    for (const { a, b } of cells) buffer.applyTag(this.bracketMatchTag, a, b);
   }
 
   // --- incremental-parse edit tracking ---------------------------------------
@@ -186,6 +385,12 @@ export class SyntaxController {
       this.tree.delete();
       this.tree = null;
     }
+    // New document: forget the painted span so the next paint clears the whole
+    // buffer (the previous file's tags), not a stale line range.
+    this.paintedExtent = null;
+    // Drop guest parsers from the previous document's injections.
+    for (const parser of this.injectionParsers.values()) parser.delete();
+    this.injectionParsers.clear();
   }
 
   /**
@@ -239,8 +444,9 @@ export class SyntaxController {
    * kept as a method because the window calls it when the system scheme changes.
    */
   restyle(): void {
-    for (const [name, color] of Object.entries(theme.syntax)) {
-      this.tags.get(name).foreground = color;
+    for (const [name, tag] of this.tags) {
+      const color = resolveColor(name);
+      if (color) tag.foreground = color;
     }
   }
 
@@ -256,124 +462,249 @@ export class SyntaxController {
     });
   }
 
+  /** On edit: reparse incrementally, then re-highlight the viewport + recompute folds. */
   private refresh(): void {
     if (!this.grammar || !this.parser) return;
     const buffer = this.buffer as any;
-    const start = buffer.getStartIter();
-    const end = buffer.getEndIter();
-
     // include_hidden_chars = true so folded (invisible) text still reaches the
     // parser. Pass the prior (edited) tree for an incremental reparse, then
-    // delete the old one to free its wasm allocation.
-    const text = buffer.getText(start, end, true);
+    // delete the old one to free its wasm allocation. Cache the text so a scroll
+    // repaint can re-query without re-reading the whole buffer.
+    this.cachedText = buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true);
     // web-tree-sitter reports UTF-16 columns; getIterAtLineOffset wants codepoints.
     // They only diverge on astral (surrogate-pair) chars — detect once so the
     // common, BMP-only file pays nothing in iterAt.
-    this.hasAstral = /[\ud800-\udbff]/.test(text);
-    this.lineTextCache.clear();
-    const tree = this.parser.parse(text, this.tree ?? undefined);
+    this.hasAstral = /[\ud800-\udbff]/.test(this.cachedText);
+    const tree = this.parser.parse(this.cachedText, this.tree ?? undefined);
     if (!tree) return;
     if (this.tree && this.tree !== tree) this.tree.delete();
     this.tree = tree;
-    const root = tree.rootNode;
 
-    // Highlighting: clear our tags, then re-apply by resolving capture overlaps.
-    // (Other tags — the invisible fold tag — are untouched, so folds persist.)
-    for (const tag of this.tags.values()) buffer.removeTag(tag, start, end);
-    this.applyCaptures(root);
+    this.repaint();
 
     // Recompute fold regions; derive folded state from the live invisible tag so
     // it tracks edits (tags move with the text).
     this.foldsByHeaderLine.clear();
-    this.walkFolds(root);
+    if (this.foldingEnabled) this.walkFolds(tree.rootNode);
     (this.view as any).queueDraw();
   }
 
   /**
-   * Apply highlight tags for one parse, resolving overlapping captures the way
-   * tree-sitter highlighters do: at any character the *innermost* (narrowest)
-   * capture wins, with ties broken in favor of the later query pattern. The
-   * grammar queries lean on this — a broad `(arrow_function) @function` capture
-   * spans the whole `() => {}`, and is meant to show through only where no
-   * narrower capture (a bracket, an operator, an identifier) covers the text.
-   *
-   * GtkTextTag priority can't express this: a tag's priority is global, but the
-   * same `@function` tag is used for both the broad arrow-function span and a
-   * narrow call-name span. So instead of leaning on priority we flatten the
-   * captures into non-overlapping runs here and apply each run's winning tag
-   * over exactly its range. Unstyled captures (no theme color → null tag) still
-   * take part: a narrower unstyled identifier suppresses a broader styled span,
-   * leaving the default foreground rather than bleeding the outer color.
+   * Re-highlight the visible range (base grammar + injected layers) from the
+   * current tree — NO reparse. Used after an edit and on scroll. Captures are
+   * limited to the viewport (± a margin) when the view is realized, so large
+   * files only pay for what's on screen; off-screen, the whole buffer is done
+   * (small files / headless). Clears the previously-painted line span first so a
+   * scroll can't leave stale tags behind.
    */
-  private applyCaptures(root: any): void {
-    const buffer = this.buffer as any;
+  private repaint(): void {
+    if (!this.grammar || !this.tree) return;
+    this.lineTextCache.clear();
+    const range = this.visibleRange();
+    const captures: RawCapture[] = [];
+    this.collectCaptures(this.grammar, this.tree.rootNode, this.cachedText, captures, 0, range);
+    this.clearPainted();
+    this.paintCaptures(captures);
+    this.paintedExtent = extentOf(captures);
+  }
 
-    // Each capture as a flat interval over UTF-16 offsets, carrying the (row,col)
-    // of both endpoints (so we can build iters without an offset→position scan)
-    // and the resolved tag (possibly null) plus its order in the capture stream.
-    interface Cap {
-      start: number; end: number;
-      sRow: number; sCol: number; eRow: number; eCol: number;
-      tag: any; idx: number;
+  /** Schedule a viewport-only repaint after scrolling settles (no reparse). */
+  private scheduleViewportRepaint(): void {
+    if (!this.grammar) return;
+    if (this.viewportDebounceId) GLib.sourceRemove(this.viewportDebounceId);
+    this.viewportDebounceId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, VIEWPORT_DEBOUNCE_MS, () => {
+      this.viewportDebounceId = 0;
+      this.repaint();
+      (this.view as any).queueDraw();
+      return false;
+    });
+  }
+
+  /** The visible buffer range (± a margin), or null (whole buffer) when the view
+   *  isn't realized/laid out yet (initial load, headless). */
+  private visibleRange(): VisibleRange | null {
+    const view = this.view as any;
+    if (!view.getRealized()) return null;
+    const rect = view.getVisibleRect();
+    if (!rect || !rect.height) return null;
+    const buffer = this.buffer as any;
+    const lineAtY = (y: number): number => {
+      const r = view.getLineAtY(y);
+      return asIter(Array.isArray(r) ? r[0] : r).getLine();
+    };
+    const last = buffer.getLineCount() - 1;
+    const top = Math.max(0, lineAtY(rect.y) - VIEWPORT_MARGIN_LINES);
+    const bottom = Math.min(last, lineAtY(rect.y + rect.height) + VIEWPORT_MARGIN_LINES);
+    const startIter = asIter(buffer.getIterAtLine(top));
+    const endIter = bottom >= last ? buffer.getEndIter() : asIter(buffer.getIterAtLine(bottom + 1));
+    return {
+      startPoint: { row: top, column: 0 },
+      endPoint: { row: endIter.getLine(), column: endIter.getLineOffset() },
+      startIndex: startIter.getOffset(),
+      endIndex: endIter.getOffset(),
+    };
+  }
+
+  /** Remove all highlight tags over the previously-painted line span (whole
+   *  buffer when unknown). Line-based so it's immune to UTF-16/codepoint skew. */
+  private clearPainted(): void {
+    const buffer = this.buffer as any;
+    let from: any, to: any;
+    if (this.paintedExtent === null) {
+      from = buffer.getStartIter();
+      to = buffer.getEndIter();
+    } else {
+      const last = buffer.getLineCount() - 1;
+      from = asIter(buffer.getIterAtLine(Math.max(0, Math.min(this.paintedExtent.fromLine, last))));
+      to = this.paintedExtent.toLine >= last
+        ? buffer.getEndIter()
+        : asIter(buffer.getIterAtLine(this.paintedExtent.toLine + 1));
     }
-    const caps: Cap[] = [];
-    const posAt = new Map<number, { row: number; col: number }>();
-    const startsAt = new Map<number, Cap[]>();
-    const endsAt = new Map<number, Cap[]>();
-    let idx = 0;
-    for (const cap of this.grammar!.query.captures(root)) {
+    for (const tag of this.allTags) buffer.removeTag(tag, from, to);
+  }
+
+  /** The syntactic indent level for `row` (enclosing fold-block depth), or null
+   *  when there's no parse tree — the editor's "real" indent source for `=` /
+   *  paste-reindent (falls back to copy-previous otherwise). */
+  indentLevelForRow(row: number): number | null {
+    if (!this.grammar || !this.tree) return null;
+    return indentLevelAt(this.tree.rootNode, row, this.grammar.foldTypes);
+  }
+
+  /** A parser for an injected guest grammar, created on first use and reused. */
+  private injectionParser(grammar: Grammar): any {
+    let parser = this.injectionParsers.get(grammar);
+    if (!parser) {
+      parser = createParser(grammar);
+      this.injectionParsers.set(grammar, parser);
+    }
+    return parser;
+  }
+
+  /**
+   * Gather highlight captures for `grammar` over `root` into `out`, then recurse
+   * into its language injections: for each injection match, resolve the guest
+   * grammar (from a captured `@language` node's text, else the injection's static
+   * `language`), parse just the `@content` range with that grammar (positions
+   * stay absolute via `includedRanges`), and collect its captures too. Captures
+   * are flattened to primitives so each injected tree can be freed immediately —
+   * its nodes would otherwise dangle once deleted. Base captures land first and
+   * injected ones after, so the paint sweep (innermost + later-index wins) lets a
+   * narrower injected token paint over the broad host region that contains it.
+   */
+  private collectCaptures(
+    grammar: Grammar, root: any, text: string, out: RawCapture[], depth: number, range: VisibleRange | null,
+  ): void {
+    const captures = range
+      ? grammar.query.captures(root, range.startPoint, range.endPoint)
+      : grammar.query.captures(root);
+    for (const cap of captures) {
       const n = cap.node;
-      const c: Cap = {
+      out.push({
+        name: cap.name,
         start: n.startIndex, end: n.endIndex,
         sRow: n.startPosition.row, sCol: n.startPosition.column,
         eRow: n.endPosition.row, eCol: n.endPosition.column,
-        tag: this.resolveTag(cap.name), idx: idx++,
-      };
-      if (c.start === c.end) continue; // zero-width capture paints nothing
-      caps.push(c);
-      if (!posAt.has(c.start)) posAt.set(c.start, { row: c.sRow, col: c.sCol });
-      if (!posAt.has(c.end)) posAt.set(c.end, { row: c.eRow, col: c.eCol });
-      (startsAt.get(c.start) ?? startsAt.set(c.start, []).get(c.start)!).push(c);
-      (endsAt.get(c.end) ?? endsAt.set(c.end, []).get(c.end)!).push(c);
+      });
     }
-    if (caps.length === 0) return;
+    if (depth >= MAX_INJECTION_DEPTH) return;
 
-    // Sweep the boundary offsets left to right, tracking which captures are open.
-    // Over each elementary interval the winner is the narrowest open capture
-    // (ties: later idx). Merge consecutive intervals with the same winning tag
-    // into one run to keep applyTag calls down.
-    const points = [...posAt.keys()].sort((a, b) => a - b);
-    const active = new Set<Cap>();
-    let runTag: any = null;
-    let runStart = -1;
-    const flush = (endOffset: number) => {
-      if (runTag && runStart >= 0) {
-        const a = posAt.get(runStart)!;
-        const b = posAt.get(endOffset)!;
-        buffer.applyTag(runTag, this.iterAt(a.row, a.col), this.iterAt(b.row, b.col));
-      }
-      runTag = null;
-      runStart = -1;
-    };
-    for (let i = 0; i < points.length - 1; i++) {
-      const p = points[i];
-      for (const c of endsAt.get(p) ?? []) active.delete(c);
-      for (const c of startsAt.get(p) ?? []) active.add(c);
-      let win: Cap | null = null;
-      for (const c of active) {
-        if (!win) { win = c; continue; }
-        const cs = c.end - c.start;
-        const ws = win.end - win.start;
-        if (cs < ws || (cs === ws && c.idx > win.idx)) win = c;
-      }
-      const tag = win ? win.tag : null;
-      if (tag !== runTag) {
-        flush(p);
-        runTag = tag;
-        runStart = tag ? p : -1;
+    for (const inj of grammar.injections) {
+      const matches = range
+        ? inj.query.matches(root, range.startPoint, range.endPoint)
+        : inj.query.matches(root);
+      for (const match of matches) {
+        let langName: string | undefined = inj.language;
+        const contentNodes: any[] = [];
+        for (const cap of match.captures) {
+          if (cap.name === 'content' || cap.name === 'injection.content') contentNodes.push(cap.node);
+          else if (cap.name === 'language' || cap.name === 'injection.language') langName = cap.node.text;
+        }
+        if (!langName || contentNodes.length === 0) continue;
+        const guest = grammarForName(langName);
+        if (!guest) continue; // no grammar for that fence language — leave it plain
+
+        const parser = this.injectionParser(guest);
+        for (const node of contentNodes) {
+          if (node.startIndex >= node.endIndex) continue;
+          // Skip injections entirely off-screen — the big win for Markdown, where
+          // there's an `inline` node per paragraph but only a few are visible.
+          if (range && (node.endIndex <= range.startIndex || node.startIndex >= range.endIndex)) continue;
+          const included = {
+            startIndex: node.startIndex, endIndex: node.endIndex,
+            startPosition: node.startPosition, endPosition: node.endPosition,
+          };
+          let injTree: any = null;
+          try {
+            injTree = parser.parse(text, undefined, { includedRanges: [included] });
+          } catch {
+            injTree = null; // a guest parse failure must never break host highlighting
+          }
+          if (!injTree) continue;
+          this.collectCaptures(guest, injTree.rootNode, text, out, depth + 1, range);
+          injTree.delete();
+        }
       }
     }
-    flush(points[points.length - 1]);
+  }
+
+  /** A capture's font style, by longest-prefix fallback; memoized. */
+  private resolveStyle(name: string): SyntaxStyle | null {
+    const cached = this.styleCache.get(name);
+    if (cached !== undefined) return cached;
+    const style = resolveStyleFor(name) ?? null;
+    this.styleCache.set(name, style);
+    return style;
+  }
+
+  /**
+   * Paint highlight tags from a gathered capture list. Each capture becomes a
+   * `StyleSpan` carrying its resolved color tag plus decoration values; the pure
+   * `computeStyleRuns` flattens overlaps into runs (foreground = innermost wins
+   * *with suppression*; background/scale = innermost-that-has-it; bold/italic/…
+   * additive — see highlightRuns.ts). We then stack the run's tags over its range,
+   * so e.g. a fenced code background shows under recolored tokens and nested
+   * bold+italic both apply (GtkTextTag priority alone couldn't express this).
+   */
+  private paintCaptures(raws: RawCapture[]): void {
+    const buffer = this.buffer as any;
+    const posAt = new Map<number, { row: number; col: number }>();
+    const spans: StyleSpan<any>[] = [];
+    let idx = 0;
+    for (const raw of raws) {
+      if (raw.start === raw.end) continue; // zero-width capture paints nothing
+      if (!posAt.has(raw.start)) posAt.set(raw.start, { row: raw.sRow, col: raw.sCol });
+      if (!posAt.has(raw.end)) posAt.set(raw.end, { row: raw.eRow, col: raw.eCol });
+      const style = this.resolveStyle(raw.name);
+      spans.push({
+        start: raw.start, end: raw.end, idx: idx++,
+        color: this.resolveTag(raw.name),
+        background: style?.background != null ? this.bgTags.get(style.background) ?? null : null,
+        lineBackground: style?.lineBackground != null ? this.lineBgTags.get(style.lineBackground) ?? null : null,
+        scale: style?.scale ?? null,
+        bold: !!style?.bold, italic: !!style?.italic,
+        underline: !!style?.underline, strikethrough: !!style?.strikethrough,
+      });
+    }
+    if (spans.length === 0) return;
+
+    for (const run of computeStyleRuns(spans)) {
+      const a = posAt.get(run.start)!;
+      const b = posAt.get(run.end)!;
+      const from = this.iterAt(a.row, a.col);
+      const to = this.iterAt(b.row, b.col);
+      if (run.lineBackground) buffer.applyTag(run.lineBackground, from, to);
+      if (run.color) buffer.applyTag(run.color, from, to);
+      if (run.background) buffer.applyTag(run.background, from, to);
+      if (run.scale !== null) {
+        const t = this.scaleTags.get(run.scale);
+        if (t) buffer.applyTag(t, from, to);
+      }
+      if (run.bold) buffer.applyTag(this.attrBold, from, to);
+      if (run.italic) buffer.applyTag(this.attrItalic, from, to);
+      if (run.underline) buffer.applyTag(this.attrUnderline, from, to);
+      if (run.strikethrough) buffer.applyTag(this.attrStrike, from, to);
+    }
   }
 
   private walkFolds(node: any): void {
@@ -392,7 +723,7 @@ export class SyntaxController {
     const buffer = this.buffer as any;
     const start = buffer.getStartIter();
     const end = buffer.getEndIter();
-    for (const tag of this.tags.values()) buffer.removeTag(tag, start, end);
+    for (const tag of this.allTags) buffer.removeTag(tag, start, end);
     buffer.removeTag(this.invisibleTag, start, end);
   }
 
@@ -503,25 +834,21 @@ export class SyntaxController {
    * so it works for both brace and indentation languages). Null when off a
    * function or with no parse tree.
    */
-  functionRangeAt(
-    row: number,
-    column: number,
-  ): { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } } | null {
-    if (!this.tree) return null;
-    let node: any = this.tree.rootNode.descendantForPosition({ row, column });
-    while (node && !isFunctionNodeType(node.type)) node = node.parent;
-    if (!node) return null;
+  /** The function enclosing `(row, column)` — outer (whole def) + inner (body) line
+   *  spans — for the `if`/`af` text object. */
+  functionRangeAt(row: number, column: number): NodeRange | null {
+    return this.nodeRangeAt(row, column, isFunctionNodeType);
+  }
 
-    const outer = { startRow: node.startPosition.row, endRow: node.endPosition.row };
-    let inner = outer;
-    const body = node.childForFieldName ? node.childForFieldName('body') : null;
-    if (body) {
-      const stmts = (body.namedChildren || []).filter(Boolean);
-      inner = stmts.length
-        ? { startRow: stmts[0].startPosition.row, endRow: stmts[stmts.length - 1].endPosition.row }
-        : { startRow: body.startPosition.row, endRow: body.endPosition.row };
-    }
-    return { outer, inner };
+  /** The class/interface/enum enclosing `(row, column)`, for the `ic`/`ac` text object. */
+  classRangeAt(row: number, column: number): NodeRange | null {
+    return this.nodeRangeAt(row, column, isClassNodeType);
+  }
+
+  /** Outer (whole node) + inner (its `body` field's statements) line spans for the
+   *  nearest enclosing node whose type satisfies `matches`. */
+  private nodeRangeAt(row: number, column: number, matches: (type: string) => boolean): NodeRange | null {
+    return this.tree ? enclosingNodeRange(this.tree.rootNode, row, column, matches) : null;
   }
 
   /** Digit width to pad line numbers to, so the gutter doesn't jitter while scrolling. */

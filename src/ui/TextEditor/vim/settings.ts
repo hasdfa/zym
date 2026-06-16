@@ -46,6 +46,16 @@ const schema: Record<string, ConfigSchema> = {
     default: false,
     description: 'Disable the OS input method when leaving insert mode.',
   },
+  leapBidirectional: {
+    type: 'boolean',
+    default: true,
+    description: 'Leap (g s) searches both directions from the cursor, not just forward/backward.',
+  },
+  leapDimEditor: {
+    type: 'boolean',
+    default: true,
+    description: 'Dim the editor text while a leap (g s) is in progress so the jump labels stand out.',
+  },
   wrapLeftRightMotion: {
     type: 'boolean',
     default: false,

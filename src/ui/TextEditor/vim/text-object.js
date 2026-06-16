@@ -9,6 +9,7 @@ import { Point } from '../../../text/Point.ts'
 //  - [ ] Count support(priority low)?
 import { Base } from './base.js'
 import PairFinder from './pair-finder.js'
+import { lhsRhsRanges } from '../lhsRhs.ts'
 
 class TextObject extends Base {
   static operationKind = 'text-object'
@@ -593,6 +594,18 @@ class Function extends TextObject {
   }
 }
 
+// `ic`/`ac` — the class/interface/enum enclosing the cursor (tree-sitter, via
+// EditorModel.getClassRange). `ac` is the whole definition; `ic` is the body.
+class Class extends TextObject {
+  wise = "linewise"
+
+  getRange (selection) {
+    const ranges = this.editor.getClassRange(this.getCursorPositionForSelection(selection))
+    if (!ranges) return
+    return this.isA() ? ranges.outer : ranges.inner
+  }
+}
+
 // Section: Other
 // =========================
 class Arguments extends TextObject {
@@ -863,6 +876,29 @@ class DiffHunk extends TextObject {
   }
 }
 
+// LHS/RHS of an assignment (a port of romgrk's equal.operator). `i h`/`a h` target
+// the left side, `i l`/`a l` the right side; inner trims to the value, `a` keeps
+// the separator. The range computation lives in the pure `../lhsRhs.ts`.
+class AssignmentSide extends TextObject {
+  getRange (selection) {
+    const point = this.getCursorPositionForSelection(selection)
+    const ranges = lhsRhsRanges(this.editor.lineTextForBufferRow(point.row))
+    if (!ranges) return null
+    const span = this.spanFrom(ranges)
+    return span ? new Range([point.row, span[0]], [point.row, span[1]]) : null
+  }
+}
+class Lhs extends AssignmentSide {
+  spanFrom (ranges) {
+    return this.isInner() ? ranges.lhsInner : ranges.lhsA
+  }
+}
+class Rhs extends AssignmentSide {
+  spanFrom (ranges) {
+    return this.isInner() ? ranges.rhsInner : ranges.rhsA
+  }
+}
+
 const __operations = Object.assign(
   {
     TextObject,
@@ -890,6 +926,7 @@ const __operations = Object.assign(
     CommentOrParagraph,
     Fold,
     Function,
+    Class,
     Arguments,
     CurrentLine,
     Entire,
@@ -925,6 +962,7 @@ const __operations = Object.assign(
   CommentOrParagraph.deriveClass(true),
   Fold.deriveClass(true),
   Function.deriveClass(true),
+  Class.deriveClass(true),
   Arguments.deriveClass(true),
   CurrentLine.deriveClass(true),
   Entire.deriveClass(true),
@@ -932,7 +970,9 @@ const __operations = Object.assign(
   LatestChange.deriveClass(true),
   PersistentSelection.deriveClass(true),
   VisibleArea.deriveClass(true),
-  DiffHunk.deriveClass(true)
+  DiffHunk.deriveClass(true),
+  Lhs.deriveClass(true),
+  Rhs.deriveClass(true)
 )
 
 for (const klass of Object.values(__operations)) klass.register()

@@ -28,28 +28,50 @@ export interface UiColors {
    * scheme. See createSourceScheme / TextEditor.followSystemColorScheme.
    */
   bg?: string;
-  /** Line-number gutter foreground. Defaults to `fg` when omitted. */
-  lineNumber?: string;
+  /** Line-number gutter foreground. */
+  lineNumber: string;
   /** Separator/border color for chrome (e.g. the header bar's bottom edge). */
-  border?: string;
+  border: string;
   /** Background of elevated surfaces: pickers, popovers, autocomplete, menus. */
-  popoverBg?: string;
+  popoverBg: string;
   /** Background of a selected entry (file tree row, picker result, list item). */
-  selectedBg?: string;
+  selectedBg: string;
   /** De-emphasized text (secondary labels, subtitles). */
-  textMuted?: string;
+  textMuted: string;
   /**
    * Accent foreground for emphasized text — used for the matched-character
-   * highlight in pickers (the role Zed's `text.accent` plays in its fuzzy
-   * finders). The picker falls back to a blue/purple when this is unset.
+   * highlight in pickers (the role Zed's `text.accent` plays in its fuzzy finders).
    */
-  textAccent?: string;
+  textAccent: string;
+  /**
+   * Background tint for editor search matches: every match (`searchMatch`) and
+   * the current one (`searchMatchCurrent`). `#rrggbbaa` so it composes over the
+   * syntax-colored text — kept dim on purpose so the text stays readable. From
+   * Zed's `search.match_background` (current adds our `…background.current`).
+   */
+  searchMatch: string;
+  searchMatchCurrent: string;
   /** Semantic text colors for status/feedback (Zed's status keys). */
-  success?: string;
-  warning?: string;
-  error?: string;
-  info?: string;
-  hint?: string;
+  success: string;
+  warning: string;
+  error: string;
+  info: string;
+  hint: string;
+  /** Drop-shadow color for floating surfaces (popovers, toasts, cards). */
+  shadow: string;
+  /** Brief flash tint over an operated/yanked range (vim). `#rrggbbaa`. */
+  flash: string;
+  /** Diff line/word background tints (`#rrggbbaa`, compose over syntax colors). */
+  diffAddedBg: string;
+  diffRemovedBg: string;
+  diffAddedWordBg: string;
+  diffRemovedWordBg: string;
+  diffFillerBg: string;
+  diffFoldBg: string;
+  /** GitHub pull-request state colors (open / merged / closed). */
+  prOpen: string;
+  prMerged: string;
+  prClosed: string;
 }
 
 /*
@@ -67,11 +89,35 @@ export interface UiColors {
  */
 export type SyntaxColors = Record<string, string>;
 
+/**
+ * Per-capture font *style* (beyond foreground color): the attributes a GtkTextTag
+ * can carry that make markup look like markup — bold/italic/strikethrough/underline,
+ * a relative font `scale` (bigger headings), and a `background` (code). Sparse and
+ * keyed by capture name like `syntax`, with the same longest-prefix fallback. Comes
+ * from the Zed theme's `font_weight`/`font_style` plus built-in `markup.*` defaults.
+ */
+export interface SyntaxStyle {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  /** Relative font size (1 = normal); e.g. 1.1 for headings. */
+  scale?: number;
+  /** Text-only background (inline code). */
+  background?: string;
+  /** Full-line (paragraph) background — block code. */
+  lineBackground?: string;
+}
+
+export type SyntaxStyles = Record<string, SyntaxStyle>;
+
 export interface Theme {
   name: string;
   appearance: 'light' | 'dark';
   ui: UiColors;
   syntax: SyntaxColors;
+  /** Per-capture font styling (bold/italic/scale/background/…). */
+  syntaxStyle: SyntaxStyles;
 }
 
 // --- Zed theme format (on disk) --------------------------------------------
@@ -94,6 +140,41 @@ interface ZedThemeFamily {
   author?: string;
   themes: ZedTheme[];
 }
+
+/*
+ * Resolved fallbacks for every UI color, applied at load time so the rest of the
+ * app never needs an inline color literal — the theme module is the single source
+ * of color. A theme's own values (from its Zed JSON) always win; these fill only
+ * what it omits. `fg` defaults to white. (`bg` has no default: its absence is the
+ * signal to follow the system light/dark scheme — see UiColors.bg.)
+ */
+const DEFAULT_UI = {
+  fg: '#ffffff',
+  lineNumber: '#888888',
+  border: 'rgba(0, 0, 0, 0.3)',
+  popoverBg: '#1e1e1e',
+  selectedBg: 'rgba(127, 127, 127, 0.25)',
+  textMuted: '#9a9996',
+  textAccent: '#c678dd',
+  searchMatch: '#e5a50a26',
+  searchMatchCurrent: '#e5a50a59',
+  success: '#2ec27e',
+  warning: '#e5a50a',
+  error: '#e01b24',
+  info: '#3584e4',
+  hint: '#33d17a',
+  shadow: 'rgba(0, 0, 0, 0.3)',
+  flash: '#f5c21188',
+  diffAddedBg: '#2ec27e26',
+  diffRemovedBg: '#e01b2426',
+  diffAddedWordBg: '#2ec27e66',
+  diffRemovedWordBg: '#e01b2466',
+  diffFillerBg: '#88888820',
+  diffFoldBg: '#88888814',
+  prOpen: '#3fb950',
+  prMerged: '#a371f7',
+  prClosed: '#f85149',
+} as const;
 
 /**
  * Load a theme from `<name>.json` (a Zed theme family). `variant` selects a
@@ -121,35 +202,98 @@ function adaptZedTheme(zed: ZedTheme): Theme {
     return undefined;
   };
 
-  const fg = pick('editor.foreground', 'foreground');
-  if (!fg) throw new Error(`theme "${zed.name}" defines no editor/foreground color`);
-
   // Preserve `style.syntax` key order — it drives tag priority (see SyntaxColors).
   const syntax: SyntaxColors = {};
+  const syntaxStyle: SyntaxStyles = {};
   for (const [capture, token] of Object.entries(style.syntax ?? {})) {
     if (token && typeof token.color === 'string') syntax[capture] = token.color;
+    // Carry the theme's own per-capture bold/italic (Zed drops nothing now).
+    const s: SyntaxStyle = {};
+    if (typeof token?.font_weight === 'number' && token.font_weight >= 700) s.bold = true;
+    if (token?.font_style === 'italic') s.italic = true;
+    if (s.bold || s.italic) syntaxStyle[capture] = s;
   }
 
-  return {
-    name: zed.name,
-    appearance: zed.appearance,
-    ui: {
-      fg,
-      bg: pick('editor.background', 'background'),
-      lineNumber: pick('editor.line_number', 'editor.gutter.foreground'),
-      border: pick('border', 'border.variant'),
-      popoverBg: pick('elevated_surface.background', 'surface.background', 'background'),
-      selectedBg: pick('element.selected', 'ghost_element.selected'),
-      textMuted: pick('text.muted'),
-      textAccent: pick('text.accent', 'text.accent.emphasis', 'accent'),
-      success: pick('success'),
-      warning: pick('warning'),
-      error: pick('error'),
-      info: pick('info'),
-      hint: pick('hint'),
-    },
-    syntax,
+  const ui: UiColors = {
+    fg: pick('editor.foreground', 'foreground') ?? DEFAULT_UI.fg,
+    bg: pick('editor.background', 'background'), // optional: absent ⇒ follow system scheme
+    lineNumber: pick('editor.line_number', 'editor.gutter.foreground') ?? DEFAULT_UI.lineNumber,
+    border: pick('border', 'border.variant') ?? DEFAULT_UI.border,
+    popoverBg: pick('elevated_surface.background', 'surface.background', 'background') ?? DEFAULT_UI.popoverBg,
+    selectedBg: pick('element.selected', 'ghost_element.selected') ?? DEFAULT_UI.selectedBg,
+    textMuted: pick('text.muted') ?? DEFAULT_UI.textMuted,
+    textAccent: pick('text.accent', 'text.accent.emphasis', 'accent') ?? DEFAULT_UI.textAccent,
+    searchMatch: pick('search.match_background') ?? DEFAULT_UI.searchMatch,
+    searchMatchCurrent:
+      pick('search.match_background.current', 'search.match_background') ?? DEFAULT_UI.searchMatchCurrent,
+    success: pick('success') ?? DEFAULT_UI.success,
+    warning: pick('warning') ?? DEFAULT_UI.warning,
+    error: pick('error') ?? DEFAULT_UI.error,
+    info: pick('info') ?? DEFAULT_UI.info,
+    hint: pick('hint') ?? DEFAULT_UI.hint,
+    shadow: pick('shadow') ?? DEFAULT_UI.shadow,
+    flash: pick('editor.flash') ?? DEFAULT_UI.flash,
+    diffAddedBg: pick('diff.added_background') ?? DEFAULT_UI.diffAddedBg,
+    diffRemovedBg: pick('diff.removed_background') ?? DEFAULT_UI.diffRemovedBg,
+    diffAddedWordBg: pick('diff.added_word_background') ?? DEFAULT_UI.diffAddedWordBg,
+    diffRemovedWordBg: pick('diff.removed_word_background') ?? DEFAULT_UI.diffRemovedWordBg,
+    diffFillerBg: pick('diff.filler_background') ?? DEFAULT_UI.diffFillerBg,
+    diffFoldBg: pick('diff.fold_background') ?? DEFAULT_UI.diffFoldBg,
+    prOpen: pick('vcs.pr.open') ?? DEFAULT_UI.prOpen,
+    prMerged: pick('vcs.pr.merged') ?? DEFAULT_UI.prMerged,
+    prClosed: pick('vcs.pr.closed') ?? DEFAULT_UI.prClosed,
   };
+
+  applyMarkupDefaults(syntax, syntaxStyle, ui);
+  return { name: zed.name, appearance: zed.appearance, ui, syntax, syntaxStyle };
+}
+
+/**
+ * Fill in defaults for the `markup.*` captures (Markdown headings/emphasis/code/…)
+ * that text-mostly themes like Zed's don't define. Colors reuse the loaded palette
+ * so they stay theme-consistent; styles give markup its visual hallmarks. Existing
+ * theme entries always win (we only set what's missing).
+ */
+function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui: UiColors): void {
+  const colorDefaults: SyntaxColors = {
+    'markup.heading': syntax.function ?? syntax.keyword ?? ui.fg,
+    'markup.link': syntax.function ?? ui.textAccent ?? ui.fg,
+    'markup.link.url': syntax.string ?? syntax.comment ?? ui.fg,
+    'markup.raw': syntax.string ?? ui.fg,
+    'markup.list': syntax.punctuation ?? syntax.operator ?? ui.fg,
+    'markup.quote': syntax.comment ?? ui.textMuted ?? ui.fg,
+  };
+  for (const [cap, color] of Object.entries(colorDefaults)) {
+    if (color && syntax[cap] === undefined) syntax[cap] = color;
+  }
+
+  const styleDefaults: SyntaxStyles = {
+    // Headings are bold and larger, scaled per level (h1 biggest). `scale` changes
+    // the line's height, which is safe for vim display-line motion (j/k, gj/gk):
+    // `displayLineMove` moves by display row via the view's layout, so a normal
+    // glyph (the unscaled `##` markers) on a taller heading line still steps off it.
+    // Colors inherit `markup.heading` via prefix fallback (resolveColor).
+    'markup.heading': { bold: true, scale: 1.2 }, // setext / generic fallback
+    'markup.heading.1': { bold: true, scale: 1.5 },
+    'markup.heading.2': { bold: true, scale: 1.2 },
+    'markup.heading.3': { bold: true, scale: 1.1 },
+    'markup.heading.4': { bold: true, scale: 1.1 },
+    'markup.heading.5': { bold: true, scale: 1.1 },
+    'markup.heading.6': { bold: true, scale: 1.1 },
+    'markup.strong': { bold: true },
+    'markup.emphasis': { italic: true },
+    'markup.strikethrough': { strikethrough: true },
+    'markup.link': { underline: true },
+    'markup.quote': { italic: true },
+    // Inline code → text-only background; block code (fences) → full-line background.
+    ...(ui.popoverBg ? {
+      'markup.raw': { background: ui.popoverBg },
+      'markup.raw.block': { lineBackground: ui.popoverBg },
+    } : {}),
+  };
+  for (const [cap, style] of Object.entries(styleDefaults)) {
+    syntaxStyle[cap] = { ...style, ...syntaxStyle[cap] };
+  }
 }
 
 /** The active theme. */

@@ -20,7 +20,7 @@ What already exists and is reused, not rebuilt:
   `getTrackedPaths`), an async mutation path (`run(args, onDone)` via
   `Gio.Subprocess`, non-blocking, GLib-native), `isBusy`, and `onChange`
   (HEAD file-monitor + 1.5s working-tree poll keyed on a `signature()`).
-- **`BranchButton`** — header indicator (branch, ±lines, ↑↓, busy spinner). Its
+- **`GitBranchButton`** — header indicator (branch, ±lines, ↑↓, busy spinner). Its
   own comment notes it is meant to grow into a branch switcher popover.
 - **`FileTree`** — per-file status (untracked / ±lines) and a hide-untracked
   filter, refreshed on `git.onChange`.
@@ -56,7 +56,7 @@ Keep it simple: the new git operations use **`node:child_process` + the `git`
 CLI** rather than extending the libgit2 `GitRepo`. The CLI gives us exactly what
 `git status`/`git diff` print (no re-deriving with three libgit2 diffs), and
 respects the user's hooks and config (name/email, GPG, pre-commit/commit-msg)
-for free. The existing libgit2 reads (BranchButton, FileTree) stay as-is for now;
+for free. The existing libgit2 reads (GitBranchButton, FileTree) stay as-is for now;
 consolidate later if it's worth it.
 
 A thin module — `src/git/cli.ts` (working name) — wrapping the CLI:
@@ -238,4 +238,4 @@ push remote, auto-fetch interval, …) can be added as we iterate.
 - **Diffs**: none yet — status + staging only; diff display deferred.
 - **Commit buffer**: backed by `.git/COMMIT_EDITMSG` (non-file buffers later).
 - **Staging**: file-level only (hunk/line staging later).
-- **BranchButton**: no popover yet — stays a plain indicator.
+- **GitBranchButton**: no popover yet — stays a plain indicator.

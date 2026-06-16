@@ -323,10 +323,27 @@ mid-text replacements falling back to the leave-insert replay.
   the incremental-parse edit tracking (`onInsert`/`onDelete`) still mixes codepoint
   iter offsets with UTF-16 string lengths, so editing right next to an astral char
   can feed tree-sitter a slightly-wrong edit — rare; its own task.
-- [~] **Vim polish** — `H`/`M`/`L` screen motions and `ctrl-f/b/d/u/e/y` scroll
-  commands are **done**; flash-on-operate is done. Only `=` auto-indent remains,
-  and that needs a real indent source (tree-sitter indents query or LSP
-  formatting) — a feature, not a cleanup.
+- [x] **Vim polish** — `H`/`M`/`L` screen motions and `ctrl-f/b/d/u/e/y` scroll
+  commands, flash-on-operate, and **`=`/`==` auto-indent** are done. `=` re-indents
+  to a real tree-sitter indent source: `SyntaxController.indentLevelForRow` counts
+  enclosing fold-block nodes (`syntax/indent.ts`), injected into the editor via
+  `EditorModel.setIndentSource` (falls back to copy-the-line-above when no grammar);
+  it also improves paste-reindent.
+- [x] **Matching brackets** — highlights the bracket under (or just before) the
+  cursor and its pair, or — when the cursor sits *inside* a pair (not adjacent) —
+  the innermost *enclosing* pair, so the brackets stay lit as you move between them
+  (`syntax/bracketMatch.ts` + a cursor-driven tag in SyntaxController). Brackets
+  inside strings/comments/regex are ignored (`SyntaxController.isInStringOrComment`,
+  via `indent.ts` `enclosingTypeMatches`).
+- [x] **Indent guides** — faint vertical lines per indentation level, drawn in the
+  leading whitespace (`IndentGuideOverlay`, a Cairo overlay like the diagnostic
+  squiggles). Levels follow the actual indentation and continue unbroken through
+  blank lines inside a block. Toggle with `editor.indentGuides`.
+- [x] **Tree-sitter text objects** — `if`/`af` (function), `ic`/`ac` (class /
+  interface / enum), `ia`/`aa` (arguments). Backed by `SyntaxController`'s
+  `functionRangeAt`/`classRangeAt` (the generic `enclosingNodeRange` in `indent.ts`,
+  outer = whole def, inner = body), surfaced via `EditorModel.getFunctionRange`/
+  `getClassRange` to the vim `Function`/`Class` text objects.
 
 ### 4. Diff display — *investigated; sequence with Git*
 

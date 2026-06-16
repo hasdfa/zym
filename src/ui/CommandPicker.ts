@@ -15,7 +15,7 @@
  */
 import { Gtk } from '../gi.ts';
 import { openPicker, escapeMarkup, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
-import { uiFontFamily } from '../fonts.ts';
+import { fonts } from '../fonts.ts';
 import { getActiveElements } from '../util/getActiveElements.ts';
 import { quilx } from '../quilx.ts';
 
@@ -61,7 +61,7 @@ export function openCommandPicker(host: Overlay): void {
     if (primary) shortcutByName.set(c.name, primary);
   }
   // The proportional UI font for descriptions (the picker itself is monospace).
-  const uiFont = uiFontFamily();
+  const uiFont = fonts.uiFamily;
 
   // Match against `name` AND `description`, but rank name hits first: the text is
   // `<description> <name>` with `boostFrom` on the name, so name matches earn the

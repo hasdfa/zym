@@ -1380,11 +1380,54 @@ class SearchBackwards extends SearchBase {
   backwards = true
 }
 
+// Leap (leap.nvim-style two-character labeled jump), as a motion so it composes
+// with operators (`d g s`), visual mode, and dot-repeat. Like SearchBase, quilx
+// drives the host (TextEditor's LeapController) through the multi-char
+// `focusInput` bridge (VimState.setLeapInput): the host reads the 2 search chars,
+// labels the matches, reads the chosen label, and hands back the target's *start*
+// position (or null on cancel / no match). An exclusive motion, like search.
+class LeapBase extends Motion {
+  static command = false
+  requireInput = true
+  backwards = false
+  jump = true
+
+  initialize () {
+    if (!this.repeated) {
+      this.focusInput({
+        purpose: 'leap',
+        reverse: this.backwards,
+        onConfirm: target => {
+          this.input = target // Point (jump) or null (cancel / no match)
+          if (target) this.processOperation()
+          else this.cancelOperation()
+        },
+        onCancel: () => this.cancelOperation(),
+      })
+    }
+    super.initialize()
+  }
+
+  moveCursor (cursor) {
+    if (this.input) cursor.setBufferPosition(this.input)
+  }
+}
+
+class Leap extends LeapBase {
+  backwards = false
+}
+
+class LeapBackwards extends LeapBase {
+  backwards = true
+}
+
 const __operations = {
   Motion,
   CurrentSelection,
   Search,
   SearchBackwards,
+  Leap,
+  LeapBackwards,
   MoveUpDisplayLine,
   MoveDownDisplayLine,
   MoveLeft,

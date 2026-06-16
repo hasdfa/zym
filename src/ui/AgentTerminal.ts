@@ -15,6 +15,11 @@
  *     / waiting-for-permission) via Claude Code hooks: it spawns claude with a
  *     per-session `--settings` block whose hooks write a status word to a file
  *     this terminal watches (a Gio file monitor). See assets/hooks/agent-status.sh.
+ *   - for a `claude` agent it also tracks the session's name: Claude's built-in
+ *     `/rename` (and auto-generated summaries) writes the session's `.name` to
+ *     `~/.claude/sessions/<pid>.json` — it is NOT emitted over the PTY as a
+ *     terminal title — so we watch that file (keyed by the spawned child's pid)
+ *     and reflect `.name` as the terminal's title.
  *
  * Status changes are surfaced via `status` / `onDidChangeStatus`.
  *
@@ -72,9 +77,13 @@ export class AgentTerminal extends Terminal {
   private filesMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   private _changedFiles: string[] = [];
   private readonly fileHandlers: Array<() => void> = [];
-  // A user-pinned display name (`rename`); when set it overrides the CLI's
-  // reported (OSC) title.
+  // A user-pinned display name (`agent:rename`); when set it overrides both the
+  // claude-reported session title and the CLI's reported (OSC) title.
   private _displayName: string | null = null;
+  // The session name Claude persists to `~/.claude/sessions/<pid>.json` (`.name`,
+  // set by its `/rename` command and auto-summaries), watched via a file monitor.
+  private _sessionName: string | null = null;
+  private nameMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   // The agent's argv as the user requested it (before `--settings` injection) and
   // its launch prompt — retained so a session can relaunch the agent verbatim.
   private readonly baseCommand: string[];
@@ -115,9 +124,10 @@ export class AgentTerminal extends Terminal {
     return this._status;
   }
 
-  // A pinned name (rename) wins over the CLI's reported title.
+  // A pinned name (`agent:rename`) wins, then Claude's own session name (its
+  // `/rename`), then the live OSC title / argv basename from the base class.
   get title(): string {
-    return this._displayName ?? super.title;
+    return this._displayName ?? this._sessionName ?? super.title;
   }
 
   /** Whether the user has pinned a custom name via `rename`. */
@@ -207,6 +217,9 @@ export class AgentTerminal extends Terminal {
 
   private readStatus(statusFile: string): void {
     if (this._status === 'exited') return; // exit is terminal; ignore late writes
+    // By the first status write the child has spawned (so its pid is known) —
+    // start watching Claude's per-session file for the `/rename` name.
+    this.ensureNameWatch();
     let raw: string;
     try {
       raw = Fs.readFileSync(statusFile, 'utf8').trim();
@@ -252,19 +265,53 @@ export class AgentTerminal extends Terminal {
     for (const handler of this.fileHandlers) handler();
   }
 
+  // --- Session name (Claude's `/rename`) --------------------------------------
+
+  // Watch `~/.claude/sessions/<pid>.json`, whose `.name` Claude (re)writes on
+  // `/rename` and auto-summaries — the rename never reaches the PTY as a title,
+  // so this file is the only signal. No-op until the child's pid is known (after
+  // spawn) and idempotent thereafter.
+  private ensureNameWatch(): void {
+    if (this.nameMonitor) return; // already watching
+    const pid = this.pid;
+    if (pid === null) return; // not spawned yet — retried on the next status write
+    const file = claudeSessionFile(pid);
+    this.readSessionName(file); // pick up an existing name now
+    const gfile = Gio.File.newForPath(file);
+    this.nameMonitor = FileProto.monitorFile.call(gfile, Gio.FileMonitorFlags.WATCH_MOVES, null);
+    this.nameMonitor!.on('changed', () => this.readSessionName(file));
+  }
+
+  private readSessionName(file: string): void {
+    let name: unknown;
+    try {
+      name = JSON.parse(Fs.readFileSync(file, 'utf8')).name;
+    } catch {
+      return; // not written yet / mid-write / malformed
+    }
+    const value = (typeof name === 'string' ? name.trim() : '') || null;
+    if (value === this._sessionName) return;
+    this._sessionName = value;
+    this.emitTitleChange();
+  }
+
   private onChildExited(): void {
     if (this._status === 'exited') return;
     this.setStatus('exited');
     void this.sessionId; // cache the id before its file is removed (restart resumes it)
     // Print a notice into the (now child-less) terminal so the pane shows why it
     // went quiet, rather than closing or freezing on the last frame. The agent and
-    // its layout linger — the user restarts (`r`) or closes (`X`) it from the layout
-    // list when they're done reading the output.
+    // its workbench linger — the user restarts (`r`) or closes (`X`) it from the
+    // workbench list when they're done reading the output.
     this.terminal.feed(encode('\r\n\x1b[2m── process exited ──\x1b[0m\r\n'));
     this.statusMonitor?.cancel();
     this.statusMonitor = null;
     this.filesMonitor?.cancel();
     this.filesMonitor = null;
+    // The session file lives under ~/.claude (Claude owns it), so we only drop
+    // our watch — we don't delete it like our own IPC files.
+    this.nameMonitor?.cancel();
+    this.nameMonitor = null;
     if (this.statusFile) {
       try { Fs.rmSync(this.statusFile, { force: true }); } catch { /* best effort */ }
       try { Fs.rmSync(`${this.statusFile}.session`, { force: true }); } catch { /* best effort */ }
@@ -286,6 +333,12 @@ export class AgentTerminal extends Terminal {
 /** A display name for the agent, from its argv (the program basename). */
 function agentName(command: string[]): string {
   return command.length > 0 ? Path.basename(command[0]) : 'agent';
+}
+
+/** Path to Claude's per-session state file (carries `.name` from `/rename`). */
+function claudeSessionFile(pid: number): string {
+  const base = process.env.CLAUDE_CONFIG_DIR || Path.join(Os.homedir(), '.claude');
+  return Path.join(base, 'sessions', `${pid}.json`);
 }
 
 /** The configured agent argv (`agent.command`), falling back to `['claude']`. */

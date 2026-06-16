@@ -20,7 +20,7 @@ export function revealRow(view: SourceView, row: number): void {
 }
 
 /** The buffer rows where each changed region starts, given per-row diff kinds
- *  (a region is a maximal run of non-`context` rows). */
+ *  (a region is a maximal run of non-`context` rows — added/removed/filler). */
 export function changeStartRows(kinds: readonly string[]): number[] {
   const rows: number[] = [];
   for (let i = 0; i < kinds.length; i++) {

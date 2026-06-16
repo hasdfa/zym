@@ -18,7 +18,9 @@
 
 (fenced_code_block_delimiter) @punctuation
 (info_string (language) @type)
-(indented_code_block) @markup.raw
+; Block code → full-line (paragraph) background; injected token colors layer on top.
+(code_fence_content) @markup.raw.block
+(indented_code_block) @markup.raw.block
 
 [
   (list_marker_plus) (list_marker_minus) (list_marker_star)

@@ -10,6 +10,7 @@
  * distinguished only by color; info and hint use info-circle and a lightbulb.
  */
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
+import { theme } from '../../theme/theme.ts';
 
 export interface SeverityStyle {
   glyph: string;
@@ -21,10 +22,10 @@ const FA_INFO_CIRCLE = String.fromCodePoint(0xf05a);
 const FA_LIGHTBULB = String.fromCodePoint(0xf0eb);
 
 export const SEVERITY_STYLES: Record<number, SeverityStyle> = {
-  [DiagnosticSeverity.Error]: { glyph: COD_WARNING, color: '#e01b24' },
-  [DiagnosticSeverity.Warning]: { glyph: COD_WARNING, color: '#e5a50a' },
-  [DiagnosticSeverity.Information]: { glyph: FA_INFO_CIRCLE, color: '#3584e4' },
-  [DiagnosticSeverity.Hint]: { glyph: FA_LIGHTBULB, color: '#33d17a' },
+  [DiagnosticSeverity.Error]: { glyph: COD_WARNING, color: theme.ui.error },
+  [DiagnosticSeverity.Warning]: { glyph: COD_WARNING, color: theme.ui.warning },
+  [DiagnosticSeverity.Information]: { glyph: FA_INFO_CIRCLE, color: theme.ui.info },
+  [DiagnosticSeverity.Hint]: { glyph: FA_LIGHTBULB, color: theme.ui.hint },
 };
 
 /** Presentation for a severity, defaulting to Error for unknown/undefined. */

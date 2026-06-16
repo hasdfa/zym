@@ -3,8 +3,8 @@
  *
  * Shape: `{ selector: { keystroke: 'command:name' } }`, exactly the input
  * `quilx.keymaps.add` takes. A quilx component is targeted by its name with an
- * `#id` selector (`#Panel`, `#FileTree`, …); a raw GTK widget by its type tag
- * (`GtkText`, `GtkSourceView.insert-mode`). The keystroke's command must be
+ * `#id` selector (`#Panel`, `#FileTree`, `#TextEditor.insert-mode`, …); a raw GTK
+ * widget by its type tag (`GtkText`). The keystroke's command must be
  * registered by some component (commands live with their owner — e.g. Panel
  * registers `tab:*`, AppWindow registers `pane:*`/`file:*`). This table is the
  * single place to read or change the app's key bindings; `load.ts` registers it
@@ -31,7 +31,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space a a': 'agent:switch', // open the agent picker
-  'space a l': 'layout-list:focus', // focus the layout sidebar
+  'space a l': 'workbench-list:focus', // focus the workbench sidebar
   'space a n': 'agent:new', // launch a new agent
   'space a r': 'agent:resume', // resume a past conversation (picker)
   'space a c': 'agent:continue', // continue the latest conversation in this folder
@@ -54,24 +54,25 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g p': 'git:push',
   'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
   // Branch (space g b …): switch / delete / merge / rename.
-  'space g b b': 'git:switch-branch', // "b"ranch picker (switch / create)
-  'space g b d': 'git:delete-branch',
-  'space g b m': 'git:merge-branch', // merge a branch into the current one
-  'space g b r': 'git:rename-branch', // rename the current branch
+  'space g b b': 'git:branch-switch', // "b"ranch picker (switch / create)
+  'space g b d': 'git:branch-delete',
+  'space g b m': 'git:branch-merge', // merge a branch into the current one
+  'space g b r': 'git:branch-rename', // rename the current branch
   // Stash (space g s …): push / pop / apply / drop.
   'space g s s': 'git:stash-push',
   'space g s p': 'git:stash-pop',
   'space g s a': 'git:stash-apply',
   'space g s d': 'git:stash-drop',
-  // GitHub (space g h …): repo / actions / issues / PR open / PR checkout / new PR / failed CI.
-  'space g h r': 'github:open-repository',
-  'space g h a': 'github:open-actions',
+  // GitHub (space g h …): repo / actions / issues / switch-to-PR / new PR / failed CI.
+  'space g h r': 'github:repository-open',
+  'space g h a': 'github:actions-open',
   'space g h i': 'github:issue-picker',
-  'space g h p': 'github:pr-open',
-  'space g h c': 'github:pr-checkout',
-  'space g h n': 'github:create-pr', // "n"ew pull request
+  'space g h p': 'github:pull-request-checkout', // pick a PR and switch to it
+  'space g h c': 'github:pull-request-checkout',
+  'space g h n': 'github:pull-request-create', // "n"ew pull request
   'space g h f': 'github:failed-ci-picker',
   'space l d': 'lsp:go-to-definition', // "l"sp "d"efinition
+  'space l p': 'lsp:peek-definition', // "p"eek definition inline (below the cursor)
   'space l D': 'lsp:go-to-declaration', // declaration
   'space l t': 'lsp:go-to-type-definition', // "t"ype definition
   'space l i': 'lsp:go-to-implementation', // "i"mplementation
@@ -125,16 +126,16 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'ctrl-w w': 'pane:focus-next',
     'ctrl-w ctrl-w': 'pane:focus-next',
 
-    // Cycle the active layout (the user / each agent) — previous / next.
-    'super-,': 'layout:previous',
-    'super-.': 'layout:next',
+    // Cycle the active workbench (the user / each agent) — previous / next.
+    'super-,': 'workbench:previous',
+    'super-.': 'workbench:next',
 
     ...SPACE_COMMANDS,
   },
 
   // LSP hover on the symbol under the cursor. Bound only in normal mode so it
   // doesn't shadow typing 'K' while inserting.
-  'GtkSourceView.normal-mode': {
+  '#TextEditor.normal-mode': {
     K: 'lsp:hover',
   },
 
@@ -159,13 +160,14 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'c c': 'git:commit', // commit: edit the message in a tab, save+close to commit
   },
 
-  // Layout list (the left sidebar): shared list navigation (l reveals the selected
+  // Workbench list (the left sidebar): shared list navigation (l reveals the selected
   // agent's terminal) plus lifecycle keys acting on the selected agent.
-  '#LayoutList': {
+  '#WorkbenchList': {
     ...LIST_NAV, // j/k, g g, G, l (l reveals the selected agent's terminal)
     r: 'agent:restart', // restart the selected agent (resume its conversation)
     R: 'agent:rename', // rename the selected agent
-    X: 'agent:close', // close the selected agent
+    x: 'agent:stop', // stop the selected agent's process (it stays listed, restartable)
+    'd d': 'agent:close', // close the selected agent (terminate if running, then remove it)
     o: 'agent:open-changes', // open the files the selected agent has edited
   },
 

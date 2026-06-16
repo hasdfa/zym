@@ -104,3 +104,24 @@ test('a lone edit is its own undo step', () => {
   m.undo();
   assert.equal(m.getText(), 'hello\n');
 });
+
+test('a live multi-cursor insert undoes as a single step', async () => {
+  const tick = () => new Promise<void>((resolve) => queueMicrotask(resolve));
+  const m = model('hello\nworld\n');
+  m.setCursorBufferPosition(new Point(0, 0)); // primary on line 1
+  m.addSelectionForBufferRange(new Range([1, 0], [1, 0])); // extra cursor on line 2
+  m.beginMultiCursorEditReplication();
+
+  // Each keystroke hits only the primary; replication mirrors it to the extra
+  // cursor on a deferred microtask — exactly the insert-mode keystroke path.
+  m.insertText('a');
+  await tick();
+  m.insertText('b');
+  await tick();
+
+  m.endMultiCursorEditReplication();
+  assert.equal(m.getText(), 'abhello\nabworld\n'); // typed at both cursors
+
+  m.undo();
+  assert.equal(m.getText(), 'hello\nworld\n'); // whole session reverted at once
+});

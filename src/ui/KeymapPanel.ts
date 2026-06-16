@@ -12,14 +12,13 @@
  */
 import { Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
-import { monospaceFontFamily } from '../fonts.ts';
+import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import { Key } from '../keymap/Key.ts';
 import type { BindingInfo } from '../KeymapManager.ts';
 
-const KEY_COLOR = theme.ui.textAccent ?? '#a9a1e1';
-const MONO = monospaceFontFamily();
+const KEY_COLOR = theme.ui.textAccent;
 
 // Friendlier names for the known registration sources; others show verbatim.
 const SOURCE_LABELS: Record<string, string> = {
@@ -155,15 +154,16 @@ export class KeymapPanel {
     const description = quilx.commands.descriptions[binding.command] ?? '';
     const source = SOURCE_LABELS[binding.source] ?? binding.source;
 
+    const mono = fonts.monospaceFamily;
     const cells = [
       // keys — accent, bold, monospace
       this.markupCell(
-        `<span foreground="${KEY_COLOR}" weight="bold" font_family="${MONO}">${escapeMarkup(binding.keystroke)}</span>`,
+        `<span foreground="${KEY_COLOR}" weight="bold" font_family="${mono}">${escapeMarkup(binding.keystroke)}</span>`,
       ),
       // command — monospace
-      this.markupCell(`<span font_family="${MONO}">${escapeMarkup(binding.command || '—')}</span>`),
+      this.markupCell(`<span font_family="${mono}">${escapeMarkup(binding.command || '—')}</span>`),
       // selector — monospace, muted
-      this.markupCell(`<span font_family="${MONO}">${escapeMarkup(binding.selector)}</span>`, true),
+      this.markupCell(`<span font_family="${mono}">${escapeMarkup(binding.selector)}</span>`, true),
       // source — muted
       this.textCell(source, true),
     ];

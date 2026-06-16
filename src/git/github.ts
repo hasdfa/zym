@@ -23,6 +23,7 @@ export type CiStatus = 'success' | 'warning' | 'error';
 export interface PullRequest {
   number: number;
   url: string;
+  title: string;
   state: PrState;
   /** Rolled-up CI status of the head commit's checks, or null when there are none. */
   ci: CiStatus | null;
@@ -122,7 +123,7 @@ export function resolveGithubRepo(root: string, remoteNames: string[]): GithubRe
 export function fetchPullRequest(cwd: string, onDone: (pr: PullRequest | null) => void): void {
   execFile(
     'gh',
-    ['pr', 'view', '--json', 'number,url,state,statusCheckRollup,closingIssuesReferences'],
+    ['pr', 'view', '--json', 'number,url,title,state,statusCheckRollup,closingIssuesReferences'],
     { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
     (err, stdout) => {
       if (err) {
@@ -143,12 +144,23 @@ export function fetchPullRequest(cwd: string, onDone: (pr: PullRequest | null) =
         const issues = Array.isArray(data.closingIssuesReferences) ? data.closingIssuesReferences : [];
         const issueUrl =
           issues.length > 0 && typeof issues[0].url === 'string' ? (issues[0].url as string) : null;
-        onDone({ number, url, state, ci: rollupCi(data.statusCheckRollup), issueUrl });
+        const title = typeof data.title === 'string' ? data.title : '';
+        onDone({ number, url, title, state, ci: rollupCi(data.statusCheckRollup), issueUrl });
       } catch {
         onDone(null);
       }
     },
   );
+}
+
+/** Coarse outcome of a single CI check: failed / in progress / passed. */
+export type CheckState = 'fail' | 'pending' | 'pass';
+
+/** A single CI check on a PR: its display name, run/job page URL, and state. */
+export interface CiCheck {
+  name: string;
+  url: string;
+  state: CheckState;
 }
 
 /** A failed CI check on a PR: its display name and the run/job page URL. */
@@ -157,36 +169,57 @@ export interface FailedCheck {
   url: string;
 }
 
+// gh's `bucket` is pass / fail / pending / skipping / cancel; collapse to the
+// three states we render (a cancelled run reads as a failure).
+function bucketToState(bucket: unknown): CheckState {
+  if (bucket === 'fail' || bucket === 'cancel') return 'fail';
+  if (bucket === 'pending') return 'pending';
+  return 'pass'; // pass / skipping / anything unexpected
+}
+
+// Parse `gh pr checks --json name,link,bucket`, deduped by run URL (matrix jobs
+// repeat the name) and dropping entries with no link (nothing to open).
+function parseChecks(stdout: string): CiCheck[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+  const seen = new Set<string>();
+  const checks: CiCheck[] = [];
+  for (const c of data as Array<{ name?: unknown; link?: unknown; bucket?: unknown }>) {
+    if (!c || typeof c.link !== 'string' || !c.link || seen.has(c.link)) continue;
+    seen.add(c.link);
+    checks.push({
+      name: typeof c.name === 'string' && c.name ? c.name : c.link,
+      url: c.link,
+      state: bucketToState(c.bucket),
+    });
+  }
+  return checks;
+}
+
 /**
- * The current branch PR's failed CI checks (name + run URL), via `gh pr checks`.
- * Empty when gh is unavailable, the branch has no PR, or nothing failed. (gh
- * exits non-zero when checks fail/pending, but still prints the JSON.)
+ * The current branch PR's CI checks (name + run URL + state), via `gh pr checks`.
+ * Empty when gh is unavailable or the branch has no PR. (gh exits non-zero when
+ * checks fail/pending, but still prints the JSON.)
  */
-export function fetchFailedChecks(cwd: string, onDone: (checks: FailedCheck[]) => void): void {
+export function fetchChecks(cwd: string, onDone: (checks: CiCheck[]) => void): void {
   execFile(
     'gh',
     ['pr', 'checks', '--json', 'name,link,bucket'],
     { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
-    (_err, stdout) => {
-      try {
-        const data = JSON.parse(stdout);
-        if (!Array.isArray(data)) {
-          onDone([]);
-          return;
-        }
-        const seen = new Set<string>();
-        const checks: FailedCheck[] = [];
-        for (const c of data) {
-          if (!c || c.bucket !== 'fail' || typeof c.link !== 'string' || !c.link) continue;
-          if (seen.has(c.link)) continue; // dedupe by URL
-          seen.add(c.link);
-          checks.push({ name: typeof c.name === 'string' && c.name ? c.name : c.link, url: c.link });
-        }
-        onDone(checks);
-      } catch {
-        onDone([]); // no PR / not authed / gh missing
-      }
-    },
+    (_err, stdout) => onDone(parseChecks(stdout)),
+  );
+}
+
+/** The current branch PR's failed CI checks (name + run URL) — the subset of
+ *  `fetchChecks` that failed. Empty when gh is unavailable or nothing failed. */
+export function fetchFailedChecks(cwd: string, onDone: (checks: FailedCheck[]) => void): void {
+  fetchChecks(cwd, (checks) =>
+    onDone(checks.filter((c) => c.state === 'fail').map(({ name, url }) => ({ name, url }))),
   );
 }
 
@@ -200,20 +233,23 @@ export interface GithubListItem {
 }
 
 /**
- * Pull requests in the repo, via `gh pr list`. Lists every state (open, closed,
- * and merged) so the picker can show each PR's status; defaults to open-only
- * unless `state` is given.
+ * Pull requests matching `query`, via `gh pr list --search`. Lists every state
+ * (open, closed, merged) so the picker can show each PR's status. An empty query
+ * omits `--search`, listing recent PRs; a non-empty query runs a GitHub search
+ * (matching title/body/number server-side). Used by the PR picker to fetch fresh
+ * matches as the user types; empty when gh is unavailable.
  */
-export function fetchPullRequests(
+export function searchPullRequests(
   cwd: string,
+  query: string,
   onDone: (items: GithubListItem[]) => void,
   state: PrState | 'all' = 'all',
+  onError?: (message: string) => void,
 ): void {
-  fetchList(
-    cwd,
-    ['pr', 'list', '--state', state, '--json', 'number,title,url,author,state', '--limit', '100'],
-    onDone,
-  );
+  const args = ['pr', 'list', '--state', state, '--json', 'number,title,url,author,state', '--limit', '50'];
+  const q = query.trim();
+  if (q) args.push('--search', q);
+  fetchList(cwd, args, onDone, onError);
 }
 
 /** Open issues in the repo, via `gh issue list`. */
@@ -221,18 +257,26 @@ export function fetchIssues(cwd: string, onDone: (items: GithubListItem[]) => vo
   fetchList(cwd, ['issue', 'list', '--json', 'number,title,url,author,state', '--limit', '100'], onDone);
 }
 
-// Run a `gh … list --json number,title,url,author,state` and parse it. Empty when
-// gh is unavailable or there are none.
-function fetchList(cwd: string, args: string[], onDone: (items: GithubListItem[]) => void): void {
-  execFile('gh', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, stdout) => {
+// Run a `gh … list --json number,title,url,author,state` and parse it. On failure
+// (gh missing/unauthenticated, bad output) it reports via `onError` if given,
+// otherwise falls back to an empty list.
+function fetchList(
+  cwd: string,
+  args: string[],
+  onDone: (items: GithubListItem[]) => void,
+  onError?: (message: string) => void,
+): void {
+  // Surface a failure through `onError` when supplied, else degrade to empty.
+  const fail = (message: string) => (onError ? onError(message) : onDone([]));
+  execFile('gh', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
     if (err) {
-      onDone([]);
+      fail(stderr?.trim() || err.message || 'gh command failed');
       return;
     }
     try {
       const data = JSON.parse(stdout);
       if (!Array.isArray(data)) {
-        onDone([]);
+        fail('Unexpected response from gh');
         return;
       }
       const items: GithubListItem[] = [];
@@ -250,9 +294,22 @@ function fetchList(cwd: string, args: string[], onDone: (items: GithubListItem[]
       }
       onDone(items);
     } catch {
-      onDone([]);
+      fail('Could not parse gh output');
     }
   });
+}
+
+/**
+ * The repository's default branch (e.g. "main"), via `gh`. Calls back with null
+ * when gh is unavailable/unauthenticated or the lookup fails.
+ */
+export function fetchDefaultBranch(cwd: string, onDone: (branch: string | null) => void): void {
+  execFile(
+    'gh',
+    ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
+    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    (err, stdout) => onDone(err ? null : stdout.trim() || null),
+  );
 }
 
 /** Open the "create pull request" page in the browser for the current branch. */

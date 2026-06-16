@@ -596,7 +596,14 @@ export default class VimState {
   // (search's `/`) lands with the custom search box.
 
   focusInput (options = {}) {
-    const { charsMax = 1, onConfirm, onCancel } = options
+    const { charsMax = 1, purpose, onConfirm, onCancel } = options
+    // Leap (`g s`) is fully host-driven: it reads its own chars, labels matches,
+    // and hands back a target Point. Route it to the host's LeapController.
+    if (purpose === 'leap') {
+      if (this.__leapInput) this.__leapInput(options)
+      else if (onCancel) onCancel()
+      return
+    }
     if (charsMax === 1) {
       this.readChar({ onConfirm, onCancel })
       return
@@ -611,6 +618,11 @@ export default class VimState {
   /** Wire the multi-char (search) input provider — the SearchBar, in practice. */
   setSearchInput (provider) {
     this.__searchInput = provider
+  }
+
+  /** Wire the leap input provider — the host's LeapController, in practice. */
+  setLeapInput (provider) {
+    this.__leapInput = provider
   }
 
   // Macros (q/@). Recorded keystrokes are stored per register letter; replay

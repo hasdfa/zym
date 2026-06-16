@@ -8,6 +8,7 @@
  * starts), per the node-gtk vfunc constraint.
  */
 import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
+import { theme } from '../../theme/theme.ts';
 
 /** Anything with a diff `kind` — a unified `DiffLine` or a side-by-side `SideLine`. */
 interface KindedLine {
@@ -15,7 +16,7 @@ interface KindedLine {
 }
 
 const GLYPH: Record<'added' | 'removed', string> = { added: '+', removed: '−' };
-const COLOR: Record<'added' | 'removed', string> = { added: '#2ec27e', removed: '#e01b24' };
+const COLOR: Record<'added' | 'removed', string> = { added: theme.ui.success, removed: theme.ui.error };
 
 class DiffGutterRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)

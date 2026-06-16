@@ -10,9 +10,10 @@ import { iconLabel } from '../icons.ts';
 import { DiffView } from './DiffView.ts';
 import { SideBySideDiffView } from './SideBySideDiffView.ts';
 import type { DiffModel } from '../../util/DiffModel.ts';
+import { theme } from '../../theme/theme.ts';
 
-const ADDED_COLOR = '#2ec27e';
-const REMOVED_COLOR = '#e01b24';
+const ADDED_COLOR = theme.ui.success;
+const REMOVED_COLOR = theme.ui.error;
 // Nerd Font glyphs for the header controls.
 const ICON_PREV = String.fromCodePoint(0xf077); // chevron-up
 const ICON_NEXT = String.fromCodePoint(0xf078); // chevron-down

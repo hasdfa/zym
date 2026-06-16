@@ -63,8 +63,8 @@ const STATE_LETTER: Record<GitFileState, string> = {
 };
 
 // Badge colors, matching `git status`: staged in green, unstaged/untracked in red.
-const STAGED_COLOR = theme.ui.success ?? '#2ec27e';
-const UNSTAGED_COLOR = theme.ui.error ?? '#e01b24';
+const STAGED_COLOR = theme.ui.success;
+const UNSTAGED_COLOR = theme.ui.error;
 
 // Compact, dense rows. The theme background/selection are applied centrally in
 // AppWindow; file rows follow the theme foreground (the badge keeps its own
@@ -73,12 +73,12 @@ addStyles(`
   /* No font-size override: section headers inherit the default label size, the
      same size every other label (file rows, file-tree headers) uses. */
   #GitPanel .git-header {
-    color: ${theme.ui.textMuted ?? '#9a9996'};
+    color: ${theme.ui.textMuted};
     font-weight: bold;
     padding: 6px 8px 3px 8px;
   }
   #GitPanel #GitRow label { color: ${theme.ui.fg}; }
-  #GitPanel #GitRow .git-icon { color: ${theme.ui.textMuted ?? '#9a9996'}; }
+  #GitPanel #GitRow .git-icon { color: ${theme.ui.textMuted}; }
   #GitPanel row { min-height: 0; }
   #GitPanel #GitRow { padding: 0 8px 0 16px; } /* indent entries under the section header */
   #GitPanel .git-badge { font-weight: bold; font-feature-settings: "tnum" 1; }
@@ -86,7 +86,7 @@ addStyles(`
      only while the panel is focused — an unfocused panel shows no highlight. */
   #GitPanel row:selected { background-color: transparent; }
   #GitPanel:focus-within row:selected {
-    background-color: ${theme.ui.selectedBg ?? 'rgba(127, 127, 127, 0.25)'};
+    background-color: ${theme.ui.selectedBg};
   }
 `);
 

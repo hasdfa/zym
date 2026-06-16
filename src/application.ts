@@ -14,7 +14,7 @@
 import { Adw, Gio, GLib, startLoop } from './gi.ts';
 import { AppWindow } from './ui/AppWindow.ts';
 import { installStyles } from './styles.ts';
-import { registerBundledFonts } from './fonts.ts';
+import { registerBundledFonts, fonts } from './fonts.ts';
 
 const APP_ID = 'com.github.romgrk.quilx';
 
@@ -43,6 +43,7 @@ export class Application {
   private onActivate() {
     registerBundledFonts();
     installStyles();
+    fonts.init(); // central font stylesheet + follow system font changes (after the display exists)
     new AppWindow(this.app, () => this.quit(), this.initialFile, this.explicitFile);
     startLoop();
     this.loop.run();

@@ -28,7 +28,28 @@ rules (`requireTabBar`, non-expanding tabs), and the zombie-safe dock-close rule
 
 ### Plugin system
 
-- [ ] Plugin system for commands, UI components, and more.
+See [plugins.md](plugins.md) for the architecture (Atom-inspired). A plugin is a
+manifest + `activate(ctx)`/`deactivate`; the `PluginContext` exposes
+disposable-tracked contribution points (languages/grammars/LSP servers, keymaps,
+commands, config schema, stylesheets) so deactivation tears everything down. The
+`PluginRegistry` (`quilx`-level `plugins` singleton) owns activation state.
+
+- [x] **Plugin core** — `src/plugin/` (`types.ts`, `PluginContext.ts`,
+  `PluginRegistry.ts`, `index.ts`). Contribution registries made
+  disposable-aware: `LanguageRegistry.register*` return Disposables,
+  `Config.removeSchema`, `styles.addRemovable` (queue-or-install, removable),
+  `grammar.clearGrammar`. Keymaps/commands already returned Disposables.
+- [x] **First plugin: TypeScript** — `src/plugins/typescript/` (the former
+  `src/lang/builtin.ts`). Contributes the TS/JS/TSX detection, tree-sitter
+  grammars (queries vendored under `queries/`, `GrammarDef.highlightsPath`), and
+  the flow/tsserver/deno/eslint server candidates. Activated at startup
+  (`src/index.ts`: `registerBuiltinPlugins()` → `plugins.activateAll()`) before
+  `preloadGrammars`, so the registry is populated before anything reads it.
+- [ ] UI-component / panel contributions (register a `Panel`/dock widget).
+- [ ] Snippets, menus, and command-palette categories as contribution points.
+- [ ] Out-of-repo plugin discovery + loading (npm-style packages, a manifest
+  file), enable/disable persisted to config, and a plugin-manager UI.
+- [ ] Per-plugin config namespace + settings UI integration.
 
 ## System integration
 
@@ -37,6 +58,7 @@ desktop's appearance and fonts, with the rule that **OS font/theme changes are
 followed through at runtime** (no restart).
 
 - [x] Editor scheme follows the OS light/dark preference (`notify::dark`), when the theme defines no background; terminal inherits libadwaita colors.
+- [x] **Color palette centralized** — all colors come from `theme.ui.*` (resolved at load via `DEFAULT_UI`; no inline literals outside `src/theme/`). New tokens: `shadow`/`flash`/`diff*`/`pr*`; regex highlighting folds into `theme.syntax`. Prereq for live theme-swap; lint guardrail still TODO.
 - [ ] Follow OS **monospace** font changes live (editor, terminal, pickers — currently read once at startup).
 - [ ] Follow OS **UI** font changes live (proportional text — currently read once).
 - [ ] Follow OS **light/dark** through the quilx theme palette (swap the theme variant; chrome/syntax/picker colors re-apply), and wire the dead `core.followSystemColorScheme` config.
@@ -56,7 +78,7 @@ See [git/index.md](git/index.md) for the architecture plan.
 
 See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the design and decisions.
 
-- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored built-in pack (`src/lang/builtin.ts`); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
+- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `src/plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
 - [x] LSP client + per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging. **Incremental** document sync (full-text fallback). Correct LSP `languageId` (`.tsx`→typescriptreact, `.js`→javascript, …). See `src/lsp/`.
 - [x] Server→client requests answered: `workspace/configuration` (from `ServerDef.settings`), `client/(un)registerCapability`, `workDoneProgress/create`; `window/showMessage` surfaced, error `logMessage` to the trace log. File watching: dynamically-registered `workspace/didChangeWatchedFiles` via a per-dir `WorkspaceWatcher` (excludes node_modules/.git).
 - [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, a "Diagnostics" panel (shared `LocationList`). Namespaced by `(server, path)` and merged.
@@ -73,6 +95,24 @@ See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the d
 ### Grammar
 
 - [ ] More default grammars
+- [x] **Language injection** (embedded languages) — done; see
+  [code-editing/syntax-injection.md](code-editing/syntax-injection.md). The
+  highlighter gathers base + injected captures into one paint sweep; grammars
+  declare `injections` on their `GrammarDef` (guest resolved through the shared
+  `LanguageRegistry`, so it's cross-plugin). **Markdown** is fully working: block +
+  inline grammars vendored (built via the plugin's own `build-grammars.sh`), and
+  fenced ```` ```lang ```` blocks highlight through the contributing language's
+  grammar (e.g. ```` ```ts ```` → the TypeScript plugin's grammar).
+- [x] **Styled tags** — highlight tags carry font styling (bold/italic/underline/
+  strikethrough/`scale`/background) via `theme.syntaxStyle`, not just foreground
+  color, so headings render bold + larger (per level: h1 1.5 / h2 1.2 / h3+ 1.1),
+  **strong**/*emphasis*/~~strike~~ as such, and code with a background. Benefits
+  every language; Markdown is the forcing function. Markdown queries cover
+  headings/emphasis/strike/code/links/lists/GFM task-lists/tables/inline-HTML.
+- [x] **Soft-wrap** (`editor.softWrap`, on by default) — long lines wrap to the
+  editor width. Vim display-line motion (`j`/`k`/`gj`/`gk`) is wrap- and
+  scaled-heading-aware: `EditorModel.displayLineMove` moves by one display row via
+  `forward/backward_display_line` + a mid-row re-snap. See syntax-injection.md.
 
 ### Autocompletion
 
@@ -105,8 +145,10 @@ Shared primitives now in place (in `EditorModel` / `DecorationController`):
 Features:
 
 - [~] Consider a custom widget or a fork of GtkSourceView for better control and features. Research how to implement features like multiple cursors, rectangular selection, and better performance with large files. Consider a JS widget, or a Rust widget with a JS wrapper. — **Decided: stay on GtkSourceView and emulate (Option A).** Multi-cursor + blockwise are now built on top (virtual selection/cursor mark pairs via `MarkerLayer`, surfaced through the array-shaped `getCursors()`/`getSelections()`); see Vim mode below. A custom/Rust widget remains a gated escape hatch only if long single lines become intolerable (see text-editor.md).
-- [~] Diff display (inline/unified + side-by-side) — **mostly done**. See [code-editing/diff.md](code-editing/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). Built: `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; `git:diff-current` command (`space g d`) → working-tree vs HEAD in a tab. Remaining: fold-unchanged, more git diff sources (staged/commit/PR), and the bigger Git-workstream integration. (Try it: `node scripts/diff-demo.ts`.)
+- [~] Diff display (inline/unified + side-by-side) — **mostly done**. See [code-editing/diff.md](code-editing/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). Built: `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; fold-unchanged (`foldUnchanged`/`DiffFold` — long context runs collapse to a `⋯ N unchanged lines` row with a ▸/▾ gutter chevron, both panes in lockstep); `git:diff-current` command (`space g d`) → working-tree vs HEAD in a tab. Remaining: more git diff sources (staged/commit/PR) and the bigger Git-workstream integration. (Try it: `node scripts/diff-demo.ts`.)
 - [x] Search interface — `SearchBar` (top-right) + `SearchController` over `EditorModel.scan`: case/regex toggles, replace + replace-all, highlights via `editor.decorations`. Bound to vim `/` `?` `n` `N`.
+- [~] Inline widgets / virtual lines — gap-tag + overlay, two flavors (see [code-editing/inline-widgets.md](code-editing/inline-widgets.md); survey in [virtual-lines.md](code-editing/virtual-lines.md)). **Done:** `InlineBlockController` (text-window `add_overlay`, scrolls natively, non-interactive) → the diff **fold placeholder** (replaced the synthesized `FoldRow`); `InlinePeek` (sibling `Gtk.Overlay` child positioned via `get-child-position`, focusable, no IM leak) → **see-definition** (`lsp:peek-definition` / `space l p`, read-only highlighted slice). The focusable path required a node-gtk fix (`get-child-position` out-struct, **#444 / PR #445**). **Remaining:** make the peek share an open file's live buffer (edits + modified dot) — needs the **document-registry** refactor (chosen, deferred — see [code-editing/document-registry.md](code-editing/document-registry.md)); polish (center the def slice, jump-to button).
+- [ ] Document registry — split `Document` (buffer + syntax + LSP + modified + undo) from the `TextEditor` view, N views per document with per-view cursors. Enables the live see-definition peek and split-view-of-same-file. **Chosen, deferred** (sizable `EditorModel` cursor refactor). See [code-editing/document-registry.md](code-editing/document-registry.md).
 
 #### Vim mode
 
@@ -123,7 +165,7 @@ It replaced `GtkSource.VimIMContext` and is now the default (no flag).
 - [x] `/` `?` `n` `N` search via the `SearchBar` (incremental highlight, case/regex, replace)
 - [x] Occurrence — operator-modifier `o`/`O` (`c o p`, `d o p`, `g U o w`; subword via `O`) and preset occurrence `g o`/`g O`/`g .` (persistent highlighted markers any later operator restricts itself to). Real `OccurrenceManager` over `MarkerLayer` + a `DecorationController` highlight layer. (`occurrence.test.ts`.)
 - [x] visual-blockwise (`ctrl-v`) and multiple cursors — emulated on `MarkerLayer` mark pairs surfaced through the array-shaped `getCursors()`/`getSelections()`. Entry points: blockwise `ctrl-v` (I/A/c/d/yank/paste), occurrence `c o p`, and persistent `ctrl-alt-↑/↓` (add cursor above/below; `escape` collapses). Extra-caret rendering (reverse-video block tags in normal/visual; host-drawn beam carets in insert); multi-cursor operations undo as one step; insert is incrementally replicated to every cursor live. (`blockwise.test.ts`, `multicursor.test.ts`.) Caret visuals + `ctrl-alt-arrow` keys need in-app verification (headless can't realize the view).
-- [ ] Polish: `=` auto-indent (needs a real indent source), scroll/fold/flash niceties. (H/M/L screen motions + ctrl-f/b/d/u/e/y scrolling are done.)
+- [x] Polish: `=`/`==` auto-indent (real tree-sitter indent source — `syntax/indent.ts` + `EditorModel.setIndentSource`), matching-bracket highlight (`syntax/bracketMatch.ts`; ignores strings/comments/regex; enclosing pair when inside), indent guides (`IndentGuideOverlay`, `editor.indentGuides`), tree-sitter text objects `ic`/`ac` (class) alongside `if`/`af`/`ia`/`aa`, H/M/L screen motions, ctrl-f/b/d/u/e/y scrolling, flash-on-operate.
 
 ## Session management
 
@@ -144,10 +186,12 @@ See [agents.md](agents.md) for the architecture plan.
 - [x] Management UX: attention notifications + waiting badge, kill / focus-next/prev, vim list nav
 - [x] Send editor context to an agent (selection / file → current / picked / new agent)
 - [x] Resume / continue past conversations (transcript enumeration + `--resume`/`--continue`); capture session id for restore
-- [x] More management UX: restart (resume conversation), rename, close — keyboard/command driven (`r`/`R`/`X`); status glyph in the tab title
+- [x] More management UX: restart (resume conversation), rename, stop, close — keyboard/command driven (`r`/`R`/`x`/`d d`); status glyph in the tab title
+- [x] Track Claude's own session name: the built-in `/rename` command (and auto-summaries) writes the session's `.name` to `~/.claude/sessions/<pid>.json` — it is NOT emitted over the PTY as a terminal title (and with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` there's no OSC at all), so `AgentTerminal` watches that file (keyed by the spawned child's pid = the main claude process) and reflects `.name` as the title. Precedence: quilx `agent:rename` pin > Claude session `.name` > live OSC title / argv basename
+- [ ] **TBD — extract a `ClaudeStatusAdapter` seam** (clean long-term home for the three claude-only watchers now living inline in `AgentTerminal`: status file, edited-files log, and session-title file). The class is meant to stay tool-agnostic (see agents.md: "Claude specifics stay isolated behind the status adapter / arg builder"), but the watchers + `--settings` injection are currently inlined. Lift them into an adapter selected by agent *kind* (`claude` | `generic`), so `AgentTerminal` is the neutral shell and a second tool can slot its own adapter in. Pairs with the agent-profiles work below. Deferred
 - [x] File-change awareness: a PostToolUse hook records edited files; agent-list "✎ N" badge (tooltip), click/`o` opens them (newest first), and edits trigger an immediate git refresh
-- [x] **Per-person layouts** — `Workbench` is now `Layout` (`src/ui/Layout.ts`, with an `owner` field naming its person), and **each person owns a fully self-contained `Layout`**: its own splittable center, its own Files/Source-Control (right), and its own bottom docks. **Nothing is shared or reparented on switch.** `buildLayout(owner)` constructs the whole bundle (`LayoutBundle`); `activateLayout(layout)` shows it (`overlay.setChild(layout.root)`) and re-points the `this.*` fields to that layout's widgets (`applyBundle`), writing the active layout's mutable state back first (`saveActiveBundle`). Detached layouts stay alive (tabs/terminal/editors persist — verified). An agent's layout opens terminal-only (no Files/Source-Control shown — the panel is still built, so `file-tree:focus`/git commands reveal it on demand); any layout can open/edit files. **Now worktree-ready** (each agent's Files/Git is its own — just needs a per-worktree root/`GitRepo`). Defer: per-worktree roots; session restore of agent layouts (only the user layout is serialized); per-layout NotificationLog/KeymapPanel subscribe to global signals and aren't disposed on close (minor leak, few agents)
-- [x] **LayoutSidebar / LayoutList** (renamed from agent sidebar / AgentList): its own full-height column at the very left of the window (left of the header bar) — a top-level horizontal `Gtk.Paned` (sidebar | header-bar+workbench), no longer a workbench dock. Top is a themed `Adw.HeaderBar` whose only content is a flat **logo button** (square placeholder for now; styled like the git branch button) that toggles collapse (icons-only / icons+text). The first row is the **user** (default-selected pseudo-agent), the rest are agents; never empty; each row is one header-bar tall. Each entry will be associated with a workbench layout (planned). Files/Source-Control moved to the **right** dock (fixed 220px); the left dock is empty/hidden at startup
+- [x] **Per-person workbenches** — `src/ui/Workbench.ts` is a first-class object: one person's dock frame **plus the widgets filling its slots** (its own `center`, Files/Source-Control, `leftPanel`, bottom-dock panels), with an `owner` field naming its person. **Each person owns a fully self-contained `Workbench`; nothing is shared or reparented on switch.** `buildWorkbench(owner)` constructs the widgets and hands them to `new Workbench(owner, contents, { showSideDock })`, registering it in `AppWindow.workbenches` (owner → `Workbench`). AppWindow keeps only `this.workbench` (the active one) and reads per-person state straight off `this.workbench.*` — **no mirror struct, no save/restore on switch**. `activateWorkbench(workbench)` just sets `this.workbench` + `overlay.setChild(workbench.root)`; `cycleWorkbench(±1)` (`super-,` / `super-.`) steps through `[user, …agents]`. Detached workbenches stay alive (tabs/terminal/editors persist — verified). An agent's workbench opens terminal-only (`showSideDock` false — the panel is still built, so `file-tree:focus`/git commands reveal it on demand); any workbench can open/edit files. **Now worktree-ready** (each agent's Files/Git is its own — just needs a per-workbench root/`GitRepo`). Defer: per-worktree roots; session restore of agent workbenches (only the user workbench is serialized); per-workbench NotificationLog/KeymapPanel subscribe to global signals and aren't disposed on close (minor leak, few agents)
+- [x] **WorkbenchSidebar / WorkbenchList** (renamed from agent sidebar / AgentList): its own full-height column at the very left of the window (left of the header bar) — a top-level horizontal `Gtk.Paned` (sidebar | header-bar+workbench), no longer a workbench dock. Top is a themed `Adw.HeaderBar` whose only content is a flat **logo button** (square placeholder for now; styled like the git branch button) that toggles collapse (icons-only / icons+text). The first row is the **user** (default-selected pseudo-agent), the rest are agents; never empty; each row is one header-bar tall. Each entry is associated with a workbench. Files/Source-Control moved to the **right** dock (fixed 220px); the left dock is empty/hidden at startup
 - [x] Modal terminal input (Terminal & AgentTerminal): normal/insert modes — `Escape`↔`i`; normal frees the `space` leader / `ctrl-w` window-nav, `ctrl-[` sends a literal Escape to the child. Implemented by wrapping the Vte in a focusable container that *steals* focus in normal mode (Vte un-focused → cursor idles, no keys reach it — no key-swallowing guard needed); clicking the Vte re-enters insert
 - [ ] **Review an agent's work** (next; design in agents.md): per-agent baselines (PreToolUse snapshot → `.baseline/`) make one agent's diff well-defined even in a tree shared by several agents; an "Agent Changes" diff panel (baseline→current), live while it works + after exit; overlap warning when two live agents edit the same file. Needs the editor Diff renderer first
 - [ ] Live activity timeline: tail the agent's transcript JSONL (already parsed for resume) into a structured feed (tools used, files touched, messages)

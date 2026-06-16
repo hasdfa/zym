@@ -10,9 +10,10 @@
  *     name (`getName()`); `:not()`/class fragments match its CSS classes
  *     (`getCssClasses()`). A widget's name defaults to its node-gtk type name
  *     (e.g. "GtkText", "GtkSourceView"), but quilx components override it with
- *     their JS class name (`widget.setName('Panel')`). The convention is to
- *     target a quilx component with `#Panel` and a raw GTK widget by its type
- *     tag (e.g. `GtkText`, `GtkSourceView.insert-mode`);
+ *     their JS class name (`widget.setName('Panel')` — e.g. the editor view is
+ *     a `GtkSourceView` renamed to `TextEditor`). The convention is to target a
+ *     quilx component with `#id` (`#Panel`, `#TextEditor.insert-mode`) and a raw
+ *     GTK widget by its type tag (e.g. `GtkText`);
  *   - the debug `console.log` at module load was removed and `translateTag`
  *     reduced to an identity passthrough (the Atom `atom-*` tag aliases don't
  *     map onto GTK widget names) — it stays as the extension point for aliases.

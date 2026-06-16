@@ -1,7 +1,7 @@
 /*
- * LayoutList — the contents of the LayoutSidebar (the full-height column at the
+ * WorkbenchList — the contents of the WorkbenchSidebar (the full-height column at the
  * very left of the window). Each entry is (will be) associated with a particular
- * workbench layout: the first ("default", selected-by-default) entry is the
+ * workbench workbench: the first ("default", selected-by-default) entry is the
  * **user** (rendered as a pseudo-agent), the rest are the running terminal agents
  * (`quilx.agents`). The list is never empty — the user entry is always present —
  * so there is no empty state.
@@ -44,27 +44,25 @@ addStyles(`
      reads as a column of header-height entries. A transparent left border keeps
      the row content from shifting when the active row gains its accent indicator;
      a subtle bottom border separates the rows. */
-  #LayoutList list row {
+  #WorkbenchList list row {
     min-height: 47px;
     border-left: 3px solid transparent;
-    border-bottom: 1px solid ${theme.ui.border ?? 'alpha(currentColor, 0.1)'};
+    border-bottom: 1px solid ${theme.ui.border};
   }
   /* The active row is marked by an accent left-border indicator rather than a
-     filled background. Force-clear every facet GTK/libadwaita uses to draw the
-     selection highlight (background color + image, box-shadow); \`!important\`
-     beats the theme's own selection rule. */
-  #LayoutList list row:selected {
-    color: ${theme.ui.fg ?? '#deddda'};
+     filled background. */
+  #WorkbenchList list row:selected {
+    color: ${theme.ui.fg};
     background-color: ${theme.ui.bg};
-    border-left-color: ${theme.ui.info ?? '#3584e4'};
+    border-left-color: ${theme.ui.info};
   }
   /* Logo placeholder (also the collapse toggle): a solid square glyph, accent-
      colored. Swap for the real logo image when there is one. */
-  #LayoutList .layoutlist-logo {
-    color: ${theme.ui.fg ?? '#deddda'};
+  #WorkbenchList .workbenchlist-logo {
+    color: ${theme.ui.fg};
   }
   /* Per-row edited-files count — a flat, muted button (click opens the files). */
-  #LayoutRow .layoutrow-files {
+  #WorkbenchRow .workbenchrow-files {
     min-width: 0;
     min-height: 0;
     padding: 0 2px;
@@ -72,18 +70,18 @@ addStyles(`
     background: none;
     box-shadow: none;
   }
-  #LayoutRow .layoutrow-files label {
-    color: ${theme.ui.textMuted ?? '#9a9996'};
+  #WorkbenchRow .workbenchrow-files label {
+    color: ${theme.ui.textMuted};
     font-size: 0.85em;
   }
-  #LayoutRow .layoutrow-files:hover label { color: ${theme.ui.fg ?? '#deddda'}; }
-  .quilx-agent-working { color: ${theme.ui.textMuted ?? '#9a9996'}; }
-  .quilx-agent-waiting { color: ${theme.ui.warning ?? '#e5a50a'}; }
-  .quilx-agent-idle    { color: ${theme.ui.success ?? '#2ec27e'}; }
-  .quilx-agent-exited  { color: ${theme.ui.textMuted ?? '#9a9996'}; }
+  #WorkbenchRow .workbenchrow-files:hover label { color: ${theme.ui.fg}; }
+  .quilx-agent-working { color: ${theme.ui.textMuted}; }
+  .quilx-agent-waiting { color: ${theme.ui.warning}; }
+  .quilx-agent-idle    { color: ${theme.ui.success}; }
+  .quilx-agent-exited  { color: ${theme.ui.textMuted}; }
 `);
 
-export interface LayoutListOptions {
+export interface WorkbenchListOptions {
   /** Fired when an agent row is activated (clicked / Enter). */
   onActivate?: (agent: AgentTerminal) => void;
   /** Fired when the default (user) row is activated. */
@@ -92,7 +90,9 @@ export interface LayoutListOptions {
   onToggleCollapsed?: (collapsed: boolean) => void;
   /** Restart an agent (respawn / resume) — the list's `r` key. */
   onRestart?: (agent: AgentTerminal) => void;
-  /** Close an agent (kill if running, then retire) — the list's `X` key. */
+  /** Stop an agent's process (it stays listed, restartable) — the list's `x` key. */
+  onStop?: (agent: AgentTerminal) => void;
+  /** Close an agent (terminate if running, then remove it from the list) — the `d d` key. */
   onClose?: (agent: AgentTerminal) => void;
   /** Rename an agent — the list's `R` key. */
   onRename?: (agent: AgentTerminal) => void;
@@ -105,12 +105,12 @@ export interface LayoutListOptions {
 // A list entry: the always-present user row, or one of the running agents.
 type Entry = { kind: 'user' } | { kind: 'agent'; agent: AgentTerminal };
 
-export class LayoutList {
+export class WorkbenchList {
   readonly root: InstanceType<typeof Gtk.Box>;
 
   private readonly listBox: InstanceType<typeof Gtk.ListBox>;
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
-  private readonly options: LayoutListOptions;
+  private readonly options: WorkbenchListOptions;
   private readonly userName: string;
   // Renders nerd-font glyphs (header robot, user, working cog) in the icon font.
   private readonly iconAttrs: InstanceType<typeof Pango.AttrList>;
@@ -126,7 +126,7 @@ export class LayoutList {
   private rowUnsubs: Array<() => void> = [];
   private readonly subs = new CompositeDisposable();
 
-  constructor(options: LayoutListOptions = {}) {
+  constructor(options: WorkbenchListOptions = {}) {
     this.options = options;
     this.userName = options.userName ?? Os.userInfo().username;
 
@@ -142,7 +142,7 @@ export class LayoutList {
     this.scrolled.setVexpand(true);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('LayoutList'); // selector identity + CSS (#LayoutList)
+    this.root.setName('WorkbenchList'); // selector identity + CSS (#WorkbenchList)
     this.registerCommands();
     this.root.append(this.buildHeader());
     this.root.append(this.scrolled);
@@ -161,17 +161,17 @@ export class LayoutList {
   // The sidebar header bar: an Adw.HeaderBar (so its height/chrome matches the
   // window header bar beside it) whose only content is a left-aligned logo button
   // — styled flat like the git branch button — that toggles collapse. The logo is
-  // a square placeholder for now (no asset yet). `.layout-header` lets the chrome
+  // a square placeholder for now (no asset yet). `.workbench-header` lets the chrome
   // theme the bar.
   private buildHeader(): InstanceType<typeof Adw.HeaderBar> {
     const bar = new Adw.HeaderBar();
-    bar.addCssClass('layout-header');
+    bar.addCssClass('workbench-header');
     bar.setShowStartTitleButtons(false);
     bar.setShowEndTitleButtons(false);
     bar.setTitleWidget(new Gtk.Box()); // clear the centered title — logo only
 
     const logo = new Gtk.Label({ label: LOGO_GLYPH }); // placeholder; swap for the real logo
-    logo.addCssClass('layoutlist-logo');
+    logo.addCssClass('workbenchlist-logo');
     logo.setValign(Gtk.Align.CENTER);
     logo.setHalign(Gtk.Align.CENTER);
     const button = new Gtk.Button();
@@ -211,11 +211,11 @@ export class LayoutList {
     this.applySelection();
   }
 
-  // A row box carrying the #LayoutRow identity. When collapsed it holds only the
+  // A row box carrying the #WorkbenchRow identity. When collapsed it holds only the
   // leading icon; expanded, the icon plus the supplied trailing widgets.
   private rowBox(icon: InstanceType<typeof Gtk.Widget>, ...trailing: InstanceType<typeof Gtk.Widget>[]): InstanceType<typeof Gtk.ListBoxRow> {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    box.setName('LayoutRow');
+    box.setName('WorkbenchRow');
     box.append(icon);
     if (!this.collapsed) for (const w of trailing) box.append(w);
     const row = new Gtk.ListBoxRow();
@@ -250,7 +250,7 @@ export class LayoutList {
     const files = new Gtk.Button();
     files.setChild(filesLabel);
     files.addCssClass('flat');
-    files.addCssClass('layoutrow-files');
+    files.addCssClass('workbenchrow-files');
     files.setCanFocus(false);
     files.on('clicked', () => this.options.onOpenChanges?.(agent));
     const updateFiles = () => this.applyFiles(files, filesLabel, agent);
@@ -267,7 +267,7 @@ export class LayoutList {
     else this.options.onActivate?.(entry.agent);
   }
 
-  // --- Keyboard navigation (vim bare keys while #LayoutList is focused) --------
+  // --- Keyboard navigation (vim bare keys while #WorkbenchList is focused) --------
 
   private registerCommands(): void {
     quilx.commands.add(this.root, {
@@ -279,6 +279,7 @@ export class LayoutList {
       // Lifecycle on the selected row (a no-op on the user row).
       'agent:restart': () => this.withSelectedAgent((a) => this.options.onRestart?.(a)),
       'agent:rename': () => this.withSelectedAgent((a) => this.options.onRename?.(a)),
+      'agent:stop': () => this.withSelectedAgent((a) => this.options.onStop?.(a)),
       'agent:close': () => this.withSelectedAgent((a) => this.options.onClose?.(a)),
       'agent:open-changes': () => this.withSelectedAgent((a) => this.options.onOpenChanges?.(a)),
     });
@@ -313,7 +314,7 @@ export class LayoutList {
   }
 
   /** Move keyboard focus into the list (so its scoped bindings apply and the
-   *  pane-navigation commands see focus as being within the layout list). */
+   *  pane-navigation commands see focus as being within the workbench list). */
   focus(): void {
     const row = this.listBox.getSelectedRow() ?? this.listBox.getRowAtIndex(0);
     if (row) row.grabFocus();

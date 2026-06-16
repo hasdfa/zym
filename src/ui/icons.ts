@@ -22,7 +22,8 @@ export const Icons = {
   fatal: String.fromCodePoint(0xf057), // times-circle
   trace: String.fromCodePoint(0xf188), // bug
   close: String.fromCodePoint(0xf00d), // times
-  git: String.fromCodePoint(0xf418), // git-branch (matches the header BranchButton)
+  git: String.fromCodePoint(0xf418), // git-branch (matches the header GitBranchButton)
+  github: String.fromCodePoint(0xf09b), // nf-fa-github — the GitHub mark
   modified: String.fromCodePoint(0xf444), // dot-fill — unsaved/modified marker
 } as const;
 

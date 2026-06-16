@@ -194,6 +194,66 @@ export function splitSides(model: DiffModel): SideBySide {
   return { left, right };
 }
 
+/**
+ * One collapsible region of unchanged lines (buffer-row indices; the diff buffer
+ * holds the real lines verbatim — no synthesized placeholder). The hidden body is
+ * `bodyStart..bodyEnd` inclusive; the placeholder block + gutter chevron attach to
+ * `anchorRow` — the still-visible line just below the body (`placement: 'below'`),
+ * or, for a fold at the very top of the file, the line just below it
+ * (`placement: 'above'`, the band sits above that line).
+ */
+export interface DiffFoldInfo {
+  anchorRow: number;
+  placement: 'below' | 'above';
+  bodyStart: number;
+  bodyEnd: number;
+  count: number;
+}
+
+/**
+ * Plan which runs of unchanged (`context`-kind) lines to collapse, keeping
+ * `context` lines on each side of every change and only folding runs with more
+ * than `minHidden` interior lines. Returns the fold regions in **buffer-row
+ * indices** (the diff buffer is the line list verbatim); `DiffFold` hides each
+ * body and renders the placeholder as an inline widget (no buffer footprint).
+ *
+ * Generic over any line carrying a `kind` (unified `DiffLine` or `SideLine`), so
+ * the two side-by-side panes — whose context lines sit at identical rows — fold
+ * in lockstep from matching plans.
+ */
+export function foldUnchanged<T extends { kind: string }>(
+  lines: readonly T[],
+  options: { context?: number; minHidden?: number } = {},
+): DiffFoldInfo[] {
+  const context = options.context ?? 3;
+  const minHidden = options.minHidden ?? 2;
+
+  const folds: DiffFoldInfo[] = [];
+  for (let i = 0; i < lines.length; ) {
+    if (lines[i].kind !== 'context') {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && lines[j].kind === 'context') j++;
+    // The run spans [i, j-1]. Keep `context` lines next to an adjacent change;
+    // a run touching the buffer edge has no change on that side, so keep none.
+    const keepTop = i > 0 ? context : 0;
+    const keepBottom = j < lines.length ? context : 0;
+    const top = i + keepTop;
+    const bottom = j - 1 - keepBottom;
+    if (bottom - top + 1 >= minHidden) {
+      // Anchor on the still-visible line just below the body; a leading fold (no
+      // line above) anchors on the line just above (the band goes above it).
+      if (top > 0) folds.push({ anchorRow: top - 1, placement: 'below', bodyStart: top, bodyEnd: bottom, count: bottom - top + 1 });
+      else if (bottom + 1 < lines.length) folds.push({ anchorRow: bottom + 1, placement: 'above', bodyStart: top, bodyEnd: bottom, count: bottom - top + 1 });
+      // else: the fold spans the whole buffer (no changes) → nothing to anchor to.
+    }
+    i = j;
+  }
+  return folds;
+}
+
 /** Group consecutive changed (non-context) lines into hunks. */
 function buildHunks(lines: DiffLine[]): DiffHunk[] {
   const hunks: DiffHunk[] = [];

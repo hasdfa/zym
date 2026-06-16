@@ -11,7 +11,7 @@
  */
 import { GLib, Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
-import { monospaceFontFamily } from '../fonts.ts';
+import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import type { PendingBinding } from '../KeymapManager.ts';
@@ -20,15 +20,14 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 const SHOW_DELAY_MS = 350;
 const MAX_ROWS = 8; // entries per column before spilling into the next
-const KEY_COLOR = theme.ui.textAccent ?? '#a9a1e1';
-const MONO = monospaceFontFamily(); // keybindings render in the monospace font
+const KEY_COLOR = theme.ui.textAccent;
 
 addStyles(`
   #WhichKey {
     background-color: var(--popover-bg-color);
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
-    box-shadow: 0px 10px 33px 28px rgba(0,0,0,0.15);
+    box-shadow: 0px 10px 33px 28px ${theme.ui.shadow};
     padding: 0.5em 0.75em;
     margin-bottom: 12px;
   }
@@ -86,7 +85,7 @@ export class WhichKey {
 
     const key = new Gtk.Label({ xalign: 0, useMarkup: true });
     key.setMarkup(
-      `<span foreground="${KEY_COLOR}" weight="bold" font_family="${MONO}">` +
+      `<span foreground="${KEY_COLOR}" weight="bold" font_family="${fonts.monospaceFamily}">` +
         `${escapeMarkup(prettyKeys(binding.keys))}</span>`,
     );
     box.append(key);

@@ -49,3 +49,29 @@ test('revealLine exposes a line buried under nested folds', () => {
   assert.equal(syntax.revealLine(2), true);
   assert.equal(isLineFolded(buffer, 2), false);
 });
+
+// Bracket matching is cursor-driven (notify::cursor-position) and text-based, so
+// it works headless without a grammar.
+test('bracket match: highlights the bracket under the cursor and its pair', () => {
+  const { buffer } = setup('foo(bar)\n');
+  const at = (off: number) => {
+    const r = (buffer as any).getIterAtOffset(off);
+    return Array.isArray(r) ? r[r.length - 1] : r;
+  };
+  const tag = buffer.getTagTable().lookup('bracket-match')!;
+  assert.ok(tag, 'bracket-match tag exists');
+
+  buffer.placeCursor(at(3)); // on the '('
+  assert.ok(at(3).hasTag(tag), 'the ( under the cursor is highlighted');
+  assert.ok(at(7).hasTag(tag), 'its matching ) is highlighted');
+  assert.ok(!at(5).hasTag(tag), 'a char between the brackets is not');
+
+  buffer.placeCursor(at(5)); // inside `bar`, not adjacent to a bracket
+  assert.ok(at(3).hasTag(tag), 'the enclosing ( stays highlighted from inside');
+  assert.ok(at(7).hasTag(tag), 'and the enclosing )');
+  assert.ok(!at(5).hasTag(tag), 'the cursor char itself is not highlighted');
+
+  buffer.placeCursor(at(1)); // before any bracket, not enclosed → cleared
+  assert.ok(!at(3).hasTag(tag), 'outside any pair clears the highlight');
+  assert.ok(!at(7).hasTag(tag), 'and its former match');
+});

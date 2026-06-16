@@ -25,6 +25,7 @@
  */
 import { Gdk, Gtk, type SourceBuffer } from '../../gi.ts';
 import { Range, type RangeLike } from '../../text/Range.ts';
+import { theme } from '../../theme/theme.ts';
 import type { EditorModel } from './EditorModel.ts';
 
 /** The built-in decoration styles. Producers re-sync layers using these keys. */
@@ -36,25 +37,27 @@ export type DecorationStyle =
   | 'filler' // diff (side-by-side): a blank alignment pad on the other side
   | 'word-add' // diff: the changed chars within an added line
   | 'word-del' // diff: the changed chars within a removed line
+  | 'fold' // diff: a collapsed-unchanged-lines placeholder row
   | 'flash'; // vim: a brief flash over an operated/yanked range
 
 // Style → background color (hex, alpha-capable via #rrggbbaa). Backgrounds rather
-// than foregrounds so they compose with syntax colors. Kept as local constants
-// for now; can move to the theme palette when it grows decoration colors.
+// than foregrounds so they compose with syntax colors. All tints come from the
+// theme palette (kept dim so text stays readable).
 const STYLE_BACKGROUND: Record<DecorationStyle, string> = {
-  highlight: '#e5a50a55',
-  'highlight-strong': '#f5c21199',
-  added: '#2ec27e26',
-  removed: '#e01b2426',
-  filler: '#88888820', // dimmed neutral pad for an aligned-but-empty row
-  'word-add': '#2ec27e66', // stronger, over the added line's background
-  'word-del': '#e01b2466', // stronger, over the removed line's background
-  flash: '#f5c21188',
+  highlight: theme.ui.searchMatch,
+  'highlight-strong': theme.ui.searchMatchCurrent,
+  added: theme.ui.diffAddedBg,
+  removed: theme.ui.diffRemovedBg,
+  filler: theme.ui.diffFillerBg, // dimmed neutral pad for an aligned-but-empty row
+  'word-add': theme.ui.diffAddedWordBg, // stronger, over the added line's background
+  'word-del': theme.ui.diffRemovedWordBg, // stronger, over the removed line's background
+  fold: theme.ui.diffFoldBg, // faint neutral band for a collapsed-context placeholder
+  flash: theme.ui.flash,
 };
 
 // Diff line styles paint the *whole line* (paragraph background, full width);
 // the rest are character-span backgrounds (word-level diff, search, flash).
-const LINE_STYLES = new Set<DecorationStyle>(['added', 'removed', 'filler']);
+const LINE_STYLES = new Set<DecorationStyle>(['added', 'removed', 'filler', 'fold']);
 
 /** Parse a `#rgb(a)`/`#rrggbb(aa)` string into a Gdk.RGBA. */
 function parseColor(hex: string): InstanceType<typeof Gdk.RGBA> {

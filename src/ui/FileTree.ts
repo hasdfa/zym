@@ -41,9 +41,9 @@ function displayPath(path: string): string {
   return path;
 }
 
-// Git diff colors (theme success/error, Adwaita fallbacks), matching BranchButton.
-const GIT_ADDED_COLOR = theme.ui.success ?? '#2ec27e';
-const GIT_REMOVED_COLOR = theme.ui.error ?? '#e01b24';
+// Git diff colors (theme success/error), matching GitBranchButton.
+const GIT_ADDED_COLOR = theme.ui.success;
+const GIT_REMOVED_COLOR = theme.ui.error;
 
 /** Pango markup for a file's git status: `?` for untracked, else +added/-removed.
  *  Colors are per-segment; the wrapper makes the digits bold, slightly smaller,
@@ -70,7 +70,7 @@ function statusMarkup(status: FileGitStatus | undefined): string {
 // keeps its own contrast.
 addStyles(`
   #FileTree .filetree-header {
-    color: ${theme.ui.textMuted ?? '#9a9996'};
+    color: ${theme.ui.textMuted};
     font-weight: bold;
     padding: 6px 8px;
   }
@@ -78,7 +78,7 @@ addStyles(`
     color: ${theme.ui.fg};
   }
   #FileTree row:not(:selected) .filetree-icon {
-    color: ${theme.ui.textMuted ?? '#9a9996'}; /* mute the file-type icon */
+    color: ${theme.ui.textMuted}; /* mute the file-type icon */
   }
   #FileTree expander {
     color: alpha(${theme.ui.fg}, 0.45); /* mute the disclosure chevron */

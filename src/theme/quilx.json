@@ -16,6 +16,8 @@
         "editor.foreground": "#bbc2cf",
         "editor.line_number": "#888888",
         "editor.active_line_number": "#bbc2cf",
+        "search.match_background": "#e5a50a26",
+        "search.match_background.current": "#e5a50a59",
         "text.muted": "#5b6268",
         "text.accent": "#c678dd",
         "success": "#98be65",

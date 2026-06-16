@@ -225,6 +225,24 @@ class Outdent extends Indent {
   }
 }
 
+// `=` — re-indent each row of the target to its syntactic level (the tree-sitter
+// indent source via editor.autoIndentBufferRow). `==` re-indents the current line.
+class AutoIndent extends TransformString {
+  stayByMarker = true
+  setToFirstCharacterOnLinewise = true
+  wise = 'linewise'
+
+  mutateSelection (selection) {
+    const range = selection.getBufferRange()
+    // A linewise range ending at column 0 of a later row doesn't include that row.
+    let lastRow = range.end.row
+    if (range.end.column === 0 && range.end.row > range.start.row) lastRow--
+    for (let row = range.start.row; row <= lastRow; row++) {
+      this.editor.autoIndentBufferRow(row)
+    }
+  }
+}
+
 // Join
 // -------------------------
 class JoinTarget extends TransformString {
@@ -276,6 +294,7 @@ const __operations = {
   ReplaceCharacter,
   Indent,
   Outdent,
+  AutoIndent,
   JoinTarget,
   Join,
   SurroundBase,

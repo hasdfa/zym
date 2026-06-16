@@ -58,6 +58,11 @@ export interface FoldProvider {
     row: number,
     column: number,
   ): { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } } | null;
+  /** The class/interface/enum enclosing `(row, column)`, for the `ic`/`ac` text object. */
+  classRangeAt?(
+    row: number,
+    column: number,
+  ): { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } } | null;
 }
 
 /** The `if`/`af` function ranges, as linewise Ranges. */
@@ -131,6 +136,10 @@ export class EditorModel {
   constructor(view: SourceView, buffer: SourceBuffer) {
     this.view = view;
     this.buffer = buffer;
+    // Selector identity for command/keymap rules: the view is the focused widget
+    // and carries the mode CSS classes, so keymaps target it as `#TextEditor`
+    // (e.g. `#TextEditor.normal-mode`) instead of the raw `GtkSourceView` type tag.
+    this.view.setName('TextEditor');
     this.selection = new Selection(this);
     // Indent with spaces by default; the host overrides via `setIndentation`
     // (config default + per-file detection). Without this a bare GtkSourceView
@@ -214,7 +223,7 @@ export class EditorModel {
     const tag = new Gtk.TextTag({
       name: 'vim-block-cursor',
       background: theme.ui.fg,
-      foreground: theme.ui.bg ?? '#000000',
+      foreground: theme.ui.bg ?? theme.ui.popoverBg,
     });
     this.buffer.getTagTable().add(tag);
     return tag;
@@ -513,7 +522,7 @@ export class EditorModel {
       this.extraCursorTag = new Gtk.TextTag({
         name: 'vim-extra-cursor',
         background: theme.ui.fg,
-        foreground: theme.ui.bg ?? '#000000',
+        foreground: theme.ui.bg ?? theme.ui.popoverBg,
       });
       this.buffer.getTagTable().add(this.extraCursorTag);
     }
@@ -676,9 +685,22 @@ export class EditorModel {
     return false;
   }
 
-  /** The indent level a fresh line at `row` should take: the indentation of the
-   *  nearest non-blank line above it (vim `autoindent`), or 0 at the top. */
+  /**
+   * A syntactic indent source (tree-sitter — see SyntaxController.indentLevelForRow),
+   * injected by TextEditor. When set and it returns a level, it wins; otherwise we
+   * fall back to copy-the-line-above.
+   */
+  private indentSource: ((row: number) => number | null) | null = null;
+  setIndentSource(fn: ((row: number) => number | null) | null): void {
+    this.indentSource = fn;
+  }
+
+  /** The indent level a line at `row` should take: the syntactic level from the
+   *  indent source if available, else the nearest non-blank line above it (vim
+   *  `autoindent`), or 0 at the top. */
   suggestedIndentForBufferRow(row: number): number {
+    const syntactic = this.indentSource?.(row);
+    if (syntactic != null) return syntactic;
     for (let r = row - 1; r >= 0; r--) {
       if (!this.isBufferRowBlank(r)) return this.indentationForBufferRow(r);
     }
@@ -965,8 +987,20 @@ export class EditorModel {
   /** The function enclosing `point` (whole def + body), as linewise Ranges, or
    *  null when the cursor isn't in a function (or there's no parse tree). */
   getFunctionRange(point: PointLike): FunctionRange | null {
+    return this.nodeRange(point, this.foldProvider?.functionRangeAt);
+  }
+
+  /** The class enclosing `point` (whole def + body), as linewise Ranges, or null. */
+  getClassRange(point: PointLike): FunctionRange | null {
+    return this.nodeRange(point, this.foldProvider?.classRangeAt);
+  }
+
+  private nodeRange(
+    point: PointLike,
+    at: ((row: number, column: number) => { outer: { startRow: number; endRow: number }; inner: { startRow: number; endRow: number } } | null) | undefined,
+  ): FunctionRange | null {
     const p = Point.fromObject(point);
-    const r = this.foldProvider?.functionRangeAt?.(p.row, p.column);
+    const r = at?.(p.row, p.column);
     if (!r) return null;
     const rowRange = (s: { startRow: number; endRow: number }) =>
       new Range(new Point(s.startRow, 0), new Point(s.endRow, this.lineLength(s.endRow)));
@@ -1017,10 +1051,16 @@ export class EditorModel {
    * so editing mid-signal would corrupt the originating edit (and a mirror on a
    * line above the primary would shift it). Off-signal, the primary edit has
    * settled and each mirror uses the extra cursor's mark (which tracks edits).
+   *
+   * The whole insert session is wrapped in one user action so it undoes as a
+   * single step: the per-keystroke replication inserts at the extra cursors
+   * otherwise break GTK's adjacent-insert coalescing, leaving the primary's
+   * keystrokes to undo one character at a time.
    */
   beginMultiCursorEditReplication(): void {
     if (this.multiCursorReplication) return;
     this.multiCursorReplication = true;
+    this.buffer.beginUserAction();
     this.replicationSub = this.onDidChangeText((event) => {
       if (this.replicatingEdit || this.extraSelections.length === 0) return;
       this.replicationQueue.push(...event.changes);
@@ -1032,10 +1072,12 @@ export class EditorModel {
   }
 
   endMultiCursorEditReplication(): void {
+    if (!this.multiCursorReplication) return; // never started / already ended — keep user actions balanced
     if (this.replicationQueue.length) this.flushReplication(); // drain pending synchronously
     this.multiCursorReplication = false;
     this.replicationSub?.dispose();
     this.replicationSub = undefined;
+    this.buffer.endUserAction(); // close the session-wide undo group opened on begin
   }
 
   /** Whether live multi-cursor replication is active (the vim layer skips its
@@ -1176,7 +1218,7 @@ export class EditorModel {
   //
   // EditorModel doubles as the ported code's `editorElement`: the vim layer
   // drives mode through CSS classes on the view (the KeymapManager matches
-  // selectors like `GtkSourceView.normal-mode` against them), gates text input
+  // selectors like `#TextEditor.normal-mode` against them), gates text input
   // per mode, and switches the cursor between block and beam. The CSS methods
   // keep the Atom `editorElement` names so vendored code calls them unchanged.
 
@@ -1433,17 +1475,30 @@ export class EditorModel {
     goalX: number | null,
   ): { point: Point; goalX: number } | null {
     if (!this.view.getRealized()) return null;
-    const cell = (this.view as any).getIterLocation(this.iterAtPoint(point)) as PixelRect;
-    const x = goalX ?? cell.x;
-    const y = direction === 'down' ? cell.y + cell.height : cell.y - 1;
-    if (y < 0) return null; // already on the document's first display line
-    // get_iter_at_location → [found, iter] (document/buffer pixel coordinates).
-    const result = (this.view as any).getIterAtLocation(x, y) as unknown[];
-    const iter = (Array.isArray(result) ? result : [result]).find(
+    const iter = this.iterAtPoint(point);
+    const x = goalX ?? ((this.view as any).getIterLocation(iter) as PixelRect).x;
+    // Move by one DISPLAY (wrapped) row using the view's own layout. This is
+    // correct under soft-wrap (a buffer line can span several display rows) AND for
+    // mixed-height lines (a scaled Markdown heading is taller than its unscaled
+    // `##` markers) — pixel-stepping by the cursor glyph or whole-line height would
+    // under/overshoot in those cases. `forward/backward_display_line` mutate the
+    // iter in place and return whether it moved (false at the first/last row).
+    const moved = direction === 'down'
+      ? (this.view as any).forwardDisplayLine(iter)
+      : (this.view as any).backwardDisplayLine(iter);
+    if (!moved) return null; // already on the first/last display row
+    // Those land at the target row's start column; re-snap to the goal visual x on
+    // that row so the cursor keeps its column (Vim's goal-column behavior). Probe
+    // at the row's MIDDLE y, not its top: get_iter_at_location at an exact row-top
+    // boundary returns the row above (the boundary is that row's bottom edge).
+    const cell = (this.view as any).getIterLocation(iter) as PixelRect;
+    const midY = cell.y + Math.max(1, Math.floor(cell.height / 2));
+    const result = (this.view as any).getIterAtLocation(x, midY) as unknown[];
+    const target = (Array.isArray(result) ? result : [result]).find(
       (r): r is TextIter => Boolean(r) && typeof (r as TextIter).getLine === 'function',
     );
-    if (!iter) return null;
-    return { point: this.pointAtIter(unwrapIter(iter)), goalX: x };
+    if (!target) return null;
+    return { point: this.pointAtIter(unwrapIter(target)), goalX: x };
   }
 
   /** The buffer Point nearest a document-pixel `top` (column 0). */

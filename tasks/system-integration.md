@@ -42,21 +42,39 @@ What exists, and whether it reacts to a live change:
 - **`core.followSystemColorScheme` config** — declared in the schema
   (`src/quilx.ts`) but **not consumed anywhere**. ❌ dead setting; should gate the
   follow-the-OS behavior once it exists.
-- **Fonts** — `fonts.ts` reads gsettings each call (`monospaceFontName` /
-  `font-name`), but callers read **once**: `Picker` caches `monospaceFontCss()`
-  in a module-level `const MONOSPACE`; `Terminal` calls `setFont(...)` at
-  construction; `CommandPicker` reads `uiFontFamily()` per-open (so a *new* picker
-  picks up a change, but open ones and the editor/terminals do not). ❌ no live
-  re-apply; **no `Gio.Settings` `changed` subscription** on the interface schema.
+- **Fonts** — ✅ centralized in the `fonts` store (`fonts.ts`). One reactive
+  stylesheet (`styles.set(..., { key: 'app-fonts' })`) carries every CSS widget's
+  font (components register a selector via `fonts.monospace(sel)` / `fonts.ui(sel)`
+  instead of inlining declarations); Pango-markup callers read the live
+  `fonts.monospaceFamily` / `fonts.uiFamily` at render time; `Terminal` subscribes
+  via `fonts.onChange`. The store watches `org.gnome.desktop.interface`
+  (`changed::monospace-font-name` / `font-name`) and re-applies live; `reload()`
+  is public so a future user font setting drives the same path. (The terminal,
+  editor signature/hover, completion docs, and all pickers now update without a
+  restart.)
 - **Match-highlight / accent** — `Picker.HIGHLIGHT_COLOR = theme.ui.textAccent`
   is a module-load constant baked into row markup. ❌ static (follows neither a
   theme change nor the OS accent).
+- **Color palette is centralized** — ✅ every color now comes from `theme.ui.*`;
+  there are **no inline color literals outside `src/theme/`**. The loader resolves
+  every `UiColors` field at load (`adaptZedTheme` coalesces each `pick()` with a
+  `DEFAULT_UI` fallback), so the rest of the app reads bare `theme.ui.X` with no
+  `?? '#fallback'`. `bg` stays optional (its absence is the "follow the system
+  scheme" signal); `fg` defaults to white. New semantic tokens were added to carry
+  what used to be hardcoded: `shadow`, `flash`, `diffAddedBg`/`diffRemovedBg`/
+  `diffAddedWordBg`/`diffRemovedWordBg`/`diffFillerBg`/`diffFoldBg`, and
+  `prOpen`/`prMerged`/`prClosed`. Regex-input highlighting reuses `theme.syntax`
+  captures (keyword/punctuation/type/string.escape/constant) instead of its own
+  colors. This is static today (baked at module load, like the rest of the
+  palette) — but it makes the "restyle on theme change" step below a re-emit of
+  the keyed stylesheets + Pango-markup rebuilds, not a literal hunt.
 
 ## Gaps (the "not followed through" list)
 
-1. Desktop **monospace font** change → editor / terminal / pickers keep the old
-   font until restart.
-2. Desktop **UI font** change → open pickers/labels keep the old font.
+1. ~~Desktop **monospace font** change → editor / terminal / pickers keep the old
+   font until restart.~~ ✅ fixed — the `fonts` store re-applies live.
+2. ~~Desktop **UI font** change → open pickers/labels keep the old font.~~ ✅ the
+   `fonts` store re-applies CSS live; Pango-markup labels update on next render.
 3. OS **light ⇄ dark** change → the quilx theme palette (chrome, syntax, picker
    colors) does not switch; only the Adwaita-fallback editor scheme + terminal
    do.
@@ -86,9 +104,15 @@ re-appliable.
   `notify::dark` already drives the editor scheme).
 - [ ] **Restyle on theme change** — the chrome styles (`AppWindow.applyChromeStyles`,
   already keyed/replaceable), picker highlight color, syntax controller, and
-  diagnostics colors re-apply from the new palette.
+  diagnostics colors re-apply from the new palette. *Unblocked:* colors are now
+  centralized in `theme.ui.*` (see Current state), so each consumer just re-reads
+  the palette — no scattered literals to chase.
 - [ ] **Wire `core.followSystemColorScheme`** — when false, ignore OS appearance
   and hold the configured variant; when true (default), follow it.
+- [ ] **Lint guardrail (color drift)** — a check that fails CI when a hex /
+  `rgb()` / `foreground="white"` literal appears outside `src/theme/**`, so colors
+  can't creep back inline. Not yet added (the centralization that makes it pass
+  is done).
 
 ## Notes / decisions
 

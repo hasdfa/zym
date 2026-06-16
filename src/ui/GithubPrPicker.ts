@@ -1,30 +1,32 @@
 /*
- * GitHub PR picker — pick a pull request, then either open it in the browser or
- * switch to its branch.
+ * GitHub PR picker — pick a pull request and switch to its branch (`gh pr
+ * checkout`).
  *
- * Lists PRs in every state (open / closed / merged) via `gh` (see git/github.ts)
- * and opens the fuzzy picker over "#<n> <title>", each row prefixed with a
- * colour-coded state glyph and the author as a muted detail. Two entry points
- * share the picker; the host wires each to a command. Notifies when gh is
- * unavailable or there are no PRs.
+ * Fetches PR matches in every state (open / closed / merged) from `gh` as the
+ * user types — a debounced server-side search (see git/github.ts). Filtering is
+ * entirely server-side (a GitHub search and local fzy disagree on matches, so
+ * the picker's local refine is off). Rows show "#<n> <title>" prefixed with a
+ * colour-coded state glyph, the author as a muted detail. The host wires it to a
+ * command.
  */
 import { Gtk } from '../gi.ts';
-import { openPicker } from './Picker.ts';
+import { openPicker, type PickerItem } from './Picker.ts';
 import { proseMarkup, escapeMarkup } from './proseMarkup.ts';
-import { openUrl } from './openUrl.ts';
 import { quilx } from '../quilx.ts';
 import { repoRoot } from '../git/cli.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
-import { fetchPullRequests, checkoutPullRequest, type GithubListItem, type PrState } from '../git/github.ts';
+import { Icons } from './icons.ts';
+import { searchPullRequests, checkoutPullRequest, type GithubListItem, type PrState } from '../git/github.ts';
+import { theme } from '../theme/theme.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 // Octicon glyph + GitHub-style colour for each PR state (open green, merged
 // purple, closed red), rendered in the bundled icon font ahead of the title.
 const STATE_STYLE: Record<PrState, { glyph: string; color: string }> = {
-  open: { glyph: String.fromCodePoint(0xf407), color: '#3fb950' }, // git-pull-request
-  merged: { glyph: String.fromCodePoint(0xf419), color: '#a371f7' }, // git-merge
-  closed: { glyph: String.fromCodePoint(0xf407), color: '#f85149' }, // git-pull-request
+  open: { glyph: String.fromCodePoint(0xf407), color: theme.ui.prOpen }, // git-pull-request
+  merged: { glyph: String.fromCodePoint(0xf419), color: theme.ui.prMerged }, // git-merge
+  closed: { glyph: String.fromCodePoint(0xf407), color: theme.ui.prClosed }, // git-pull-request
 };
 
 export function stateGlyphMarkup(state: PrState): string {
@@ -32,58 +34,55 @@ export function stateGlyphMarkup(state: PrState): string {
   return `<span face="${ICON_FONT_FAMILY}" foreground="${color}">${escapeMarkup(glyph)}</span> `;
 }
 
-/** Pick a PR and open it in the browser. */
-export function openGithubPrPicker(host: Overlay, cwd: string): void {
-  pickPullRequest(host, cwd, 'Open pull request…', (pr) => openUrl(pr.url));
+// A picker row carrying its PR (so `formatMain`/`onSelect` read it straight off
+// the item — no shared map that a stale async response could clobber).
+interface PrPickerItem extends PickerItem {
+  pr: GithubListItem;
 }
 
 /** Pick a PR and switch to its branch (`gh pr checkout`). */
-export function checkoutGithubPrPicker(host: Overlay, cwd: string): void {
-  pickPullRequest(host, cwd, 'Switch to pull request…', (pr, root) => {
-    checkoutPullRequest(root, pr.number, (ok, stderr) => {
-      if (ok) quilx.notifications.addSuccess(`Switched to PR #${pr.number}`);
-      else quilx.notifications.addError('Could not switch to pull request', { detail: stderr.trim() });
-    });
-  });
-}
-
-// Shared: fetch PRs (all states), show the picker, and run `onPick` for the chosen one.
-function pickPullRequest(
-  host: Overlay,
-  cwd: string,
-  placeholder: string,
-  onPick: (pr: GithubListItem, root: string) => void,
-): void {
+export function switchToGithubPrPicker(host: Overlay, cwd: string): void {
   const root = repoRoot(cwd);
   if (!root) {
     quilx.notifications.addInfo('Not a git repository');
     return;
   }
-  fetchPullRequests(root, (prs) => {
-    if (prs.length === 0) {
-      quilx.notifications.addInfo('No pull requests');
-      return;
-    }
-    // value = PR number (unique); map it back to the PR for the action + author.
-    const byKey = new Map<string, GithubListItem>();
-    const items = prs.map((pr) => {
-      const key = String(pr.number);
-      byKey.set(key, pr);
-      return { value: key, text: `#${pr.number} ${pr.title}` };
-    });
-    openPicker({
-      host,
-      placeholder,
-      items,
-      formatMain: (item, positions) => {
-        const pr = byKey.get(item.value);
-        const main = (pr ? stateGlyphMarkup(pr.state) : '') + proseMarkup(item.text, positions);
-        return pr && pr.author ? { main, detail: `@${pr.author}` } : { main };
-      },
-      onSelect: (key) => {
-        const pr = byKey.get(key);
-        if (pr) onPick(pr, root);
-      },
-    });
+  openPicker({
+    host,
+    placeholder: 'Switch to pull request…',
+    promptIcon: Icons.github, // doubles as the home for the fetch spinner
+    // Filter entirely via `gh` search (debounced): a GitHub search and local fzy
+    // disagree on what matches, so don't refine locally — show what `gh` returns.
+    localFilter: false,
+    fetch: (query, onResult, onError) => {
+      searchPullRequests(
+        root,
+        query,
+        (prs) => {
+          onResult(
+            prs.map((pr): PrPickerItem => ({
+              value: String(pr.number), // PR number is unique
+              text: `#${pr.number} ${pr.title}`,
+              pr,
+            })),
+          );
+        },
+        'all',
+        (message) => onError(`Could not list pull requests: ${message}`),
+      );
+    },
+    formatMain: (item, positions) => {
+      const { pr } = item as PrPickerItem;
+      const main = (pr ? stateGlyphMarkup(pr.state) : '') + proseMarkup(item.text, positions);
+      return pr && pr.author ? { main, detail: `@${pr.author}` } : { main };
+    },
+    onSelect: (_value, item) => {
+      const { pr } = item as PrPickerItem;
+      if (!pr) return;
+      checkoutPullRequest(root, pr.number, (ok, stderr) => {
+        if (ok) quilx.notifications.addSuccess(`Switched to PR #${pr.number}`);
+        else quilx.notifications.addError('Could not switch to pull request', { detail: stderr.trim() });
+      });
+    },
   });
 }

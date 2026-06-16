@@ -17,7 +17,7 @@
 import { Gdk, Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { monospaceFontCss } from '../../fonts.ts';
+import { fonts } from '../../fonts.ts';
 import { regexSpans, replacementSpans, applySpans } from './regexHighlight.ts';
 import type { SourceView } from '../../gi.ts';
 import type { Point } from '../../text/Point.ts';
@@ -35,26 +35,39 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 // Floating "elevated surface": use the theme's popover background so it reads as
 // a panel over the editor, not part of it.
-const POPOVER_BG = theme.ui.popoverBg ?? theme.ui.bg ?? '#1e1e1e';
-// Match the editor: the search/replace inputs use the OS monospace font.
-const MONO = monospaceFontCss();
+const POPOVER_BG = theme.ui.popoverBg;
+// Match the editor: the search/replace inputs use the app monospace font (from
+// the central, reactive font store).
+fonts.monospace('#SearchBar entry > text');
 
 const ENTRY_WIDTH_CHARS = 28;
 const COUNT_WIDTH_CHARS = 11; // fits the longest label ("Bad pattern") so it never reflows
+
+// Search history is global (shared across editors/tabs, like vim's), most-recent
+// first, deduped, and capped. Recalled in the bar with Ctrl+P / Ctrl+N.
+const SEARCH_HISTORY: string[] = [];
+const SEARCH_HISTORY_MAX = 100;
+function recordSearchHistory(query: string): void {
+  if (!query) return;
+  const existing = SEARCH_HISTORY.indexOf(query);
+  if (existing !== -1) SEARCH_HISTORY.splice(existing, 1);
+  SEARCH_HISTORY.unshift(query);
+  if (SEARCH_HISTORY.length > SEARCH_HISTORY_MAX) SEARCH_HISTORY.length = SEARCH_HISTORY_MAX;
+}
 
 addStyles(`
   #SearchBar {
     background-color: ${POPOVER_BG};
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
-    box-shadow: 0px 6px 20px 8px rgba(0,0,0,0.18);
+    box-shadow: 0px 6px 20px 8px ${theme.ui.shadow};
     padding: 4px;
   }
   #SearchBar entry { min-height: 0; }
-  #SearchBar entry > text { ${MONO.declarations} }
+  /* #SearchBar entry > text font comes from the font store — see fonts.monospace(...). */
   #SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
   /* Bad regex: tint the entry text. */
-  #SearchBar entry.invalid > text { color: #e01b24; }
+  #SearchBar entry.invalid > text { color: ${theme.ui.error}; }
   #SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
   /* Linked search+replace inputs: square the touching corners and merge the
      shared border so the two entries read as one control. */
@@ -98,6 +111,14 @@ export class SearchBar {
 
   private shown = false;
 
+  // History navigation: `historyIndex` is -1 while showing live (typed) text, or
+  // an index into SEARCH_HISTORY while recalling; `historyStash` holds the typed
+  // text so stepping back past the newest entry restores it. `applyingHistory`
+  // guards the `changed` handler from resetting the index during a recall.
+  private historyIndex = -1;
+  private historyStash = '';
+  private applyingHistory = false;
+
   constructor(host: Overlay, controller: SearchController, view: SourceView, options: SearchBarOptions = {}) {
     this.host = host;
     this.controller = controller;
@@ -106,6 +127,7 @@ export class SearchBar {
 
     this.searchEntry = this.makeEntry('Search');
     this.searchEntry.on('changed', () => {
+      if (!this.applyingHistory) this.historyIndex = -1; // manual edit leaves history recall
       this.render(this.controller.setQuery(this.searchEntry.getText()));
       this.refreshHighlight();
     });
@@ -162,6 +184,7 @@ export class SearchBar {
   /** Open the bar (focused) for a forward (`/`) or backward (`?`) search. */
   open(reverse = false): void {
     this.controller.start(reverse);
+    this.historyIndex = -1;
     this.shown = true;
     this.panel.setVisible(true);
     this.searchEntry.grabFocus();
@@ -180,6 +203,7 @@ export class SearchBar {
   private close(cancel: boolean): void {
     if (!this.shown) return;
     this.shown = false;
+    if (!cancel) recordSearchHistory(this.searchEntry.getText()); // commit the executed query
     const motion = this.motion;
     this.motion = null;
     this.panel.setVisible(false);
@@ -204,6 +228,21 @@ export class SearchBar {
   /** Whether the bar is currently open (so the editor can keep its active caret). */
   get isOpen(): boolean {
     return this.shown;
+  }
+
+  /** Step through the search history: `delta` +1 recalls older, -1 newer. Index
+   *  -1 is the live (typed) text, stashed when first stepping back into history. */
+  private recallHistory(delta: number): void {
+    if (SEARCH_HISTORY.length === 0) return;
+    const next = this.historyIndex + delta;
+    if (next < -1 || next >= SEARCH_HISTORY.length) return; // clamp at live text / oldest
+    if (this.historyIndex === -1) this.historyStash = this.searchEntry.getText();
+    this.historyIndex = next;
+    const text = next === -1 ? this.historyStash : SEARCH_HISTORY[next];
+    this.applyingHistory = true;
+    this.searchEntry.setText(text);
+    this.searchEntry.setPosition(-1); // caret to end
+    this.applyingHistory = false;
   }
 
   // --- widgets ---------------------------------------------------------------
@@ -279,6 +318,12 @@ export class SearchBar {
     keys.on('key-pressed', (keyval: number, _keycode: number, state: number) => {
       const shift = (state & Gdk.ModifierType.SHIFT_MASK) !== 0;
       const ctrl = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
+      if (ctrl && (keyval === Gdk.KEY_p || keyval === Gdk.KEY_n)) {
+        // Ctrl+P older, Ctrl+N newer — recall the search history.
+        if (keyval === Gdk.KEY_p) this.recallHistory(1);
+        else this.recallHistory(-1);
+        return true;
+      }
       if ((state & Gdk.ModifierType.ALT_MASK) !== 0) {
         if (keyval === Gdk.KEY_s) {
           this.cycleCase();

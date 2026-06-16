@@ -9,26 +9,41 @@
  * the candidate strings and an `onSelect` callback. Items may arrive
  * asynchronously via the returned handle's `setItems`.
  */
-import { Gdk, Gtk, Pango } from '../gi.ts';
+import { Gtk, Pango } from '../gi.ts';
+import { quilx } from '../quilx.ts';
 import { addStyles } from '../styles.ts';
-import { monospaceFontCss, uiFontFamily } from '../fonts.ts';
+import { fonts } from '../fonts.ts';
+import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
 import { theme } from '../theme/theme.ts';
 import { frecency } from '../util/Frecency.ts';
 
-const MONOSPACE = monospaceFontCss();
-// The proportional UI font, for the opt-in `.prose-entry` (CSS doesn't resolve
-// the `sans-serif` generic reliably, so a concrete family is used).
-const UI_FONT = uiFontFamily();
+// The picker card is monospace; the opt-in `.prose-entry` overrides to the UI
+// font. Both are registered with the central font store (so they follow the
+// system / configured font live) rather than baked into the static CSS below.
+fonts.monospace('#Picker');
+fonts.ui('#PickerEntry.prose-entry, #PickerEntry.prose-entry > text');
 
 const PICKER_WIDTH = 640;
 const PICKER_MAX_HEIGHT = 360;
 const MAX_RESULTS = 200;
+// Auto search-debounce: a dataset larger than this re-ranks on a delay (coalesce
+// keystrokes when fuzzy-ranking is costly); anything smaller filters instantly.
+const LARGE_DATASET = 2000;
+const LARGE_DATASET_DELAY_MS = 150; // GtkSearchEntry's own default
+// Debounce before re-running a `fetch` source (a remote/`gh` call is costly, so
+// coalesce keystrokes); local fuzzy filtering still runs instantly in between.
+const FETCH_DELAY_MS = 200;
+// Leading prompt slot (px): a fixed-width icon/spinner before the entry text,
+// shown for `fetch` pickers (spun while fetching) and any `promptIcon` picker.
+// The slot reserves its space even when empty so the spinner never shifts layout.
+const PROMPT_INSET = 11; // gap from the entry's left edge to the slot
+const PROMPT_SLOT = 16; // the icon/spinner square
+const PROMPT_GAP = 5; // gap from the slot to the entry text
 // Color of the matched characters. Sourced from the theme's accent foreground
-// (Zed's `text.accent`), with a blue fallback when the theme omits it. Baked
-// into Pango markup at row-build time, so it can't be a CSS variable (and Pango
-// can't gradient-fill text, so it's a solid color).
-export const HIGHLIGHT_COLOR = theme.ui.textAccent ?? '#05d6d9';
+// (Zed's `text.accent`). Baked into Pango markup at row-build time, so it can't
+// be a CSS variable (and Pango can't gradient-fill text, so it's a solid color).
+export const HIGHLIGHT_COLOR = theme.ui.textAccent;
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -41,8 +56,7 @@ addStyles(`
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
     background-color: var(--window-bg-color);
-    box-shadow: 0px 10px 33px 28px rgba(0,0,0,0.15);
-    ${MONOSPACE.declarations}
+    box-shadow: 0px 10px 33px 28px ${theme.ui.shadow};
   }
   #PickerEntry {
     padding: 0.5em 0.5em;
@@ -60,15 +74,23 @@ addStyles(`
     padding: 0;
     margin: 0;
   }
-  /* Opt-in sans entry (e.g. the resume picker, whose query is prose, not a path
-     or identifier). Overrides the card's inherited monospace family. */
-  #PickerEntry.prose-entry,
-  #PickerEntry.prose-entry > text {
-    font-family: "${UI_FONT}";
-  }
+  /* The opt-in prose-entry sans family (resume picker etc.) is applied via the
+     font store — see fonts.ui(...) above. */
   #PickerEntry > text {
     margin: 0;
     padding: 0;
+  }
+  /* Leading prompt slot (icon/spinner) overlaid on the entry's left inset; the
+     entry text is pushed right to clear it (reserved even when the slot is
+     empty, so toggling the spinner never shifts the text). */
+  #PickerPrompt {
+    margin-left: ${PROMPT_INSET}px;
+  }
+  #PickerEntry.has-prompt {
+    padding-left: 0;
+  }
+  #PickerEntry.has-prompt > text {
+    padding-left: ${PROMPT_INSET + PROMPT_SLOT + PROMPT_GAP}px;
   }
   #PickerList {
     border-radius: var(--popover-radius);
@@ -89,6 +111,12 @@ addStyles(`
   #PickerEmpty {
     padding: 0.5em 1em;
     opacity: 0.55;
+  }
+  /* An error from an async source (a failed fetch, or an explicit setError):
+     shown in place of the matches, tinted with the theme's error color. */
+  #PickerError {
+    padding: 0.5em 1em;
+    color: ${theme.ui.error};
   }
   /* The action row uses the current prompt; set it apart from the matches with a
      separator and the accent color. */
@@ -147,7 +175,9 @@ export interface PickerOptions {
   items?: Array<string | PickerItem>;
   /** Initial entry text (e.g. seed an action prompt with the editor selection). */
   query?: string;
-  onSelect: (value: string) => void;
+  /** Invoked with the chosen item's `value` (and the full item, for callers that
+   *  attach extra data to their items). */
+  onSelect: (value: string, item: PickerItem) => void;
   action?: PickerAction;
   /**
    * Show the `action` row only when the query matches no items (rather than
@@ -158,6 +188,57 @@ export interface PickerOptions {
   /** Render the search entry in a proportional (sans) font instead of the card's
    *  monospace — for pickers whose query is prose rather than a path/identifier. */
   proseEntry?: boolean;
+  /**
+   * Async candidate source. Called (debounced by `searchDelay`) whenever the
+   * query changes — and once on open — to fetch candidates for the current query
+   * (e.g. a `gh`/server search); the results replace the candidate pool. By
+   * default this is a "remote search + local refine" picker: local fuzzy
+   * filtering still runs on every keystroke over whatever pool is loaded, so
+   * typing stays responsive while fresh matches stream in. Set `localFilter:
+   * false` when the source already filters server-side and local fzy would fight
+   * it (e.g. `gh` search). The `onResult` callback is ignored if the picker has
+   * closed or a newer query superseded this call.
+   *
+   * Report a failure via the `onError` callback (or by throwing synchronously):
+   * the picker drops its loading state and shows the message in place of the
+   * matches. Like `onResult`, a stale/closed `onError` call is ignored.
+   */
+  fetch?: (
+    query: string,
+    onResult: (items: Array<string | PickerItem>) => void,
+    onError: (message: string) => void,
+  ) => void;
+  /**
+   * Whether to fuzzy-filter the pool locally as the user types (default true).
+   * Set false for a `fetch` source that filters server-side — the list then shows
+   * exactly what `fetch` returns, in order, refreshed (debounced) on each query
+   * change rather than refined locally in between.
+   */
+  localFilter?: boolean;
+  /**
+   * A Nerd Font glyph shown in a leading prompt slot before the entry text (e.g.
+   * a GitHub mark for the PR picker). For a `fetch` picker the slot doubles as
+   * the loading spinner's home, and the slot is reserved (so the spinner can
+   * appear without shifting layout) even when no `promptIcon` is given.
+   */
+  promptIcon?: string;
+  /**
+   * Start in a loading state: spin the prompt slot and show a "Loading…" row
+   * until content arrives. For a picker that opens immediately and fills in via
+   * the handle's `setItems` (which clears loading) — e.g. a one-shot async fetch.
+   * `setLoading` on the handle toggles it explicitly.
+   */
+  loading?: boolean;
+  /**
+   * Debounce (ms) before a typed query triggers the costly step — re-filtering a
+   * local list, or re-running a `fetch` source. Defaults automatically: a
+   * `fetch` picker debounces by `FETCH_DELAY_MS`; otherwise it's chosen from the
+   * dataset size — instant (`0`) for small lists, a modest debounce for large
+   * ones. Set explicitly to override — e.g. `0` to force an always-responsive
+   * picker regardless of size. (With `fetch`, local fuzzy filtering is always
+   * instant; this only debounces the remote call.)
+   */
+  searchDelay?: number;
   /**
    * Override the markup of a (non-`display`) row, given the item and its
    * matched-char positions (into `item.text`). Return either a single markup
@@ -203,13 +284,46 @@ export interface FormattedRow {
 }
 
 export interface PickerHandle {
-  /** Replace the candidate list (e.g. once an async scan completes). */
+  /** Replace the candidate list (e.g. once an async scan completes). Clears the
+   *  loading state. */
   setItems(items: Array<string | PickerItem>): void;
+  /** Toggle the loading state (spinner + "Loading…" row) explicitly. */
+  setLoading(loading: boolean): void;
+  /** Show an error message in place of the matches (e.g. an async load failed),
+   *  or clear it by passing `null`. Also clears the loading state. */
+  setError(message: string | null): void;
   close(): void;
 }
 
 function normalizeItem(item: string | PickerItem): PickerItem {
   return typeof item === 'string' ? { value: item, text: item } : item;
+}
+
+// List navigation goes through the app's command/keymap system rather than a
+// private key controller: each picker registers `core:*` commands on its panel
+// (see `openPicker`), and this once-registered keymap binds the keystrokes to
+// them, scoped to `#Picker`. The KeymapManager's capture-phase controller on the
+// window sees these before the focused entry, so Down/Up/Tab/Escape drive the
+// list instead of moving the entry cursor or walking the focus chain. alt-j/alt-k
+// mirror Down/Up for home-row navigation while typing; Tab / shift-tab cycle like
+// Down / Up. Enter stays on the entry's `activate` signal (see `openPicker`).
+let pickerKeymapRegistered = false;
+function registerPickerKeymapOnce(): void {
+  if (pickerKeymapRegistered) return;
+  pickerKeymapRegistered = true;
+  quilx.keymaps.add('picker', {
+    '#Picker': {
+      down: 'core:down',
+      KP_Down: 'core:down',
+      tab: 'core:down',
+      'alt-j': 'core:down',
+      up: 'core:up',
+      KP_Up: 'core:up',
+      'shift-tab': 'core:up',
+      'alt-k': 'core:up',
+      escape: 'core:cancel',
+    },
+  });
 }
 
 export function openPicker(options: PickerOptions): PickerHandle {
@@ -228,6 +342,59 @@ export function openPicker(options: PickerOptions): PickerHandle {
   entry.setName('PickerEntry');
   entry.addCssClass('has-text-input'); // release the `space` leader so it types
   if (options.proseEntry) entry.addCssClass('prose-entry');
+
+  // Leading prompt slot: a fixed-width icon/spinner overlaid on the entry's left
+  // inset. Present for `fetch` (async) pickers — which spin it while fetching —
+  // any picker with a `promptIcon`, and any picker that starts in a `loading`
+  // state. The icon and spinner share one slot and toggle (only one shows at a
+  // time); the slot reserves its width regardless, so the spinner appearing never
+  // shifts the entry text.
+  let entryHost: InstanceType<typeof Gtk.Widget> = entry;
+  let promptSpinner: InstanceType<typeof Gtk.Spinner> | null = null;
+  let promptGlyph: InstanceType<typeof Gtk.Label> | null = null;
+  if (options.fetch || options.promptIcon || options.loading) {
+    entry.addCssClass('has-prompt');
+    const slot = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    slot.setName('PickerPrompt');
+    slot.setHalign(Gtk.Align.START);
+    slot.setValign(Gtk.Align.CENTER);
+    slot.setSizeRequest(PROMPT_SLOT, PROMPT_SLOT);
+    if (options.promptIcon) {
+      promptGlyph = iconLabel(options.promptIcon);
+      promptGlyph.setHexpand(true);
+      promptGlyph.setOpacity(0.7); // muted, like a search-entry's icon
+      slot.append(promptGlyph);
+    }
+    promptSpinner = new Gtk.Spinner();
+    promptSpinner.setHexpand(true);
+    promptSpinner.setVisible(false);
+    slot.append(promptSpinner);
+    const overlay = new Gtk.Overlay();
+    overlay.setChild(entry);
+    overlay.addOverlay(slot);
+    entryHost = overlay;
+  }
+  // Whether async content is still loading: spins the prompt slot (hiding the
+  // static glyph) and shows a "Loading…" placeholder row instead of "No entries".
+  let isLoading = false;
+  const setLoading = (loading: boolean) => {
+    isLoading = loading;
+    if (!promptSpinner) return;
+    promptSpinner.setVisible(loading);
+    if (loading) promptSpinner.start();
+    else promptSpinner.stop();
+    promptGlyph?.setVisible(!loading);
+  };
+  setLoading(Boolean(options.loading));
+
+  // An error from an async source (failed fetch / explicit setError). When set it
+  // replaces the matches with a tinted message row; cleared whenever a fresh
+  // fetch or `setItems` brings in new content.
+  let error: string | null = null;
+  const setError = (message: string | null) => {
+    error = message;
+    if (message !== null) setLoading(false); // an error supersedes loading
+  };
 
   const listBox = new Gtk.ListBox();
   listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
@@ -248,11 +415,26 @@ export function openPicker(options: PickerOptions): PickerHandle {
   panel.setValign(Gtk.Align.START);
   panel.setMarginTop(48);
   panel.setSizeRequest(PICKER_WIDTH, -1);
-  panel.append(entry);
+  panel.append(entryHost);
   panel.append(scrolled);
   panel.overflow = Gtk.Overflow.HIDDEN;
 
   let items = (options.items ?? []).map(normalizeItem);
+
+  // Set the entry's debounce: an explicit `searchDelay` wins; otherwise a `fetch`
+  // source debounces the remote call, and a plain local picker picks from the
+  // dataset size (instant for small lists, debounced for large ones). Re-run when
+  // `setItems` swaps the dataset (e.g. an async scan resolves).
+  const applySearchDelay = () => {
+    const auto = options.fetch
+      ? FETCH_DELAY_MS
+      : items.length > LARGE_DATASET
+        ? LARGE_DATASET_DELAY_MS
+        : 0;
+    entry.setSearchDelay(options.searchDelay ?? auto);
+  };
+  applySearchDelay();
+
   // The currently displayed matches, parallel to the leading rows in the list
   // box, so a row can be mapped back to its item by index.
   let results: PickerItem[] = [];
@@ -260,6 +442,9 @@ export function openPicker(options: PickerOptions): PickerHandle {
   // non-empty; checked in `choose` to run the action instead of selecting.
   let actionRow: InstanceType<typeof Gtk.ListBoxRow> | null = null;
   let closed = false;
+  // The picker's `core:*` command bundle, registered on the panel below and torn
+  // down here so a dismissed picker leaves no dangling commands.
+  let commandsSub: { dispose(): void } | null = null;
 
   // Remember whatever held focus before the picker grabbed it, so that
   // dismissing without a selection returns focus there (e.g. back to the editor)
@@ -269,6 +454,8 @@ export function openPicker(options: PickerOptions): PickerHandle {
   const close = (restoreFocus = true) => {
     if (closed) return;
     closed = true;
+    commandsSub?.dispose();
+    promptSpinner?.stop();
     host.removeOverlay(panel);
     if (restoreFocus) previousFocus?.grabFocus();
   };
@@ -280,8 +467,31 @@ export function openPicker(options: PickerOptions): PickerHandle {
       listBox.remove(child);
       child = next;
     }
+
+    // An async error replaces the whole list with a single non-interactive
+    // message row; reset the navigable state so move/choose have nothing to act on.
+    if (error !== null) {
+      results = [];
+      actionRow = null;
+      const label = new Gtk.Label({ xalign: 0 });
+      label.setText(error);
+      label.setName('PickerError');
+      const row = new Gtk.ListBoxRow();
+      row.setChild(label);
+      row.setActivatable(false);
+      row.setSelectable(false);
+      listBox.append(row);
+      return;
+    }
+
     const query = entry.getText();
-    const ranked = rank(query, items, weight).slice(0, MAX_RESULTS);
+    // Local fuzzy filter, unless the caller filters server-side (`localFilter:
+    // false`) — then show the fetched pool as-is, in order, with no highlights.
+    const ranked = (
+      options.localFilter === false
+        ? items.map((item) => ({ item, positions: [] as number[] }))
+        : rank(query, items, weight)
+    ).slice(0, MAX_RESULTS);
     results = ranked.map((match) => match.item);
     for (const match of ranked) {
       const row = new Gtk.ListBoxRow();
@@ -307,7 +517,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
       // No rows to select — show a non-interactive message row instead so the
       // card doesn't collapse to just the entry.
       const label = new Gtk.Label({ xalign: 0 });
-      label.setText(items.length === 0 ? 'No entries' : 'No matches');
+      label.setText(isLoading ? 'Loading…' : items.length === 0 ? 'No entries' : 'No matches');
       label.setName('PickerEmpty');
       const row = new Gtk.ListBoxRow();
       row.setChild(label);
@@ -333,7 +543,41 @@ export function openPicker(options: PickerOptions): PickerHandle {
     if (item === undefined) return;
     if (frecencyNs) frecency.record(frecencyNs, item.value);
     close(false);
-    options.onSelect(item.value);
+    options.onSelect(item.value, item);
+  };
+
+  // A `fetch` source re-queries its candidate pool (debounced) as the query
+  // changes; a generation counter drops a stale response if a newer query (or a
+  // close) superseded it. When refining locally, fuzzy filtering also runs
+  // instantly in between (wired to the immediate `changed` signal below).
+  let fetchGeneration = 0;
+  const runFetch = () => {
+    if (!options.fetch) return;
+    const generation = ++fetchGeneration;
+    setError(null); // a fresh attempt clears a previous failure
+    setLoading(true);
+    // A stale/closed response (result or error) is dropped; only the latest
+    // query's outcome updates the picker.
+    const isCurrent = () => !closed && generation === fetchGeneration;
+    const fail = (message: string) => {
+      if (!isCurrent()) return;
+      setError(message);
+      rebuild();
+    };
+    try {
+      options.fetch(
+        entry.getText(),
+        (next) => {
+          if (!isCurrent()) return;
+          setLoading(false);
+          items = next.map(normalizeItem);
+          rebuild();
+        },
+        fail,
+      );
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const move = (delta: number) => {
@@ -347,48 +591,61 @@ export function openPicker(options: PickerOptions): PickerHandle {
     if (row) listBox.selectRow(row);
   };
 
-  entry.on('search-changed', rebuild);
+  if (options.fetch) {
+    // Remote-search picker: re-fetch on the debounced signal. When also refining
+    // locally, filter the current pool instantly on each keystroke (the immediate
+    // `changed` signal); a server-filtered picker skips that and just waits for
+    // the fetch.
+    if (options.localFilter !== false) entry.on('changed', rebuild);
+    entry.on('search-changed', runFetch);
+  } else {
+    entry.on('search-changed', rebuild);
+  }
   entry.on('activate', () => choose(null));
   listBox.on('row-activated', (row) => choose(row));
 
-  // Drive list navigation from a capture-phase controller so Up/Down/Tab move
-  // the selection instead of the entry's cursor or the focus chain.
-  const keys = new Gtk.EventControllerKey();
-  keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
-  keys.on('key-pressed', (keyval: number) => {
-    switch (keyval) {
-      case Gdk.KEY_Escape:
-        close();
-        return true;
-      case Gdk.KEY_Down:
-      case Gdk.KEY_KP_Down:
-      case Gdk.KEY_Tab:
-        move(1);
-        return true;
-      case Gdk.KEY_Up:
-      case Gdk.KEY_KP_Up:
-      case Gdk.KEY_ISO_Left_Tab:
-        move(-1);
-        return true;
-      default:
-        return false;
-    }
+  // Drive list navigation through the command/keymap system: register the
+  // picker's `core:*` commands on the panel (named `#Picker`, so the keymap from
+  // `registerPickerKeymapOnce` resolves Down/Up/Tab/Escape/alt-j/alt-k to them).
+  // The KeymapManager's capture-phase controller runs ahead of the focused entry,
+  // so these keys move the selection rather than the entry's cursor.
+  registerPickerKeymapOnce();
+  commandsSub = quilx.commands.add(panel, {
+    'core:down': () => move(1),
+    'core:up': () => move(-1),
+    'core:cancel': () => close(),
   });
-  panel.addController(keys);
 
-  // Dismiss when focus leaves the card (e.g. clicking back into the editor).
+  // Dismiss when focus leaves the card (click elsewhere, tab away, window blur):
+  // close and hand focus back to wherever it came from. `leave` fires only when
+  // focus exits the panel *and* its descendants, so moving between the entry and
+  // the list rows doesn't trigger it; the entry is focused below, so the first
+  // event is an `enter`, never a spurious `leave`. `close()` restores
+  // `previousFocus` by default and is idempotent (the focus restore can re-enter).
   const focus = new Gtk.EventControllerFocus();
-  // focus.on('leave', () => close());
+  focus.on('leave', () => close());
   panel.addController(focus);
 
   host.addOverlay(panel);
   if (options.query) entry.setText(options.query); // prefill (e.g. a seeded prompt)
   rebuild();
+  runFetch(); // populate a `fetch` source for the initial (possibly empty) query
   entry.grabFocus();
 
   return {
     setItems(next: Array<string | PickerItem>) {
       items = next.map(normalizeItem);
+      setError(null); // content arrived — clear any prior failure
+      setLoading(false); // content arrived
+      applySearchDelay(); // dataset size may have crossed the auto threshold
+      if (!closed) rebuild();
+    },
+    setLoading(loading: boolean) {
+      setLoading(loading);
+      if (!closed) rebuild(); // refresh the placeholder row's text
+    },
+    setError(message: string | null) {
+      setError(message);
       if (!closed) rebuild();
     },
     close,

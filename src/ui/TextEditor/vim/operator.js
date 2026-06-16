@@ -631,6 +631,35 @@ class YankDiffHunk extends Yank {
   }
 }
 
+// ReplaceWithRegister (port of romgrk/replace.vim): replace the target with the
+// content of the register (`s{motion}`, `ss` current line, `S` = whole line). The
+// replaced text is discarded (blackhole) rather than yanked, so the register used
+// for the replacement keeps its content across repeated replaces. (Named to avoid
+// the vmp `Replace` transform-string operator, which reads a char instead.)
+class ReplaceWithRegister extends Operator {
+  trackChange = true
+  stayOptionName = 'stayOnDelete'
+
+  mutateSelection (selection) {
+    const value = this.vimState.register.get(null, selection)
+    let text = value && value.text != null ? value.text : ''
+    const linewise = this.target.wise === 'linewise' || this.isMode('visual', 'linewise')
+    // Match the register's shape to a linewise target (and vice-versa) so the line
+    // structure stays intact.
+    if (linewise) {
+      if (!text.endsWith('\n')) text += '\n'
+    } else if (text.endsWith('\n')) {
+      text = text.replace(/\n+$/, '')
+    }
+    selection.insertText(text)
+  }
+}
+
+class ReplaceLineWithRegister extends ReplaceWithRegister {
+  wise = 'linewise'
+  target = 'MoveToRelativeLine'
+}
+
 // -------------------------
 // [ctrl-a]
 class Increase extends Operator {
@@ -989,6 +1018,8 @@ const __operations = {
   YankLine,
   YankToLastCharacterOfLine,
   YankDiffHunk,
+  ReplaceWithRegister,
+  ReplaceLineWithRegister,
   Increase,
   Decrease,
   IncrementNumber,

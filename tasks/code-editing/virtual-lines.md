@@ -5,6 +5,15 @@ text, full virtual lines, inline widgets — on our GtkSourceView 5.20 editor. T
 is a cross-cutting capability several features want; diff is just one. All APIs
 below were probed and **exist in our node-gtk build**.
 
+> **Update — the general virtual-line / inline-widget mechanism (§2 below) is
+> chosen and planned in [inline-widgets.md](inline-widgets.md).** The exact APIs
+> are re-confirmed in `Gtk-4.0.gir`: `gtk_text_view_add_overlay`/`move_overlay`/
+> `remove` take **buffer coordinates** (so the overlay child scrolls with the text
+> natively — no manual scroll-follow), `get_iter_location` returns the anchor's
+> rect in buffer coords, and `Gtk.TextTag.pixels-below-lines`/`pixels-above-lines`
+> reserve the gap. First consumers: the diff fold placeholder (replacing the
+> synthesized `FoldRow`) and a see-definition peek.
+
 ## Features that want it
 
 - **LSP inlay hints** — parameter names / inferred types, mid-line and end-of-line.

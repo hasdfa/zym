@@ -1,7 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeDiff, computeIntraLineDiff, splitLines, splitSides } from './DiffModel.ts';
+import { computeDiff, computeIntraLineDiff, foldUnchanged, splitLines, splitSides } from './DiffModel.ts';
+
+// Build a context/change line list from a compact spec: '.' is context, 'x' a
+// change. Each char becomes one line (text = its 0-based index) of that kind.
+const lineList = (spec: string) =>
+  [...spec].map((c, i) => ({ kind: c === '.' ? 'context' : 'added', text: String(i) }));
 
 const kinds = (text: string, other: string) => computeDiff(text, other).lines.map((l) => `${l.kind[0]}:${l.text}`);
 
@@ -127,5 +132,40 @@ describe('splitSides', () => {
     const { left, right } = sides('a\nc', 'a\nb\nc');
     assert.deepEqual(left.map((l) => l.kind), ['context', 'filler', 'context']);
     assert.deepEqual(right.map((l) => l.kind), ['context', 'added', 'context']);
+  });
+});
+
+describe('foldUnchanged', () => {
+  it('collapses a long interior context run, anchoring below the kept context', () => {
+    // change, 10 context, change → keep 3 lines each side, hide the middle 4.
+    const folds = foldUnchanged(lineList('x..........x'));
+    assert.deepEqual(folds, [
+      { anchorRow: 3, placement: 'below', bodyStart: 4, bodyEnd: 7, count: 4 },
+    ]);
+  });
+
+  it('leaves a short context run alone', () => {
+    assert.deepEqual(foldUnchanged(lineList('x....x')), []);
+  });
+
+  it('folds a leading context run, anchoring above the first visible line', () => {
+    const folds = foldUnchanged(lineList('......x'));
+    assert.deepEqual(folds, [
+      { anchorRow: 3, placement: 'above', bodyStart: 0, bodyEnd: 2, count: 3 },
+    ]);
+  });
+
+  it('folds a trailing context run to the end of the file', () => {
+    const folds = foldUnchanged(lineList('x......'));
+    assert.deepEqual(folds, [
+      { anchorRow: 3, placement: 'below', bodyStart: 4, bodyEnd: 6, count: 3 },
+    ]);
+  });
+
+  it('folds the two side-by-side panes identically (so they stay aligned)', () => {
+    const ctx = Array.from({ length: 10 }, (_, i) => `c${i}`).join('\n');
+    const { left, right } = splitSides(computeDiff(`OLD\n${ctx}`, `NEW\n${ctx}`));
+    assert.deepEqual(foldUnchanged(left), foldUnchanged(right));
+    assert.equal(foldUnchanged(left).length, 1);
   });
 });

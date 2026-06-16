@@ -17,7 +17,7 @@ import {
   Vte,
   type VteTerminal,
 } from '../gi.ts';
-import { monospaceFontDescription } from '../fonts.ts';
+import { fonts } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
@@ -114,7 +114,11 @@ export class Terminal {
     terminal.setScrollOnOutput(false);
     terminal.setScrollOnKeystroke(true);
     terminal.setMouseAutohide(true);
-    terminal.setFont(monospaceFontDescription());
+    terminal.setFont(fonts.monospaceDescription());
+    // Follow the app monospace font live (VTE takes a description, not CSS); drop
+    // the subscription when the widget is destroyed.
+    const unsubscribe = fonts.onChange(() => terminal.setFont(fonts.monospaceDescription()));
+    terminal.on('destroy', () => unsubscribe());
 
     // The shell/agent's reported title (xterm OSC 0/2). VTE 0.78+ deprecated the
     // `window-title-changed` signal in favor of termprops, so the title arrives as
@@ -177,6 +181,11 @@ export class Terminal {
   /** The tab/window title for this terminal (the shell's reported title). */
   get title(): string {
     return this._title;
+  }
+
+  /** The spawned child's process id, once spawned (null before / on failure). */
+  get pid(): number | null {
+    return this._pid;
   }
 
   focus() {

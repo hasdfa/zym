@@ -120,16 +120,32 @@ light up automatically (the registry resolves the fence name → the new grammar
 
 Highlight tags aren't foreground-only any more. A capture can carry font styling
 via `theme.syntaxStyle` (`bold`/`italic`/`underline`/`strikethrough`/`scale`/
-`background`), applied alongside its color when `SyntaxController` builds the tag
-(`tagProps`). Headings are **bold + larger, scaled per level** (h1 1.5, h2 1.2,
+`background`). Headings are **bold + larger, scaled per level** (h1 1.5, h2 1.2,
 h3+ 1.1) via per-level `@markup.heading.1`…`.6` captures; their color inherits
 `markup.heading` by `resolveColor`'s longest-prefix fallback. The theme adapter
 fills these from Zed's `font_weight`/`font_style` plus built-in `markup.*` defaults
 (`theme.ts` `applyMarkupDefaults`), with colors reused from the loaded palette so
 they stay theme-consistent. This is what makes Markdown *look* like Markdown — it
-benefits every language, Markdown is just the forcing function. (One-winner-per-run
-still holds: nested styles don't combine — the innermost capture's tag wins; an
-acceptable edge case.)
+benefits every language, Markdown is just the forcing function.
+
+**Stacking (multiple attributes compose).** Styles are split into separate
+GtkTextTags — one foreground-color tag per capture, plus shared *decoration* tags
+(bold/italic/underline/strikethrough, one per distinct scale, one per distinct
+background) — applied additively. The pure `computeStyleRuns` (`highlightRuns.ts`,
+unit-tested) flattens overlapping captures into runs, with two deliberately
+different rules:
+
+  - **Foreground color**: innermost capture wins *with suppression* — a narrower
+    uncolored token shows the default foreground rather than bleeding a broader
+    `@function` color (standard tree-sitter behavior). Ties break toward the later
+    capture, so injected layers win.
+  - **Decorations** layer: background and scale take the innermost capture that
+    *has* one (so a code span's background survives under recolored tokens, and a
+    heading keeps its scale over inline code inside it); bold/italic/… are additive
+    (nested `***bold italic***` is both).
+
+So nested emphasis composes and a fenced/inline code background can sit under
+syntax-colored tokens — neither was possible with the old one-tag-per-run sweep.
 
 **`scale` + vertical motion (soft-wrap):** `scale` is the one style attribute that
 changes a line's height, so a scaled heading line is taller than the unscaled `##`
@@ -146,17 +162,35 @@ cursor glyph height would under/overshoot. Soft-wrap itself is on by default
 
 The plugin's queries (`queries/markdown*/highlights.scm`) cover: headings
 (`@markup.heading.1`…`.6`, bold + per-level scale), **strong**/*emphasis*/~~strikethrough~~
-(`@markup.strong`/`.emphasis`/`.strikethrough`), inline + fenced code
-(`@markup.raw`, background), links/images (`@markup.link[.url]`, underlined),
+(`@markup.strong`/`.emphasis`/`.strikethrough`), inline code (`@markup.raw`,
+text background) and fenced/indented code (`@markup.raw.block`, full-line
+`paragraph-background` under the injected token colors), links/images
+(`@markup.link[.url]`, underlined),
 lists + GFM task checkboxes, block quotes, tables (header + delimiter row), and
 inline HTML tags (`@tag`). Front matter has an injection rule ready
 (`(minus_metadata) @content` → `yaml`); it lights up once a YAML plugin
 contributes a `yaml` grammar (the Markdown plugin deliberately doesn't own YAML).
 
+## Performance: viewport-scoped + incremental
+
+Highlighting is limited to the **visible range** (± `VIEWPORT_MARGIN_LINES`) when
+the view is realized, so large files only pay for what's on screen:
+
+- `refresh()` (on edit) reparses incrementally (as before) then calls `repaint()`;
+  the scroll handler (debounced) calls `repaint()` with **no** reparse, reusing the
+  cached buffer text.
+- `repaint()` queries the base grammar over the visible `startPoint`/`endPoint`
+  (tree-sitter limits captures to the range) and **skips injections entirely
+  off-screen** — the big win for Markdown, which has an `inline` node per paragraph
+  but only parses the visible ones.
+- Tags are cleared over the previously-painted *line* span before each paint
+  (`paintedExtent`), so scrolling can't leave stale highlighting behind.
+- Not realized (initial load / headless) → whole buffer, as before.
+
 ## Later
 
 - Recursion is bounded at `MAX_INJECTION_DEPTH`; markdown needs depth 1.
 - Combined injections (parse all same-language fences as one tree) — today each
-  region parses separately. Fine for correctness; an optimization for huge files.
+  region parses separately. Fine for correctness; a further optimization.
 - A general `injections.scm` loader (in addition to the TS-declared form) if a
   vendored grammar ships one we'd rather use verbatim.

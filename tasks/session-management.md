@@ -43,7 +43,7 @@ These were settled up front and shape everything below:
   (a list of *workspaces* with one active — see below), so adding the active-root
   switch later is a runtime change, not a format migration. The target model is
   agents.md's "the window holds the active root; viewing an agent in another
-  worktree switches the active root (FileTree, GitRepo, BranchButton, title)" — i.e.
+  worktree switches the active root (FileTree, GitRepo, GitBranchButton, title)" — i.e.
   **one active root at a time, switchable**, not several folders shown at once.
 - **Sync `Fs` at startup/save is fine.** The "no node I/O on the main path" rule
   is about async `child_process`/promises starved by the GLib loop; `config/load.ts`
@@ -161,7 +161,7 @@ interface SessionState {
 label. The MVP always writes a single workspace and `activeWorkspace: 0`; the
 runtime carries no root-switch yet. Restoring just rebuilds `workspaces[active]`.
 Layering multi-root on later means: keep more than one workspace, and let the
-active-root switch swap which one drives `FileTree`/`GitRepo`/`BranchButton`/title —
+active-root switch swap which one drives `FileTree`/`GitRepo`/`GitBranchButton`/title —
 no format change.
 
 `SessionManager` resolves the path
