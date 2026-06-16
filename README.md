@@ -1,7 +1,11 @@
-# quilx
 
-**neovim meets agent workflow. Native GTK 4 — no Electron. Node.js
-under the hood — the full npm ecosystem.**
+<h1 align="center">
+  quilx
+</h1>
+
+<p align="center">
+  <b>neovim meets agent workflow. Native GTK 4 — no Electron. Node.js under the hood — the full npm ecosystem.</b>
+</p>
 
 A keyboard-driven, Vim-style code editor for the Linux desktop, with `claude`
 and other coding agents living right inside the workbench — each tracked live,
@@ -11,18 +15,11 @@ so you always know which agent is working, waiting, or done.
 
 ## Highlights
 
-- ⌨️ **Vim-style modal editing** with a status line for the command bar (`:`,
-  `/`) and a pending-command preview (e.g. `2dw`)
-- 🤖 **Embedded coding agents** — run `claude` and friends in the workbench,
-  with a live status list and a fuzzy quick-switcher
-- 🪟 **Built for the keyboard** — a `Space`-leader scheme, `Ctrl+*` shortcuts,
-  and Vim-style window splits, all fully rebindable
-- 🎨 **Native GNOME look** — Adwaita light/dark schemes that follow the system
-  preference, with a one-click dark-mode toggle
-- ✨ **Editor essentials** — syntax highlighting with automatic language
-  detection, a minimap gutter, and native Open / Save / Save-As dialogs
-- 🔔 **Notifications** surfaced as transient toasts and kept in a persistent
-  session log
+- ⌨️ **Vim beyond its best**: the `vim-mode-plus` plugin ported from Atom — so good it's better than the original. Multi-cursor, occurences, text objects, operators, and more (target.vim, leap.nvim, etc).
+- 🤖 **Embedded coding agents** (well at least `claude` for now) — a workbench conceived so you work alongside your minions.
+- 🪟 **Built for simplicity** — a `space`-leader scheme (thanks Spacemacs) and fuzzy finders for everything.
+- 🎨 **Native GNOME look** — Adwaita with simple theming support.
+- ✨ **Editor essentials** — LSP, tree-sitter syntax highlighting, file tree, git integration, and more.
 
 Jump to the details: [Keybindings](#keybindings) ·
 [Notifications](#notifications) · [Agents](#agents) ·
@@ -55,24 +52,32 @@ regex in the current file.
 ![Project-wide ripgrep picker with live results](img/demo-ripgrep-picker.png)
 ![In-buffer regex search and replace](img/demo-search-regex.png)
 
-### Project sidebar
-
-A file tree and a live git status view sit side by side in the left dock.
-
-![File tree in the sidebar](img/demo-sidebar-files.png)
-![Git status view listing staged and unstaged changes](img/demo-sidebar-git.png)
-
 ### Git & GitHub
 
 Open pull requests, watch CI checks, and create or track PRs for the current
 branch — all from inside the editor.
 
-![Pull request picker listing open PRs](img/demo-github-pr-branch-picker.png)
+Checkout a pull request branch without leaving your editor. Filter as if you were on GitHub.
+
 ![Pull request picker filtered by author](img/demo-github-pr-branch-filter.png)
+
+Create a pull request in a single click.
+
 ![Creating a pull request from the current branch](img/demo-github-pr-create.png)
-![Current branch linked to a merged pull request](img/demo-github-pr-merged.png)
-![CI check picker with passing and failing checks](img/demo-github-ci.png)
+
+See CI checks live status, and jump to any run log:
+
 ![CI checks all passing for a branch](img/demo-github-ci-success.png)
+
+### Project sidebar
+
+A file tree and a live git status view sit side by side in the left dock.
+
+<p>
+  <img src="img/demo-sidebar-files.png" alt="File tree in the sidebar" width="49%" />
+  <img src="img/demo-sidebar-git.png" alt="Git status view listing staged and unstaged changes" width="49%" />
+</p>
+
 
 ## Requirements
 
@@ -80,80 +85,29 @@ branch — all from inside the editor.
 - GTK 4, libadwaita, and GtkSourceView 5 with their GObject-Introspection
   typelibs installed (`Gtk-4.0`, `Adw-1`, `GtkSource-5`)
 
-## Setup
+## Install
 
-`node-gtk` is consumed as a local linked dependency (`link:../node-gtk`), so a
-checkout of [node-gtk](https://github.com/romgrk/node-gtk) must sit alongside
-this project:
-
-```text
-src/
-├── node-gtk/
-└── quilx/
 ```
-
-Then install:
-
-```sh
-pnpm install
+pnpm add -g github:romgrk/quilx
 ```
 
 ## Usage
 
 ```sh
-pnpm start [file]
-# or
-node src/index.ts [file]
+quilx [file]
 ```
-
-With no argument, quilx opens its own source. In the editor, normal mode is
-active by default — press `i` to insert, `Esc` to return to normal mode, and use
-`:w`, `:e <path>`, `:q`, `:wq` as you would in Vim.
 
 ## Keybindings
 
-quilx is organized around a **`Space` leader**: press `Space`, then a mnemonic.
-The leader is available globally; in text-input contexts (entries, the terminal,
-the editor in insert mode) `Space` is released so it still types literally.
-
-| Keys                | Action                      |
-| ------------------- | --------------------------- |
-| `Space` `w`         | Save the current editor     |
-| `Space` `o`         | Open the file picker        |
-| `Space` `Space`     | Open the command picker     |
-| `Space` `q`         | Quit                        |
-| `Space` `t`         | New terminal                |
-| `Space` `a` `n`     | New agent                   |
-| `Space` `a` `a`     | Switch agent (picker)       |
-| `Space` `n`         | Toggle the notification log |
-| `Space` `,`         | Open preferences            |
-| `Space` `g` `l`/`p` | Git pull / push             |
-
-Window splits (Vim-style, `Ctrl+W` prefix):
-
-| Keys                  | Action                              |
-| --------------------- | ----------------------------------- |
-| `Ctrl+W` `v` / `s`    | Split right / down                  |
-| `Ctrl+W` `h/j/k/l`    | Focus the split left/down/up/right  |
-| `Ctrl+W` `w`          | Cycle through splits                |
-| `Ctrl+W` `c`          | Close the active split              |
-
-Tabs: `Alt+,` / `Alt+.` switch to the previous / next tab; `Alt+1`…`Alt+8` jump
-to a tab, `Alt+9` to the last.
-
-File tree: `j` / `k` move, `l` / `h` expand / collapse, `,` toggles untracked
-files, `.` toggles hidden files.
-
-Notification log (while focused): `c` clears the history, `q` hides the panel.
+quilx is organized around a **`space` leader**: press `space`, then a mnemonic. Press `space ?` to see the keymap panel.
 
 Bindings live in [`src/keymaps/default.ts`](src/keymaps/default.ts). To override
 them, drop a `~/.config/quilx/keymap.json` (the same
 `{ "selector": { "keystroke": "command" } }` shape) — user bindings take priority
 over the defaults.
 
-Selectors target a **quilx component** by name with an `#id` (e.g. `#AppWindow`,
-`#Panel`, `#FileTree`), and a raw GTK widget by its type tag (e.g. `GtkText`,
-`GtkSourceView.insert-mode`).
+Selectors target a **quilx component** by name with an `#id`: `#AppWindow`,
+`#Panel`, `#FileTree`, `#TextEditor.insert-mode`, etc.
 
 A binding's value may also pass arguments to its command, using
 `{ "command": "...", "args": [...] }` instead of a bare string. For example,
@@ -214,15 +168,13 @@ When the agent process exits the pane is *not* torn down — a "process exited"
 notice is printed and the agent stays listed, flipped to an `exited` status, so
 you can read its final output.
 
-- `Space` `a` `n` launches a new agent (`agent:new`). The argv comes from the
-  `agent.command` config (default `['claude']`).
 - `Space` `a` `a` opens the agent quick-switcher (`agent:switch`), a fuzzy picker
   over the running agents. Typing a prompt and choosing **Start agent** launches a
   fresh agent seeded with that prompt.
+- `Space` `a` `n` launches a new agent (`agent:new`). The argv comes from the
+  `agent.command` config (default `['claude']`).
 
-Running agents appear in the **Agents list** in the left dock, below the file
-tree. Each row shows the agent's title and a status dot that tracks its state
-live:
+Running agents appear in the workbench list:
 
 | Indicator      | Meaning                          |
 | -------------- | -------------------------------- |
