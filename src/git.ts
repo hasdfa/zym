@@ -92,6 +92,15 @@ export interface GitRepo {
    * the busy transitions and again when the refreshed state lands.
    */
   run(args: string[], onDone?: (ok: boolean) => void): void;
+  /**
+   * Mark the repo busy while a repo-mutating operation that does *not* go through
+   * `run()` is in flight — a `gh` command (e.g. `gh pr checkout`), a branch switch,
+   * a stash, a commit. Returns an `end()` to call on completion, which clears the
+   * busy state and forces a refresh (so the UI reflects whatever the op changed,
+   * immediately rather than waiting on the HEAD monitor / poll). `isBusy()` is true
+   * and `onChange` fires for the duration, exactly like `run()`.
+   */
+  beginOperation(): () => void;
   /** Subscribe to branch / working-tree / busy changes. Returns an unsubscribe fn. */
   onChange(callback: () => void): () => void;
   /** Re-check the working tree now (and fire `onChange` if it moved) instead of
@@ -194,6 +203,18 @@ class CliGitRepo implements GitRepo {
       this.pollOnce();
       onDone?.(ok);
     });
+  }
+
+  beginOperation(): () => void {
+    this.enterBusy();
+    let ended = false;
+    return () => {
+      if (ended) return; // idempotent — safe to call from an error path too
+      ended = true;
+      this.lastSignature = ''; // the op may have moved anything — force a rebuild
+      this.pollOnce();
+      this.leaveBusy();
+    };
   }
 
   // --- subscription + lifecycle ----------------------------------------------

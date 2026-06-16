@@ -211,6 +211,27 @@ Not done: `#123`-in-text / branch-name / selection detection (offer *Open #123*)
   buffer against the HEAD blob (debounced, generation-guarded against stale async
   results).
 
+## Busy/refresh coordination for non-`git` mutations
+
+`GitRepo.run()` marks the repo busy + refreshes for `git` subcommands
+(fetch/pull/push). But several mutations run through `git/cli.ts` or `git/github.ts`
+directly and so **bypassed** the busy state (no branch-indicator spinner) and the
+explicit refresh. `GitRepo.beginOperation()` closes that: it returns an `end()`
+token — `isBusy()` is true and `onChange` fires for the duration, and `end()`
+forces an immediate refresh.
+
+- **Done:** `gh pr checkout` (the PR picker) wraps the checkout in
+  `beginOperation()` — the indicator now spins through the (multi-second, fork-
+  fetching) checkout and refreshes on completion instead of waiting on the HEAD
+  monitor. The picker takes the `GitRepo` for this.
+- **Also fixed:** `GithubButtons.refresh()` resolved the GitHub remote (two sync
+  `git` spawns) on *every* `onChange`; now cached once per session.
+- **Also done:** `BranchPicker` (switch/create/delete/merge/rename), `StashPicker`
+  (pop/apply/drop), and `AppWindow`'s `stashChanges`/`finishCommit` now wrap their
+  `git/cli.ts` mutations in `beginOperation()` too — every repo mutation (git or gh)
+  now spins the indicator and refreshes on completion. The pickers take the
+  `GitRepo`; BranchPicker's old `report()` helper became `runOp(git, success, run)`.
+
 ## Config: default git workflow (done)
 
 Config keys registered in `src/quilx.ts` (same mechanism as `editor.*`), read via
@@ -397,6 +418,8 @@ bounded by the 64 MiB `maxBuffer`.
 - [x] Diff gutter in the editor (added/modified/deleted per line)
 - [ ] In-panel diffs / hunk-level staging
 - [ ] More git diff sources (staged / commit / PR) — see code-editing/diff.md
+- [x] `GitRepo.beginOperation()` busy/refresh token; `gh pr checkout` wrapped; GithubButtons remote-resolve cached — see "Busy/refresh coordination" above
+- [x] Wrapped BranchPicker / StashPicker / commit / stash-push mutations in `beginOperation()` too — every repo mutation now spins + refreshes
 - [x] Mitigate the Ggit/node-gtk leak in `src/git.ts` (cache repo + memoize reads) — see "Known issue" above
 - [x] Migrate off Ggit → CLI-backed `GitRepo` (see "Migration design" above; node-gtk#446):
   - [x] `src/git/status.ts`: pure `parseStatus` (porcelain v2) + `parseNumstat` + `parseLsFiles`, with unit tests (`status.test.ts`, 14)

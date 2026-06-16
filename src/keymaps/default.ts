@@ -37,6 +37,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space a r': 'agent:resume', // resume the current stopped agent in place
   'space a R': 'agent:resume-conversation', // resume a past conversation (picker)
   'space a c': 'agent:continue', // continue the latest conversation in this folder
+  'space a b': 'agent:branch', // branch the current agent into a new forked agent
   // Send editor context to an agent: the second key picks selection (s) or file
   // (f); the third picks the current agent (repeat), one from the picker (a), or
   // a new agent with an editable prompt (n).
@@ -171,6 +172,7 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     ...LIST_NAV, // j/k, g g, G, l (l reveals the selected agent's terminal)
     r: 'agent:restart', // restart the selected agent (resume its conversation)
     R: 'agent:rename', // rename the selected agent
+    b: 'agent:branch', // branch the selected agent into a new forked agent
     x: 'agent:stop', // stop the selected agent's process (it stays listed, restartable)
     'd d': 'agent:close', // close the selected agent (terminate if running, then remove it)
     o: 'agent:open-changes', // open the files the selected agent has edited

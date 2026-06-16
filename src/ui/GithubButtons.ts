@@ -30,6 +30,7 @@ import {
   fetchPullRequest,
   fetchDefaultBranch,
   createPullRequestWeb,
+  type GithubRepo,
   type PrState,
   type CiStatus,
 } from '../git/github.ts';
@@ -107,6 +108,11 @@ export class GithubButtons {
   // When there's no PR, the PR segment becomes a "create PR" affordance on a
   // non-default branch; the click handler branches on this.
   private prMode: 'view' | 'create' = 'view';
+  // The GitHub remote is stable for the session; resolving it shells out to git
+  // twice (`remote`, `remote get-url`), so do it once rather than on every
+  // git.onChange (which fires on every working-tree edit).
+  private githubRepo: GithubRepo | null = null;
+  private repoResolved = false;
   private prGeneration = 0;
   private ciTimer = 0;
   private readonly unsubscribe: () => void;
@@ -184,7 +190,13 @@ export class GithubButtons {
   // --- refresh ---------------------------------------------------------------
 
   private refresh(): void {
-    const repo = this.repoDir ? resolveGithubRepo(this.repoDir, this.remoteNames()) : null;
+    // Resolve the GitHub remote once (it doesn't change during a session); avoids
+    // two synchronous git spawns on every onChange.
+    if (!this.repoResolved) {
+      this.githubRepo = this.repoDir ? resolveGithubRepo(this.repoDir, this.remoteNames()) : null;
+      this.repoResolved = true;
+    }
+    const repo = this.githubRepo;
     if (!repo) {
       this.repoUrl = this.actionsUrl = this.issuesUrl = this.pullsUrl = null;
       this.prUrl = this.issueUrl = null;

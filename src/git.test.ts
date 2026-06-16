@@ -99,6 +99,33 @@ test('untracked insertions: text counted (incl. no trailing newline), binary →
   }
 });
 
+test('beginOperation toggles busy, notifies, and is idempotent', () => {
+  const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-op-'));
+  try {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: d });
+    const r = openGitRepo(d);
+    let notifications = 0;
+    const unsub = r.onChange(() => notifications++);
+
+    assert.equal(r.isBusy(), false);
+    const end = r.beginOperation();
+    assert.equal(r.isBusy(), true);
+    assert.ok(notifications >= 1, 'onChange fires on the busy transition');
+
+    end();
+    assert.equal(r.isBusy(), false);
+    const after = notifications;
+    end(); // idempotent — no further busy change/notify
+    assert.equal(r.isBusy(), false);
+    assert.equal(notifications, after);
+
+    unsub();
+    r.dispose();
+  } finally {
+    Fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('outside a repo: null/empty, never throws', () => {
   const plain = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-nogit-'));
   try {

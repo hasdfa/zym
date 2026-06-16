@@ -1230,7 +1230,11 @@ export class TextEditor {
       this.syntax.restyle(); // keep tree-sitter tag colors in sync with the scheme
     };
     apply();
+    // styleManager is the global Adw.StyleManager singleton; without disconnecting
+    // on teardown it would keep this editor (its buffer, tree-sitter tree, widgets)
+    // alive forever, leaking one whole editor per file ever opened.
     styleManager.on('notify::dark', apply);
+    this.root.on('destroy', () => styleManager.off('notify::dark', apply));
   }
 
   // --- File operations -------------------------------------------------------

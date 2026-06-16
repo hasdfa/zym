@@ -23,10 +23,11 @@ import {
   renameBranch,
   type GitDone,
 } from '../git/cli.ts';
+import type { GitRepo } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-export function openBranchPicker(host: Overlay, cwd: string): void {
+export function openBranchPicker(host: Overlay, cwd: string, git: GitRepo): void {
   const root = repoRoot(cwd);
   if (!root) {
     openPicker({
@@ -55,7 +56,7 @@ export function openBranchPicker(host: Overlay, cwd: string): void {
     },
     onSelect: (branch) => {
       if (branch === current) return; // already here — nothing to do
-      switchBranch(root, branch, report(`Switched to ${branch}`));
+      runOp(git, `Switched to ${branch}`, (done) => switchBranch(root, branch, done));
     },
     // Always offer to create the typed name off HEAD — shown after any matches
     // (whenever the query is non-empty), so it's available even when branches match.
@@ -63,28 +64,28 @@ export function openBranchPicker(host: Overlay, cwd: string): void {
       label: (query) => `Create branch: ${query.trim()}`,
       run: (query) => {
         const name = query.trim();
-        if (name) createBranch(root, name, report(`Created branch ${name}`));
+        if (name) runOp(git, `Created branch ${name}`, (done) => createBranch(root, name, done));
       },
     },
   });
 }
 
 /** Pick another branch (not the current one) to delete. */
-export function openDeleteBranchPicker(host: Overlay, cwd: string): void {
+export function openDeleteBranchPicker(host: Overlay, cwd: string, git: GitRepo): void {
   pickOtherBranch(host, cwd, 'Delete branch…', Icons.trash, (root, branch) =>
-    deleteBranch(root, branch, report(`Deleted branch ${branch}`)),
+    runOp(git, `Deleted branch ${branch}`, (done) => deleteBranch(root, branch, done)),
   );
 }
 
 /** Pick another branch to merge into the current one. */
-export function openMergeBranchPicker(host: Overlay, cwd: string): void {
+export function openMergeBranchPicker(host: Overlay, cwd: string, git: GitRepo): void {
   pickOtherBranch(host, cwd, 'Merge branch into current…', Icons.gitMerge, (root, branch) =>
-    mergeBranch(root, branch, report(`Merged ${branch}`)),
+    runOp(git, `Merged ${branch}`, (done) => mergeBranch(root, branch, done)),
   );
 }
 
 /** Rename the current branch: an entry-only picker whose action does the rename. */
-export function openRenameBranchPicker(host: Overlay, cwd: string): void {
+export function openRenameBranchPicker(host: Overlay, cwd: string, git: GitRepo): void {
   const root = repoRoot(cwd);
   if (!root) {
     openPicker({
@@ -108,7 +109,7 @@ export function openRenameBranchPicker(host: Overlay, cwd: string): void {
       label: (query) => `Rename to: ${query.trim()}`,
       run: (query) => {
         const name = query.trim();
-        if (name && name !== current) renameBranch(root, name, report(`Renamed to ${name}`));
+        if (name && name !== current) runOp(git, `Renamed to ${name}`, (done) => renameBranch(root, name, done));
       },
     },
   });
@@ -142,10 +143,14 @@ function pickOtherBranch(
   });
 }
 
-// Report a git result: success message, or an error with git's stderr.
-function report(success: string): GitDone {
-  return (ok, _stdout, stderr) => {
+// Run a branch mutation with busy/refresh coordination: mark the repo busy (so the
+// branch indicator spins), run it, then end the operation (forcing a refresh) and
+// report the result — success message, or an error with git's stderr.
+function runOp(git: GitRepo, success: string, run: (done: GitDone) => void): void {
+  const end = git.beginOperation();
+  run((ok, _stdout, stderr) => {
+    end();
     if (ok) quilx.notifications.addSuccess(success);
     else quilx.notifications.addError('Git operation failed', { detail: stderr.trim() });
-  };
+  });
 }

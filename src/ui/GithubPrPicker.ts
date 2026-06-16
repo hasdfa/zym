@@ -17,6 +17,7 @@ import { repoRoot } from '../git/cli.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { Icons } from './icons.ts';
 import { searchPullRequests, checkoutPullRequest, type GithubListItem, type PrState } from '../git/github.ts';
+import type { GitRepo } from '../git.ts';
 import { theme } from '../theme/theme.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -41,7 +42,7 @@ interface PrPickerItem extends PickerItem {
 }
 
 /** Pick a PR and switch to its branch (`gh pr checkout`). */
-export function switchToGithubPrPicker(host: Overlay, cwd: string): void {
+export function switchToGithubPrPicker(host: Overlay, cwd: string, git: GitRepo): void {
   const root = repoRoot(cwd);
   if (!root) {
     openPicker({
@@ -85,7 +86,12 @@ export function switchToGithubPrPicker(host: Overlay, cwd: string): void {
     onSelect: (_value, item) => {
       const { pr } = item as PrPickerItem;
       if (!pr) return;
+      // A `gh pr checkout` mutates the repo (switches branch, fetches forks) and
+      // can take seconds — mark the repo busy so the branch indicator spins, and
+      // refresh on completion rather than waiting on the HEAD monitor.
+      const end = git.beginOperation();
       checkoutPullRequest(root, pr.number, (ok, stderr) => {
+        end();
         if (ok) quilx.notifications.addSuccess(`Switched to PR #${pr.number}`);
         else quilx.notifications.addError('Could not switch to pull request', { detail: stderr.trim() });
       });

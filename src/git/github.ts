@@ -8,7 +8,7 @@
  * unauthenticated, or the branch has no PR.
  */
 import { execFile } from 'node:child_process';
-import { gitSync } from './cli.ts';
+import { currentBranch, gitSync } from './cli.ts';
 
 export interface GithubRepo {
   host: string; // always 'github.com' (GitHub.com only, for now)
@@ -312,13 +312,53 @@ export function fetchDefaultBranch(cwd: string, onDone: (branch: string | null) 
   );
 }
 
-/** Open the "create pull request" page in the browser for the current branch. */
+/** True when the current branch has an upstream tracking branch on a remote. */
+function hasUpstream(cwd: string): boolean {
+  try {
+    gitSync(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open the "create pull request" page in the browser for the current branch.
+ *
+ * `gh pr create --web` needs the branch to exist on the remote. When the branch
+ * has no upstream yet, push it (`git push -u origin <branch>`) first, then open
+ * the create-PR page.
+ */
 export function createPullRequestWeb(cwd: string, onDone: (ok: boolean, stderr: string) => void): void {
+  const openWeb = () =>
+    execFile(
+      'gh',
+      ['pr', 'create', '--web'],
+      { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+      (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
+    );
+
+  if (hasUpstream(cwd)) {
+    openWeb();
+    return;
+  }
+
+  const branch = currentBranch(cwd);
+  if (!branch) {
+    onDone(false, 'Cannot create a pull request from a detached HEAD.');
+    return;
+  }
   execFile(
-    'gh',
-    ['pr', 'create', '--web'],
+    'git',
+    ['push', '--set-upstream', 'origin', branch],
     { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
-    (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
+    (err, _stdout, stderr) => {
+      if (err) {
+        onDone(false, stderr?.trim() || `Could not push '${branch}' to origin.`);
+        return;
+      }
+      openWeb();
+    },
   );
 }
 
