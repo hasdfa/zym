@@ -26,7 +26,8 @@ import { FileTree } from './FileTree.ts';
 import { Panel, type PanelChild } from './Panel.ts';
 import { PanelGroup, type Direction, type RestoredChild } from './PanelGroup.ts';
 import { TextEditor } from './TextEditor/index.ts';
-import { buildDefinitionPeek } from './TextEditor/buildDefinitionPeek.ts';
+import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
+import { buildDefinitionPeek, wrapPeekBody, LIVE_PEEK_HEIGHT } from './TextEditor/buildDefinitionPeek.ts';
 import { Terminal } from './Terminal.ts';
 import { AgentTerminal, type AgentStatus, type AgentResume } from './AgentTerminal.ts';
 import { listAgentSessions, relativeTime } from '../agentSessions.ts';
@@ -131,6 +132,9 @@ export class AppWindow {
   // Editor tabs in the active workbench's center, mapped from their root widget so the
   // active child can be resolved back to its editor regardless of which split it's in.
   private readonly editors = new Map<Widget, TextEditor>();
+  // Open documents (text model + undo + file I/O), ref-counted. Editor tabs are views
+  // onto these — a split or the see-definition peek shares one document (A2 model).
+  private readonly documents = new DocumentRegistry();
   // Per-editor `quilx.workspace` registration (drives plugin `observeTextEditors`);
   // disposed when the tab closes (see disposeChild).
   private readonly editorRegistrations = new Map<Widget, Disposable>();
@@ -511,6 +515,13 @@ export class AppWindow {
       if (focus) existing.focus();
       return existing;
     }
+    return this.openFileViewIn(path, panel);
+  }
+
+  // Open a *new* view of `path` in `panel` — no reveal-if-open, so the same file can
+  // show in two panes as two views sharing one Document (live model + undo). Used by
+  // splitPane; openFileIn reveals instead.
+  private openFileViewIn(path: string, panel: Panel): TextEditor {
     const built = this.createEditorTab(path);
     const child = panel.add(built.widget, {
       title: built.title,
@@ -518,7 +529,7 @@ export class AppWindow {
     });
     built.onAttached?.(child);
     const editor = this.editors.get(built.widget)!;
-    if (focus) editor.focus();
+    editor.focus();
     return editor;
   }
 
@@ -528,14 +539,20 @@ export class AppWindow {
   // onActiveChanged resolves the active editor.
   private createEditorTab(path: string, cursor?: [number, number]): RestoredChild {
     let child: PanelChild | null = null;
+    // A ref-counted shared Document from the registry: the first view loads it; a
+    // second view (split / restore) attaches to the already-loaded shared model.
+    const { document, isNew } = this.documents.acquire(path);
     const editor = new TextEditor({
       onToast: (message) => this.toast(message),
       onClose: () => child?.close(),
       git: this.git, // draws the git change bar in the gutter
+      document,
+      onReleaseDocument: () => this.documents.release(document),
     });
     this.editors.set(editor.root, editor);
     this.participants.set(editor.root, quilx.session.registerParticipant(editor));
-    editor.loadFile(path);
+    if (isNew) editor.loadFile(path);
+    else editor.attachToLoadedDocument();
     if (cursor) editor.restoreCursor(cursor);
     // Announce to the workspace so editor-observing plugins (color preview, …) can
     // attach; registered after load so their first pass sees the file's content.
@@ -1560,6 +1577,24 @@ export class AppWindow {
     }
     const target = await quilx.lsp.goto(editor.lsp, 'definition');
     if (!target) return;
+
+    // If the definition's file is already open, peek a *live* read-only view onto its
+    // shared Document — edits in the open file show in the peek and vice versa.
+    const openDoc = this.documents.find(target.path);
+    if (openDoc) {
+      this.documents.acquire(target.path); // hold a ref so closing the source tab won't dispose it
+      const peekEditor = new TextEditor({
+        document: openDoc,
+        onReleaseDocument: () => this.documents.release(openDoc),
+        peek: true,
+      });
+      peekEditor.revealPeekRow(target.point.row);
+      const { widget, height } = wrapPeekBody(target, peekEditor.root, LIVE_PEEK_HEIGHT, () => editor.closePeek());
+      editor.showPeek({ widget, height });
+      return;
+    }
+
+    // Otherwise fall back to a read-only snapshot slice read from disk.
     let content: string;
     try {
       content = Fs.readFileSync(target.path, 'utf8');
@@ -2089,7 +2124,9 @@ export class AppWindow {
   private splitPane(direction: Direction) {
     const path = this.activeEditor?.currentFile ?? null;
     const pane = this.workbench.center.split(direction); // the new empty pane becomes active
-    if (path) this.openFileIn(path, pane); // opens into (and focuses) the new pane
+    // A second *view* of the same file (shared Document/model), not a reveal — so a
+    // split shows it side by side with independent cursors / scroll / folds.
+    if (path) this.openFileViewIn(path, pane);
     else this.focusActivePane();
   }
 

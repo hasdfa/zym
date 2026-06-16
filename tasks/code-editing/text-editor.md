@@ -232,8 +232,10 @@ Option C gate before committing to any rewrite. Related friction evidence:
 
 ## Document-model direction (A2): own the model, keep per-view GtkSourceViews
 
-*(Decided to prototype, 2026-06-16, after the document-registry work hit the
-"everything is shared across views" wall above.)*
+*(Decided 2026-06-16 after the document-registry work hit the "everything is shared
+across views" wall above. **Implemented** on `prototype/document-model`: a validated
+POC (`src/poc/document-model.ts`) then the full integration — see "Implementation"
+at the end of this section.)*
 
 A **third path** between Option A (one shared buffer, emulate everything per view)
 and Option C (own the whole widget): keep GtkSourceView as the **renderer**, but make
@@ -292,10 +294,33 @@ the headless-model-buffer + mirror, validating the three hard things:
 3. **Propagation perf** is acceptable (typing + paste latency with 2–3 mirrors).
 
 What stays regardless: the `DocumentRegistry`, `Document`, multi-host/active-view
-routing, ref-counting, and the peek/split entry points (all on the
-`refactor/document-registry` branch). Easiest first proof: convert the **read-only
-peek** to a one-way-synced separate buffer (no undo, no bidirectional) — immediate
-native folding/decorations, validates the rendering win cheaply.
+routing, ref-counting, and the peek/split entry points.
+
+### Implementation (`prototype/document-model`)
+
+The POC (`src/poc/document-model.ts`, 16/16 assertions, ~0.02 ms/edit) validated the
+three gates, then the full integration landed:
+
+- **`Document`** — the headless model `GtkSource.Buffer` (text + undo authority,
+  `setEnableUndo(true)`) + per-view buffers via `createView()` (`setEnableUndo(false)`).
+  A native edit in a view forwards to the model; the model's change signal mirrors it to
+  the other views (reentrancy-guarded by an `origin`/`suppress` pair). Owns the ported
+  file I/O, disk-watching, modified-state, and the **document-level LSP** — one
+  `didOpen`/`didChange`/`didClose` driven off the model (the insert/delete signals carry
+  the deltas), no per-view gating.
+- **Undo trick** — `EditorModel` gained a `setUndoTarget()` seam: buffer-only editors
+  keep native buffer undo; document-backed views route `undo`/`redo`/`transact` to the
+  `Document` (the model's one undo stack), which propagates to every view. So `u` in one
+  split pane reverts in both.
+- **`EditorModel` rendering is untouched** — native cursor / selection / current-line /
+  bracket / search / folds per view (each buffer is its own). `ViewDecorations` and the
+  Phase-2 emulated-cursor machinery from the shared-buffer attempt are **not used**.
+- **`TextEditor`** is a view onto a `Document` (`createView()` buffer, file I/O /
+  modified / title / LSP delegated, `DocumentHost` for the active-view reactions);
+  **`AppWindow` split** opens a real 2nd view sharing the `Document`; the **live
+  see-definition peek** (`peek: true`) is a read-only 2nd view on the open document.
+- **Per-view folding works** — the wall the shared buffer hit. 576/576 tests; verified
+  in-app (split: independent cursors/folds + shared edits/undo; live peek).
 
 ## Constraints carried from the research (cited; mark-uncertain noted)
 
