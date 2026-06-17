@@ -472,14 +472,16 @@ export class Document {
       quilx.notifications.addWarning(`${name} was deleted on disk`, {
         detail: path,
         dismissable: true,
-        onDidClick: () => this.save(),
+        // No default (body-click) action: saving requires the explicit button,
+        // so an accidental click on the toast can't overwrite the file.
         buttons: [{ text: 'Save', onDidClick: () => this.save() }],
       });
     } else {
       quilx.notifications.addWarning(`${name} changed on disk`, {
         detail: path,
         dismissable: true,
-        onDidClick: () => this.loadFile(path),
+        // No default (body-click) action: reloading requires the explicit
+        // button, so an accidental click can't discard in-memory changes.
         buttons: [{ text: 'Reload', onDidClick: () => this.loadFile(path) }],
       });
     }
