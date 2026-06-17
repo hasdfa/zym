@@ -24,6 +24,9 @@ export class InlayHintController {
   private timer = 0;
   private seq = 0; // drops stale async responses
   private disposed = false;
+  // Last-fetched hints (MODEL lines), kept so a fold toggle can re-place them at the
+  // shifted view lines without a new LSP round-trip.
+  private lastHints: Array<{ line: number; label: string }> = [];
 
   // Maps a MODEL (file) line to the VIEW line it renders on — folds collapse text so
   // the two diverge; identity when not provided.
@@ -60,10 +63,25 @@ export class InlayHintController {
     const token = ++this.seq;
     const hints = await quilx.lsp.inlayHints(doc);
     if (this.disposed || token !== this.seq) return; // superseded by a newer request
+    this.lastHints = hints;
+    this.apply();
+  }
 
+  /** Re-place the last-fetched hints at the current view lines — no LSP round-trip.
+   *  Called when folds open/close (which shifts the view lines under the model hints). */
+  rerender(): void {
+    if (!this.disposed) this.apply();
+  }
+
+  /** Group cached hints per (model) line, translate to view lines, render end-of-line. */
+  private apply(): void {
+    if (quilx.config.get('editor.inlayHints') === false) {
+      this.annotations.clear();
+      return;
+    }
     // One annotation per line: join that line's hint labels (e.g. `a: b: number`).
     const byLine = new Map<number, string[]>();
-    for (const hint of hints) {
+    for (const hint of this.lastHints) {
       const labels = byLine.get(hint.line);
       if (labels) labels.push(hint.label);
       else byLine.set(hint.line, [hint.label]);

@@ -23,7 +23,6 @@ import { theme } from '../../theme/theme.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot } from '../../git.ts';
-import { isLineFolded } from '../../syntax/syntax-controller.ts';
 import type { GitRepo } from '../../git.ts';
 
 type ChangeKind = 'added' | 'modified' | 'removed';
@@ -56,22 +55,21 @@ class GitGutterRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)
   kindByLine!: Map<number, ChangeKind>;
   stagedLines!: Set<number>;
+  viewToModel!: (line: number) => number;
   buffer!: any;
 
   queryData(_lines: any, line: number) {
-    // Blank for changed lines hidden inside a fold (so bars don't pile up at the
-    // collapsed position).
-    if (isLineFolded(this.buffer, line)) {
-      this.setMarkup(' ', -1);
-      return;
-    }
-    const kind = this.kindByLine?.get(line);
+    // The diff is keyed by MODEL/file lines; translate this view line (folds collapse
+    // text, so view lines diverge). A folded body's changed lines have no view line of
+    // their own → their bars simply don't show (no pile-up at the collapsed position).
+    const modelLine = this.viewToModel(line);
+    const kind = this.kindByLine?.get(modelLine);
     if (kind) {
       this.setMarkup(`<span foreground="${COLORS[kind]}">${BAR}</span>`, -1);
       return;
     }
     // Staged-only lines (no overlapping unstaged change) read blue.
-    if (this.stagedLines?.has(line)) {
+    if (this.stagedLines?.has(modelLine)) {
       this.setMarkup(`<span foreground="${STAGED_COLOR}">${BAR}</span>`, -1);
       return;
     }
@@ -114,15 +112,28 @@ export class GitGutter {
   private cachedRoot: string | null = null;
   private cachedRootPath: string | null = null;
 
-  constructor(view: SourceView, getPath: () => string | null, getText: () => string, gitRepo: GitRepo) {
+  // Maps a VIEW line to its MODEL (file) line — folds collapse text so they diverge.
+  // Identity when not provided (no folds). The diff is keyed by model/file lines, so
+  // the gutter (queried per view line) translates back through this.
+  private readonly viewToModelLine: (line: number) => number;
+
+  constructor(
+    view: SourceView,
+    getPath: () => string | null,
+    getText: () => string,
+    gitRepo: GitRepo,
+    viewToModelLine?: (line: number) => number,
+  ) {
     this.view = view;
     this.getPath = getPath;
     this.getText = getText;
     this.git = gitRepo;
+    this.viewToModelLine = viewToModelLine ?? ((line) => line);
 
     this.renderer = new GitGutterRenderer();
     (this.renderer as any).kindByLine = this.kindByLine;
     (this.renderer as any).stagedLines = this.stagedLines;
+    (this.renderer as any).viewToModel = this.viewToModelLine;
     (this.renderer as any).buffer = (view as any).getBuffer();
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
 

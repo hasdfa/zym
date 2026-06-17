@@ -206,6 +206,9 @@ export class SyntaxController {
   private foldHost: FoldHost | null = null;
   // Active fold handles, one per collapsed region (bodies live only in the model).
   private readonly activeFolds: any[] = [];
+  // Notified after any fold open/close so the editor re-places fold-dependent
+  // decorations (diagnostics squiggles, inlay hints) at the shifted view lines.
+  private readonly foldsChangedHandlers: Array<() => void> = [];
   // Highlights the bracket under the cursor and its match; cursor-driven, managed
   // separately from the parse-driven highlight tags (not in `allTags`).
   private readonly bracketMatchTag: any;
@@ -903,7 +906,16 @@ export class SyntaxController {
     // The collapse/expand edited the view buffer → a reparse is scheduled (rebuilds
     // the fold state); repaint now for responsiveness.
     (this.view as any).queueDraw();
+    this.emitFoldsChanged();
     return revealed;
+  }
+
+  /** Subscribe to fold open/close — the editor re-renders fold-dependent decorations. */
+  onFoldsChanged(handler: () => void): void {
+    this.foldsChangedHandlers.push(handler);
+  }
+  private emitFoldsChanged(): void {
+    for (const handler of this.foldsChangedHandlers) handler();
   }
 
   private markOffset(mark: any): number {
@@ -1082,6 +1094,7 @@ export class SyntaxController {
     this.activeFolds.length = 0;
     for (const region of this.foldsByHeaderLine.values()) { region.folded = false; region.handle = undefined; }
     (this.view as any).queueDraw();
+    this.emitFoldsChanged();
   }
 
   /** Drop fold handles an enclosing fold has subsumed (their marks are gone), so the

@@ -573,6 +573,13 @@ export class TextEditor implements DocumentHost {
       (line) => this.document.viewLineForModelLine(this.buffer, line),
     );
     quilx.config.observe('editor.inlayHints', () => void this.inlayHints.refresh());
+    // A fold open/close shifts the view lines under the model-positioned decorations
+    // (diagnostic squiggles + gutter + error lens, inlay hints) — re-place them at the
+    // new view positions (cached, no LSP round-trip).
+    this.syntax.onFoldsChanged(() => {
+      this.diagnostics?.render();
+      this.inlayHints?.rerender();
+    });
     // Signature help is a per-view concern (the active view shows the card while
     // typing); the document drives didChange, so this only triggers signature help.
     this.editorModel.onDidChangeText((event) => {
@@ -704,11 +711,15 @@ export class TextEditor implements DocumentHost {
     this.gitGutter = new GitGutter(
       this.view,
       () => this._currentFile,
-      () => this.editorModel.getText(),
+      () => this.document.getText(), // diff against the MODEL (full file), not the collapsed view
       this.gitRepo,
+      (line) => this.document.modelLineForViewLine(this.buffer, line),
     );
-    // Let the vim layer reach the gutter's hunk ranges (for `]h`/`[h`).
-    this.editorModel.setHunkProvider(() => this.gitGutter?.hunkStartRows() ?? []);
+    // Let the vim layer reach the gutter's hunk ranges (for `]h`/`[h`). Hunk rows are
+    // MODEL/file rows; translate to view rows (folded ones collapse onto one line).
+    this.editorModel.setHunkProvider(() => [
+      ...new Set((this.gitGutter?.hunkStartRows() ?? []).map((r) => this.document.viewLineForModelLine(this.buffer, r))),
+    ]);
     // Live updates: re-diff the buffer (debounced) on every edit.
     this.editorModel.onDidChangeText(() => this.gitGutter?.scheduleUpdate());
     this.root.on('destroy', () => this.gitGutter?.dispose());
@@ -727,6 +738,9 @@ export class TextEditor implements DocumentHost {
   // hunk op, then run `action` with the gutter and the cursor's buffer row.
   private withHunkGutter(action: (gutter: GitGutter, row: number) => void): void {
     if (!this.gitGutter) return;
+    // Hunks are computed in MODEL/file rows; reveal folds so view==model and both the
+    // lookup-by-cursor-row and any in-buffer revert act on the right lines.
+    this.syntax.unfoldAll();
     if (this.isModified()) this.save();
     action(this.gitGutter, this.editorModel.getCursorBufferPosition().row);
   }
