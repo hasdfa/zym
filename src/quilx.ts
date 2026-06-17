@@ -166,6 +166,14 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     description:
       'Automatically install a missing language server (into a quilx-managed dir) when a file needs it — shown as an info notification — instead of prompting with an Install button.',
   },
+  'diagnostics.statusSeverities': {
+    type: 'array',
+    default: ['error', 'warning', 'info', 'hint'],
+    description:
+      'Which diagnostic severities the header status pill counts, in any subset of ' +
+      '"error", "warning", "info", "hint". Counts always display in severity order; ' +
+      'severities left out here still appear in the Diagnostics panel.',
+  },
 };
 
 class Quilx {

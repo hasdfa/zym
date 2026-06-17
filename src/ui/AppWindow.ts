@@ -30,7 +30,8 @@ import { buildDefinitionPeek, wrapPeekBody, LIVE_PEEK_HEIGHT } from './TextEdito
 import { Terminal } from './Terminal.ts';
 import { AgentTerminal, type AgentStatus, type AgentResume } from './AgentTerminal.ts';
 import { listAgentSessions, relativeTime } from '../agentSessions.ts';
-import { WorkbenchList } from './WorkbenchList.ts';
+import { WorkbenchList, PROJECT_NAME } from './WorkbenchList.ts';
+import { WorkbenchStatus } from './WorkbenchStatus.ts';
 import { GitPanel } from './GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons, iconLabel } from './icons.ts';
@@ -156,6 +157,9 @@ export class AppWindow {
   private quitting = false;
   // The most recently focused agent — the default target for send-to-agent.
   private lastAgent: AgentTerminal | null = null;
+  // The agent the user is currently looking at (its tab is the active one), so its
+  // status counts as seen — clears the sidebar attention blink (see updateViewedAgent).
+  private viewedAgent: AgentTerminal | null = null;
   private readonly toastOverlay: ToastOverlay;
   // Content-area overlay: hosts the active workbench (swapped on agent switch) and
   // the notification toasts — floats below the header bar, right of the sidebar.
@@ -185,6 +189,8 @@ export class AppWindow {
   private readonly github: GithubService;
   // Header-bar links to the repository / PR / issue on GitHub.
   private readonly githubButtons: GithubButtons;
+  // Right-aligned header cluster: diagnostics pill + LSP status indicator.
+  private readonly workbenchStatus: WorkbenchStatus;
   // Last-seen upstream "behind" count, to fire the pull notification only on the
   // transition into being behind (not on every status poll while behind).
   private lastBehind = 0;
@@ -237,6 +243,10 @@ export class AppWindow {
       github: this.github,
       cwd: this.workbench.cwd,
       onShowChecks: () => openGithubCIChecksPicker(this.overlay, this.workbench.cwd),
+    });
+    this.workbenchStatus = new WorkbenchStatus({
+      onOpenDiagnostics: () => this.toggleDiagnosticsPanel(),
+      onOpenLog: () => this.toggleNotificationLog(),
     });
 
     // The workbench list lives in its own full-height sidebar at the very left of the
@@ -321,6 +331,7 @@ export class AppWindow {
 
     this.window = new Adw.ApplicationWindow({ application: app });
     this.window.setName('AppWindow'); // selector identity for command/keymap rules
+    this.window.setTitle(PROJECT_NAME); // OS taskbar label — the project, not the bare "node"
     this.window.setDefaultSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
     this.window.setContent(this.overlay);
     // Track the focused widget per panel tab so each panel can restore focus to
@@ -426,6 +437,7 @@ export class AppWindow {
     this.upstreamUnsub?.();
     this.branchButton.dispose();
     this.githubButtons.dispose();
+    this.workbenchStatus.dispose();
     this.github.dispose();
     // Release every workbench's pooled GitRepo (refcounted — a shared root is only
     // disposed when its last workbench releases it).
@@ -650,6 +662,7 @@ export class AppWindow {
     this.terminals.set(agent.root, agent);
     const child = workbench.center.pinChild(agent.root, { title: agentTabTitle(agent) });
     this.agentChildren.set(agent.root, child);
+    this.updateViewedAgent(); // the agent's tab is now the active one — mark it viewed
     // A running agent reports as modified, so it's consulted before exit.
     this.participants.set(agent.root, quilx.session.registerParticipant(agent));
     // The agent's tab carries a status glyph prefix + attention highlight.
@@ -797,6 +810,21 @@ export class AppWindow {
   // viewing), not focus.
   private updateAgentHighlight(): void {
     this.workbenchList.selectAgent(this.workbench.owner === 'user' ? null : this.workbench.owner);
+  }
+
+  // Tell each agent whether the user is currently looking at it — only the agent
+  // whose tab is the active child of the active workbench counts as viewed. Viewing
+  // acknowledges its status, clearing the sidebar attention blink; switching away
+  // from a still-`waiting` agent lets it blink again to call the user back.
+  private updateViewedAgent(): void {
+    const active = this.activeAgent;
+    const viewed = active && this.workbench.center.activePanel.activeChild === active.root
+      ? active
+      : null;
+    if (viewed === this.viewedAgent) return;
+    this.viewedAgent?.setViewed(false);
+    this.viewedAgent = viewed;
+    viewed?.setViewed(true);
   }
 
   /** The agent whose workbench is active, if any. */
@@ -1114,6 +1142,7 @@ export class AppWindow {
     this.contentOverlay.setChild(workbench.root); // show this workbench
     this.workbenchList.selectAgent(workbench.owner === 'user' ? null : workbench.owner);
     this.rebindGitChrome(); // header branch/GitHub now reflect this workbench's root
+    this.updateViewedAgent();
     this.focusActivePane();
   }
 
@@ -1197,6 +1226,7 @@ export class AppWindow {
   // editor widget itself, so this only re-evaluates the agent highlight.
   private onActiveTabChanged() {
     this.updateAgentHighlight();
+    this.updateViewedAgent();
     // Tab add/close/switch and split changes all route through here — a good,
     // cheap signal to (debounced-)persist the session.
     this.sessionController?.scheduleAutosave();
@@ -1211,8 +1241,15 @@ export class AppWindow {
     header.packStart(this.branchButton.root);
     header.packStart(this.githubButtons.root);
 
-    // The project name and the unsaved-changes marker both live in the sidebar
-    // (WorkbenchList) header now, so the center header bar has no title widget.
+    // Per-workbench health signals (diagnostics + LSP) sit at the right edge,
+    // opposite the git/GitHub controls.
+    header.packEnd(this.workbenchStatus.root);
+
+    // The project name and the unsaved-changes marker live in the sidebar
+    // (WorkbenchList) header, so the centre title slot would otherwise fall back
+    // to the window title ("node"/project name) — duplicative. Clear it with an
+    // empty widget so the bar shows only its packed controls.
+    header.setTitleWidget(new Gtk.Box());
     return header;
   }
 

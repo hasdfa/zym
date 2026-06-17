@@ -26,6 +26,13 @@ focus-driven `.active-empty` outline, `.is-panel-child` invariant, the tab-bar
 rules (`requireTabBar`, non-expanding tabs), and the zombie-safe dock-close rule
 (bottom docks veto-hide; side docks per-tab close + re-root-before-re-add).
 
+### Styling
+
+See [styling.md](styling.md) for how UI styling works: GTK CSS (`addStyles` /
+`styles.set`) vs. inline Pango markup, the shared `window` CSS custom properties
+(`--popover-radius`, `--font-size-small`, …), the one-secondary-text-size font
+rule, `theme.ui` color tokens, Nerd Font icons, and `.linked` button groups.
+
 ### Plugin system
 
 See [plugins.md](plugins.md) for the architecture (Atom-inspired). A plugin is a

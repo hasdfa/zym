@@ -31,6 +31,7 @@ export const Icons = {
   stash: String.fromCodePoint(0xf187), // nf-fa-archive — git stash
   search: String.fromCodePoint(0xf002), // nf-fa-search — magnifying glass
   symbol: String.fromCodePoint(0xea8b), // nf-cod-symbol_namespace — "{}" go-to-symbol
+  server: String.fromCodePoint(0xf233), // nf-fa-server — language-server status
   sidebar: String.fromCodePoint(0xebf5), // nf-cod-layout_sidebar_left — sidebar toggle
 } as const;
 

@@ -162,6 +162,12 @@ interface ResolvedServer {
   primary: boolean;
 }
 
+/** A running server's lifecycle state, for the header LSP indicator. */
+export interface ServerStatus {
+  name: string;
+  state: 'starting' | 'ready' | 'failed';
+}
+
 export class LspManager {
   readonly diagnostics: DiagnosticsStore;
   private enabled = true;
@@ -176,6 +182,8 @@ export class LspManager {
   private readonly reportedMissing = new Set<string>();
   // Server names with an install currently in flight (so we don't install twice).
   private readonly installing = new Set<string>();
+  // Per-server lifecycle state for the header LSP indicator, keyed like `servers`.
+  private readonly serverStatuses = new Map<string, ServerStatus>();
   private autoInstall = false;
   private readonly emitter = new Emitter();
 
@@ -219,6 +227,30 @@ export class LspManager {
   /** Subscribe to major LSP events (server start/ready/exit/failure) for logging. */
   onNotice(handler: (notice: LspNotice) => void): Disposable {
     return this.emitter.on('notice', handler as (v?: unknown) => void);
+  }
+
+  /** Current per-server lifecycle state, for the header LSP indicator. */
+  serverStates(): ServerStatus[] {
+    return [...this.serverStatuses.values()];
+  }
+
+  /** Whether any server install is currently in flight (drives the spinner). */
+  get isInstalling(): boolean {
+    return this.installing.size > 0;
+  }
+
+  /** Fires when server lifecycle or install state moves (for the LSP indicator). */
+  onDidChangeServers(handler: () => void): Disposable {
+    return this.emitter.on('servers-changed', handler as (v?: unknown) => void);
+  }
+
+  private setServerStatus(key: string, name: string, state: ServerStatus['state']): void {
+    this.serverStatuses.set(key, { name, state });
+    this.emitter.emit('servers-changed');
+  }
+
+  private clearServerStatus(key: string): void {
+    if (this.serverStatuses.delete(key)) this.emitter.emit('servers-changed');
   }
 
   private notice(level: LspNotice['level'], message: string, detail?: string): void {
@@ -654,6 +686,7 @@ export class LspManager {
       });
       server.onExit((code) => {
         this.servers.delete(key);
+        this.clearServerStatus(key);
         const st = this.restartState.get(key);
         if (st?.stableTimer) {
           clearTimeout(st.stableTimer);
@@ -664,11 +697,13 @@ export class LspManager {
         this.notice('warning', `${spec.name} exited`, detail);
         this.recoverFromCrash(key, spec, langId);
       });
+      this.setServerStatus(key, spec.name, 'starting');
       const invocation = [spec.command, ...(spec.args ?? [])].join(' ');
       this.notice('trace', `starting ${spec.name}`, `${invocation} (cwd ${rootDir})`);
       void server
         .start()
         .then(() => {
+          this.setServerStatus(key, spec.name, 'ready');
           this.notice('trace', `${spec.name} ready`);
           // Forgive earlier crashes once the server has stayed up a while.
           const st = this.restartStateFor(key);
@@ -677,6 +712,7 @@ export class LspManager {
         })
         .catch((err) => {
           this.servers.delete(key);
+          this.setServerStatus(key, spec.name, 'failed');
           // Report why: the spawn-level reason if we have one, else the rejection.
           const reason = server!.failureReason ?? (err as Error).message;
           this.notice('error', `failed to start ${spec.name}`, `${reason} — ${invocation}`);
@@ -702,6 +738,7 @@ export class LspManager {
 
     const st = this.restartStateFor(key);
     if (st.attempts >= MAX_RESTARTS) {
+      this.setServerStatus(key, spec.name, 'failed');
       this.notice(
         'error',
         `${spec.name} keeps crashing`,
@@ -813,6 +850,7 @@ export class LspManager {
   private async install(server: ServerDef, auto = false): Promise<void> {
     if (!server.install || this.installing.has(server.name)) return;
     this.installing.add(server.name);
+    this.emitter.emit('servers-changed'); // spinner on while installing
     // One transient toast spans the install: the in-progress notice is sticky and
     // shares a `replaceKey` with the result, which transforms it in place. The log
     // keeps both as separate entries.
@@ -822,6 +860,7 @@ export class LspManager {
     this.emitNotice({ level: 'info', message, detail, replaceKey, sticky: true, loading: true });
     const result = await installServer(server);
     this.installing.delete(server.name);
+    this.emitter.emit('servers-changed');
     if (result.ok) {
       // Keep the same `detail` so the in-place toast doesn't shift when it swaps.
       this.emitNotice({ level: 'success', message: `${server.name} installed`, detail, replaceKey });
@@ -860,6 +899,8 @@ export class LspManager {
     this.restartState.clear();
     const all = [...this.servers.values()];
     this.servers.clear();
+    this.serverStatuses.clear();
+    this.emitter.emit('servers-changed');
     await Promise.all(all.map((s) => s.shutdown()));
   }
 }

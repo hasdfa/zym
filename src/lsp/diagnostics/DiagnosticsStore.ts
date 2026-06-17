@@ -95,6 +95,23 @@ export class DiagnosticsStore {
     return n;
   }
 
+  /**
+   * Diagnostic counts grouped by severity (1=Error … 4=Hint), across all files
+   * and servers. Severities the LSP omits default to Error, matching the panel.
+   */
+  countsBySeverity(): Record<number, number> {
+    const counts: Record<number, number> = {};
+    for (const perServer of this.byPath.values()) {
+      for (const { diagnostics } of perServer.values()) {
+        for (const d of diagnostics) {
+          const sev = d.severity ?? 1; // DiagnosticSeverity.Error
+          counts[sev] = (counts[sev] ?? 0) + 1;
+        }
+      }
+    }
+    return counts;
+  }
+
   onDidUpdate(handler: (path: string) => void): Disposable {
     return this.emitter.on('did-update', handler as (v?: unknown) => void);
   }

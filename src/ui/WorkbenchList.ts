@@ -32,7 +32,7 @@ import type { AgentTerminal } from './AgentTerminal.ts';
 const USER_GLYPH = String.fromCodePoint(0xf007); // nf-fa-user (the default/user entry)
 const CHANGED_GLYPH = String.fromCodePoint(0xf040); // nf-fa-pencil (changed-files badge)
 // Project name shown in the sidebar header: the last path component of the cwd.
-const PROJECT_NAME = Path.basename(process.cwd());
+export const PROJECT_NAME = Path.basename(process.cwd());
 // Add/remove animation duration: each row rides in/out inside a Gtk.Revealer that
 // slides its height open (on launch) or shut (on close).
 const ROW_TRANSITION_MS = 250;
@@ -76,13 +76,13 @@ addStyles(`
   #WorkbenchRow .workbenchrow-files label {
     color: ${theme.ui.fg};
     opacity: 0.75;
-    font-size: 0.85em;
+    font-size: var(--font-size-small);
   }
   #WorkbenchRow .workbenchrow-files:hover label { opacity: 1; }
   #WorkbenchRow .workbenchrow-branch {
     color: ${theme.ui.fg};
     opacity: 0.75;
-    font-size: 0.85em;
+    font-size: var(--font-size-small);
   }
 `);
 
