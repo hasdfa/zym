@@ -10,12 +10,15 @@
  * white PR glyph and opens the create-PR web page; the control is hidden only when
  * there's nothing actionable.
  *
- * The repo is resolved from the git remotes (upstream → origin); the PR + CI come
- * from `gh`, re-queried on branch change and on a timer (CI changes over time).
+ * This is a pure view over the reactive `GithubService` (PR/CI/default-branch
+ * state + busy): it re-renders on `github.onChange` and reads the cached getters,
+ * never querying `gh` itself. While the service is busy (a push and its follow-up
+ * scheduled refresh, or any git operation) the CI segment is shown in the
+ * in-progress (pending) look as a loading state, until the next status resolves.
  * The `github:*` commands cover the repo/actions/issues/pulls/issue pages too.
  * Assembled control exposed via `root`.
  */
-import { GLib, Gtk } from '../gi.ts';
+import { Gtk } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
@@ -24,24 +27,15 @@ import { openUrl } from './openUrl.ts';
 import { repoRoot } from '../git.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { stateGlyphMarkup } from './GithubPrPicker.ts';
-import {
-  resolveGithubRepo,
-  repoWebUrl,
-  fetchPullRequest,
-  fetchDefaultBranch,
-  createPullRequestWeb,
-  type GithubRepo,
-  type PrState,
-  type CiStatus,
-} from '../github.ts';
+import { repoWebUrl, createPullRequestWeb, type PrState, type CiStatus, type GithubService } from '../github.ts';
 import type { GitRepo } from '../git.ts';
 
 // CI status glyph + colour (bundled icon font): check / dot / times, drawn in
 // the theme's success / warning / error.
 const CI_STYLE: Record<CiStatus, { glyph: string; color: string }> = {
   success: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.success }, // check
-  warning: { glyph: String.fromCodePoint(0xf111), color: theme.ui.warning }, // dot
-  error: { glyph: String.fromCodePoint(0xf00d), color: theme.ui.error }, // times
+  warning: { glyph: String.fromCodePoint(0xf444), color: theme.ui.warning }, // dot-fill (smaller)
+  error: { glyph: String.fromCodePoint(0xf467), color: theme.ui.error }, // oct-x (smaller)
 };
 
 // Markup for the PR segment: the state glyph (coloured) then "#1234" in the
@@ -70,10 +64,10 @@ addStyles(`
   #GithubButtons button { padding-left: 8px; padding-right: 8px; }
 `);
 
-const CI_REFRESH_MS = 30000; // re-poll the PR's CI status every 30s while shown
-
 export interface GithubButtonsOptions {
   git: GitRepo;
+  /** The reactive GitHub model (PR/CI/default-branch + busy) this view renders. */
+  github: GithubService;
   /** A directory inside the repo (the repo root is resolved from it). */
   cwd: string;
   /**
@@ -88,6 +82,7 @@ export class GithubButtons {
   readonly root: InstanceType<typeof Gtk.Box>;
 
   private readonly git: GitRepo;
+  private readonly github: GithubService;
   private readonly repoDir: string | null;
   private readonly onShowChecks?: () => void;
 
@@ -96,29 +91,22 @@ export class GithubButtons {
   private readonly ciButton: InstanceType<typeof Gtk.Button>;
   private readonly ciIcon: InstanceType<typeof Gtk.Label>;
 
+  // URLs / state derived from the model on each render; the command handlers and
+  // click handlers read these (resolved lazily at dispatch time).
   private repoUrl: string | null = null;
   private actionsUrl: string | null = null; // the repo's CI Actions page
   private issuesUrl: string | null = null; // the repo's issues list
   private pullsUrl: string | null = null; // the repo's pull-requests list
   private prUrl: string | null = null; // this branch's PR
   private issueUrl: string | null = null; // the PR's linked issue
-  private lastBranch: string | null = null;
-  private defaultBranch: string | null = null; // the repo's default branch
-  private defaultBranchFetched = false;
   // When there's no PR, the PR segment becomes a "create PR" affordance on a
   // non-default branch; the click handler branches on this.
   private prMode: 'view' | 'create' = 'view';
-  // The GitHub remote is stable for the session; resolving it shells out to git
-  // twice (`remote`, `remote get-url`), so do it once rather than on every
-  // git.onChange (which fires on every working-tree edit).
-  private githubRepo: GithubRepo | null = null;
-  private repoResolved = false;
-  private prGeneration = 0;
-  private ciTimer = 0;
   private readonly unsubscribe: () => void;
 
   constructor(options: GithubButtonsOptions) {
     this.git = options.git;
+    this.github = options.github;
     this.repoDir = repoRoot(options.cwd);
     this.onShowChecks = options.onShowChecks;
 
@@ -148,18 +136,12 @@ export class GithubButtons {
     this.root.setVisible(false); // shown only when a PR exists
 
     this.registerCommands();
-    this.unsubscribe = this.git.onChange(() => this.refresh());
-    this.refresh();
-
-    // Re-poll the PR's CI status while the pill is shown (checks change over time).
-    this.ciTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, CI_REFRESH_MS, () => {
-      if (this.prUrl) this.lookupPullRequest();
-      return true;
-    });
+    // Re-render on any model change — data (PR/CI/default branch) or busy state.
+    this.unsubscribe = this.github.onChange(() => this.render());
+    this.render();
   }
 
   dispose(): void {
-    if (this.ciTimer) GLib.sourceRemove(this.ciTimer);
     this.unsubscribe();
   }
 
@@ -187,79 +169,52 @@ export class GithubButtons {
     });
   }
 
-  // --- refresh ---------------------------------------------------------------
+  // --- render ----------------------------------------------------------------
 
-  private refresh(): void {
-    // Resolve the GitHub remote once (it doesn't change during a session); avoids
-    // two synchronous git spawns on every onChange.
-    if (!this.repoResolved) {
-      this.githubRepo = this.repoDir ? resolveGithubRepo(this.repoDir, this.remoteNames()) : null;
-      this.repoResolved = true;
-    }
-    const repo = this.githubRepo;
+  // Reflect the model into the widgets. Driven entirely by the cached getters,
+  // so it's cheap to call on every `onChange` (data or busy).
+  private render(): void {
+    const repo = this.github.getRepo();
     if (!repo) {
       this.repoUrl = this.actionsUrl = this.issuesUrl = this.pullsUrl = null;
       this.prUrl = this.issueUrl = null;
       this.root.setVisible(false);
-      this.lastBranch = null;
       return;
     }
     this.repoUrl = repoWebUrl(repo);
     this.actionsUrl = `${this.repoUrl}/actions`;
     this.issuesUrl = `${this.repoUrl}/issues`;
     this.pullsUrl = `${this.repoUrl}/pulls`;
-    if (!this.defaultBranchFetched) this.lookupDefaultBranch(); // stable per repo
 
-    // The PR is per-branch; only re-query gh when the branch changes (the timer
-    // re-queries the same branch's PR for fresh CI).
-    const branch = this.git.getBranch();
-    if (branch === this.lastBranch) return;
-    this.lastBranch = branch;
-    this.root.setVisible(false); // until the lookup resolves
-    this.lookupPullRequest();
-  }
-
-  // Query the current branch's PR and update the pill (hidden when there's none,
-  // unless the branch can open a new PR — see `showCreatePr`).
-  private lookupPullRequest(): void {
-    if (!this.repoDir) return;
-    const generation = ++this.prGeneration;
-    fetchPullRequest(this.repoDir, (pr) => {
-      if (generation !== this.prGeneration) return; // superseded
-      if (!pr) {
-        this.prUrl = this.issueUrl = null;
-        this.showCreatePr();
-        return;
-      }
-      this.prMode = 'view';
-      this.prButton.setTooltipText(`Open ${pr.title || `#${pr.number}`}`);
-      this.prUrl = pr.url;
-      this.issueUrl = pr.issueUrl;
-      this.prLabel.setMarkup(prMarkup(pr.state, pr.number));
-      // CI glyph only for open/merged PRs that actually have checks.
-      const showCi = (pr.state === 'open' || pr.state === 'merged') && pr.ci !== null;
-      if (showCi) this.ciIcon.setMarkup(ciMarkup(pr.ci!));
-      this.ciButton.setVisible(showCi);
-      this.root.setVisible(true);
-    });
-  }
-
-  // Fetch the repo's default branch once (it's stable for `repoDir`). A no-PR
-  // lookup may have already resolved before we knew it, so re-evaluate then.
-  private lookupDefaultBranch(): void {
-    if (!this.repoDir) return;
-    this.defaultBranchFetched = true;
-    fetchDefaultBranch(this.repoDir, (branch) => {
-      this.defaultBranch = branch;
-      if (!this.prUrl) this.showCreatePr();
-    });
+    const pr = this.github.getPullRequest();
+    if (!pr) {
+      this.prUrl = this.issueUrl = null;
+      this.renderCreatePr();
+      return;
+    }
+    this.prMode = 'view';
+    this.prButton.setTooltipText(`Open ${pr.title || `#${pr.number}`}`);
+    this.prUrl = pr.url;
+    this.issueUrl = pr.issueUrl;
+    this.prLabel.setMarkup(prMarkup(pr.state, pr.number));
+    // CI glyph only for open/merged PRs that actually have checks.
+    const showCi = (pr.state === 'open' || pr.state === 'merged') && pr.ci !== null;
+    if (showCi) {
+      // While the model is busy (a push + its scheduled refresh, or any git op),
+      // the cached CI status is stale — show the in-progress (pending) look as a
+      // loading state until the next status resolves.
+      this.ciIcon.setMarkup(ciMarkup(this.github.isBusy() ? 'warning' : pr.ci!));
+    }
+    this.ciButton.setVisible(showCi);
+    this.root.setVisible(true);
   }
 
   // With no PR for the current branch, offer "create PR" — but only on a real,
   // non-default branch. Otherwise hide the control entirely.
-  private showCreatePr(): void {
+  private renderCreatePr(): void {
     const branch = this.git.getBranch();
-    if (!branch || this.defaultBranch === null || branch === this.defaultBranch) {
+    const defaultBranch = this.github.getDefaultBranch();
+    if (!branch || defaultBranch === null || branch === defaultBranch) {
       this.prMode = 'view';
       this.root.setVisible(false);
       return;
@@ -272,12 +227,6 @@ export class GithubButtons {
   }
 
   // --- helpers ---------------------------------------------------------------
-
-  private remoteNames(): string[] {
-    const upstream = (quilx.config.get('git.remotes.upstream') as string) || 'upstream';
-    const origin = (quilx.config.get('git.remotes.origin') as string) || 'origin';
-    return [upstream, origin];
-  }
 
   private open(url: string | null): void {
     if (url) openUrl(url);

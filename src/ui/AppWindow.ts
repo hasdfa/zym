@@ -38,6 +38,7 @@ import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { openGitRepo, type GitRepo } from '../git.ts';
 import { git, repoRoot, commitMsgPath } from '../git.ts';
+import { openGithubService, type GithubService } from '../github.ts';
 import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import { Workbench, type BottomDock } from './Workbench.ts';
@@ -176,6 +177,8 @@ export class AppWindow {
   // Git integration for the header-bar branch indicator.
   private readonly git: GitRepo;
   private readonly branchButton: GitBranchButton;
+  // Reactive GitHub PR/CI model (busy-aware) shared by the header buttons.
+  private readonly github: GithubService;
   // Header-bar links to the repository / PR / issue on GitHub.
   private readonly githubButtons: GithubButtons;
   // Last-seen upstream "behind" count, to fire the pull notification only on the
@@ -203,8 +206,17 @@ export class AppWindow {
 
     this.git = openGitRepo(process.cwd());
     this.branchButton = new GitBranchButton(this.git, () => openBranchPicker(this.overlay, process.cwd(), this.git));
+    this.github = openGithubService(this.git, {
+      cwd: process.cwd(),
+      remoteNames: () => {
+        const upstream = (quilx.config.get('git.remotes.upstream') as string) || 'upstream';
+        const origin = (quilx.config.get('git.remotes.origin') as string) || 'origin';
+        return [upstream, origin];
+      },
+    });
     this.githubButtons = new GithubButtons({
       git: this.git,
+      github: this.github,
       cwd: process.cwd(),
       onShowChecks: () => openGithubCIChecksPicker(this.overlay, process.cwd()),
     });
@@ -400,6 +412,7 @@ export class AppWindow {
     if (this.autoFetchTimer) GLib.sourceRemove(this.autoFetchTimer);
     this.branchButton.dispose();
     this.githubButtons.dispose();
+    this.github.dispose();
     this.git.dispose();
     this.configWatcher.dispose();
     this.keymapWatcher.dispose();
@@ -1852,7 +1865,14 @@ export class AppWindow {
       // Git commands only apply inside a repository (a resolvable branch).
       'git:fetch': { didDispatch: () => this.runGit((d) => this.git.fetch(d), 'Fetch'), when: () => this.git.getBranch() !== null },
       'git:pull': { didDispatch: () => this.runGit((d) => this.git.pull(d), 'Pull'), when: () => this.git.getBranch() !== null },
-      'git:push': { didDispatch: () => this.runGit((d) => this.git.push(d), 'Push'), when: () => this.git.getBranch() !== null },
+      'git:push': {
+        // After a successful push, GitHub re-runs the PR's checks; schedule a CI
+        // refresh ~10s out. The service stays busy until then, so the CI segment
+        // shows the in-progress (loading) look in the meantime.
+        didDispatch: () =>
+          this.runGit((d) => this.git.push(d), 'Push', () => this.github.scheduleRefresh(10000)),
+        when: () => this.git.getBranch() !== null,
+      },
       'git:branch-switch': {
         didDispatch: () => openBranchPicker(this.overlay, process.cwd(), this.git),
         when: () => this.git.getBranch() !== null,
@@ -1906,10 +1926,12 @@ export class AppWindow {
 
   // Run a coordinated git operation (e.g. `(d) => this.git.fetch(d)`) and report.
   // Success is quiet (a trace, recorded in the log only); failures pop a toast.
-  private runGit(op: (done: (ok: boolean, stderr: string) => void) => void, label: string) {
+  private runGit(op: (done: (ok: boolean, stderr: string) => void) => void, label: string, onSuccess?: () => void) {
     op((ok) => {
-      if (ok) quilx.notifications.addTrace(`${label} succeeded`);
-      else quilx.notifications.addError(`${label} failed`);
+      if (ok) {
+        quilx.notifications.addTrace(`${label} succeeded`);
+        onSuccess?.();
+      } else quilx.notifications.addError(`${label} failed`);
     });
   }
 

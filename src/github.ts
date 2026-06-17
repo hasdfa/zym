@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 // helpers directly. It deliberately imports from `git/cli.ts` (pure node) rather
 // than the public `git.ts` so it stays GTK-free and testable in isolation — the
 // rest of the codebase still imports git helpers only via git.ts / github.ts.
-import { currentBranch, gitSync } from './git/cli.ts';
+import { currentBranch, gitSync, repoRoot } from './git/cli.ts';
 
 export interface GithubRepo {
   host: string; // always 'github.com' (GitHub.com only, for now)
@@ -381,4 +381,204 @@ export function checkoutPullRequest(
     { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
     (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
   );
+}
+
+// --- reactive GitHub model -------------------------------------------------
+
+/**
+ * The slice of the git model the GitHub service needs: the current branch (to
+ * re-query the PR when it changes) and a reactive busy/onChange pair (so the
+ * service can mirror git's busy state). `GitRepo` satisfies this — passing the
+ * interface rather than `GitRepo` itself keeps github.ts free of git.ts/GTK.
+ */
+export interface GithubServiceGit {
+  getBranch(): string | null;
+  isBusy(): boolean;
+  onChange(callback: () => void): () => void;
+}
+
+export interface GithubServiceOptions {
+  /** A directory inside the repo (its root is resolved from this). */
+  cwd: string;
+  /** Remote names to try, in order (e.g. upstream → origin). Read each lookup so
+   *  config changes are picked up. */
+  remoteNames: () => string[];
+  /** How often to silently re-poll the PR's CI while alive (ms). */
+  pollMs?: number;
+}
+
+/**
+ * A reactive model of the current branch's GitHub PR + CI status.
+ *
+ * Owns the `gh` lookups and caches the result; consumers read the cached getters
+ * and subscribe via `onChange` (which also fires on busy transitions). `isBusy()`
+ * is true while a user-initiated `scheduleRefresh` is pending/in flight, OR
+ * whenever the underlying git model is busy — so a push (git-busy) and the
+ * follow-up scheduled refresh both read as "loading". Background polling and
+ * branch-change re-queries are silent (they don't set busy).
+ */
+export interface GithubService {
+  isBusy(): boolean;
+  getRepo(): GithubRepo | null;
+  getPullRequest(): PullRequest | null;
+  getDefaultBranch(): string | null;
+  onChange(callback: () => void): () => void;
+  /** Re-query the PR/CI now, silently (no busy). */
+  refresh(): void;
+  /** Re-query after `delayMs`, holding busy=true from now until it resolves. */
+  scheduleRefresh(delayMs: number): void;
+  dispose(): void;
+}
+
+const DEFAULT_POLL_MS = 30000;
+
+class CliGithubService implements GithubService {
+  private readonly git: GithubServiceGit;
+  private readonly repoDir: string | null;
+  private readonly remoteNames: () => string[];
+
+  private repo: GithubRepo | null = null;
+  private repoResolved = false;
+  private pr: PullRequest | null = null;
+  private defaultBranch: string | null = null;
+  private defaultBranchFetched = false;
+
+  private lastBranch: string | null = null;
+  private gitBusy = false;
+  // Count of outstanding scheduled refreshes (a pending timer or an in-flight
+  // query started by one). Non-zero ⇒ the service is "busy" on its own.
+  private scheduledBusy = 0;
+  // Bumps on every query so a slow in-flight response that's been superseded
+  // (newer query, branch change, or dispose) is discarded.
+  private generation = 0;
+
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private scheduleTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly listeners = new Set<() => void>();
+  private readonly unsubscribeGit: () => void;
+
+  constructor(git: GithubServiceGit, options: GithubServiceOptions) {
+    this.git = git;
+    this.repoDir = repoRoot(options.cwd);
+    this.remoteNames = options.remoteNames;
+    this.lastBranch = git.getBranch();
+    this.gitBusy = git.isBusy();
+
+    this.unsubscribeGit = git.onChange(() => this.onGitChange());
+    this.pollTimer = setInterval(() => this.refresh(), options.pollMs ?? DEFAULT_POLL_MS);
+    this.refresh();
+  }
+
+  isBusy(): boolean {
+    return this.scheduledBusy > 0 || this.git.isBusy();
+  }
+  getRepo(): GithubRepo | null {
+    return this.repo;
+  }
+  getPullRequest(): PullRequest | null {
+    return this.pr;
+  }
+  getDefaultBranch(): string | null {
+    return this.defaultBranch;
+  }
+
+  onChange(callback: () => void): () => void {
+    this.listeners.add(callback);
+    return () => this.listeners.delete(callback);
+  }
+
+  refresh(): void {
+    this.lookup();
+  }
+
+  scheduleRefresh(delayMs: number): void {
+    // Coalesce: a new schedule resets the timer but keeps busy continuous.
+    if (this.scheduleTimer) {
+      clearTimeout(this.scheduleTimer);
+      this.scheduleTimer = null;
+      this.scheduledBusy--; // the superseded schedule's busy is replaced below
+    }
+    this.scheduledBusy++;
+    this.notify(); // busy may have just turned on
+    this.scheduleTimer = setTimeout(() => {
+      this.scheduleTimer = null;
+      // Hand this schedule's busy hold to the query; cleared when it resolves.
+      this.lookup(() => {
+        this.scheduledBusy--;
+        this.notify();
+      });
+    }, delayMs);
+  }
+
+  dispose(): void {
+    this.generation++; // discard any in-flight response
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.scheduleTimer) clearTimeout(this.scheduleTimer);
+    this.pollTimer = this.scheduleTimer = null;
+    this.unsubscribeGit();
+    this.listeners.clear();
+  }
+
+  // --- internals -------------------------------------------------------------
+
+  // Git moved: a branch switch re-queries the PR; a busy transition just needs to
+  // be re-broadcast so consumers re-read our (composed) busy state.
+  private onGitChange(): void {
+    const branch = this.git.getBranch();
+    const busy = this.git.isBusy();
+    const branchChanged = branch !== this.lastBranch;
+    if (branchChanged) {
+      this.lastBranch = branch;
+      this.pr = null; // stale until the new branch's lookup resolves
+      this.notify(); // clear the old branch's PR from the view now
+      this.lookup();
+      return;
+    }
+    if (busy !== this.gitBusy) {
+      this.gitBusy = busy;
+      this.notify();
+    }
+  }
+
+  // Re-query the repo (once), default branch (once), and the PR/CI. `onSettled`
+  // runs after the PR query finishes (success or failure), used to release a
+  // scheduled-refresh busy hold.
+  private lookup(onSettled?: () => void): void {
+    if (!this.repoResolved) {
+      this.repo = this.repoDir ? resolveGithubRepo(this.repoDir, this.remoteNames()) : null;
+      this.repoResolved = true;
+    }
+    if (!this.repo || !this.repoDir) {
+      onSettled?.();
+      return;
+    }
+    if (!this.defaultBranchFetched) {
+      this.defaultBranchFetched = true;
+      const gen = this.generation;
+      fetchDefaultBranch(this.repoDir, (branch) => {
+        if (gen !== this.generation) return;
+        this.defaultBranch = branch;
+        this.notify();
+      });
+    }
+    const gen = ++this.generation;
+    fetchPullRequest(this.repoDir, (pr) => {
+      if (gen !== this.generation) {
+        onSettled?.();
+        return;
+      }
+      this.pr = pr;
+      onSettled?.();
+      this.notify();
+    });
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener();
+  }
+}
+
+/** Open a reactive GitHub PR/CI model bound to a git model. */
+export function openGithubService(git: GithubServiceGit, options: GithubServiceOptions): GithubService {
+  return new CliGithubService(git, options);
 }
