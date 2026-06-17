@@ -437,7 +437,7 @@ const ALT_NAV_COMMANDS: Record<string, string> = {
 // Leap (leap.nvim-style two-char labeled jump). `g s` / `g S` because plain
 // `s`/`S` are Substitute here. Bound in every non-insert mode so it works as a
 // plain jump (normal), a selection extension (visual), and an operator target
-// (`d g s`). The host (TextEditor's LeapController) supplies the labels + input.
+// (`d g s`). The host (TextEditor's Leap) supplies the labels + input.
 const LEAP_BINDINGS: Record<string, string> = {
   'g s': 'Leap',
   'g S': 'LeapBackwards',

@@ -1,7 +1,7 @@
 /*
  * leapTargets — the pure (GTK-free) core of the leap motion: finding match
  * targets, picking a safe label set, assigning stable labels, and interpreting a
- * label-phase keypress. Split out from `LeapController` so the headless vim layer
+ * label-phase keypress. Split out from `Leap` so the headless vim layer
  * (`motion.js`, for `;` repeat) and the host renderer can share it, and so it is
  * unit-testable without a display.
  */

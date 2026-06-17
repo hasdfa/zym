@@ -35,7 +35,7 @@ GTK-free core, talking to editors via the small `LspDocument` interface:
   server reuse, document lifecycle, diagnostics routing, go-to-definition.
 - `diagnostics/DiagnosticsStore.ts` — per-path diagnostics + `did-update` events.
 - `diagnostics/DiagnosticsView.ts` — per-editor inline squiggles (via the shared
-  `DecorationController` `diagnostic-*` styles) + Nerd Font gutter glyphs drawn by a
+  `TextDecorations` `diagnostic-*` styles) + Nerd Font gutter glyphs drawn by a
   `GtkSource.GutterRendererText` (the fold-gutter pattern).
 - `diagnostics/DiagnosticsPanel.ts` — the "Diagnostics" list (bottom-dock tab); a thin
   consumer of the shared `ui/LocationList` that maps the store to severity-glyph +
@@ -85,12 +85,12 @@ log — trace level for routine events, warning/error for exits/failures.
 - [x] **Inlay hints** — `textDocument/inlayHint` (`LanguageServer.inlayHint` +
   `inlayHint` client capability; `LspManager.inlayHints` requests the whole doc,
   normalized to `{line, label}`). Rendered as native **end-of-line annotations** per
-  view (`InlayHintController` → `AnnotationController`, debounced on edits), since the
+  view (`InlayHintController` → `VirtualText`, debounced on edits), since the
   annotation API is line-anchored (mid-line column placement would need the overlay
   recipe — see [virtual-lines.md](virtual-lines.md)). tsserver inlay prefs enabled in
   the TS plugin. Toggle `editor.inlayHints`.
 - [x] **Error lens** — each line's worst diagnostic message trailing the line
-  (`DiagnosticsView` → `AnnotationController`, colored by severity). Toggle
+  (`DiagnosticsView` → `VirtualText`, colored by severity). Toggle
   `editor.errorLens`.
 - [ ] Later: hover-on-mouse, rename, completion, signature help, incremental sync.
 

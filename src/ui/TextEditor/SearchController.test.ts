@@ -2,13 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../gi.ts';
 import { EditorModel } from './EditorModel.ts';
-import { DecorationController } from './DecorationController.ts';
+import { TextDecorations } from './TextDecorations.ts';
 import { SearchController } from './SearchController.ts';
 import { Point } from '../../text/Point.ts';
 import type { PointLike } from '../../text/Point.ts';
 
 // SearchController drives a live buffer (regex scan, cursor moves) and paints via
-// DecorationController, so these are headless integration tests. Gtk.init is idempotent.
+// TextDecorations, so these are headless integration tests. Gtk.init is idempotent.
 Gtk.init();
 
 function setup(text: string) {
@@ -17,7 +17,7 @@ function setup(text: string) {
   const view = new GtkSource.View({ buffer });
   const editor = new EditorModel(view, buffer);
   editor.setCursorBufferPosition(new Point(0, 0));
-  const search = new SearchController(editor, new DecorationController(editor));
+  const search = new SearchController(editor, new TextDecorations(editor));
   return { editor, search };
 }
 

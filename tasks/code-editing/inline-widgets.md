@@ -35,7 +35,7 @@ Confirmed by running the POC interactively:
   (the overlay's real parent). Forcing `unparent()` then detaches the widget while
   the `GtkTextViewChild`'s internal overlay list still references it → a
   `gtk_widget_snapshot_child: assertion '_gtk_widget_get_parent (child) == widget'
-  failed` CRITICAL on the next paint. **Fix (`InlineBlockController`):** the overlay
+  failed` CRITICAL on the next paint. **Fix (`BlockDecorations`):** the overlay
   child is a controller-owned **slot `Gtk.Box`** wrapping the consumer's widget;
   removal detaches the consumer widget (`Gtk.Box.remove`, which works) and **hides +
   pools the slot** for the view's lifetime, and `add()` reuses a pooled slot. Repro +
@@ -90,9 +90,9 @@ the child's height and repositioning when the buffer changes *above* the anchor.
 - **Synthesized real line** (today's `FoldRow`) — selectable/editable text; the
   thing we're replacing.
 
-## The primitive: `InlineBlockController`
+## The primitive: `BlockDecorations`
 
-Lives beside `DecorationController` (one per editor, `editor.inlineBlocks`).
+Lives beside `TextDecorations` (one per editor, `editor.inlineBlocks`).
 
 ```ts
 const handle = editor.inlineBlocks.add({
@@ -166,8 +166,8 @@ per-feature.
    IM problem) → interactive content needs the sibling-overlay strategy. (Headless
    here only confirms API bindings; rendering needs the real display. node-gtk #442:
    defer the top-level `app.run` by one macrotask or the app exits 0 immediately.)
-2. [x] **`InlineBlockController` — `add_overlay` (non-interactive) path.**
-   `src/ui/TextEditor/InlineBlockController.ts`: mark anchor + per-handle gap tag +
+2. [x] **`BlockDecorations` — `add_overlay` (non-interactive) path.**
+   `src/ui/TextEditor/BlockDecorations.ts`: mark anchor + per-handle gap tag +
    text-window overlay; measures the child and sets the gap to match; defers
    placement to `map` and **retries until line geometry is valid** (map fires before
    the first layout pass → `get_iter_location` is 0); force-`unparent` on remove;
@@ -185,7 +185,7 @@ per-feature.
    (`scrollToMark`). Unified + side-by-side (one block per pane, lockstep). The
    placeholder is no longer buffer text (not editable/selectable).
 
-   **node-gtk timing gotchas (hard-won — all in `InlineBlockController`):**
+   **node-gtk timing gotchas (hard-won — all in `BlockDecorations`):**
    - **Place only after geometry is valid.** `get_iter_location` returns 0 before
      the view's first layout (and `map` fires before it), so placement retries on a
      16ms timer until the anchor's line rect is non-zero.
@@ -199,7 +199,7 @@ per-feature.
    - **Reposition via a frame-clock tick callback** (a few frames after a change),
      not idle/timeout (which fire mid-transition and read bogus coordinates); guard
      against moving to a zero-height (invalid) rect.
-4. [x] **Sibling-overlay variant** — `InlinePeek` (`src/ui/TextEditor/InlinePeek.ts`):
+4. [x] **Sibling-overlay variant** — `Peek` (`src/ui/TextEditor/Peek.ts`):
    the peek card is a direct child of the editor's `Gtk.Overlay` (a SIBLING of the
    text view, so focusing it releases the outer view's IM → no input leak),
    positioned at the gap via the overlay's **`get-child-position`** (exact +
@@ -234,7 +234,7 @@ per-feature.
 
 ## Net
 
-No fork or custom widget: a small `InlineBlockController` (per-line gap tag +
+No fork or custom widget: a small `BlockDecorations` (per-line gap tag +
 buffer-coordinate overlay child) on top of GtkSourceView covers fold placeholders,
 see-definition peeks, code lens, and inline expanded content — with a zero
 buffer-footprint, natively-scrolling overlay. POC the geometry + focus first.
@@ -244,7 +244,7 @@ buffer-footprint, natively-scrolling overlay. POC the geometry + focus first.
 The two primitives are built and proven; these are candidate features on top.
 Each notes the primitive it uses and the existing infra it reuses.
 
-**Block (`InlineBlockController` — non-interactive / click, text-window overlay):**
+**Block (`BlockDecorations` — non-interactive / click, text-window overlay):**
 
 - **Error lens** — the diagnostic message inline below the offending line (the
   readable, no-hover form). Reuses the existing diagnostics (`DiagnosticsView`,
@@ -258,14 +258,14 @@ Each notes the primitive it uses and the existing infra it reuses.
   `![img]`, or `$$…$$`. *Nice, low–medium (markdown/CSS).*
   - ✅ **Markdown image preview built** (`src/plugins/markdown/imagePreview.ts`):
     `![alt](src)` local images (relative / absolute / `file://`) render as a
-    `Gtk.Picture` block below their line via `InlineBlockController`, reconciled on a
+    `Gtk.Picture` block below their line via `BlockDecorations`, reconciled on a
     debounced rescan (blocks keep their identity across edits and track their anchor
     line, so typing doesn't reload). Textures are downscaled+cached per path/mtime;
     toggle `markdown.imagePreview`. Remote (`http(s)`/`data:`) deferred (async
     network). Color swatch is the separate `color-preview` plugin (decoration tint).
 - **Test / coverage results** — pass/fail + message by a test. *Needs a test-runner.*
 
-**Peek (`InlinePeek` — focusable, sibling overlay):**
+**Peek (`Peek` — focusable, sibling overlay):**
 
 - **Peek references / implementations / type-definition** — a results list + preview
   inline (the sibling of see-definition). Reuses `find-references`. *High value,

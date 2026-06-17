@@ -2,7 +2,7 @@
  * buildDefinitionPeek — the card shown by the see-definition inline peek: a header
  * (file:line + close button) over a read-only, syntax-highlighted slice of the
  * definition's file. Lives in the editor's sibling overlay via `editor.showPeek`
- * (InlinePeek); the nested editor is focusable there without leaking input to the
+ * (Peek); the nested editor is focusable there without leaking input to the
  * file behind it.
  */
 import * as Path from 'node:path';

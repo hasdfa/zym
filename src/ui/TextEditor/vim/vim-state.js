@@ -598,7 +598,7 @@ export default class VimState {
   focusInput (options = {}) {
     const { charsMax = 1, purpose, onConfirm, onCancel } = options
     // Leap (`g s`) is fully host-driven: it reads its own chars, labels matches,
-    // and hands back a target Point. Route it to the host's LeapController.
+    // and hands back a target Point. Route it to the host's Leap.
     if (purpose === 'leap') {
       if (this.__leapInput) this.__leapInput(options)
       else if (onCancel) onCancel()
@@ -620,7 +620,7 @@ export default class VimState {
     this.__searchInput = provider
   }
 
-  /** Wire the leap input provider — the host's LeapController, in practice. */
+  /** Wire the leap input provider — the host's Leap, in practice. */
   setLeapInput (provider) {
     this.__leapInput = provider
   }

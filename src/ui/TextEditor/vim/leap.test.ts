@@ -13,7 +13,7 @@ import './text-object.js';
 
 Gtk.init();
 
-// Leap-as-motion drives the host's LeapController. Headless, we stand in a
+// Leap-as-motion drives the host's Leap. Headless, we stand in a
 // provider that captures the request and resolves it after the operation runs —
 // mirroring the real flow (the user types 2 chars + a label, then a target Point
 // comes back). `confirm` hands back a target point; `cancel` models Esc.

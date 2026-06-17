@@ -31,15 +31,14 @@ import { markdownToPango } from '../markdownMarkup.ts';
 import { fonts } from '../../fonts.ts';
 import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
 import { langIdForPath } from '../../syntax/grammar.ts';
-import { DecorationController } from './DecorationController.ts';
-import { InlineBlockController } from './InlineBlockController.ts';
-import { InlinePeek, type InlinePeekOptions } from './InlinePeek.ts';
+import { TextDecorations } from './TextDecorations.ts';
+import { BlockDecorations } from './BlockDecorations.ts';
+import { Peek, type PeekOptions } from './Peek.ts';
 import { GitGutter } from './GitGutter.ts';
-import { UnderlineOverlay } from './UnderlineOverlay.ts';
-import { IndentGuideOverlay } from './IndentGuideOverlay.ts';
+import { IndentGuides } from './IndentGuides.ts';
 import { SearchController } from './SearchController.ts';
 import { SearchBar } from './SearchBar.ts';
-import { LeapController, type LeapRequest } from './LeapController.ts';
+import { Leap, type LeapRequest } from './Leap.ts';
 import { CompletionController } from './CompletionController.ts';
 import { createBufferWordsSource } from './createBufferWordsSource.ts';
 import { createLspCompletionSource } from './createLspCompletionSource.ts';
@@ -288,13 +287,12 @@ export class TextEditor implements DocumentHost {
   private foldProvider: FoldProvider | null = null;
   private readonly editorModel: EditorModel;
   private readonly vimState: VimState;
-  private readonly decorationController: DecorationController;
-  private readonly inlineBlockController: InlineBlockController;
+  private readonly textDecorations: TextDecorations;
+  private readonly inlineBlockController: BlockDecorations;
   private readonly search: SearchController;
-  private leap!: LeapController; // built in buildEditorArea (needs the overlay)
+  private leap!: Leap; // built in buildEditorArea (needs the overlay)
   private completion!: CompletionController; // built in buildEditorArea (needs the overlay)
   private searchBar!: SearchBar; // built in buildEditorArea (needs the overlay)
-  private underlineOverlay!: UnderlineOverlay; // drawn diagnostic squiggles; built in buildEditorArea
   private readonly onToast: (message: string) => void;
 
   // LSP: a document adapter the LspManager drives, and the per-editor diagnostics
@@ -310,7 +308,7 @@ export class TextEditor implements DocumentHost {
   // Vertical box so the label fills (and wraps to) the card's fixed width.
   private readonly hoverCard = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the hover card
-  private inlinePeek!: InlinePeek; // focusable inline peek (see-definition); built in buildEditorArea
+  private inlinePeek!: Peek; // focusable inline peek (see-definition); built in buildEditorArea
   // The signature-help card: shown live while typing a call's arguments. Same
   // floating-card pattern as hover; `signatureSeq` drops stale async responses.
   private readonly signatureLabel = new Gtk.Label({ useMarkup: true, wrap: true, xalign: 0 });
@@ -408,11 +406,11 @@ export class TextEditor implements DocumentHost {
     this.vimState = attachVim(this.editorModel);
     // Inline decoration surface (search highlights, inline diff) — consumers
     // reach it via `editor.decorations`.
-    this.decorationController = new DecorationController(this.editorModel);
+    this.textDecorations = new TextDecorations(this.editorModel);
     // Inline block surface (virtual content between lines: the diff fold placeholder).
-    this.inlineBlockController = new InlineBlockController(this.view);
+    this.inlineBlockController = new BlockDecorations(this.view);
     // Search/replace engine; its `SearchBar` widget is built in buildEditorArea.
-    this.search = new SearchController(this.editorModel, this.decorationController);
+    this.search = new SearchController(this.editorModel, this.textDecorations);
 
     this.root = this.buildEditorArea();
     // The inner view is the `#TextEditor` selector subject (it holds focus + the
@@ -535,7 +533,7 @@ export class TextEditor implements DocumentHost {
     this.vimState.onDidRequestClearSearchHighlight(() => this.search.clear());
 
     // Leap (`g s` / `g S`): the vim motion requests a target through this bridge;
-    // the LeapController reads the chars, paints labels, and resolves a Point.
+    // the Leap reads the chars, paints labels, and resolves a Point.
     (this.vimState as unknown as VimLeapBridge).setLeapInput?.((req) => {
       void this.leap.start(req);
     });
@@ -565,7 +563,7 @@ export class TextEditor implements DocumentHost {
     // The LSP document lives on `this.document` (one per file; didOpen/didChange/
     // didClose are driven there off the model). This view contributes the diagnostics
     // renderer and signature help.
-    this.diagnostics = new DiagnosticsView(this.view, this.underlineOverlay, this.editorModel, () => this._currentFile);
+    this.diagnostics = new DiagnosticsView(this.view, this.textDecorations, this.editorModel, () => this._currentFile);
     // Inlay hints (parameter names / inferred types) trailing each line, per view.
     this.inlayHints = new InlayHintController(
       this.view,
@@ -844,8 +842,8 @@ export class TextEditor implements DocumentHost {
   }
 
   /** The inline decoration surface (search highlights, inline diff). */
-  get decorations(): DecorationController {
-    return this.decorationController;
+  get decorations(): TextDecorations {
+    return this.textDecorations;
   }
 
   /** The editor model (Atom-`TextEditor`-shaped buffer API) — for features and
@@ -856,14 +854,14 @@ export class TextEditor implements DocumentHost {
 
   /** The inline-block surface (virtual content between lines, e.g. the diff fold
    *  placeholder) — overlay widgets in a reserved gap, zero buffer footprint. */
-  get inlineBlocks(): InlineBlockController {
+  get inlineBlocks(): BlockDecorations {
     return this.inlineBlockController;
   }
 
   /** Open a focusable inline peek (e.g. see-definition) below `line` — defaults to
    *  the cursor's line. Replaces any current peek. Returns nothing; `closePeek()`
    *  dismisses it (and clicking a close button in `widget` should call it). */
-  showPeek(options: Omit<InlinePeekOptions, 'line'> & { line?: number }): void {
+  showPeek(options: Omit<PeekOptions, 'line'> & { line?: number }): void {
     const line = options.line ?? this.editorModel.getCursorBufferPosition().row;
     this.inlinePeek.show({ ...options, line });
   }
@@ -1020,15 +1018,14 @@ export class TextEditor implements DocumentHost {
     overlay.setChild(scrolled);
     this.contentOverlay = overlay; // hosts the bottom-aligned hover card
     // Focusable inline peek (see-definition) — lives in this sibling overlay.
-    this.inlinePeek = new InlinePeek(this.view, overlay);
+    this.inlinePeek = new Peek(this.view, overlay);
 
     // Indent guides sit lowest (behind the squiggles/caret), in the whitespace.
-    overlay.addOverlay(new IndentGuideOverlay(this.view, this.editorModel).widget);
+    overlay.addOverlay(new IndentGuides(this.view, this.editorModel).widget);
 
     // Built here (after the view is in the ScrolledWindow, so its scroll
     // adjustments exist); fed by DiagnosticsView in installLsp.
-    this.underlineOverlay = new UnderlineOverlay(this.view, this.editorModel);
-    overlay.addOverlay(this.underlineOverlay.widget);
+    overlay.addOverlay(this.textDecorations.underlineWidget); // squiggles live inside TextDecorations
 
     // The search/replace bar floats at the top-right; it adds itself to `overlay`.
     this.searchBar = new SearchBar(overlay, this.search, this.view, { onInfo: this.onToast });
@@ -1074,7 +1071,7 @@ export class TextEditor implements DocumentHost {
     // `input-char-waiting` grab) and resolves a target Point to the leap motion.
     this.leapLayer.setCanTarget(false);
     overlay.addOverlay(this.leapLayer);
-    this.leap = new LeapController({
+    this.leap = new Leap({
       editor: this.editorModel,
       labelLayer: this.leapLayer,
       readChar: () =>

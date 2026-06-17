@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../gi.ts';
 import { EditorModel } from './EditorModel.ts';
-import { DecorationController } from './DecorationController.ts';
+import { TextDecorations } from './TextDecorations.ts';
 import type { PointLike } from '../../text/Point.ts';
 
-// DecorationController paints GtkTextTags on a live buffer, so these are
+// TextDecorations paints GtkTextTags on a live buffer, so these are
 // integration tests (GTK initialized, no realized view needed). Gtk.init is idempotent.
 Gtk.init();
 
@@ -24,7 +24,7 @@ function hasTag(m: EditorModel, point: PointLike, tagName: string): boolean {
 
 test('decorate applies a styled tag over the range; clear removes it', () => {
   const m = model('hello world\n');
-  const layer = new DecorationController(m).layer('search');
+  const layer = new TextDecorations(m).layer('search');
   layer.decorate([[0, 0], [0, 5]], 'highlight');
   assert.ok(hasTag(m, [0, 2], 'deco:search:highlight')); // inside
   assert.ok(!hasTag(m, [0, 8], 'deco:search:highlight')); // outside
@@ -34,7 +34,7 @@ test('decorate applies a styled tag over the range; clear removes it', () => {
 
 test('layers clear independently', () => {
   const m = model('hello world\n');
-  const deco = new DecorationController(m);
+  const deco = new TextDecorations(m);
   const search = deco.layer('search');
   const diff = deco.layer('diff');
   search.decorate([[0, 0], [0, 5]], 'highlight');
@@ -45,6 +45,6 @@ test('layers clear independently', () => {
 });
 
 test('the same layer instance is returned for a name', () => {
-  const deco = new DecorationController(model('x\n'));
+  const deco = new TextDecorations(model('x\n'));
   assert.equal(deco.layer('search'), deco.layer('search'));
 });

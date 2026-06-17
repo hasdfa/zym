@@ -54,7 +54,7 @@ open and each one opened later, and the Disposable it returns is torn down when
 that editor closes *or* the plugin deactivates. Backed by an editor registry on
 `Workspace` (`quilx.workspace.addTextEditor`/`observeTextEditors`); the AppWindow
 registers/deregisters each file editor over its tab lifecycle. The editor it hands
-back exposes `editor.decorations` (the `DecorationController` tag surface, now with
+back exposes `editor.decorations` (the `TextDecorations` tag surface, now with
 a `layer.tint(range, {background, foreground})` for arbitrary colors) and
 `editor.model` (the `EditorModel`: `scan`, `onDidChangeText`, …). This is the seam
 the **color-preview** plugin and the future error-lens / code-lens plugins build on.

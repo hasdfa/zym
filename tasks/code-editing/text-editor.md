@@ -430,11 +430,11 @@ polish, multi-cursor) plug into. Status:
   `getLineAtY`/`getIterLocation`) need interactive verification. Consumers: LSP
   hover & code-action popovers, vim H/M/L + scroll commands, side-by-side diff
   scroll-sync. (`EditorModel.ts`.)
-- [x] **Inline decoration surface** — `DecorationController` / `DecorationLayer`
+- [x] **Inline decoration surface** — `TextDecorations` / `DecorationLayer`
   (`editor.decorations`): clearable, named layers of GtkTextTag *background* spans,
   re-synced by their producer. Styles: `highlight`/`highlight-strong` (search),
-  `added`/`removed` (diff). Tags sit above syntax priority. (`DecorationController.ts`,
-  tests in `DecorationController.test.ts`.)
+  `added`/`removed` (diff). Tags sit above syntax priority. (`TextDecorations.ts`,
+  tests in `TextDecorations.test.ts`.)
 - [x] **Drawn-underline overlay** — `UnderlineOverlay`: a transparent
   `Gtk.DrawingArea` over the text that strokes anti-aliased Cairo sine waves under
   buffer ranges, replacing GtkTextTag's fixed dense `Pango.Underline.ERROR`
@@ -548,7 +548,7 @@ mid-text replacements falling back to the leave-insert replay.
   inside strings/comments/regex are ignored (`SyntaxController.isInStringOrComment`,
   via `indent.ts` `enclosingTypeMatches`).
 - [x] **Indent guides** — faint vertical lines per indentation level, drawn in the
-  leading whitespace (`IndentGuideOverlay`, a Cairo overlay like the diagnostic
+  leading whitespace (`IndentGuides`, a Cairo overlay like the diagnostic
   squiggles). Levels follow the actual indentation and continue unbroken through
   blank lines inside a block. Toggle with `editor.indentGuides`.
 - [x] **Tree-sitter text objects** — `if`/`af` (function), `ic`/`ac` (class /

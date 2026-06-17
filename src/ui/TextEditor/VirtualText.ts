@@ -1,5 +1,5 @@
 /*
- * AnnotationController — a per-view wrapper over GtkSourceView's native annotation API
+ * VirtualText — a per-view wrapper over GtkSourceView's native annotation API
  * (`GtkSourceAnnotations`, 5.18+): end-of-line trailing virtual text, styled
  * none/warning/error/accent, with optional hover.
  *
@@ -33,7 +33,7 @@ const STYLE_ENUM: Record<AnnotationStyleName, number> = {
   accent: (GtkSource as any).AnnotationStyle.ACCENT,
 };
 
-export class AnnotationController {
+export class VirtualText {
   private readonly provider: any;
   private readonly annotations: any;
   private added = false;
