@@ -1,53 +1,51 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../gi.ts';
-import { SyntaxController, isLineFolded, FOLD_HIDDEN_TAG_NAME } from './syntax-controller.ts';
+import { SyntaxController } from './syntax-controller.ts';
+import { Document } from '../ui/TextEditor/Document.ts';
 
 Gtk.init();
 
 // SyntaxController is normally built inside the app's activate handler; it builds
-// safely headless too. These tests drive `revealLine` directly by registering fold
-// regions + applying the hide tag (the parse-driven path needs a grammar).
+// safely headless too. Folding physically collapses a body to `[...]` in the VIEW
+// buffer while the Document (model) keeps the full text. These tests register a
+// foldable region by hand (the parse-driven discovery needs a grammar) and drive
+// the public fold toggle; bracket-match tests reuse the same buffer.
 function setup(text: string) {
-  const buffer = new GtkSource.Buffer();
-  buffer.setText(text, -1);
+  const doc = new Document();
+  doc.setText(text);
+  const buffer = doc.createView();
   const view = new GtkSource.View({ buffer });
-  const syntax = new SyntaxController(view, buffer, {});
-  const iter = (line: number) => {
-    const r = (buffer as any).getIterAtLine(line);
-    return Array.isArray(r) ? r[r.length - 1] : r;
-  };
-  // Mark lines [startLine+1, endLine) hidden and register the region as folded.
-  const fold = (startLine: number, endLine: number) => {
-    buffer.applyTag(buffer.getTagTable().lookup(FOLD_HIDDEN_TAG_NAME)!, iter(startLine + 1), iter(endLine));
-    syntax.foldsByHeaderLine.set(startLine, { startLine, endLine, folded: true });
-  };
-  return { buffer, syntax, fold };
+  const syntax = new SyntaxController(view, buffer, { folds: doc });
+  const textOf = () => (buffer as any).getText(buffer.getStartIter(), buffer.getEndIter(), true);
+  const registerFoldable = (startLine: number, endLine: number) =>
+    syntax.foldsByHeaderLine.set(startLine, { startLine, endLine, folded: false });
+  return { doc, buffer, view, syntax, textOf, registerFoldable };
 }
 
-test('revealLine opens the fold hiding a line and reports the change', () => {
-  const { buffer, syntax, fold } = setup('header\n  body1\n  body2\nend\nafter\n');
-  fold(0, 3); // body lines 1,2 hidden
-  assert.equal(isLineFolded(buffer, 1), true);
-  assert.equal(syntax.revealLine(1), true);
-  assert.equal(isLineFolded(buffer, 1), false);
+test('folding collapses the body to a placeholder in the view, not the model', () => {
+  const { doc, syntax, textOf, registerFoldable } = setup('function f() {\n  a;\n  b;\n}\nafter\n');
+  registerFoldable(0, 3);
+  syntax.toggleHeaderLine(0);
+  assert.equal(textOf(), 'function f() {[4]}\nafter\n', 'view is one navigable line');
+  assert.equal(doc.getText(), 'function f() {\n  a;\n  b;\n}\nafter\n', 'model keeps the body');
 });
 
-test('revealLine is a no-op on a visible line (a fold header never auto-opens)', () => {
-  const { buffer, syntax, fold } = setup('header\n  body\nend\n');
-  fold(0, 2);
-  // line 0 is the header (always visible); revealing it must not open the fold
-  assert.equal(syntax.revealLine(0), false);
-  assert.equal(isLineFolded(buffer, 1), true); // body stays hidden
+test('unfolding restores the body in the view', () => {
+  const { doc, syntax, textOf, registerFoldable } = setup('function f() {\n  a;\n}\nafter\n');
+  registerFoldable(0, 2);
+  syntax.toggleHeaderLine(0); // fold — placeholder stays on line 0
+  syntax.toggleHeaderLine(0); // unfold
+  assert.equal(textOf(), doc.getText());
 });
 
-test('revealLine exposes a line buried under nested folds', () => {
-  const { buffer, syntax, fold } = setup('outer\n inner\n  deep\n end\nclose\nafter\n');
-  fold(0, 4); // outer hides lines 1..3
-  fold(1, 3); // inner hides line 2
-  assert.equal(isLineFolded(buffer, 2), true);
-  assert.equal(syntax.revealLine(2), true);
-  assert.equal(isLineFolded(buffer, 2), false);
+test('a collapsed fold maps the gutter line back to the model line', () => {
+  const { syntax, registerFoldable } = setup('function f() {\n  a;\n  b;\n}\nafter\n');
+  registerFoldable(0, 3);
+  syntax.toggleHeaderLine(0);
+  // view line 0 = the folded one-liner (model 0); view line 1 = `after` (model 4).
+  assert.equal(syntax.modelLineFor(0), 0);
+  assert.equal(syntax.modelLineFor(1), 4);
 });
 
 // Bracket matching is cursor-driven (notify::cursor-position) and text-based, so
@@ -74,4 +72,12 @@ test('bracket match: highlights the bracket under the cursor and its pair', () =
   buffer.placeCursor(at(1)); // before any bracket, not enclosed → cleared
   assert.ok(!at(3).hasTag(tag), 'outside any pair clears the highlight');
   assert.ok(!at(7).hasTag(tag), 'and its former match');
+});
+
+test('a keep-footer fold (if/else branch) leaves the footer line on its own line', () => {
+  const { syntax, textOf } = setup('if (x) {\n  a;\n  b;\n} else {\n  c;\n}\n');
+  // The consequence block of an if-with-else: keep its footer (`} else {`) on its line.
+  syntax.foldsByHeaderLine.set(0, { startLine: 0, endLine: 3, folded: false, joinFooter: false });
+  syntax.toggleHeaderLine(0);
+  assert.equal(textOf(), 'if (x) {[2]\n} else {\n  c;\n}\n');
 });

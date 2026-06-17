@@ -284,6 +284,34 @@ and override-able; no runtime fetch remains.
 > activation rather than at import. The `LanguageRegistry` is unchanged — it was
 > the plugin seam all along. See [../plugins.md](../plugins.md).
 
+## Fold queries (`folds.scm`)
+
+A grammar declares foldable constructs in `queries/<lang>/folds.scm` (referenced by
+`registerGrammar`'s `foldsPath`; `foldTypes` is the node-type fallback when no query
+ships). Two capture names control fold *style* (the projection mechanism is in
+[folding.md](folding.md)):
+
+- **`@fold`** — the default: folds to a single line, the footer (`}` / `} from 'x'`)
+  joins the header (`import {[N]} from 'x'`). Use for blocks, objects, arrays,
+  class/interface bodies, comments, standalone `if`, the final `else`/`finally`.
+- **`@fold.keepFooter`** — keeps the closing line on its **own** line, so a chained
+  construct reads one-per-line (`if (x) {[N]` / `} else if (y) {…`). Capture the
+  body block of a clause that is *continued* by another (`} else {`, `} catch {`).
+
+A node may match both; `computeFoldRanges` merges per start row and keep-footer wins.
+Example (TS/TSX `folds.scm`):
+
+```scheme
+[ (statement_block) (object) (class_body) (comment) ] @fold
+; consequence of an `if` that has an else; a try/catch block a clause follows:
+(if_statement consequence: (statement_block) @fold.keepFooter alternative: (_))
+(try_statement body: (statement_block) @fold.keepFooter handler: (catch_clause))
+```
+
+Adding keep-footer to another language is a **query-only** change (no code). Verify
+field names against the grammar — a bad pattern fails the whole `language.query`
+compile (folding then silently stops); the runtime path is `grammar.ts` (~line 89).
+
 ## Open questions
 
 - Group tie-break when several exclusive roots are present: priority (chosen) vs

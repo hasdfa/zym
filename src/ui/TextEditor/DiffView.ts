@@ -47,13 +47,15 @@ export class DiffView implements FoldProvider {
   }
 
   // FoldProvider — the editor's `fold:*` commands drive the DiffFold.
-  toggleFoldAtCursor(): void {
+  toggleFoldAtCursor(): null {
     const i = this.fold.regionIndexAtCursor();
     if (i !== -1) this.fold.toggle(i);
+    return null;
   }
-  setFoldAtCursor(folded: boolean): void {
+  setFoldAtCursor(folded: boolean): null {
     const i = this.fold.regionIndexAtCursor();
     if (i !== -1) this.fold.setFolded(i, folded);
+    return null;
   }
   foldAll(): void {
     this.fold.setAll(true);

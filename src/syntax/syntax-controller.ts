@@ -24,6 +24,17 @@ import { findBracketPair } from './bracketMatch.ts';
 import { indentLevelAt, enclosingTypeMatches, enclosingNodeRange } from './indent.ts';
 import { computeFoldRanges } from './folds.ts';
 import { tagNamesAt, type TagName } from './tags.ts';
+/** The view↔model projection a SyntaxController folds through (the editor's Document). */
+export interface FoldHost {
+  foldViewRange(buffer: SourceBuffer, viewStart: number, viewEnd: number, placeholder: string): any;
+  unfoldView(buffer: SourceBuffer, fold: any): void;
+  foldPlaceholderRange(buffer: SourceBuffer, fold: any): [number, number];
+  modelLineForViewLine(buffer: SourceBuffer, viewLine: number): number;
+  /** False once an enclosing fold has subsumed this one (its marks are gone). */
+  isFoldAlive(fold: any): boolean;
+  /** The model text a fold currently collapses (for matching during search). */
+  foldModelText(buffer: SourceBuffer, fold: any): string;
+}
 
 const STRING_COMMENT_RE = /string|comment|char|regex/;
 // Node types folded as a *run* of consecutive siblings (import block, comment block).
@@ -72,10 +83,16 @@ const LINE_NUMBER_COLOR = theme.ui.lineNumber;
 
 
 interface FoldRegion {
-  startLine: number; // line the block opens on (stays visible)
-  endLine: number;   // line the block closes on (stays visible)
-  folded: boolean;   // derived from the invisible tag on each refresh
+  startLine: number; // header line (stays visible; gets the inline [...] anchor)
+  endLine: number;   // footer line (only meaningful while expanded)
+  folded: boolean;   // whether the body is currently collapsed in this view
+  handle?: any;      // the Document fold handle while collapsed
+  joinFooter?: boolean; // collapse the footer onto the header line (single-line fold)
 }
+
+// A view range [[row,col],[row,col]] revealed by opening a fold the caret was on —
+// the editor selects it so the just-unfolded text reads "as the cursor".
+export type RevealedRange = [[number, number], [number, number]];
 
 // node-gtk returns `[inRange, iter]` for the get_iter_at_* family but a bare
 // iter for get_start/end_iter. Normalize to an iter.
@@ -183,6 +200,12 @@ export class SyntaxController {
   private readonly tagCache = new Map<string, any>();
   private readonly styleCache = new Map<string, SyntaxStyle | null>();
   private readonly invisibleTag: any;
+  // Styles each collapsed-fold placeholder ([...]) — muted + non-editable.
+  private readonly foldPlaceholderTag: any;
+  // The projection folds collapse through (editor's Document; null for diff panes).
+  private foldHost: FoldHost | null = null;
+  // Active fold handles, one per collapsed region (bodies live only in the model).
+  private readonly activeFolds: any[] = [];
   // Highlights the bracket under the cursor and its match; cursor-driven, managed
   // separately from the parse-driven highlight tags (not in `allTags`).
   private readonly bracketMatchTag: any;
@@ -225,7 +248,7 @@ export class SyntaxController {
   constructor(
     view: SourceView,
     buffer: SourceBuffer,
-    options: { lineNumbers?: boolean; folding?: boolean } = {},
+    options: { lineNumbers?: boolean; folding?: boolean; folds?: FoldHost } = {},
   ) {
     this.view = view;
     this.buffer = buffer;
@@ -267,6 +290,8 @@ export class SyntaxController {
     // The tag that performs the actual hiding when a range is folded.
     this.invisibleTag = new Gtk.TextTag({ name: FOLD_HIDDEN_TAG_NAME, invisible: true });
     (buffer as any).getTagTable().add(this.invisibleTag);
+    this.foldPlaceholderTag = new Gtk.TextTag({ name: 'ts:fold-placeholder', editable: false, foreground: theme.ui.textMuted } as any);
+    (buffer as any).getTagTable().add(this.foldPlaceholderTag);
 
     // Bracket-match highlight (subtle box-like background + bold).
     this.bracketMatchTag = mk({
@@ -295,6 +320,7 @@ export class SyntaxController {
       (renderer as any).controller = this;
       renderer.setXpad(4);
       gutter.insert(renderer, options.lineNumbers ? 1 : 0);
+      this.foldHost = options.folds ?? null;
     }
 
     // Feed edits into the current tree for incremental reparsing. insert-text /
@@ -748,10 +774,25 @@ export class SyntaxController {
   private walkFolds(root: any): void {
     const grammar = this.grammar!;
     const buffer = this.buffer as any;
-    for (const { startRow, endRow } of computeFoldRanges(root, grammar.foldsQuery, grammar.foldTypes, RUN_FOLD_RE)) {
-      // Folded state is derived from the live invisible tag so it tracks edits.
-      const folded = asIter(buffer.getIterAtLine(startRow + 1)).hasTag(this.invisibleTag);
-      this.foldsByHeaderLine.set(startRow, { startLine: startRow, endLine: endRow, folded });
+    // Expanded foldable regions from the parse (their bodies are present in the view).
+    for (const { startRow, endRow, joinFooter } of computeFoldRanges(root, grammar.foldsQuery, grammar.foldTypes, RUN_FOLD_RE)) {
+      this.foldsByHeaderLine.set(startRow, { startLine: startRow, endLine: endRow, folded: false, joinFooter });
+    }
+    // Collapsed folds: their bodies are physically gone, so the parse can't see them —
+    // add each by its placeholder line and (re)apply the placeholder style.
+    if (this.foldHost) {
+      this.pruneDeadFolds();
+      for (const handle of this.activeFolds) {
+        const [ps, pe] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+        const line = asIter(buffer.getIterAtOffset(ps)).getLine();
+        // Don't clobber a foldable region that shares this line (e.g. `} function f2() {`
+        // joined onto a collapsed line) — that region must stay reachable by `zc`. This
+        // fold is still in `activeFolds`, so its marker stays navigable + unfoldable.
+        if (!this.foldsByHeaderLine.has(line)) {
+          this.foldsByHeaderLine.set(line, { startLine: line, endLine: line, folded: true, handle });
+        }
+        buffer.applyTag(this.foldPlaceholderTag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
+      }
     }
   }
 
@@ -812,24 +853,81 @@ export class SyntaxController {
 
   // --- folding operations ----------------------------------------------------
 
-  private toggleFold(region: FoldRegion): void {
+  /** Toggle `region`. Returns the view range revealed by an expand when the caret was
+   *  directly on the marker (so the caller can highlight it), else null. */
+  private toggleFold(region: FoldRegion): RevealedRange | null {
     const buffer = this.buffer as any;
-    const bodyStart = asIter(buffer.getIterAtLine(region.startLine + 1));
-    const bodyEnd = asIter(buffer.getIterAtLine(region.endLine));
-
-    if (region.folded) {
-      buffer.removeTag(this.invisibleTag, bodyStart, bodyEnd);
+    const cursorOff = asIter(buffer.getIterAtMark(buffer.getInsert())).getOffset();
+    let revealed: RevealedRange | null = null;
+    if (region.folded && region.handle) {
+      // Expand: restore the body text from the model. If the caret was on the marker,
+      // report the restored range so the caller highlights it.
+      const [ps, pe] = this.foldHost!.foldPlaceholderRange(this.buffer, region.handle);
+      const onMarker = cursorOff >= ps && cursorOff <= pe;
+      const sm = buffer.createMark(null, asIter(buffer.getIterAtOffset(ps)), true);
+      const em = buffer.createMark(null, asIter(buffer.getIterAtOffset(pe)), false);
+      this.foldHost!.unfoldView(this.buffer, region.handle);
+      if (onMarker) revealed = [this.pointAtOffset(this.markOffset(sm)), this.pointAtOffset(this.markOffset(em))];
+      buffer.deleteMark(sm);
+      buffer.deleteMark(em);
+      const i = this.activeFolds.indexOf(region.handle);
+      if (i >= 0) this.activeFolds.splice(i, 1);
       region.folded = false;
-    } else {
-      buffer.applyTag(this.invisibleTag, bodyStart, bodyEnd);
-      region.folded = true;
-      // Keep the cursor out of the hidden range (GtkTextView's invisible caveat).
-      const cursor = asIter(buffer.getIterAtMark(buffer.getInsert()));
-      if (cursor.getLine() > region.startLine && cursor.getLine() < region.endLine) {
-        buffer.placeCursor(asIter(buffer.getIterAtLine(region.startLine)));
+      region.handle = undefined;
+    } else if (!region.folded && this.foldHost) {
+      // Collapse: physically replace the body (after `{` .. the `}`) with `[N]` in the
+      // VIEW buffer — the model keeps the full text. Only move the caret if it was
+      // *inside* the removed body (closing a fold shouldn't jump the cursor otherwise).
+      const join = region.joinFooter !== false;
+      const viewStart = this.lineEndIter(region.startLine).getOffset();
+      // join: collapse through the footer's `}` (single line). keep-footer: collapse to
+      // the newline ending the last body line, so `}`/`} else …` stays on its own line.
+      const viewEnd = join
+        ? this.footerContentStart(region.endLine).getOffset()
+        : this.lineEndIter(region.endLine - 1).getOffset();
+      const cursorInside = cursorOff > viewStart && cursorOff < viewEnd;
+      const lines = join ? region.endLine - region.startLine + 1 : region.endLine - region.startLine - 1;
+      const placeholder = `[${lines}]`; // lines folded
+      const handle = this.foldHost.foldViewRange(this.buffer, viewStart, viewEnd, placeholder);
+      // foldViewRange may have subsumed folds nested in this range — drop their handles.
+      this.pruneDeadFolds();
+      if (handle) {
+        this.activeFolds.push(handle);
+        region.folded = true;
+        region.handle = handle;
+        const [ps, pe] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+        buffer.applyTag(this.foldPlaceholderTag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
+        if (cursorInside) buffer.placeCursor(asIter(buffer.getIterAtOffset(ps)));
       }
     }
+    // The collapse/expand edited the view buffer → a reparse is scheduled (rebuilds
+    // the fold state); repaint now for responsiveness.
     (this.view as any).queueDraw();
+    return revealed;
+  }
+
+  private markOffset(mark: any): number {
+    return asIter((this.buffer as any).getIterAtMark(mark)).getOffset();
+  }
+
+  private pointAtOffset(offset: number): [number, number] {
+    const iter = asIter((this.buffer as any).getIterAtOffset(offset));
+    return [iter.getLine(), iter.getLineOffset()];
+  }
+
+  /** End-of-line iter for a buffer line (the position of its trailing newline). */
+  private lineEndIter(line: number): any {
+    const iter = asIter((this.buffer as any).getIterAtLine(line));
+    if (!iter.endsLine()) iter.forwardToLineEnd();
+    return iter;
+  }
+
+  /** Iter at the footer line's first non-whitespace glyph (its `}`), so a fold hides
+   *  the leading indentation and the `}` joins the header flush. */
+  private footerContentStart(line: number): any {
+    const iter = asIter((this.buffer as any).getIterAtLine(line));
+    while (!iter.endsLine() && (iter.getChar() === 0x20 || iter.getChar() === 0x09)) iter.forwardChar();
+    return iter;
   }
 
   /** Toggle a fold by its header line (used by the gutter renderer's click). */
@@ -839,21 +937,17 @@ export class SyntaxController {
   }
 
   /**
-   * Whether `line` sits inside a *folded* region's hidden body (used by the
-   * line-number gutter to skip hidden lines). Cheap region check — no iter ops.
+   * Whether `line` sits inside a *folded* region's hidden body (the lines between
+   * the header and the footer). Used by the line-number gutter to skip hidden
+   * lines. Cheap region check — no iter ops.
    */
-  isLineHidden(line: number): boolean {
-    for (const region of this.foldsByHeaderLine.values()) {
-      if (region.folded && line > region.startLine && line < region.endLine) return true;
-    }
-    return false;
+  isLineHidden(_line: number): boolean {
+    return false; // folds physically collapse the view — no view lines are hidden
   }
 
   /** Reveal `row` if it sits inside a collapsed fold (unfold every fold hiding it). */
-  unfoldRow(row: number): void {
-    for (const region of this.foldsByHeaderLine.values()) {
-      if (region.folded && row > region.startLine && row < region.endLine) this.toggleFold(region);
-    }
+  unfoldRow(_row: number): void {
+    // Bodies are collapsed out of the view, so there are no hidden view rows to reveal.
   }
 
   /** Every foldable region's inclusive line span (header → close), for the vim
@@ -914,10 +1008,41 @@ export class SyntaxController {
     this.lineNumberRenderer.queueResize();
   }
 
+  /** A folded FoldRegion for an active handle (reuse the map's tracked object when it
+   *  matches, so toggleFold mutates/removes the same one). */
+  private regionForHandle(handle: any, pStart: number | undefined): FoldRegion {
+    const p = pStart ?? this.foldHost!.foldPlaceholderRange(this.buffer, handle)[0];
+    const line = asIter((this.buffer as any).getIterAtOffset(p)).getLine();
+    const existing = this.foldsByHeaderLine.get(line);
+    if (existing && existing.handle === handle) return existing;
+    return { startLine: line, endLine: line, folded: true, handle };
+  }
+
   private regionAtCursor(): FoldRegion | null {
-    const line = asIter((this.buffer as any).getIterAtMark((this.buffer as any).getInsert())).getLine();
+    const buffer = this.buffer as any;
+    const cursor = asIter(buffer.getIterAtMark(buffer.getInsert()));
+    const off = cursor.getOffset();
+    const line = cursor.getLine();
+    // 1. A collapsed placeholder the caret is on or nearest to — iterate the active
+    //    handles (not the per-line map) so several folds on one line each get their
+    //    own `za`/`zo`, offset-precise.
+    let nearest: any = null;
+    let nearestDist = Infinity;
+    if (this.foldHost) {
+      for (const handle of this.activeFolds) {
+        const [p, e] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+        if (off >= p && off <= e) return this.regionForHandle(handle, p); // on/at the marker
+        if (asIter(buffer.getIterAtOffset(p)).getLine() === line) {
+          const d = Math.min(Math.abs(off - p), Math.abs(off - e));
+          if (d < nearestDist) { nearestDist = d; nearest = handle; }
+        }
+      }
+    }
+    if (nearest) return this.regionForHandle(nearest, undefined);
+    // 2. Otherwise the innermost expanded foldable region containing the caret line.
     let best: FoldRegion | null = null;
     for (const region of this.foldsByHeaderLine.values()) {
+      if (region.folded) continue;
       if (line >= region.startLine && line <= region.endLine) {
         if (!best || region.startLine > best.startLine) best = region; // innermost
       }
@@ -932,42 +1057,76 @@ export class SyntaxController {
    * exposed. Returns whether anything was opened. No-op when `line` is visible
    * (so resting on a fold *header* never auto-opens it).
    */
-  revealLine(line: number): boolean {
-    let changed = false;
-    // Each pass exposes one more level; bounded by the fold count.
-    for (let guard = this.foldsByHeaderLine.size; guard >= 0 && this.isLineHidden(line); guard--) {
-      let outer: FoldRegion | null = null;
-      for (const region of this.foldsByHeaderLine.values()) {
-        if (region.folded && line > region.startLine && line < region.endLine) {
-          if (!outer || region.startLine < outer.startLine) outer = region;
-        }
-      }
-      if (!outer) break;
-      this.toggleFold(outer);
-      changed = true;
-    }
-    return changed;
+  revealLine(_line: number): boolean {
+    return false; // no hidden view rows; a folded body simply isn't in the view
   }
 
-  setFoldAtCursor(folded: boolean): void {
+  setFoldAtCursor(folded: boolean): RevealedRange | null {
     const region = this.regionAtCursor();
-    if (region && region.folded !== folded) this.toggleFold(region);
+    return region && region.folded !== folded ? this.toggleFold(region) : null;
   }
 
-  toggleFoldAtCursor(): void {
+  toggleFoldAtCursor(): RevealedRange | null {
     const region = this.regionAtCursor();
-    if (region) this.toggleFold(region);
+    return region ? this.toggleFold(region) : null;
   }
 
   foldAll(): void {
-    for (const region of this.foldsByHeaderLine.values()) if (!region.folded) this.toggleFold(region);
+    // Bottom-up so collapsing one region doesn't shift the line numbers of those above.
+    const regions = [...this.foldsByHeaderLine.values()].filter((r) => !r.folded).sort((a, b) => b.startLine - a.startLine);
+    for (const region of regions) this.toggleFold(region);
   }
 
   unfoldAll(): void {
-    const buffer = this.buffer as any;
-    buffer.removeTag(this.invisibleTag, buffer.getStartIter(), buffer.getEndIter());
-    for (const region of this.foldsByHeaderLine.values()) region.folded = false;
+    for (const handle of [...this.activeFolds]) this.foldHost?.unfoldView(this.buffer, handle);
+    this.activeFolds.length = 0;
+    for (const region of this.foldsByHeaderLine.values()) { region.folded = false; region.handle = undefined; }
     (this.view as any).queueDraw();
+  }
+
+  /** Drop fold handles an enclosing fold has subsumed (their marks are gone), so the
+   *  read paths never query a dead handle. */
+  private pruneDeadFolds(): void {
+    if (!this.foldHost) return;
+    for (let i = this.activeFolds.length - 1; i >= 0; i--) {
+      if (!this.foldHost.isFoldAlive(this.activeFolds[i])) this.activeFolds.splice(i, 1);
+    }
+  }
+
+  /** Reveal every collapsed fold whose model content satisfies `test` (search reveals
+   *  folds that contain a match, leaving the rest folded — not a blanket unfold-all). */
+  revealFoldsMatching(test: (text: string) => boolean): void {
+    if (!this.foldHost) return;
+    for (const handle of [...this.activeFolds]) {
+      if (!this.foldHost.isFoldAlive(handle)) continue;
+      if (test(this.foldHost.foldModelText(this.buffer, handle))) {
+        this.unfoldAtViewOffset(this.foldHost.foldPlaceholderRange(this.buffer, handle)[0]);
+      }
+    }
+  }
+
+  /** View-offset [start,end) ranges of every collapsed-fold placeholder (atomic to
+   *  the cursor + non-editable). */
+  placeholderRanges(): Array<[number, number]> {
+    if (!this.foldHost) return [];
+    this.pruneDeadFolds();
+    return this.activeFolds.map((h) => this.foldHost!.foldPlaceholderRange(this.buffer, h));
+  }
+
+  /** Unfold the fold whose placeholder contains view `offset` (editing/searching a
+   *  fold reveals it); returns whether one was opened. */
+  unfoldAtViewOffset(offset: number): boolean {
+    if (!this.foldHost) return false;
+    for (const handle of [...this.activeFolds]) {
+      const [p, e] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+      if (offset >= p && offset < e) { this.toggleFold(this.regionForHandle(handle, p)); return true; }
+    }
+    return false;
+  }
+
+  /** The model (file) line shown at view line `viewLine` — the gutter renders this. */
+  modelLineFor(viewLine: number): number {
+    return this.foldHost ? this.foldHost.modelLineForViewLine(this.buffer, viewLine) : viewLine;
   }
 }
 
@@ -983,7 +1142,7 @@ class FoldRenderer extends GtkSource.GutterRendererText {
   queryData(_lines: any, line: number) {
     const controller = (this as any).controller as SyntaxController | undefined;
     const region = controller?.foldsByHeaderLine.get(line);
-    const glyph = region && !controller!.isLineHidden(line) ? (region.folded ? '▸' : '▾') : ' ';
+    const glyph = region ? (region.folded ? '▸' : '▾') : ' ';
     this.setMarkup(glyph, -1);
   }
 
@@ -1014,11 +1173,11 @@ class LineNumberRenderer extends GtkSource.GutterRendererText {
     // Always emit fixed-width content so the gutter column keeps a stable width
     // (empty text collapses it to zero → no numbers show). Hidden (folded) lines
     // render as blanks of the same width, so they don't pile up.
-    if (!controller || controller.isLineHidden(line)) {
+    if (!controller) {
       this.setText(' '.repeat(width), -1);
       return;
     }
-    const num = String(line + 1).padStart(width, ' ');
+    const num = String(controller.modelLineFor(line) + 1).padStart(width, ' ');
     this.setMarkup(`<span foreground="${LINE_NUMBER_COLOR}">${num}</span>`, -1);
   }
 }

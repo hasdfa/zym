@@ -115,13 +115,15 @@ export class SideBySideDiffView implements FoldProvider {
     const fold = this.folds[1].viewHasFocus() ? this.folds[1] : this.folds[0];
     return fold.regionIndexAtCursor();
   }
-  toggleFoldAtCursor(): void {
+  toggleFoldAtCursor(): null {
     const i = this.cursorIndex();
     if (i !== -1) for (const fold of this.folds) fold.toggle(i);
+    return null;
   }
-  setFoldAtCursor(folded: boolean): void {
+  setFoldAtCursor(folded: boolean): null {
     const i = this.cursorIndex();
     if (i !== -1) for (const fold of this.folds) fold.setFolded(i, folded);
+    return null;
   }
   foldAll(): void {
     for (const fold of this.folds) fold.setAll(true);

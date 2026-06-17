@@ -13,6 +13,14 @@ below were probed and **exist in our node-gtk build**.
 > rect in buffer coords, and `Gtk.TextTag.pixels-below-lines`/`pixels-above-lines`
 > reserve the gap. First consumers: the diff fold placeholder (replacing the
 > synthesized `FoldRow`) and a see-definition peek.
+>
+> **Update 2 — showing *less* than the model (single-line navigable code folding)
+> uses a third mechanism: a view-side text *projection*. See
+> [folding.md](folding.md).** GtkTextView can't join two real lines across an
+> invisible newline, so the view buffer physically holds the collapsed one-liner
+> (`import {[N]} from 'x'`) with the model as source of truth + view↔model
+> translation. Complements the overlay/annotation tiers here (those *add* content;
+> the projection *removes* it).
 
 ## Features that want it
 

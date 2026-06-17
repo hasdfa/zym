@@ -80,6 +80,23 @@ export interface FunctionRange {
   inner: Range;
 }
 
+/** How EditorModel reaches the fold projection: placeholder ranges are atomic to the
+ *  cursor, editing one reveals it, and search runs over the unfolded document. */
+export interface FoldAccess {
+  /** View-offset [start, end) ranges of every collapsed-fold placeholder. */
+  placeholderRanges(): Array<[number, number]>;
+  /** Unfold the fold whose placeholder contains `viewOffset`; true if one did. */
+  unfoldAt(viewOffset: number): boolean;
+  /** Expand every fold (so a search sees the whole document). */
+  unfoldAll(): void;
+  /** MODEL caret → VIEW caret (folds shift lines/cols); for rendering LSP results. */
+  viewPointFromModel(point: Point): Point;
+  /** MODEL line text (no newline) — for LSP column-encoding of model-space ranges. */
+  modelLineText(row: number): string;
+  /** Reveal folds whose collapsed model content matches `test` (search). */
+  revealFoldsMatching(test: (text: string) => boolean): void;
+}
+
 export class EditorModel {
   // The vim layer reaches `editorElement.constructor.CursorType`; EditorModel is
   // both the `editor` and the `editorElement`, so it carries it statically.
@@ -169,7 +186,7 @@ export class EditorModel {
     this.view.setOverwrite(false); // the block look comes from the tag, not overwrite
     // Keep the block caret on the insert mark even when it moves outside the vim
     // layer (e.g. a mouse click placing the cursor), not just after operations.
-    this.buffer.on('notify::cursor-position', () => this.refreshCursorStyle());
+    this.buffer.on('notify::cursor-position', () => this.onCursorMoved());
     this.installChangeTracking();
   }
 
@@ -445,7 +462,79 @@ export class EditorModel {
     // layer relies on this to drop a visual-block's extra cursors (e.g. leaving
     // insert mode after `ctrl-v I`).
     if (this.extraSelections.length) this.clearExtraSelections();
-    this.buffer.placeCursor(this.iterAtPoint(point));
+    this.buffer.placeCursor(this.snapOutOfFold(this.iterAtPoint(point)));
+  }
+
+  // --- Fold awareness (the [...] placeholder is atomic + non-editable) --------
+
+  private foldAccess: FoldAccess | null = null;
+  private lastCursorOffset = 0;
+  private snappingCursor = false;
+
+  /** Wire the fold projection (the editor passes its SyntaxController's view). */
+  setFoldAccess(access: FoldAccess): void {
+    this.foldAccess = access;
+  }
+
+  /** Reveal folds whose collapsed content matches — so a search finds matches inside
+   *  them while leaving non-matching folds closed. */
+  revealFoldsMatching(test: (text: string) => boolean): void {
+    this.foldAccess?.revealFoldsMatching(test);
+  }
+
+  /** MODEL row text (the LSP file's line), falling back to the view when no folds. */
+  modelLineTextForRow(row: number): string {
+    return this.foldAccess ? this.foldAccess.modelLineText(row) : this.lineTextForBufferRow(row);
+  }
+
+  /** Translate a MODEL range (LSP result) into VIEW space for rendering on the buffer. */
+  viewRangeFromModel(range: Range): Range {
+    if (!this.foldAccess) return Range.fromObject(range);
+    const r = Range.fromObject(range);
+    return new Range(this.foldAccess.viewPointFromModel(r.start), this.foldAccess.viewPointFromModel(r.end));
+  }
+
+  private offsetOf(iter: TextIter): number {
+    return iter.getOffset();
+  }
+
+  private iterAtOffset(offset: number): TextIter {
+    return unwrapIter(this.buffer.getIterAtOffset(offset));
+  }
+
+  /** If `iter` lands strictly inside a fold placeholder, return its near/far edge by
+   *  travel direction (so a motion jumps over the atomic `[...]`); else `iter`. */
+  private snapOutOfFold(iter: TextIter): TextIter {
+    if (!this.foldAccess) return iter;
+    const off = iter.getOffset();
+    const cur = this.offsetOf(unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert())));
+    for (const [p, e] of this.foldAccess.placeholderRanges()) {
+      if (off > p && off < e) return this.iterAtOffset(off >= cur ? e : p);
+    }
+    return iter;
+  }
+
+  /** Cursor moved (any source incl. native clicks/arrows): keep the primary caret out
+   *  of a placeholder's interior. Only when there's no selection (placeCursor would
+   *  otherwise collapse it); selection-driven motions snap via setCursorBufferPosition. */
+  private onCursorMoved(): void {
+    if (!this.snappingCursor && this.foldAccess) {
+      const insert = unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
+      const bound = unwrapIter(this.buffer.getIterAtMark(this.buffer.getSelectionBound()));
+      const off = insert.getOffset();
+      if (off === bound.getOffset()) {
+        for (const [p, e] of this.foldAccess.placeholderRanges()) {
+          if (off > p && off < e) {
+            this.snappingCursor = true;
+            this.buffer.placeCursor(this.iterAtOffset(off >= this.lastCursorOffset ? e : p));
+            this.snappingCursor = false;
+            break;
+          }
+        }
+      }
+      this.lastCursorOffset = this.offsetOf(unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert())));
+    }
+    this.refreshCursorStyle();
   }
 
   // --- Selections & cursors (single, surfaced as arrays) ---------------------
@@ -653,6 +742,31 @@ export class EditorModel {
    */
   setTextInBufferRange(range: RangeLike, text: string): Range {
     const r = Range.fromObject(range);
+    // An edit spanning a fold placeholder reveals those folds first, then acts on the
+    // real (former-folded) text — so deleting/changing a selection that includes a
+    // folded region works. Marks keep the edit range across the expansion.
+    if (this.foldAccess) {
+      const s0 = this.iterAtPoint(r.start).getOffset();
+      const e0 = this.iterAtPoint(r.end).getOffset();
+      const touched = this.foldAccess.placeholderRanges().filter(([p, pe]) => s0 < pe && e0 > p);
+      if (touched.length) {
+        const sm = this.buffer.createMark(null, this.iterAtOffset(s0), true);
+        const em = this.buffer.createMark(null, this.iterAtOffset(e0), false);
+        let revealed = false;
+        for (const [p] of touched) revealed = this.foldAccess.unfoldAt(p) || revealed;
+        const ns = unwrapIter(this.buffer.getIterAtMark(sm)).getOffset();
+        const ne = unwrapIter(this.buffer.getIterAtMark(em)).getOffset();
+        this.buffer.deleteMark(sm);
+        this.buffer.deleteMark(em);
+        // Recurse only if a fold actually opened, else we'd loop forever on the same range.
+        if (revealed) {
+          return this.setTextInBufferRange(
+            new Range(this.pointAtIter(this.iterAtOffset(ns)), this.pointAtIter(this.iterAtOffset(ne))),
+            text,
+          );
+        }
+      }
+    }
     return this.transact(() => {
       const start = this.iterAtPoint(r.start);
       const end = this.iterAtPoint(r.end);
@@ -1344,8 +1458,15 @@ export class EditorModel {
       return;
     }
 
-    const next = iter.copy();
+    let next = iter.copy();
     next.forwardChar();
+    // A fold placeholder is one atomic glyph — cover the whole `[...]` when on it.
+    if (this.foldAccess) {
+      const off = iter.getOffset();
+      for (const [p, e] of this.foldAccess.placeholderRanges()) {
+        if (off === p) { next = this.iterAtOffset(e); break; }
+      }
+    }
     // Raise the cursor tag above any syntax tags so its reverse-video foreground
     // wins (tag priority is creation order; syntax tags are created later).
     this.cursorTag.setPriority(this.buffer.getTagTable().getSize() - 1);

@@ -231,6 +231,10 @@ export class SearchController {
     this.matches = [];
     if (regex) {
       this.onPattern?.(regex); // publish the live pattern for the vim `gn` text objects
+      // Reveal folds that contain a match (their content isn't in the collapsed view),
+      // leaving non-matching folds closed — then scan the now-visible text.
+      const probe = new RegExp(regex.source, regex.flags.replace('g', ''));
+      this.editor.revealFoldsMatching((text) => probe.test(text));
       this.editor.scan(regex, ({ range }) => this.matches.push(range));
     }
   }
