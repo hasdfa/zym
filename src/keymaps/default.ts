@@ -56,6 +56,11 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
   'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
+  // Hunk-level staging on the gutter hunk under the cursor (editor only): "s"tage,
+  // "u"nstage (a staged/blue hunk), "r"evert (discard the unstaged change).
+  'space h s': 'git:stage-hunk',
+  'space h u': 'git:unstage-hunk',
+  'space h r': 'git:revert-hunk',
   // Branch (space g b …): switch / delete / merge / rename.
   'space g b b': 'git:branch-switch', // "b"ranch picker (switch / create)
   'space g b d': 'git:branch-delete',

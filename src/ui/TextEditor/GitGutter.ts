@@ -1,12 +1,18 @@
 /*
  * GitGutter — a VS Code-style change bar in the editor's left gutter.
  *
- * Draws a colored bar on each line that differs from HEAD: added (green),
- * modified (amber), and a marker on the line above a deletion (red). Updates
- * live as you type: the editor buffer is diffed in-process (Myers, see
- * util/lineDiff) against the file's HEAD blob, debounced. The HEAD blob is
- * (re)fetched on load and on any `GitRepo.onChange` (commits, staging, branch
- * switches), so the bars stay correct as both sides move.
+ * Draws a colored bar on each line that differs from the index/HEAD: unstaged
+ * changes (added=green, modified=amber, deletion marker=red) and staged changes
+ * (blue). Two diffs feed it, both computed in-process (Myers, see util/lineDiff):
+ * the live buffer against the file's *index* blob (unstaged hunks — the
+ * stage/revert targets) and the index against the *HEAD* blob (staged hunks — the
+ * unstage targets). Both base blobs are (re)fetched on load and on any
+ * `GitRepo.onChange` (commits, staging, branch switches), so the bars stay
+ * correct as all three sides move.
+ *
+ * It also drives hunk-level git actions: `stageHunk` / `unstageHunk` synthesize a
+ * unified diff for the hunk under the cursor and `git apply` it to the index;
+ * reverting is done in the buffer by the editor (it owns the edit).
  *
  * Mirrors DiagnosticsView: a `GtkSource.GutterRendererText` subclass driven by a
  * line→kind map, repainted with `queueDraw()`.
@@ -15,20 +21,22 @@ import * as Path from 'node:path';
 import { GLib, Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
-import { diffLines } from '../../util/lineDiff.ts';
-import { git, repoRoot } from '../../git.ts';
+import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../../util/hunkPatch.ts';
+import { applyPatch, git, repoRoot } from '../../git.ts';
 import { isLineFolded } from '../../syntax/syntax-controller.ts';
 import type { GitRepo } from '../../git.ts';
 
 type ChangeKind = 'added' | 'modified' | 'removed';
 
 // Bar colors match the rest of the git UI (GitBranchButton / GitPanel): theme
-// semantic colors.
+// semantic colors. Staged changes use the `info` blue so they read as a distinct
+// (already-staged, unstageable) state next to the unstaged add/modify/remove.
 const COLORS: Record<ChangeKind, string> = {
   added: theme.ui.success,
   modified: theme.ui.warning,
   removed: theme.ui.error,
 };
+const STAGED_COLOR = theme.ui.info;
 // U+258F LEFT ONE EIGHTH BLOCK — the thinnest full-height block glyph (~1px), so
 // stacked lines read as one continuous hairline bar.
 const BAR = '▏';
@@ -47,17 +55,27 @@ function splitLines(text: string): string[] {
 class GitGutterRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)
   kindByLine!: Map<number, ChangeKind>;
+  stagedLines!: Set<number>;
   buffer!: any;
 
   queryData(_lines: any, line: number) {
-    const kind = this.kindByLine?.get(line);
-    // Blank for unchanged lines, and for changed lines hidden inside a fold (so
-    // bars don't pile up at the collapsed position).
-    if (!kind || isLineFolded(this.buffer, line)) {
+    // Blank for changed lines hidden inside a fold (so bars don't pile up at the
+    // collapsed position).
+    if (isLineFolded(this.buffer, line)) {
       this.setMarkup(' ', -1);
       return;
     }
-    this.setMarkup(`<span foreground="${COLORS[kind]}">${BAR}</span>`, -1);
+    const kind = this.kindByLine?.get(line);
+    if (kind) {
+      this.setMarkup(`<span foreground="${COLORS[kind]}">${BAR}</span>`, -1);
+      return;
+    }
+    // Staged-only lines (no overlapping unstaged change) read blue.
+    if (this.stagedLines?.has(line)) {
+      this.setMarkup(`<span foreground="${STAGED_COLOR}">${BAR}</span>`, -1);
+      return;
+    }
+    this.setMarkup(' ', -1);
   }
 }
 registerClass(GitGutterRenderer);
@@ -68,11 +86,21 @@ export class GitGutter {
   private readonly getText: () => string;
   private readonly git: GitRepo;
   private readonly renderer: GitGutterRenderer;
+  // Unstaged changes (index → buffer): the stage / revert targets.
   private readonly kindByLine = new Map<number, ChangeKind>();
+  // Staged changes (HEAD → index), mapped onto buffer rows: the unstage targets.
+  private readonly stagedLines = new Set<number>();
   private readonly subs = new CompositeDisposable();
 
-  // The current file's HEAD blob, split into lines; null until first fetched.
-  private baseLines: string[] | null = null;
+  // The current file's index / HEAD blobs, split into lines; null until fetched.
+  private indexLines: string[] | null = null;
+  private headLines: string[] | null = null;
+  // The latest hunk lists, rebuilt on every recompute() and read by the actions.
+  private unstagedHunks: Hunk[] = [];
+  private stagedHunks: Hunk[] = [];
+  // Repo root + repo-relative path for the current file (set per refresh).
+  private root: string | null = null;
+  private relPath: string | null = null;
   // Bumped per base fetch so a late async result for a superseded file is dropped.
   private baseGeneration = 0;
   // Pending debounced recompute (a GLib timeout id; 0 when none).
@@ -89,34 +117,47 @@ export class GitGutter {
 
     this.renderer = new GitGutterRenderer();
     (this.renderer as any).kindByLine = this.kindByLine;
+    (this.renderer as any).stagedLines = this.stagedLines;
     (this.renderer as any).buffer = (view as any).getBuffer();
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
 
-    // HEAD moved (commit / checkout / staging): re-fetch the base and re-diff.
+    // HEAD / index moved (commit / checkout / staging): re-fetch the bases and re-diff.
     this.subs.add({ dispose: this.git.onChange(() => this.refresh()) });
   }
 
-  /** (Re)fetch the file's HEAD blob, then re-diff. Call on load / save / HEAD change. */
+  /** (Re)fetch the file's index + HEAD blobs, then re-diff. Call on load / save /
+   *  HEAD change. */
   refresh(): void {
     const path = this.getPath();
     const root = path ? this.rootFor(path) : null;
-    if (!path || !root) {
-      this.baseLines = [];
+    this.root = root;
+    this.relPath = path && root ? Path.relative(root, path) : null;
+    if (!path || !root || !this.relPath) {
+      this.indexLines = [];
+      this.headLines = [];
       this.recompute();
       return;
     }
-    const rel = Path.relative(root, path);
+    const rel = this.relPath;
     const generation = ++this.baseGeneration;
-    git(root, ['show', `HEAD:${rel}`], (ok, stdout) => {
+    // No index/HEAD blob (untracked / new / unborn HEAD) → empty base, so that side
+    // reads as fully added. Recompute once both fetches for this generation land.
+    let pending = 2;
+    const settle = () => {
       if (generation !== this.baseGeneration) return; // superseded by a newer fetch
-      // No HEAD blob (untracked / new / unborn HEAD) → empty base, so the whole
-      // file reads as added.
-      this.baseLines = ok ? splitLines(stdout) : [];
-      this.recompute();
+      if (--pending === 0) this.recompute();
+    };
+    git(root, ['show', `:${rel}`], (ok, stdout) => {
+      if (generation === this.baseGeneration) this.indexLines = ok ? splitLines(stdout) : [];
+      settle();
+    });
+    git(root, ['show', `HEAD:${rel}`], (ok, stdout) => {
+      if (generation === this.baseGeneration) this.headLines = ok ? splitLines(stdout) : [];
+      settle();
     });
   }
 
-  /** Debounced re-diff of the live buffer against the cached base (on edits). */
+  /** Debounced re-diff of the live buffer against the cached bases (on edits). */
   scheduleUpdate(): void {
     if (this.updateTimer) GLib.sourceRemove(this.updateTimer);
     this.updateTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
@@ -127,9 +168,9 @@ export class GitGutter {
   }
 
   /** Sorted buffer rows where each git hunk begins — a hunk is a maximal run of
-   *  consecutive changed (added/modified/removed) lines. Drives vim `]h`/`[h`. */
+   *  consecutive changed (unstaged or staged) lines. Drives vim `]h`/`[h`. */
   hunkStartRows(): number[] {
-    const rows = [...this.kindByLine.keys()].sort((a, b) => a - b);
+    const rows = [...new Set([...this.kindByLine.keys(), ...this.stagedLines])].sort((a, b) => a - b);
     const starts: number[] = [];
     let prev = -2;
     for (const row of rows) {
@@ -137,6 +178,43 @@ export class GitGutter {
       prev = row;
     }
     return starts;
+  }
+
+  // --- Hunk-level git actions ------------------------------------------------
+
+  /** The unstaged hunk under buffer `row` (stage / revert target), or null. */
+  unstagedHunkAtRow(row: number): Hunk | null {
+    this.recompute(); // operate on the live buffer, not a debounced snapshot
+    return this.unstagedHunks.find((hunk) => hunkContainsBufferRow(hunk, row)) ?? null;
+  }
+
+  /** The staged hunk under buffer `row` (unstage target), or null. */
+  stagedHunkAtRow(row: number): Hunk | null {
+    this.recompute();
+    return this.stagedHunks.find((hunk) => hunkContainsBufferRow(hunk, row)) ?? null;
+  }
+
+  /** Stage one unstaged hunk: synthesize its (index→buffer) patch and apply it to
+   *  the index. On success the repo + gutter refresh so the bar turns blue. */
+  stageHunk(hunk: Hunk, onDone?: (ok: boolean, error: string) => void): void {
+    this.applyHunk(hunk, { cached: true }, onDone);
+  }
+
+  /** Unstage one staged hunk: apply its (HEAD→index) patch in reverse to the index. */
+  unstageHunk(hunk: Hunk, onDone?: (ok: boolean, error: string) => void): void {
+    this.applyHunk(hunk, { cached: true, reverse: true }, onDone);
+  }
+
+  private applyHunk(hunk: Hunk, opts: { cached?: boolean; reverse?: boolean }, onDone?: (ok: boolean, error: string) => void): void {
+    if (!this.root || !this.relPath) return onDone?.(false, 'not in a git repository');
+    const patch = formatHunkPatch(this.relPath, hunk);
+    applyPatch(this.root, patch, opts, (ok, _stdout, stderr) => {
+      if (ok) {
+        this.git.refresh(); // let the Source Control panel pick up the new index state
+        this.refresh(); // re-fetch the index blob so the bars reflect the staged hunk
+      }
+      onDone?.(ok, stderr);
+    });
   }
 
   dispose(): void {
@@ -155,37 +233,45 @@ export class GitGutter {
     return this.cachedRoot;
   }
 
-  // Diff the live buffer against the base and rebuild the line→kind map.
+  // Re-diff the live buffer against the bases and rebuild the line→kind map and
+  // the cached hunk lists.
   private recompute(): void {
-    if (this.baseLines === null) return; // base not fetched yet; refresh() will drive it
+    if (this.indexLines === null || this.headLines === null) return; // bases not fetched yet
     this.kindByLine.clear();
+    this.stagedLines.clear();
 
-    const ops = diffLines(this.baseLines, splitLines(this.getText()));
-    let row = 0; // 0-based line in the new (buffer) side
-    let i = 0;
-    while (i < ops.length) {
-      if (ops[i] === 'eq') {
-        row++;
-        i++;
-        continue;
-      }
-      // A change run: consecutive deletions/insertions, classified like git.
-      let deletions = 0;
-      const inserted: number[] = [];
-      while (i < ops.length && ops[i] !== 'eq') {
-        if (ops[i] === 'ins') inserted.push(row++);
-        else deletions++;
-        i++;
-      }
-      if (inserted.length === 0) {
-        // Pure deletion: mark the surviving line above the gap (always exists).
-        this.mark(Math.max(0, row - 1), 'removed');
+    const bufferLines = splitLines(this.getText());
+
+    // Unstaged: index → buffer. These bars sit directly on buffer rows.
+    this.unstagedHunks = computeHunks(this.indexLines, bufferLines);
+    for (const hunk of this.unstagedHunks) this.markUnstaged(hunk);
+
+    // Staged: HEAD → index. Computed in index coordinates, then mapped onto buffer
+    // rows through the index→buffer alignment so they land on the right line even
+    // when there are also unstaged edits above them.
+    this.stagedHunks = computeHunks(this.headLines, this.indexLines);
+    const indexToBuffer = buildRowMap(this.indexLines, bufferLines);
+    const mapRow = (indexRow: number) =>
+      indexToBuffer[Math.min(indexRow, indexToBuffer.length - 1)] ?? bufferLines.length - 1;
+    for (const hunk of this.stagedHunks) {
+      if (hunk.newLines.length === 0) {
+        this.stagedLines.add(Math.max(0, mapRow(hunk.newStart) - 1));
       } else {
-        const kind: ChangeKind = deletions === 0 ? 'added' : 'modified';
-        for (const r of inserted) this.mark(r, kind);
+        for (let i = 0; i < hunk.newLines.length; i++) this.stagedLines.add(mapRow(hunk.newStart + i));
       }
     }
+
     this.renderer.queueDraw();
+  }
+
+  private markUnstaged(hunk: Hunk): void {
+    if (hunk.newLines.length === 0) {
+      // Pure deletion: mark the surviving line above the gap (always exists).
+      this.mark(Math.max(0, hunk.newStart - 1), 'removed');
+    } else {
+      const kind: ChangeKind = hunk.oldLines.length === 0 ? 'added' : 'modified';
+      for (let i = 0; i < hunk.newLines.length; i++) this.mark(hunk.newStart + i, kind);
+    }
   }
 
   private mark(row: number, kind: ChangeKind): void {

@@ -688,6 +688,63 @@ export class TextEditor implements DocumentHost {
     // Live updates: re-diff the buffer (debounced) on every edit.
     this.editorModel.onDidChangeText(() => this.gitGutter?.scheduleUpdate());
     this.root.on('destroy', () => this.gitGutter?.dispose());
+
+    // Hunk-level staging on the hunk under the cursor (gutter bars). Bound to the
+    // `space h …` leader; the gutter does the index `git apply`, revert is an
+    // in-buffer edit (so it's a single undo).
+    quilx.commands.add(this.view, {
+      'git:stage-hunk': () => this.stageHunkAtCursor(),
+      'git:unstage-hunk': () => this.unstageHunkAtCursor(),
+      'git:revert-hunk': () => this.revertHunkAtCursor(),
+    });
+  }
+
+  // Save first (the user's choice) so the index/buffer/worktree agree before any
+  // hunk op, then run `action` with the gutter and the cursor's buffer row.
+  private withHunkGutter(action: (gutter: GitGutter, row: number) => void): void {
+    if (!this.gitGutter) return;
+    if (this.isModified()) this.save();
+    action(this.gitGutter, this.editorModel.getCursorBufferPosition().row);
+  }
+
+  private stageHunkAtCursor(): void {
+    this.withHunkGutter((gutter, row) => {
+      const hunk = gutter.unstagedHunkAtRow(row);
+      if (!hunk) return quilx.notifications.addTrace('No unstaged hunk under the cursor');
+      gutter.stageHunk(hunk, (ok, error) => {
+        if (!ok) quilx.notifications.addError('Failed to stage hunk', { detail: error.trim() });
+      });
+    });
+  }
+
+  private unstageHunkAtCursor(): void {
+    this.withHunkGutter((gutter, row) => {
+      const hunk = gutter.stagedHunkAtRow(row);
+      if (!hunk) return quilx.notifications.addTrace('No staged hunk under the cursor');
+      gutter.unstageHunk(hunk, (ok, error) => {
+        if (!ok) quilx.notifications.addError('Failed to unstage hunk', { detail: error.trim() });
+      });
+    });
+  }
+
+  // Revert (discard) the unstaged hunk under the cursor: replace its buffer rows
+  // with the index version (`hunk.oldLines`), as one undoable edit, then save so
+  // the working tree matches.
+  private revertHunkAtCursor(): void {
+    this.withHunkGutter((gutter, row) => {
+      const hunk = gutter.unstagedHunkAtRow(row);
+      if (!hunk) return quilx.notifications.addTrace('No unstaged hunk under the cursor');
+      const startRow = hunk.newStart;
+      const endRow = hunk.newStart + hunk.newLines.length; // exclusive
+      // Restored text: the index lines, each newline-terminated. A pure deletion
+      // (no buffer rows) re-inserts the removed lines before `startRow`.
+      const restored = hunk.oldLines.map((line) => line + '\n').join('');
+      const range = new Range(new Point(startRow, 0), new Point(endRow, 0));
+      this.editorModel.setTextInBufferRange(range, restored);
+      this.editorModel.setCursorBufferPosition(new Point(startRow, 0));
+      this.save();
+      this.gitGutter?.refresh();
+    });
   }
 
   /** The LSP document adapter for this editor (used by `lsp:*` commands). */

@@ -133,6 +133,28 @@ export function stage(root: string, relPath: string, onDone: GitDone): void {
   git(root, ['add', '--', relPath], onDone);
 }
 
+/**
+ * Apply a unified-diff `patch` (fed on stdin) with `git apply` — the primitive
+ * behind hunk-level staging. `cached` targets the index (stage/unstage); `reverse`
+ * applies it backwards (unstage / discard). `--unidiff-zero --recount` lets git
+ * accept the zero-context patches `formatHunkPatch` synthesizes.
+ */
+export function applyPatch(
+  root: string,
+  patch: string,
+  opts: { cached?: boolean; reverse?: boolean },
+  onDone: GitDone,
+): void {
+  const args = ['apply', '--unidiff-zero', '--recount', '--whitespace=nowarn'];
+  if (opts.cached) args.push('--cached');
+  if (opts.reverse) args.push('--reverse');
+  args.push('-');
+  const child = execFile('git', args, { cwd: root, encoding: 'utf8', maxBuffer: MAX_BUFFER }, (err, stdout, stderr) => {
+    onDone(!err, stdout ?? '', stderr ?? '');
+  });
+  child.stdin?.end(patch);
+}
+
 export function unstage(root: string, relPath: string, onDone: GitDone): void {
   git(root, ['restore', '--staged', '--', relPath], onDone);
 }

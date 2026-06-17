@@ -8,6 +8,7 @@ const Z = (...records: string[]) => records.map((r) => r + '\0').join('');
 test('parseStatus: clean repo on a branch', () => {
   const s = parseStatus(Z('# branch.oid abc1234def', '# branch.head main'));
   assert.equal(s.branch, 'main');
+  assert.equal(s.commit, 'abc1234def');
   assert.equal(s.ahead, null);
   assert.equal(s.behind, null);
   assert.equal(s.conflicts, false);
@@ -28,6 +29,7 @@ test('parseStatus: detached HEAD → short SHA', () => {
 test('parseStatus: unborn branch keeps the branch name', () => {
   const s = parseStatus(Z('# branch.oid (initial)', '# branch.head main'));
   assert.equal(s.branch, 'main');
+  assert.equal(s.commit, null); // unborn branch has no HEAD commit
 });
 
 test('parseStatus: tracked modified (worktree only) vs staged', () => {
@@ -90,7 +92,7 @@ test('parseStatus: conflicts', () => {
 
 test('parseStatus: empty input', () => {
   const s = parseStatus('');
-  assert.deepEqual(s, { branch: null, ahead: null, behind: null, conflicts: false, entries: [] });
+  assert.deepEqual(s, { branch: null, commit: null, ahead: null, behind: null, conflicts: false, entries: [] });
 });
 
 test('parseNumstat: normal + binary', () => {

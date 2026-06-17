@@ -393,6 +393,10 @@ export function checkoutPullRequest(
  */
 export interface GithubServiceGit {
   getBranch(): string | null;
+  /** HEAD commit OID, or null on an unborn branch. */
+  getHead(): string | null;
+  /** Commits ahead/behind upstream, or null when there's no upstream. */
+  getAheadBehind(): { ahead: number; behind: number } | null;
   isBusy(): boolean;
   onChange(callback: () => void): () => void;
 }
@@ -444,6 +448,9 @@ class CliGithubService implements GithubService {
   private defaultBranchFetched = false;
 
   private lastBranch: string | null = null;
+  // HEAD commit + ahead/behind, joined — re-poll GitHub whenever this moves on the
+  // same branch (a local commit, or a push made outside the editor flips ahead→0).
+  private lastHeadSig = '';
   private gitBusy = false;
   // Count of outstanding scheduled refreshes (a pending timer or an in-flight
   // query started by one). Non-zero ⇒ the service is "busy" on its own.
@@ -462,6 +469,7 @@ class CliGithubService implements GithubService {
     this.repoDir = repoRoot(options.cwd);
     this.remoteNames = options.remoteNames;
     this.lastBranch = git.getBranch();
+    this.lastHeadSig = this.headSig();
     this.gitBusy = git.isBusy();
 
     this.unsubscribeGit = git.onChange(() => this.onGitChange());
@@ -521,23 +529,37 @@ class CliGithubService implements GithubService {
 
   // --- internals -------------------------------------------------------------
 
-  // Git moved: a branch switch re-queries the PR; a busy transition just needs to
-  // be re-broadcast so consumers re-read our (composed) busy state.
+  // Git moved: a branch switch re-queries the PR; a HEAD/ahead-behind move on the
+  // same branch re-polls (catching a commit or a push made outside the editor); a
+  // busy transition just needs re-broadcasting so consumers re-read composed busy.
   private onGitChange(): void {
     const branch = this.git.getBranch();
     const busy = this.git.isBusy();
-    const branchChanged = branch !== this.lastBranch;
-    if (branchChanged) {
+    if (branch !== this.lastBranch) {
       this.lastBranch = branch;
+      this.lastHeadSig = this.headSig(); // baseline for the new branch
       this.pr = null; // stale until the new branch's lookup resolves
       this.notify(); // clear the old branch's PR from the view now
       this.lookup();
       return;
     }
+    // Same branch: re-poll GitHub when HEAD or ahead/behind moved. Plain working-
+    // tree edits don't change this, so we don't re-query gh on every keystroke.
+    const headSig = this.headSig();
+    if (headSig !== this.lastHeadSig) {
+      this.lastHeadSig = headSig;
+      this.refresh();
+    }
     if (busy !== this.gitBusy) {
       this.gitBusy = busy;
       this.notify();
     }
+  }
+
+  // HEAD commit + ahead/behind, joined into a comparison key.
+  private headSig(): string {
+    const ab = this.git.getAheadBehind();
+    return `${this.git.getHead() ?? ''}|${ab ? `${ab.ahead}/${ab.behind}` : ''}`;
   }
 
   // Re-query the repo (once), default branch (once), and the PR/CI. `onSettled`

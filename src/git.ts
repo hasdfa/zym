@@ -69,6 +69,12 @@ export interface GitRepo {
    */
   getBranch(): string | null;
   /**
+   * HEAD commit OID (full SHA), or null outside a repo / on an unborn branch.
+   * Moves on any HEAD change (commit, amend, reset, checkout, external push).
+   * Served from the cached poll state.
+   */
+  getHead(): string | null;
+  /**
    * Inserted/deleted line counts of the working tree vs HEAD — `git diff HEAD
    * --numstat` for tracked changes, plus untracked files counted as insertions
    * (matching the old libgit2 `SHOW_UNTRACKED_CONTENT` behaviour, which the branch
@@ -144,6 +150,7 @@ export function openGitRepo(cwd: string): GitRepo {
 /** Cached snapshot the synchronous getters read from. */
 interface State {
   branch: string | null;
+  commit: string | null;
   status: GitStatus | null;
   ahead: AheadBehind | null;
   conflicts: boolean;
@@ -154,6 +161,7 @@ interface State {
 function emptyState(): State {
   return {
     branch: null,
+    commit: null,
     status: null,
     ahead: null,
     conflicts: false,
@@ -192,6 +200,9 @@ class CliGitRepo implements GitRepo {
 
   getBranch(): string | null {
     return this.state.branch;
+  }
+  getHead(): string | null {
+    return this.state.commit;
   }
   getStatus(): GitStatus | null {
     return this.state.status;
@@ -388,6 +399,7 @@ class CliGitRepo implements GitRepo {
     for (const p of tracked) trackedSet.add(trackedAbs ? p : Path.join(root, p));
     return {
       branch: parsed.branch,
+      commit: parsed.commit,
       status: { added, removed },
       ahead:
         parsed.ahead != null && parsed.behind != null
@@ -462,11 +474,13 @@ const STATUS_ARGS = ['status', '--porcelain=v2', '--branch', '-z', '--untracked-
 const NUMSTAT_ARGS = ['diff', '--numstat', '-z', 'HEAD'];
 const LSFILES_ARGS = ['ls-files', '-z'];
 
-/** Change-detection key: branch + ahead/behind + conflicts + per-file staged/
- *  unstaged/untracked state + tracked line totals + untracked insertions. Moves on
- *  edits (tracked numstat or untracked line counts), staging, and branch/upstream
- *  changes (the staging part fixes the old libgit2 gap where an external `git add`
- *  didn't refresh). */
+/** Change-detection key: branch + HEAD commit + ahead/behind + conflicts + per-file
+ *  staged/unstaged/untracked state + tracked line totals + untracked insertions.
+ *  Moves on edits (tracked numstat or untracked line counts), staging, branch/
+ *  upstream changes, and any HEAD move — commit/amend/reset/external push (the
+ *  commit + ahead/behind parts let listeners catch a push made outside the editor).
+ *  (The staging part fixes the old libgit2 gap where an external `git add` didn't
+ *  refresh.) */
 function signature(parsed: ParsedStatus, numstat: Map<string, LineDelta>, untrackedAdded: number): string {
   let added = 0;
   let removed = 0;
@@ -482,7 +496,7 @@ function signature(parsed: ParsedStatus, numstat: Map<string, LineDelta>, untrac
     .map((e) => `${e.relPath}:${e.staged ? 'S' : ''}${e.unstaged ? 'U' : ''}${e.untracked ? '?' : ''}${e.conflicted ? '!' : ''}`)
     .sort()
     .join(',');
-  return [parsed.branch, parsed.ahead, parsed.behind, parsed.conflicts, added, removed, untrackedAdded, files].join('|');
+  return [parsed.branch, parsed.commit, parsed.ahead, parsed.behind, parsed.conflicts, added, removed, untrackedAdded, files].join('|');
 }
 
 // Cap per-file untracked reads so a huge new file can't stall the poll; larger

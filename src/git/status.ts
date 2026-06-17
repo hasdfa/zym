@@ -26,6 +26,8 @@ export interface StatusEntry {
 export interface ParsedStatus {
   /** Branch name, a short SHA when detached, or null when there's no branch info. */
   branch: string | null;
+  /** HEAD commit OID, or null on an unborn branch (no commits yet). */
+  commit: string | null;
   /** Commits ahead of upstream, or null when there is no upstream. */
   ahead: number | null;
   /** Commits behind upstream, or null when there is no upstream. */
@@ -102,7 +104,8 @@ export function parseStatus(out: string): ParsedStatus {
           : null
         : head;
 
-  return { branch, ahead, behind, conflicts, entries };
+  const commit = oid && oid !== '(initial)' ? oid : null;
+  return { branch, commit, ahead, behind, conflicts, entries };
 }
 
 function entry(
