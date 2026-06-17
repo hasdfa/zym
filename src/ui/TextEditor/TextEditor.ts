@@ -339,7 +339,9 @@ export class TextEditor implements DocumentHost {
   // A read-only, compact view onto a shared Document — the live see-definition peek (a
   // second view of an open file). File-backed (unlike bufferMode), but not edited.
   private readonly peekMode: boolean;
-  private readonly gitRepo: GitRepo | null;
+  // The git repo for the change gutter — swapped via `setGitRepo` when this editor's
+  // workbench re-roots into a worktree.
+  private gitRepo: GitRepo | null;
   private placeholderLabel: InstanceType<typeof Gtk.Label> | null = null;
 
   // File I/O, disk-watching, modified-state, title, and the LSP document all live on
@@ -674,6 +676,13 @@ export class TextEditor implements DocumentHost {
   }
 
   // --- Git gutter ------------------------------------------------------------
+
+  /** Re-point the change gutter at a different repo when this editor's workbench
+   *  re-roots into a worktree (a no-op in buffer mode or before a gutter exists). */
+  setGitRepo(git: GitRepo): void {
+    this.gitRepo = git;
+    this.gitGutter?.setGit(git);
+  }
 
   private installGitGutter() {
     if (this.bufferMode || !this.gitRepo) return; // file mode with a repo only

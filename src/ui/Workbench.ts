@@ -21,6 +21,7 @@
  *   hLeft[ left | hCenterRight[ vTop[ top | vBottom[ center | bottom ] ] | right ] ]
  */
 import { Gtk } from '../gi.ts';
+import type { GitRepo } from '../git.ts';
 import type { DiagnosticsPanel } from '../lsp/diagnostics/DiagnosticsPanel.ts';
 import type { FileTree } from './FileTree.ts';
 import type { GitPanel } from './GitPanel.ts';
@@ -44,6 +45,12 @@ export type BottomDock = 'notifications' | 'diagnostics' | 'keymap' | null;
 // handed to the constructor (which docks the center + Source-Control). `bottomDock`
 // is not here — the bottom slot starts empty and is toggled later.
 export interface WorkbenchContents {
+  // The workbench's root directory and the (pooled) git repo for it. Every
+  // per-person view — file tree, Source Control, and the chrome/pickers while
+  // this workbench is active — resolves against these, so an agent in a worktree
+  // sees its own tree/branch (see tasks/agents.md "git worktree integration").
+  cwd: string;
+  git: GitRepo;
   center: PanelGroup;
   fileTree: FileTree;
   gitPanel: GitPanel;
@@ -64,6 +71,11 @@ export class Workbench<TOwner = unknown> {
   // The person this workbench belongs to (the user or an agent); read by the
   // WorkbenchList to render/select.
   owner: TOwner;
+
+  // This workbench's root directory and pooled git repo (see WorkbenchContents).
+  // `cwd`/`git` are reassigned by AppWindow when an agent re-roots into a worktree.
+  cwd: string;
+  git: GitRepo;
 
   // The widgets filling this workbench's slots. `center`/`fileTree`/… are built once;
   // `filesTab`/`gitTab` are reassigned when the left dock is collapsed and re-revealed;
@@ -89,6 +101,8 @@ export class Workbench<TOwner = unknown> {
 
   constructor(owner: TOwner, contents: WorkbenchContents, options: { showSideDock: boolean }) {
     this.owner = owner;
+    this.cwd = contents.cwd;
+    this.git = contents.git;
     this.center = contents.center;
     this.fileTree = contents.fileTree;
     this.gitPanel = contents.gitPanel;

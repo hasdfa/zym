@@ -50,9 +50,16 @@ export class AgentTerminal extends Terminal {
   private readonly permissionModeHandlers: Array<() => void> = [];
   private _changedFiles: string[] = [];
   private readonly fileHandlers: Array<() => void> = [];
-  // The git worktree the agent launched in, computed lazily from its cwd and cached
-  // (the worktree root is fixed for the session). `null` = not inside a repo.
+  // The agent's current working directory: its launch cwd, or a worktree it has
+  // since moved into (reported via the set_worktree bridge tool).
+  private _effectiveCwd: string = this.cwd;
+  // The git worktree the agent is in, computed lazily from `_effectiveCwd` and
+  // cached; recomputed on a cwd change. `null` = not inside a repo.
   private _worktree: WorktreeInfo | null | undefined;
+  private readonly worktreeHandlers: Array<() => void> = [];
+  // A worktree the Bash validator saw the agent create but which it hasn't yet
+  // announced via set_worktree (cleared when it does); drives the warning toast.
+  private _pendingWorktree: string | null = null;
   // A user-pinned display name (`agent:rename`); when set it overrides both the
   // claude-reported session name and the CLI's reported (OSC) title.
   private _displayName: string | null = null;
@@ -112,8 +119,42 @@ export class AgentTerminal extends Terminal {
 
   /** The git worktree the agent runs in, or null when its cwd isn't in a repo. */
   get worktree(): WorktreeInfo | null {
-    if (this._worktree === undefined) this._worktree = worktreeInfo(this.cwd);
+    if (this._worktree === undefined) this._worktree = worktreeInfo(this._effectiveCwd);
     return this._worktree;
+  }
+
+  /** The agent's current working directory — its launch cwd, or a worktree it has
+   *  since moved into (reported via the set_worktree bridge tool). */
+  get effectiveCwd(): string {
+    return this._effectiveCwd;
+  }
+
+  /** Subscribe to the agent moving into a different git worktree. Returns unsub. */
+  onDidChangeWorktree(callback: () => void): () => void {
+    this.worktreeHandlers.push(callback);
+    return () => {
+      const index = this.worktreeHandlers.indexOf(callback);
+      if (index !== -1) this.worktreeHandlers.splice(index, 1);
+    };
+  }
+
+  /** A worktree the validator saw the agent create but which it never announced via
+   *  set_worktree, or null. `clearUnannouncedWorktree` consumes it after warning. */
+  get unannouncedWorktree(): string | null {
+    return this._pendingWorktree;
+  }
+  clearUnannouncedWorktree(): void {
+    this._pendingWorktree = null;
+  }
+
+  // The agent moved into `cwd` (set_worktree): recompute the worktree, drop any
+  // pending validator warning (it did announce), and notify.
+  private setEffectiveCwd(cwd: string): void {
+    if (cwd === this._effectiveCwd) return;
+    this._effectiveCwd = cwd;
+    this._worktree = worktreeInfo(cwd);
+    this._pendingWorktree = null;
+    for (const handler of this.worktreeHandlers) handler();
   }
 
   // A pinned name (`agent:rename`) wins, then Claude's own session name (its
@@ -227,6 +268,8 @@ export class AgentTerminal extends Terminal {
         this._sessionName = name;
         this.emitTitleChange();
       },
+      onCwd: (cwd) => this.setEffectiveCwd(cwd),
+      onWorktreeCreated: (path) => { this._pendingWorktree = path; },
     };
   }
 

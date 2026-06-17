@@ -169,9 +169,11 @@ export class FileTree {
   private tree: InstanceType<typeof Gtk.TreeListModel>;
   private readonly selection: InstanceType<typeof Gtk.SingleSelection>;
   private readonly onOpenFile: (path: string) => void;
-  private readonly rootFile: GFile;
+  // Root + git are swapped by `setRoot` when an agent re-roots into a worktree.
+  private rootFile: GFile;
+  private header!: InstanceType<typeof Gtk.Label>;
 
-  private readonly git?: GitRepo;
+  private git?: GitRepo;
   private statuses = new Map<string, FileGitStatus>();
   private readonly boundItems = new Set<any>();
   private gitUnsubscribe?: () => void;
@@ -264,6 +266,7 @@ export class FileTree {
       ellipsize: Pango.EllipsizeMode.END,
     });
     header.addCssClass('filetree-header');
+    this.header = header;
 
     const rootBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     rootBox.setName('FileTree'); // selector identity for command/keymap rules + chrome
@@ -292,6 +295,25 @@ export class FileTree {
   /** Move keyboard focus into the tree. */
   focus() {
     this.list.grabFocus();
+  }
+
+  /** Re-root the tree at `rootPath` (with `git`) when an agent moves into a
+   *  worktree. Rebuilds the model in place — expand state is reset, which is fine
+   *  for a re-root; the widget/tabs/commands stay put. */
+  setRoot(rootPath: string, git?: GitRepo): void {
+    this.gitUnsubscribe?.();
+    this.gitUnsubscribe = undefined;
+    this.git = git;
+    this.rootFile = Gio.File.newForPath(rootPath);
+    this.statuses = git ? git.getFileStatuses() : new Map();
+    this.trackedFiles = new Set();
+    this.trackedDirs = new Set();
+    if (git) this.refreshTracked();
+    this.header.setLabel(displayPath(rootPath));
+    this.header.setTooltipText(rootPath);
+    this.tree = this.buildTree();
+    this.selection.setModel(this.tree);
+    if (git) this.gitUnsubscribe = git.onChange(() => this.refreshStatuses());
   }
 
   /** Release the git subscription and config observers. */

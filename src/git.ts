@@ -142,9 +142,53 @@ export interface GitRepo {
   dispose(): void;
 }
 
-/** Open the repository containing `cwd` (resolved lazily; non-repos are fine). */
+/** Open the repository containing `cwd` (resolved lazily; non-repos are fine).
+ *  Standalone (un-pooled) — callers own its `dispose`. Prefer `acquireGitRepo`
+ *  for workbench roots, which shares one instance across the same repo root. */
 export function openGitRepo(cwd: string): GitRepo {
   return new CliGitRepo(cwd);
+}
+
+// Ref-counted GitRepo pool keyed by repository root. Workbenches sharing a root
+// (the common N agents : 1 worktree case, and every agent that stays in the main
+// checkout) share one polling CliGitRepo instead of each running its own 1.5s
+// poll + HEAD monitor. A linked worktree has its *own* top-level, so it keys
+// separately from the main checkout — exactly the per-worktree git we want.
+interface RepoEntry {
+  repo: GitRepo;
+  count: number;
+}
+const repoPool = new Map<string, RepoEntry>();
+
+/** Acquire a shared `GitRepo` for the repository containing `cwd`; cwds resolving
+ *  to the same repo root return the same instance. Pair with `releaseGitRepo`. */
+export function acquireGitRepo(cwd: string): GitRepo {
+  // Key by repo root so different cwds in one worktree share; fall back to the
+  // cwd itself when not in a repo (each non-repo dir gets its own dormant repo).
+  const key = cli.repoRoot(cwd) ?? cwd;
+  const existing = repoPool.get(key);
+  if (existing) {
+    existing.count++;
+    return existing.repo;
+  }
+  const repo = new CliGitRepo(cwd);
+  repoPool.set(key, { repo, count: 1 });
+  return repo;
+}
+
+/** Release a `GitRepo` acquired via `acquireGitRepo`; disposes it when the last
+ *  holder releases. A repo not in the pool (e.g. from `openGitRepo`) is disposed
+ *  directly, so this is always a safe release. */
+export function releaseGitRepo(repo: GitRepo): void {
+  for (const [key, entry] of repoPool) {
+    if (entry.repo !== repo) continue;
+    if (--entry.count <= 0) {
+      repoPool.delete(key);
+      entry.repo.dispose();
+    }
+    return;
+  }
+  repo.dispose(); // not pooled — caller-owned
 }
 
 /** Cached snapshot the synchronous getters read from. */

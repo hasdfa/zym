@@ -49,13 +49,15 @@ function countSpan(sign: string, count: number, color: string): string {
 export class GitBranchButton {
   readonly root: InstanceType<typeof Gtk.Button>;
 
-  private readonly repo: GitRepo;
+  // The git repo this button reflects — swapped via `setRepo` when the active
+  // workbench changes (per-workbench roots; see tasks/agents.md).
+  private repo: GitRepo;
   private readonly icon: InstanceType<typeof Gtk.Label>;
   private readonly spinner: InstanceType<typeof Gtk.Spinner>;
   // Branch name plus the working-tree/upstream counts, as one markup label (so
   // the smaller count spans baseline-align with the name — see `countSpan`).
   private readonly label: InstanceType<typeof Gtk.Label>;
-  private readonly unsubscribe: () => void;
+  private unsubscribe: () => void;
 
   constructor(repo: GitRepo, onClicked?: () => void) {
     this.repo = repo;
@@ -87,6 +89,16 @@ export class GitBranchButton {
     this.root.setVisible(false); // shown once a branch is resolved
     this.root.on('clicked', () => onClicked?.());
 
+    this.unsubscribe = repo.onChange(() => this.refresh());
+    this.refresh();
+  }
+
+  /** Point the button at a different repo (active-workbench switch): drop the old
+   *  subscription, bind the new one, and re-render immediately. */
+  setRepo(repo: GitRepo): void {
+    if (repo === this.repo) return;
+    this.unsubscribe();
+    this.repo = repo;
     this.unsubscribe = repo.onChange(() => this.refresh());
     this.refresh();
   }

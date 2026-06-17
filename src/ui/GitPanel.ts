@@ -93,11 +93,13 @@ addStyles(`
 export class GitPanel {
   readonly root: InstanceType<typeof Gtk.Box>;
 
-  private readonly git: GitRepo;
-  private readonly repo: string | null; // repository top-level, or null outside a repo
+  // git/repo are swapped by `setRoot` when an agent re-roots into a worktree.
+  private git: GitRepo;
+  private repo: string | null; // repository top-level, or null outside a repo
   private readonly onOpenFile: (path: string) => void;
   private readonly onCommit: () => void;
   private readonly subs = new CompositeDisposable();
+  private gitUnsub?: () => void; // the active git's onChange subscription
   private readonly list: InstanceType<typeof Gtk.ListBox>;
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly iconAttrs: InstanceType<typeof Pango.AttrList>;
@@ -125,7 +127,17 @@ export class GitPanel {
     this.root.append(this.scrolled);
 
     this.registerCommands();
-    this.subs.add({ dispose: this.git.onChange(() => this.refresh()) });
+    this.gitUnsub = this.git.onChange(() => this.refresh());
+    this.refresh();
+  }
+
+  /** Re-root the panel at `cwd` (with `git`) when an agent moves into a worktree:
+   *  swap the repo + git subscription and re-render. */
+  setRoot(cwd: string, git: GitRepo): void {
+    this.gitUnsub?.();
+    this.git = git;
+    this.repo = repoRoot(cwd);
+    this.gitUnsub = git.onChange(() => this.refresh());
     this.refresh();
   }
 
@@ -138,6 +150,7 @@ export class GitPanel {
   }
 
   dispose(): void {
+    this.gitUnsub?.();
     this.subs.dispose();
   }
 

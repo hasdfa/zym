@@ -38,6 +38,37 @@ if [ "$status" = "files" ]; then
   exit 0
 fi
 
+# PostToolUse(Bash) validator: spot a `git worktree add <path>` the agent might
+# forget to announce via the set_worktree bridge tool. Extract the new worktree's
+# path (first non-option token after "add") and write it atomically to
+# $QUILX_STATUS_FILE.wtcreate; the editor warns if no set_worktree follows.
+if [ "$status" = "bash" ]; then
+  cmd=$(printf '%s' "$payload" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
+  case "$cmd" in
+    *"git worktree add"*)
+      # First non-option token after "add" — skipping flags and the values of the
+      # value-taking ones (-b/-B/--reason) so `-b feature ../wt` yields `../wt`.
+      wt=$(printf '%s' "$cmd" | sed -n 's/.*git worktree add[[:space:]]*//p' \
+        | awk '{
+            skip = 0
+            for (i = 1; i <= NF; i++) {
+              if (skip) { skip = 0; continue }
+              if (substr($i, 1, 1) == "-") {
+                if ($i == "-b" || $i == "-B" || $i == "--reason") skip = 1
+                continue
+              }
+              print $i; exit
+            }
+          }')
+      if [ -n "$wt" ]; then
+        printf '%s' "$wt" > "$QUILX_STATUS_FILE.wtcreate.tmp" 2>/dev/null &&
+          mv "$QUILX_STATUS_FILE.wtcreate.tmp" "$QUILX_STATUS_FILE.wtcreate" 2>/dev/null
+      fi
+      ;;
+  esac
+  exit 0
+fi
+
 if [ "$status" = "notification" ]; then
   case "$payload" in
     *'"permission_prompt"'* | *'"elicitation'*) status=waiting ;;

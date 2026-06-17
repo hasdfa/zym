@@ -36,7 +36,7 @@ import { fileIconGlyph } from './fileIcons.ts';
 import { Icons, iconLabel } from './icons.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
-import { openGitRepo, type GitRepo } from '../git.ts';
+import { acquireGitRepo, releaseGitRepo, type GitRepo } from '../git.ts';
 import { git, repoRoot, commitMsgPath } from '../git.ts';
 import { openGithubService, type GithubService } from '../github.ts';
 import { computeDiff } from '../util/DiffModel.ts';
@@ -50,6 +50,7 @@ import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
+import { openWorktreePicker } from './WorktreePicker.ts';
 import {
   openBranchPicker,
   openDeleteBranchPicker,
@@ -121,6 +122,9 @@ export class AppWindow {
   // Editor tabs in the active workbench's center, mapped from their root widget so the
   // active child can be resolved back to its editor regardless of which split it's in.
   private readonly editors = new Map<Widget, TextEditor>();
+  // Which workbench each editor lives in, so a workbench re-root can re-point its
+  // editors' git gutters (kept in lockstep with `editors`).
+  private readonly editorOwners = new Map<Widget, Workbench<'user' | AgentTerminal>>();
   // Open documents (text model + undo + file I/O), ref-counted. Editor tabs are views
   // onto these — a split or the see-definition peek shares one document (A2 model).
   private readonly documents = new DocumentRegistry();
@@ -174,8 +178,8 @@ export class AppWindow {
   private workbench!: Workbench<'user' | AgentTerminal>;
   private readonly workbenches = new Map<'user' | AgentTerminal, Workbench<'user' | AgentTerminal>>();
 
-  // Git integration for the header-bar branch indicator.
-  private readonly git: GitRepo;
+  // Header-bar git chrome. The GitRepo itself lives on the active workbench
+  // (`this.workbench.git`); these widgets are re-pointed at it on switch.
   private readonly branchButton: GitBranchButton;
   // Reactive GitHub PR/CI model (busy-aware) shared by the header buttons.
   private readonly github: GithubService;
@@ -184,6 +188,9 @@ export class AppWindow {
   // Last-seen upstream "behind" count, to fire the pull notification only on the
   // transition into being behind (not on every status poll while behind).
   private lastBehind = 0;
+  // Unsubscribe for the upstream-behind watch on the active workbench's git;
+  // swapped by `rebindGitChrome` on every workbench switch.
+  private upstreamUnsub: (() => void) | null = null;
   // Background `git fetch` timer (a GLib timeout id; 0 when disabled).
   private autoFetchTimer = 0;
 
@@ -204,10 +211,21 @@ export class AppWindow {
 
     this.toastOverlay = new Adw.ToastOverlay();
 
-    this.git = openGitRepo(process.cwd());
-    this.branchButton = new GitBranchButton(this.git, () => openBranchPicker(this.overlay, process.cwd(), this.git));
-    this.github = openGithubService(this.git, {
-      cwd: process.cwd(),
+    // Build the user's workbench first — its own center + Files/Source-Control +
+    // bottom docks, and the (pooled) GitRepo for the window cwd that the header
+    // chrome below binds to. Agents get their own (openAgent); no widget is shared
+    // across workbenches, so a switch reparents nothing.
+    const userWorkbench = this.buildWorkbench('user', process.cwd());
+    this.workbench = userWorkbench; // the active workbench until a person is switched
+
+    // Header-bar git chrome targets the *active* workbench's git/cwd;
+    // activateWorkbench re-points it (setRepo/rebind) on a person switch. The
+    // click/picker closures read `this.workbench` lazily, so they always act on
+    // the workbench shown when invoked.
+    this.branchButton = new GitBranchButton(this.workbench.git,
+      () => openBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git));
+    this.github = openGithubService(this.workbench.git, {
+      cwd: this.workbench.cwd,
       remoteNames: () => {
         const upstream = (quilx.config.get('git.remotes.upstream') as string) || 'upstream';
         const origin = (quilx.config.get('git.remotes.origin') as string) || 'origin';
@@ -215,17 +233,11 @@ export class AppWindow {
       },
     });
     this.githubButtons = new GithubButtons({
-      git: this.git,
+      git: this.workbench.git,
       github: this.github,
-      cwd: process.cwd(),
-      onShowChecks: () => openGithubCIChecksPicker(this.overlay, process.cwd()),
+      cwd: this.workbench.cwd,
+      onShowChecks: () => openGithubCIChecksPicker(this.overlay, this.workbench.cwd),
     });
-
-    // Build the user's workbench — its own center + Files/Source-Control + bottom
-    // docks — and make it the active one. Agents get their own (openAgent); no
-    // widget is shared across workbenches, so a switch reparents nothing.
-    const userWorkbench = this.buildWorkbench('user');
-    this.workbench = userWorkbench; // the active workbench until a person is switched
 
     // The workbench list lives in its own full-height sidebar at the very left of the
     // window (built into the top-level split below), not in the workbench dock.
@@ -239,6 +251,7 @@ export class AppWindow {
       onClose: (agent) => this.closeAgent(agent),
       onRename: (agent) => this.renameAgentPrompt(agent),
       onOpenChanges: (agent) => this.openAgentChanges(agent),
+      gitFor: (agent) => this.workbenches.get(agent)?.git ?? null,
     });
 
     // Session save/restore/autosave is anchored to the user workbench (its center +
@@ -371,11 +384,11 @@ export class AppWindow {
       else quilx.notifications.addTrace(text, opts);
     });
 
-    // Watch the upstream sync state: when the branch falls behind its upstream
-    // (e.g. a fetch brought in remote commits), offer to pull. Seed from the
-    // current state so an already-behind repo doesn't toast on launch.
-    this.lastBehind = this.git.getAheadBehind()?.behind ?? 0;
-    this.git.onChange(() => this.checkUpstream());
+    // Bind the header git chrome (branch button, GitHub model/buttons) and the
+    // upstream-behind watch to the active (user) workbench; activateWorkbench
+    // re-points them on a person switch. Seeds lastBehind so an already-behind
+    // repo doesn't toast on launch.
+    this.rebindGitChrome();
     this.startAutoFetch();
 
     // Closing the window consults the session's modified participants first: an
@@ -410,10 +423,13 @@ export class AppWindow {
   private teardownAndQuit() {
     this.sessionController.flush(); // final autosave before the workbench goes away
     if (this.autoFetchTimer) GLib.sourceRemove(this.autoFetchTimer);
+    this.upstreamUnsub?.();
     this.branchButton.dispose();
     this.githubButtons.dispose();
     this.github.dispose();
-    this.git.dispose();
+    // Release every workbench's pooled GitRepo (refcounted — a shared root is only
+    // disposed when its last workbench releases it).
+    for (const wb of this.workbenches.values()) releaseGitRepo(wb.git);
     this.configWatcher.dispose();
     this.keymapWatcher.dispose();
     this.workbenchList.dispose();
@@ -494,7 +510,11 @@ export class AppWindow {
   // duplicate — a file is only ever backed by one editor. `focus` (default true)
   // moves keyboard focus to it; callers opening several files at once suppress it
   // and focus the one they want at the end.
-  private openFileIn(path: string, panel: Panel, options: { focus?: boolean } = {}): TextEditor {
+  private openFileIn(
+    path: string,
+    panel: Panel,
+    options: { focus?: boolean; owner?: Workbench<'user' | AgentTerminal> } = {},
+  ): TextEditor {
     const focus = options.focus ?? true;
     const existing = [...this.editors.values()].find((editor) => editor.currentFile === path);
     if (existing) {
@@ -502,14 +522,15 @@ export class AppWindow {
       if (focus) existing.focus();
       return existing;
     }
-    return this.openFileViewIn(path, panel);
+    return this.openFileViewIn(path, panel, options.owner);
   }
 
   // Open a *new* view of `path` in `panel` — no reveal-if-open, so the same file can
   // show in two panes as two views sharing one Document (live model + undo). Used by
-  // splitPane; openFileIn reveals instead.
-  private openFileViewIn(path: string, panel: Panel): TextEditor {
-    const built = this.createEditorTab(path);
+  // splitPane; openFileIn reveals instead. `owner` is the workbench the editor lives
+  // in (its git feeds the gutter); defaults to the active one.
+  private openFileViewIn(path: string, panel: Panel, owner: Workbench<'user' | AgentTerminal> = this.workbench): TextEditor {
+    const built = this.createEditorTab(path, undefined, owner);
     const child = panel.add(built.widget, {
       title: built.title,
       requireTabBar: built.requireTabBar,
@@ -524,7 +545,11 @@ export class AppWindow {
   // openFile (which adds it to the active panel) and session restore (which places
   // it into the rebuilt workbench). The map is set before any attach so the first
   // onActiveChanged resolves the active editor.
-  private createEditorTab(path: string, cursor?: [number, number]): RestoredChild {
+  private createEditorTab(
+    path: string,
+    cursor?: [number, number],
+    owner: Workbench<'user' | AgentTerminal> = this.workbench,
+  ): RestoredChild {
     let child: PanelChild | null = null;
     // A ref-counted shared Document from the registry: the first view loads it; a
     // second view (split / restore) attaches to the already-loaded shared model.
@@ -532,11 +557,12 @@ export class AppWindow {
     const editor = new TextEditor({
       onToast: (message) => this.toast(message),
       onClose: () => child?.close(),
-      git: this.git, // draws the git change bar in the gutter
+      git: owner.git, // the owning workbench's repo draws the gutter (follows re-root)
       document,
       onReleaseDocument: () => this.documents.release(document),
     });
     this.editors.set(editor.root, editor);
+    this.editorOwners.set(editor.root, owner);
     this.participants.set(editor.root, quilx.session.registerParticipant(editor));
     if (isNew) editor.loadFile(path);
     else editor.attachToLoadedDocument();
@@ -563,7 +589,7 @@ export class AppWindow {
 
   /** Open a new Terminal tab in the center panel and select it. */
   private openTerminal(): Terminal {
-    const built = this.createTerminalTab(process.cwd());
+    const built = this.createTerminalTab(this.workbench.cwd);
     const child = this.workbench.center.add(built.widget, { title: built.title });
     built.onAttached?.(child);
     const terminal = this.terminals.get(built.widget)!;
@@ -602,9 +628,12 @@ export class AppWindow {
   }
 
   /** Launch (or resume) an agent and show it in a center tab. */
-  private openAgent(options: { prompt?: string; resume?: AgentResume; title?: string } = {}): AgentTerminal {
+  private openAgent(options: { prompt?: string; resume?: AgentResume; title?: string; cwd?: string } = {}): AgentTerminal {
+    // The agent's root: an explicit worktree (launch-time picker, Phase 3) or the
+    // window cwd. Its workbench is built rooted at the same path.
+    const cwd = options.cwd ?? process.cwd();
     const agent = new AgentTerminal({
-      cwd: process.cwd(),
+      cwd,
       prompt: options.prompt,
       resume: options.resume,
       title: options.title,
@@ -616,7 +645,7 @@ export class AppWindow {
     // leaf that takes no other tabs; everything the agent opens (reviewed files, etc.)
     // lands in a split to its right. Activate (show) the workbench *before* adding the
     // terminal — adding a tab to a detached, unrooted Adw.TabView yields a blank page.
-    const workbench = this.buildWorkbench(agent);
+    const workbench = this.buildWorkbench(agent, cwd);
     this.activateWorkbench(workbench);
     this.terminals.set(agent.root, agent);
     const child = workbench.center.pinChild(agent.root, { title: agentTabTitle(agent) });
@@ -631,14 +660,19 @@ export class AppWindow {
       this.updateAgentTab(agent);
       this.notifyAgentAttention(agent, previousStatus, agent.status);
       previousStatus = agent.status;
+      // On settle, flag a worktree it created but never announced (validator).
+      if (agent.status === 'idle') this.warnUnannouncedWorktree(agent);
     });
+    // The agent announced (via the set_worktree bridge tool) that it moved into a
+    // different worktree — re-root its workbench to match.
+    agent.onDidChangeWorktree(() => this.reRootWorkbench(workbench, agent.effectiveCwd));
     // When the agent edits files, re-check git now instead of waiting for the poll,
     // so its changes surface in Source Control / the branch indicator promptly, and
     // (when enabled) auto-open each newly-edited file in the agent's own workbench.
     // Seed from the current list so resuming an agent doesn't flood-open its history.
     const seenFiles = new Set<string>(agent.changedFiles);
     agent.onDidChangeFiles(() => {
-      this.git.refresh();
+      workbench.git.refresh(); // the agent's own workbench root, not the active one
       const autoOpen = quilx.config.get('agent.autoOpenChangedFiles') === true;
       for (const path of agent.changedFiles) {
         if (seenFiles.has(path)) continue;
@@ -670,7 +704,7 @@ export class AppWindow {
   }
   private editorFileText(): string {
     const file = this.activeEditor?.currentFile;
-    return file ? `${Path.relative(process.cwd(), file)} ` : '';
+    return file ? `${Path.relative(this.workbench.cwd, file)} ` : '';
   }
 
   // Feed `text` into `agent`'s prompt and reveal it.
@@ -880,8 +914,9 @@ export class AppWindow {
     if (!workbench) return;
     if ([...this.editors.values()].some((editor) => editor.currentFile === path)) return;
     // openPanel splits the agent panel to the right on the first file, then reuses
-    // that work area for the rest.
-    this.openFileIn(path, workbench.center.openPanel, { focus: false });
+    // that work area for the rest. Pass the agent's workbench as owner so the
+    // editor's gutter uses *its* (worktree) git, not the active workbench's.
+    this.openFileIn(path, workbench.center.openPanel, { focus: false, owner: workbench });
   }
 
   // Restart an agent: retire the old one and relaunch with the same cwd, resuming
@@ -899,7 +934,20 @@ export class AppWindow {
   private closeAgent(agent: AgentTerminal): void {
     if (!agent.exited) agent.kill();
     if (this.workbench.owner === agent) this.activateOwner('user'); // swap away first
+    const workbench = this.workbenches.get(agent);
     this.workbenches.delete(agent); // its workbench (center + Files/Git + bottom + tabs) goes
+    if (workbench) {
+      // Tear down the editors that lived in this workbench — closing it drops their
+      // widgets but not their bookkeeping (gutter git subscription, LSP doc ref,
+      // session participant, the editor→workbench entry that pins the workbench).
+      // Copy first: disposeChild mutates editorOwners.
+      for (const [widget, owner] of [...this.editorOwners]) {
+        if (owner === workbench) this.disposeChild(widget);
+      }
+      workbench.fileTree.dispose(); // also holds a git subscription
+      workbench.gitPanel.dispose();
+      releaseGitRepo(workbench.git); // refcounted; the shared user/worktree repo survives
+    }
     this.participants.get(agent.root)?.dispose();
     this.participants.delete(agent.root);
     this.agentChildren.delete(agent.root);
@@ -965,6 +1013,7 @@ export class AppWindow {
     this.editorRegistrations.delete(widget);
     this.editors.get(widget)?.dispose(); // explicit teardown, not reliant on the GTK destroy signal
     this.editors.delete(widget);
+    this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
     this.agentChildren.delete(widget);
@@ -978,22 +1027,24 @@ export class AppWindow {
   }
 
   /**
-   * Build a person's workbench: construct its own center, Files/Source-Control, and
-   * bottom-dock widgets, then hand them to a `Workbench` (which docks the center, and
-   * Source-Control for the user). Nothing is shared with other workbenches, so a switch
-   * never reparents. Registers and returns the `Workbench`.
+   * Build a person's workbench rooted at `cwd`: acquire the (pooled) GitRepo for
+   * that root, construct its own center, Files/Source-Control, and bottom-dock
+   * widgets, then hand them to a `Workbench` (which docks the center, and
+   * Source-Control for the user). Nothing is shared with other workbenches, so a
+   * switch never reparents. Registers and returns the `Workbench`.
    */
-  private buildWorkbench(owner: 'user' | AgentTerminal): Workbench<'user' | AgentTerminal> {
+  private buildWorkbench(owner: 'user' | AgentTerminal, cwd: string): Workbench<'user' | AgentTerminal> {
+    const git = acquireGitRepo(cwd);
     const center = this.makeCenter();
     const fileTree = new FileTree({
-      rootPath: process.cwd(),
+      rootPath: cwd,
       onOpenFile: (path) => this.openFile(path),
-      git: this.git,
+      git,
     });
     // Source Control shares the top section with the file tree, as sibling tabs.
     const gitPanel = new GitPanel({
-      cwd: process.cwd(),
-      git: this.git,
+      cwd,
+      git,
       onOpenFile: (path) => this.openFile(path),
       onCommit: () => this.startCommit(),
     });
@@ -1025,7 +1076,7 @@ export class AppWindow {
     const workbench = new Workbench<'user' | AgentTerminal>(
       owner,
       {
-        center, fileTree, gitPanel, leftPanel, filesTab, gitTab,
+        cwd, git, center, fileTree, gitPanel, leftPanel, filesTab, gitTab,
         notificationLog, notificationPanel, diagnosticsPanel, diagnosticsDock,
         keymapPanel, keymapDock,
       },
@@ -1062,7 +1113,57 @@ export class AppWindow {
     this.workbench = workbench;
     this.contentOverlay.setChild(workbench.root); // show this workbench
     this.workbenchList.selectAgent(workbench.owner === 'user' ? null : workbench.owner);
+    this.rebindGitChrome(); // header branch/GitHub now reflect this workbench's root
     this.focusActivePane();
+  }
+
+  // Re-point the header git chrome (branch button, GitHub model + buttons) and the
+  // upstream-behind watch at the active workbench's git/cwd. Idempotent (the
+  // widgets no-op when the repo is unchanged), so it also seeds the initial bind.
+  private rebindGitChrome(): void {
+    const { git, cwd } = this.workbench;
+    this.branchButton.setRepo(git);
+    this.github.rebind(git, cwd);
+    this.githubButtons.setRepo(git, cwd);
+    this.upstreamUnsub?.();
+    this.lastBehind = git.getAheadBehind()?.behind ?? 0;
+    this.upstreamUnsub = git.onChange(() => this.checkUpstream());
+  }
+
+  // Re-root an agent's workbench after it moves into a worktree: swap the pooled
+  // GitRepo and re-root the file tree + Source Control in place (the widgets/tabs
+  // stay put); if it's the active workbench, re-point the header chrome too.
+  private reRootWorkbench(workbench: Workbench<'user' | AgentTerminal>, newCwd: string): void {
+    if (newCwd === workbench.cwd) return;
+    const oldGit = workbench.git;
+    const git = acquireGitRepo(newCwd); // acquire before release: a shared root keeps its repo
+    workbench.cwd = newCwd;
+    workbench.git = git;
+    workbench.fileTree.setRoot(newCwd, git);
+    workbench.gitPanel.setRoot(newCwd, git);
+    // Re-point the gutters of editors already open in this workbench at the new repo.
+    for (const [root, owner] of this.editorOwners) {
+      if (owner === workbench) this.editors.get(root)?.setGitRepo(git);
+    }
+    releaseGitRepo(oldGit);
+    // Sidebar branch line: re-read + re-subscribe now that the git is swapped (the
+    // row can't observe the swap itself without racing the re-root).
+    if (workbench.owner !== 'user') this.workbenchList.refreshAgent(workbench.owner);
+    if (this.workbench === workbench) this.rebindGitChrome();
+  }
+
+  // The cooperative-detection safety net: if an agent created a worktree (spotted
+  // by the Bash validator) but never announced it via set_worktree, warn once when
+  // it next settles — its workbench won't have re-rooted to the worktree.
+  private warnUnannouncedWorktree(agent: AgentTerminal): void {
+    const path = agent.unannouncedWorktree;
+    if (!path) return;
+    agent.clearUnannouncedWorktree();
+    quilx.notifications.addWarning(`${agent.title} switched worktree without telling the editor`, {
+      detail:
+        `It created a worktree (${path}) but didn't call the set_worktree tool, so its file tree ` +
+        'and Source Control still point at the old root.',
+    });
   }
 
   // The Panel currently shown in the bottom dock (`this.workbench.bottomDock`), or null.
@@ -1309,6 +1410,7 @@ export class AppWindow {
       'terminal:normal-mode': 'Terminal: enter normal mode (app shortcuts)',
       'terminal:send-escape': 'Terminal: send Escape to the child',
       'agent:new': 'Start a new agent',
+      'agent:new-in-worktree': 'Start a new agent in a chosen git worktree',
       'agent:picker': 'Open the agent picker (agents, conversations, new)',
       'agent:resume': 'Resume the stopped agent',
       'agent:resume-conversation': 'Resume a past conversation…',
@@ -1817,6 +1919,10 @@ export class AppWindow {
     quilx.commands.add('#AppWindow', {
       'terminal:new': () => this.openTerminal(),
       'agent:new': () => this.openAgent(),
+      // Pick an existing worktree to launch the agent in (its workbench is rooted
+      // there). New worktrees are created by the agent itself, then detected live.
+      'agent:new-in-worktree': () =>
+        openWorktreePicker(this.overlay, this.workbench.cwd, (cwd) => this.openAgent({ cwd })),
       'agent:picker': () => openAgentPicker(this.overlay, {
         onActivate: (agent) => this.showAgent(agent),
         onResume: (session) => this.openAgent({ resume: { sessionId: session.id }, title: truncate(session.label, 40) }),
@@ -1863,68 +1969,68 @@ export class AppWindow {
   private registerGitCommands() {
     quilx.commands.add('#AppWindow', {
       // Git commands only apply inside a repository (a resolvable branch).
-      'git:fetch': { didDispatch: () => this.runGit((d) => this.git.fetch(d), 'Fetch'), when: () => this.git.getBranch() !== null },
-      'git:pull': { didDispatch: () => this.runGit((d) => this.git.pull(d), 'Pull'), when: () => this.git.getBranch() !== null },
+      'git:fetch': { didDispatch: () => this.runGit((d) => this.workbench.git.fetch(d), 'Fetch'), when: () => this.workbench.git.getBranch() !== null },
+      'git:pull': { didDispatch: () => this.runGit((d) => this.workbench.git.pull(d), 'Pull'), when: () => this.workbench.git.getBranch() !== null },
       'git:push': {
         // After a successful push, GitHub re-runs the PR's checks; schedule a CI
         // refresh ~10s out. The service stays busy until then, so the CI segment
         // shows the in-progress (loading) look in the meantime.
         didDispatch: () =>
-          this.runGit((d) => this.git.push(d), 'Push', () => this.github.scheduleRefresh(10000)),
-        when: () => this.git.getBranch() !== null,
+          this.runGit((d) => this.workbench.git.push(d), 'Push', () => this.github.scheduleRefresh(10000)),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:branch-switch': {
-        didDispatch: () => openBranchPicker(this.overlay, process.cwd(), this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:branch-delete': {
-        didDispatch: () => openDeleteBranchPicker(this.overlay, process.cwd(), this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openDeleteBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:branch-merge': {
-        didDispatch: () => openMergeBranchPicker(this.overlay, process.cwd(), this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openMergeBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:branch-rename': {
-        didDispatch: () => openRenameBranchPicker(this.overlay, process.cwd(), this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openRenameBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:stash-push': {
         didDispatch: () => this.stashChanges(),
-        when: () => this.git.getBranch() !== null,
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:stash-pop': {
-        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'pop', this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openStashPicker(this.overlay, this.workbench.cwd, 'pop', this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:stash-apply': {
-        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'apply', this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openStashPicker(this.overlay, this.workbench.cwd, 'apply', this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'git:stash-drop': {
-        didDispatch: () => openStashPicker(this.overlay, process.cwd(), 'drop', this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openStashPicker(this.overlay, this.workbench.cwd, 'drop', this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'github:issue-picker': {
-        didDispatch: () => openGithubIssuePicker(this.overlay, process.cwd()),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openGithubIssuePicker(this.overlay, this.workbench.cwd),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'github:failed-ci-picker': {
-        didDispatch: () => openGithubFailedCIPicker(this.overlay, process.cwd()),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openGithubFailedCIPicker(this.overlay, this.workbench.cwd),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'github:ci-checks': {
-        didDispatch: () => openGithubCIChecksPicker(this.overlay, process.cwd()),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => openGithubCIChecksPicker(this.overlay, this.workbench.cwd),
+        when: () => this.workbench.git.getBranch() !== null,
       },
       'github:pull-request-checkout': {
-        didDispatch: () => switchToGithubPrPicker(this.overlay, process.cwd(), this.git),
-        when: () => this.git.getBranch() !== null,
+        didDispatch: () => switchToGithubPrPicker(this.overlay, this.workbench.cwd, this.workbench.git),
+        when: () => this.workbench.git.getBranch() !== null,
       },
     });
   }
 
-  // Run a coordinated git operation (e.g. `(d) => this.git.fetch(d)`) and report.
+  // Run a coordinated git operation (e.g. `(d) => this.workbench.git.fetch(d)`) and report.
   // Success is quiet (a trace, recorded in the log only); failures pop a toast.
   private runGit(op: (done: (ok: boolean, stderr: string) => void) => void, label: string, onSuccess?: () => void) {
     op((ok) => {
@@ -1953,7 +2059,7 @@ export class AppWindow {
 
   // Stash the working-tree changes (visible success, since it's a manual action).
   private stashChanges() {
-    this.git.stash((ok, stderr) => {
+    this.workbench.git.stash((ok, stderr) => {
       if (ok) quilx.notifications.addSuccess('Stashed changes');
       else quilx.notifications.addError('Stash failed', { detail: stderr.trim() });
     });
@@ -1963,7 +2069,7 @@ export class AppWindow {
   // tab. Closing the tab finalizes it — git-style: write the message, save, close
   // to commit (close without a saved message aborts). Reuses the normal editor.
   private startCommit() {
-    const repo = repoRoot(process.cwd());
+    const repo = repoRoot(this.workbench.cwd);
     if (!repo) return;
     const msgPath = commitMsgPath(repo);
     try {
@@ -1989,7 +2095,7 @@ export class AppWindow {
       quilx.notifications.addInfo('Commit aborted (empty message)');
       return;
     }
-    this.git.commit(msgPath, (ok, stderr) => {
+    this.workbench.git.commit(msgPath, (ok, stderr) => {
       if (ok) quilx.notifications.addSuccess('Committed');
       else quilx.notifications.addError('Commit failed', { detail: stderr.trim() });
     });
@@ -1999,7 +2105,7 @@ export class AppWindow {
   // offering to pull. Only fires when `behind` goes from 0 to positive, so a
   // repo that stays behind across status polls isn't re-toasted every tick.
   private checkUpstream() {
-    const behind = this.git.getAheadBehind()?.behind ?? 0;
+    const behind = this.workbench.git.getAheadBehind()?.behind ?? 0;
     if (behind > 0 && this.lastBehind === 0) {
       const commits = behind === 1 ? 'commit' : 'commits';
       // Sticky + a shared `replaceKey` so the prompt persists until acted on and
@@ -2009,7 +2115,7 @@ export class AppWindow {
         detail: 'Your branch is behind its upstream — pull to update.',
         replaceKey: PULL_NOTICE_KEY,
         dismissable: true,
-        buttons: [{ text: 'Pull', onDidClick: () => this.runGitWithProgress((d) => this.git.pull(d), 'Pull', PULL_NOTICE_KEY) }],
+        buttons: [{ text: 'Pull', onDidClick: () => this.runGitWithProgress((d) => this.workbench.git.pull(d), 'Pull', PULL_NOTICE_KEY) }],
       });
     }
     this.lastBehind = behind;
@@ -2023,7 +2129,7 @@ export class AppWindow {
     const minutes = Number(quilx.config.get('git.autoFetchMinutes') ?? 0);
     if (!(minutes > 0)) return;
     this.autoFetchTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, minutes * 60_000, () => {
-      if (this.git.getBranch() !== null) this.git.fetch();
+      if (this.workbench.git.getBranch() !== null) this.workbench.git.fetch();
       return true; // keep fetching
     });
   }

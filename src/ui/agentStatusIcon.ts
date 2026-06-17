@@ -100,3 +100,19 @@ export function agentWorktreeMarkup(worktree: WorktreeInfo | null): string | nul
     `<span font_family="${ICON_FONT_FAMILY}">${Icons.git}</span> ${escapeMarkup(name)}</span>`
   );
 }
+
+/** Pango markup for an agent's current branch/worktree (git glyph + branch name,
+ *  falling back to the worktree name), or null when it isn't inside a repo. Unlike
+ *  `agentWorktreeMarkup` it shows for *any* checkout (not only linked worktrees)
+ *  and carries no foreground — the caller styles it via CSS so it tracks the row's
+ *  theme (see WorkbenchList's two-line rows). */
+export function agentBranchMarkup(
+  worktree: WorktreeInfo | null,
+  branch: string | null = worktree?.branch ?? null,
+): string | null {
+  if (!worktree) return null;
+  // `branch` is the live branch from the workbench's git (so an in-place checkout
+  // shows immediately); fall back to the worktree name when detached.
+  const name = branch ?? worktree.name;
+  return `<span font_family="${ICON_FONT_FAMILY}">${Icons.git}</span> ${escapeMarkup(name)}`;
+}

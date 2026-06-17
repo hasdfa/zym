@@ -84,6 +84,48 @@ export function worktreeInfo(cwd: string): WorktreeInfo | null {
   return { root, name: Path.basename(root), branch: currentBranch(root), linked };
 }
 
+/** One entry from `git worktree list` — a checkout (main or linked) of the repo. */
+export interface WorktreeEntry {
+  /** The worktree's top-level directory (absolute). */
+  path: string;
+  /** Display name — the path's basename. */
+  name: string;
+  /** Checked-out branch (short name), or null when detached / bare. */
+  branch: string | null;
+  /** HEAD commit OID, or null for a bare entry. */
+  head: string | null;
+  /** True for a linked worktree, false for the main checkout. */
+  linked: boolean;
+}
+
+/** Every worktree of the repository containing `cwd` (`git worktree list
+ *  --porcelain`); the main checkout is first (`linked:false`). Empty outside a
+ *  repo. */
+export function listWorktrees(cwd: string): WorktreeEntry[] {
+  let out: string;
+  try {
+    out = gitSync(cwd, ['worktree', 'list', '--porcelain', '-z']);
+  } catch {
+    return [];
+  }
+  // Porcelain records are blank-line separated; with -z lines are NUL-joined and
+  // records are double-NUL separated. Parse defensively for both forms.
+  const entries: WorktreeEntry[] = [];
+  for (const block of out.split(/\0\0|\n\n/)) {
+    let path: string | null = null;
+    let head: string | null = null;
+    let branch: string | null = null;
+    for (const line of block.split(/\0|\n/)) {
+      if (line.startsWith('worktree ')) path = line.slice('worktree '.length);
+      else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length) || null;
+      else if (line.startsWith('branch ')) branch = line.slice('branch '.length).replace(/^refs\/heads\//, '') || null;
+    }
+    if (!path) continue;
+    entries.push({ path, name: Path.basename(path), branch, head, linked: entries.length > 0 });
+  }
+  return entries;
+}
+
 /** Absolute path of `.git/COMMIT_EDITMSG` (handles worktrees/submodules). */
 export function commitMsgPath(root: string): string {
   const p = gitSync(root, ['rev-parse', '--git-path', 'COMMIT_EDITMSG']).trim();

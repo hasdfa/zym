@@ -84,7 +84,12 @@ export class GitGutter {
   private readonly view: SourceView;
   private readonly getPath: () => string | null;
   private readonly getText: () => string;
-  private readonly git: GitRepo;
+  // The repo whose HEAD/index changes re-trigger a diff (and that staging pokes for
+  // the Source Control panel). Swapped via `setGit` when the editor's workbench
+  // re-roots into a worktree. The diff *bases* are fetched from the file's own repo
+  // root (`rootFor`), so they're correct regardless of this.
+  private git: GitRepo;
+  private gitUnsub?: () => void;
   private readonly renderer: GitGutterRenderer;
   // Unstaged changes (index → buffer): the stage / revert targets.
   private readonly kindByLine = new Map<number, ChangeKind>();
@@ -122,7 +127,18 @@ export class GitGutter {
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
 
     // HEAD / index moved (commit / checkout / staging): re-fetch the bases and re-diff.
-    this.subs.add({ dispose: this.git.onChange(() => this.refresh()) });
+    this.gitUnsub = this.git.onChange(() => this.refresh());
+  }
+
+  /** Re-point at a different repo (the editor's workbench re-rooted into a worktree):
+   *  swap the change subscription and re-diff against the new repo's HEAD/index. */
+  setGit(git: GitRepo): void {
+    if (git === this.git) return;
+    this.gitUnsub?.();
+    this.git = git;
+    this.gitUnsub = git.onChange(() => this.refresh());
+    this.cachedRootPath = null; // force rootFor to re-resolve for the new repo
+    this.refresh();
   }
 
   /** (Re)fetch the file's index + HEAD blobs, then re-diff. Call on load / save /
@@ -220,6 +236,7 @@ export class GitGutter {
   dispose(): void {
     if (this.updateTimer) GLib.sourceRemove(this.updateTimer);
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.renderer);
+    this.gitUnsub?.();
     this.subs.dispose();
   }
 

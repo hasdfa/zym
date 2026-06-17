@@ -431,14 +431,18 @@ export interface GithubService {
   refresh(): void;
   /** Re-query after `delayMs`, holding busy=true from now until it resolves. */
   scheduleRefresh(delayMs: number): void;
+  /** Re-point at a different git model + repo dir (active-workbench switch): drops
+   *  the old git subscription, resets the cached repo/PR, and re-queries. */
+  rebind(git: GithubServiceGit, cwd: string): void;
   dispose(): void;
 }
 
 const DEFAULT_POLL_MS = 30000;
 
 class CliGithubService implements GithubService {
-  private readonly git: GithubServiceGit;
-  private readonly repoDir: string | null;
+  // `git`/`repoDir` are swapped by `rebind` when the active workbench changes.
+  private git: GithubServiceGit;
+  private repoDir: string | null;
   private readonly remoteNames: () => string[];
 
   private repo: GithubRepo | null = null;
@@ -462,7 +466,7 @@ class CliGithubService implements GithubService {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private scheduleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly listeners = new Set<() => void>();
-  private readonly unsubscribeGit: () => void;
+  private unsubscribeGit: () => void;
 
   constructor(git: GithubServiceGit, options: GithubServiceOptions) {
     this.git = git;
@@ -516,6 +520,26 @@ class CliGithubService implements GithubService {
         this.notify();
       });
     }, delayMs);
+  }
+
+  rebind(git: GithubServiceGit, cwd: string): void {
+    if (git === this.git) return;
+    this.unsubscribeGit();
+    this.generation++; // discard any in-flight response bound to the old repo
+    this.git = git;
+    this.repoDir = repoRoot(cwd);
+    // Forget the old repo's resolution so the new root is looked up fresh.
+    this.repo = null;
+    this.repoResolved = false;
+    this.pr = null;
+    this.defaultBranch = null;
+    this.defaultBranchFetched = false;
+    this.lastBranch = git.getBranch();
+    this.lastHeadSig = this.headSig();
+    this.gitBusy = git.isBusy();
+    this.unsubscribeGit = git.onChange(() => this.onGitChange());
+    this.notify(); // clear the old branch's PR/CI from the view immediately
+    this.refresh();
   }
 
   dispose(): void {

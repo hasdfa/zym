@@ -81,9 +81,11 @@ export interface GithubButtonsOptions {
 export class GithubButtons {
   readonly root: InstanceType<typeof Gtk.Box>;
 
-  private readonly git: GitRepo;
+  // `git`/`repoDir` are swapped via `setRepo` when the active workbench changes;
+  // `github` is the shared service (rebound internally), so its subscription stays.
+  private git: GitRepo;
   private readonly github: GithubService;
-  private readonly repoDir: string | null;
+  private repoDir: string | null;
   private readonly onShowChecks?: () => void;
 
   private readonly prLabel: InstanceType<typeof Gtk.Label>; // state glyph + "#1234"
@@ -138,6 +140,14 @@ export class GithubButtons {
     this.registerCommands();
     // Re-render on any model change — data (PR/CI/default branch) or busy state.
     this.unsubscribe = this.github.onChange(() => this.render());
+    this.render();
+  }
+
+  /** Re-point at the active workbench's git + root (the shared GithubService is
+   *  rebound separately); recompute the repo dir and re-render. */
+  setRepo(git: GitRepo, cwd: string): void {
+    this.git = git;
+    this.repoDir = repoRoot(cwd);
     this.render();
   }
 
