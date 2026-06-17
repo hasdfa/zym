@@ -147,9 +147,14 @@ export function installStyles(): void {
 // fullscreen/maximised — these surfaces should stay rounded regardless.
 // `--popover-radius-small` is the tighter radius for compact, in-text chrome
 // (the autocompletion popup) that sits flush against the cursor.
+//
+// `--font-size-small` is the one secondary-text size — metadata and counts that
+// sit beside full-size text (sidebar/diagnostics counts, list detail columns).
+// See tasks/styling.md for when to use it vs. the inline Pango `size="smaller"`.
 addStyles(`
   window {
     --popover-radius: 15px;
     --popover-radius-small: 6px;
+    --font-size-small: 0.85em;
   }
 `);
