@@ -11,7 +11,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { SyntaxController } from '../../syntax/syntax-controller.ts';
+import { SyntaxController, type RevealedRange } from '../../syntax/syntax-controller.ts';
 import { detectIndentation } from './detectIndentation.ts';
 import { handleAutoPairInsert, handleAutoPairBackspace } from './autoPair.ts';
 import { handleTagAutoClose } from './tagClose.ts';
@@ -263,8 +263,8 @@ function signatureMarkup(
 /** What the editor's `fold:*` commands drive — SyntaxController by default, or a
  *  diff pane's DiffFold. (SyntaxController already satisfies this structurally.) */
 export interface FoldProvider {
-  toggleFoldAtCursor(): void;
-  setFoldAtCursor(folded: boolean): void;
+  toggleFoldAtCursor(): RevealedRange | null;
+  setFoldAtCursor(folded: boolean): RevealedRange | null;
   foldAll(): void;
   unfoldAll(): void;
   revealLine(row: number): void;
@@ -370,11 +370,22 @@ export class TextEditor implements DocumentHost {
     this.syntax = new SyntaxController(this.view, this.buffer, {
       lineNumbers: !compact,
       folding: this.bufferMode?.folding ?? (this.peekMode ? false : undefined),
+      folds: this.document, // folding collapses view ranges through the model projection
     });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
     // Undo/redo run on the document model (this view's buffer has native undo off).
     this.editorModel.setUndoTarget(this.document);
+    // The [...] placeholder is atomic + non-editable, and search runs over the whole
+    // document — give the model access to the syntax controller's folds.
+    this.editorModel.setFoldAccess({
+      placeholderRanges: () => this.syntax.placeholderRanges(),
+      unfoldAt: (off) => this.syntax.unfoldAtViewOffset(off),
+      unfoldAll: () => this.syntax.unfoldAll(),
+      viewPointFromModel: (p) => this.document.viewPointFromModel(this.buffer, p),
+      modelLineText: (row) => this.document.modelLineText(row),
+      revealFoldsMatching: (test) => this.syntax.revealFoldsMatching(test),
+    });
     // Real (tree-sitter) indent source for `=`/paste-reindent/new lines.
     this.editorModel.setIndentSource((row) => this.syntax.indentLevelForRow(row));
     // Default indentation from config; `loadFile` detects and overrides per file.
@@ -552,7 +563,11 @@ export class TextEditor implements DocumentHost {
     // renderer and signature help.
     this.diagnostics = new DiagnosticsView(this.view, this.underlineOverlay, this.editorModel, () => this._currentFile);
     // Inlay hints (parameter names / inferred types) trailing each line, per view.
-    this.inlayHints = new InlayHintController(this.view, () => this.lspDocument ?? null);
+    this.inlayHints = new InlayHintController(
+      this.view,
+      () => this.lspDocument ?? null,
+      (line) => this.document.viewLineForModelLine(this.buffer, line),
+    );
     quilx.config.observe('editor.inlayHints', () => void this.inlayHints.refresh());
     // Signature help is a per-view concern (the active view shows the card while
     // typing); the document drives didChange, so this only triggers signature help.
@@ -1174,8 +1189,8 @@ export class TextEditor implements DocumentHost {
     // or a diff pane's DiffFold). Registered per-view so a keystroke folds the
     // focused editor.
     quilx.commands.add(this.view, {
-      'fold:toggle': () => this.foldController.toggleFoldAtCursor(),
-      'fold:open': () => this.foldController.setFoldAtCursor(false),
+      'fold:toggle': () => this.selectRevealedFold(this.foldController.toggleFoldAtCursor()),
+      'fold:open': () => this.selectRevealedFold(this.foldController.setFoldAtCursor(false)),
       'fold:close': () => this.foldController.setFoldAtCursor(true),
       'fold:open-all': () => this.foldController.unfoldAll(),
       'fold:close-all': () => this.foldController.foldAll(),
@@ -1196,6 +1211,12 @@ export class TextEditor implements DocumentHost {
 
   private get foldController(): FoldProvider {
     return this.foldProvider ?? this.syntax;
+  }
+
+  /** Highlight the text a fold revealed (when the caret was on its marker) — `zo`
+   *  shows what was unfolded, as if the marker-cursor expanded onto the body. */
+  private selectRevealedFold(range: RevealedRange | null): void {
+    if (range) this.editorModel.setSelectedBufferRange(range);
   }
 
   // --- Auto-close brackets / quotes (insert mode) ----------------------------
@@ -1377,9 +1398,10 @@ export class TextEditor implements DocumentHost {
     this.onToast(message);
   }
 
-  /** @internal The cursor for an LSP request (anchors completion/hover at this view). */
+  /** @internal The cursor for an LSP request (anchors completion/hover at this view).
+   *  Translated to model space — inline fold anchors shift view columns past them. */
   lspCursor(): Point {
-    return this.editorModel.getCursorBufferPosition();
+    return this.document.modelPointFromView(this.buffer, this.editorModel.getCursorBufferPosition());
   }
 
   // --- Identity --------------------------------------------------------------

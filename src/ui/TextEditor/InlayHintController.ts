@@ -25,9 +25,14 @@ export class InlayHintController {
   private seq = 0; // drops stale async responses
   private disposed = false;
 
-  constructor(view: SourceView, getDoc: () => LspDocument | null) {
+  // Maps a MODEL (file) line to the VIEW line it renders on — folds collapse text so
+  // the two diverge; identity when not provided.
+  private readonly toViewLine: (line: number) => number;
+
+  constructor(view: SourceView, getDoc: () => LspDocument | null, toViewLine?: (line: number) => number) {
     this.annotations = new AnnotationController(view);
     this.getDoc = getDoc;
+    this.toViewLine = toViewLine ?? ((line) => line);
   }
 
   /** Recompute after a short idle (coalesces a burst of edits into one request). */
@@ -64,7 +69,7 @@ export class InlayHintController {
       else byLine.set(hint.line, [hint.label]);
     }
     this.annotations.setAnnotations(
-      [...byLine.entries()].map(([line, labels]) => ({ line, text: labels.join(' '), style: 'none' as const })),
+      [...byLine.entries()].map(([line, labels]) => ({ line: this.toViewLine(line), text: labels.join(' '), style: 'none' as const })),
     );
   }
 

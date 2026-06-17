@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../gi.ts';
 import { EditorModel } from './EditorModel.ts';
+import { Document } from './Document.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 
@@ -164,4 +165,59 @@ test('cursor end-of-line uses codepoint columns on non-BMP lines', () => {
   cursor.moveToEndOfLine();
   assert.deepEqual(m.getCursorBufferPosition().toArray(), [0, 3]); // codepoint EOL, not 4
   assert.ok(cursor.isAtEndOfLine());
+});
+
+// --- Fold awareness: the [...] placeholder is atomic + non-editable ----------
+
+// A stub FoldAccess: the view text is `ab[...]cd`, placeholder at offsets [2,7).
+function modelWithFold() {
+  const buffer = new GtkSource.Buffer();
+  buffer.setText('ab[...]cd', -1);
+  const view = new GtkSource.View({ buffer });
+  const m = new EditorModel(view, buffer);
+  const unfolded: number[] = [];
+  m.setFoldAccess({
+    placeholderRanges: () => [[2, 7]],
+    unfoldAt: (off) => { unfolded.push(off); return true; },
+    unfoldAll: () => {},
+    viewPointFromModel: (p) => p,
+    modelLineText: () => '',
+    revealFoldsMatching: () => {},
+  });
+  return { m, buffer, unfolded };
+}
+
+test('a motion landing inside a placeholder snaps to its far edge (rightward)', () => {
+  const { m } = modelWithFold();
+  m.setCursorBufferPosition(new Point(0, 0));   // before the placeholder
+  m.setCursorBufferPosition(new Point(0, 4));   // would land inside `[...]`
+  assert.equal(m.getCursorBufferPosition().column, 7, 'snapped past the placeholder');
+});
+
+test('a leftward motion into a placeholder snaps to its near edge', () => {
+  const { m } = modelWithFold();
+  m.setCursorBufferPosition(new Point(0, 8));   // after the placeholder
+  m.setCursorBufferPosition(new Point(0, 5));   // would land inside `[...]`
+  assert.equal(m.getCursorBufferPosition().column, 2, 'snapped before the placeholder');
+});
+
+test('editing across a fold reveals it and edits the real (former-folded) text', () => {
+  const doc = new Document();
+  doc.setText('abXYZcd\n');
+  const buffer = doc.createView();
+  const view = new GtkSource.View({ buffer });
+  const m = new EditorModel(view, buffer);
+  const fold = doc.foldViewRange(buffer, 2, 5, '[...]'); // collapse "XYZ" → view "ab[...]cd"
+  let folded = true;
+  m.setFoldAccess({
+    placeholderRanges: () => (folded ? [doc.foldPlaceholderRange(buffer, fold!)] : []),
+    unfoldAt: () => { doc.unfoldView(buffer, fold!); folded = false; return true; },
+    unfoldAll: () => {},
+    viewPointFromModel: (p) => p,
+    modelLineText: () => '',
+    revealFoldsMatching: () => {},
+  });
+  // Delete a range crossing the placeholder → reveal + delete the real content.
+  m.setTextInBufferRange(new Range(new Point(0, 2), new Point(0, 3)), '');
+  assert.equal(doc.getText(), 'abcd\n', 'the former-folded XYZ was deleted from the model');
 });

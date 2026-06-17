@@ -11,6 +11,10 @@ It supersedes the synthesized-`FoldRow` placeholder the diff viewer uses today
 selectable/editable text and perturbs row mapping. As an inline widget it has
 **zero buffer footprint**.
 
+> Note: this primitive *adds* content (a widget/line not in the buffer). To show
+> *less* than the model on one real navigable line — single-line code folding —
+> use the view-side text **projection** in [folding.md](folding.md) instead.
+
 ## POC findings (`src/poc/inline-overlay.ts`, run on a real display)
 
 Confirmed by running the POC interactively:

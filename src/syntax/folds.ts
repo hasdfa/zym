@@ -4,6 +4,10 @@
  *
  *  - **Block folds**: a grammar's `folds.scm` query (`@fold` captures — incl.
  *    multi-line comments), or, when it ships none, the `foldTypes` node-type set.
+ *    A node captured as `@fold.keepFooter` (instead of `@fold`) keeps its closing
+ *    line on its own line when folded — for chained constructs like if/else and
+ *    try/catch where the `}` line continues (`} else {`). See the grammar query
+ *    convention in code-editing/folding.md.
  *  - **Run folds**: a run of >= 2 consecutive same-type siblings the grammar folds
  *    as a block (import statements, line comments) — collapse to the first line.
  *
@@ -17,7 +21,15 @@
 export interface FoldRange {
   startRow: number;
   endRow: number;
+  // Whether the footer (`}`) joins the header onto ONE line when folded (import,
+  // function, standalone if). False keeps the footer on its own line so a chained
+  // construct reads 1-per-line (`if (x) {[N]` / `} else if (y) {…`).
+  joinFooter: boolean;
 }
+
+// A grammar declares "keep the footer on its own line" by capturing the node as
+// this instead of `@fold` (see folds.scm for if/else, try/catch).
+const FOLD_KEEP_FOOTER = 'fold.keepFooter';
 
 export function computeFoldRanges(
   root: any,
@@ -27,17 +39,27 @@ export function computeFoldRanges(
 ): FoldRange[] {
   const seen = new Set<number>();
   const ranges: FoldRange[] = [];
-  const add = (startRow: number, endRow: number): void => {
+  const add = (startRow: number, endRow: number, joinFooter = true): void => {
     if (endRow - startRow >= 2 && !seen.has(startRow)) {
       seen.add(startRow);
-      ranges.push({ startRow, endRow });
+      ranges.push({ startRow, endRow, joinFooter });
     }
   };
 
   if (foldsQuery) {
+    // A node can match both `@fold` and the more specific `@fold.keepFooter`; merge
+    // per start row so keep-footer wins (it's the declared chained-construct case).
+    const byRow = new Map<number, { endRow: number; keepFooter: boolean }>();
     for (const cap of foldsQuery.captures(root)) {
-      add(cap.node.startPosition.row, cap.node.endPosition.row);
+      const startRow = cap.node.startPosition.row;
+      const endRow = cap.node.endPosition.row;
+      if (endRow - startRow < 2) continue;
+      const keep = cap.name === FOLD_KEEP_FOOTER;
+      const cur = byRow.get(startRow);
+      if (!cur) byRow.set(startRow, { endRow, keepFooter: keep });
+      else if (keep) cur.keepFooter = true;
     }
+    for (const [startRow, { endRow, keepFooter }] of byRow) add(startRow, endRow, !keepFooter);
   } else {
     walkFoldTypes(root, foldTypes, add);
   }
@@ -47,7 +69,8 @@ export function computeFoldRanges(
   return ranges;
 }
 
-function walkFoldTypes(node: any, foldTypes: Set<string>, add: (s: number, e: number) => void): void {
+function walkFoldTypes(node: any, foldTypes: Set<string>, add: (s: number, e: number, j?: boolean) => void): void {
+  // The node-type fallback (no folds query) doesn't express keep-footer → always join.
   if (foldTypes.has(node.type)) add(node.startPosition.row, node.endPosition.row);
   for (const child of node.namedChildren) if (child) walkFoldTypes(child, foldTypes, add);
 }

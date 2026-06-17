@@ -82,10 +82,13 @@ export class DiagnosticsView {
     // line → the worst diagnostic to trail (message + severity) + how many share the line.
     const lensByLine = new Map<number, { message: string; severity: number; count: number }>();
     const entries = path ? quilx.lsp.diagnostics.get(path) : [];
-    const lineAt = (row: number) => this.model.lineTextForBufferRow(row);
+    // LSP ranges are in MODEL (file) coordinates; encode columns off the MODEL line,
+    // then translate to VIEW space — folds collapse text so view lines/cols diverge
+    // from the model's (a diagnostic inside a fold maps onto its placeholder line).
+    const lineAt = (row: number) => this.model.modelLineTextForRow(row);
     for (const { diagnostic, encoding } of entries) {
       const severity = diagnostic.severity ?? DiagnosticSeverity.Error;
-      const range = lspToRange(diagnostic.range, lineAt, encoding);
+      const range = this.model.viewRangeFromModel(lspToRange(diagnostic.range, lineAt, encoding));
       underlines.push({ range: visibleRange(range), color: severityStyle(severity).color });
       const line = range.start.row;
       const worst = this.severityByLine.get(line);
