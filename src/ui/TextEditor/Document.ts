@@ -77,6 +77,9 @@ export interface DocumentHost {
   hasFocus(): boolean;
   /** Surface an error message (load/save failures). */
   toast(message: string): void;
+  /** Reflect an on-disk change (or its resolution) in the view's warning banner.
+   *  Shown persistently until the user reloads/saves it away — not a transient toast. */
+  onDiskStateChanged(state: 'synced' | 'changed' | 'deleted', path: string | null): void;
   /** The view's cursor, for LSP requests (completion/hover anchor at the active view). */
   lspCursor(): Point;
 }
@@ -108,7 +111,6 @@ export class Document {
   private _currentFile: string | null = null;
   private diskMtimeMs: number | null = null;
   private diskState: 'synced' | 'changed' | 'deleted' = 'synced';
-  private diskChangePrompted = false;
   private fileMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   private deletionCheckTimer = 0;
 
@@ -234,6 +236,8 @@ export class Document {
   addHost(host: DocumentHost): void {
     if (!this.hosts.includes(host)) this.hosts.push(host);
     if (!this.activeHost) this.activeHost = host;
+    // A view opening onto an already-changed document gets the banner immediately.
+    host.onDiskStateChanged(this.diskState, this._currentFile);
   }
   removeHost(host: DocumentHost): void {
     const index = this.hosts.indexOf(host);
@@ -685,33 +689,9 @@ export class Document {
   private setDiskState(state: 'synced' | 'changed' | 'deleted'): void {
     if (state === this.diskState) return;
     this.diskState = state;
-    this.diskChangePrompted = false;
     this.emitTitleChange();
-    if (state === 'synced') return;
-    if (this.host?.hasFocus()) this.promptDiskChange();
-  }
-
-  promptDiskChange(): void {
-    const path = this._currentFile;
-    if (!path || this.diskState === 'synced' || this.diskChangePrompted) return;
-    this.diskChangePrompted = true;
-    const name = Path.basename(path);
-    if (this.diskState === 'deleted') {
-      quilx.notifications.addWarning(`${name} was deleted on disk`, {
-        detail: path,
-        dismissable: true,
-        // No default (body-click) action: saving requires the explicit button,
-        // so an accidental click on the toast can't overwrite the file.
-        buttons: [{ text: 'Save', onDidClick: () => this.save() }],
-      });
-    } else {
-      quilx.notifications.addWarning(`${name} changed on disk`, {
-        detail: path,
-        dismissable: true,
-        // No default (body-click) action: reloading requires the explicit
-        // button, so an accidental click can't discard in-memory changes.
-        buttons: [{ text: 'Reload', onDidClick: () => this.loadFile(path) }],
-      });
-    }
+    // Every view onto this document shows (or hides) its own banner — the warning
+    // is persistent, so unlike the old toast there's no focus gating or one-shot dedup.
+    for (const host of this.hosts) host.onDiskStateChanged(state, this._currentFile);
   }
 }

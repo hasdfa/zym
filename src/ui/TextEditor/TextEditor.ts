@@ -102,6 +102,22 @@ addStyles(`
     padding: 6px 8px;
     box-shadow: 0 1px 3px ${theme.ui.shadow};
   }
+  /* On-disk change warning banner, pinned above the editor content. The warning
+     color is mostly muted into the UI background (just a tint) so it isn't garish;
+     text/button keep the normal foreground. Compact button keeps the bar slim. */
+  .quilx-disk-banner {
+    background-color: mix(${theme.ui.bg ?? theme.ui.popoverBg}, ${theme.ui.warning}, 0.25);
+    color: ${theme.ui.fg};
+    padding: 2px 8px;
+  }
+  .quilx-disk-banner label {
+    font-weight: bold;
+  }
+  .quilx-disk-banner button {
+    color: ${theme.ui.fg};
+    min-height: 0;
+    padding: 1px 8px;
+  }
 `);
 
 const TAB_WIDTH = 4;
@@ -295,6 +311,13 @@ export class TextEditor implements DocumentHost {
   private completion!: CompletionController; // built in buildEditorArea (needs the overlay)
   private searchBar!: SearchBar; // built in buildEditorArea (needs the overlay)
   private underlineOverlay!: UnderlineOverlay; // drawn diagnostic squiggles; built in buildEditorArea
+  // On-disk change warning, pinned above the content (a Revealer wrapping a
+  // left-aligned label + button); the button reloads (changed) or saves (deleted)
+  // per `diskBannerState`. Wired up in buildEditorArea.
+  private readonly diskBanner = new Gtk.Revealer();
+  private readonly diskBannerLabel = new Gtk.Label({ xalign: 0 });
+  private readonly diskBannerButton = new Gtk.Button();
+  private diskBannerState: 'synced' | 'changed' | 'deleted' = 'synced';
   private readonly onToast: (message: string) => void;
 
   // LSP: a document adapter the LspManager drives, and the per-editor diagnostics
@@ -1134,7 +1157,37 @@ export class TextEditor implements DocumentHost {
       const sub = quilx.config.observe('editor.minimap', (v) => minimap.setVisible(v === true));
       box.on('destroy', () => sub.dispose());
     }
-    return box;
+
+    // On-disk change banner pinned above the content (replaces a transient toast,
+    // so the warning persists until the user acts). A centered message + button;
+    // the button's action depends on the state (`onDiskStateChanged` keeps the label,
+    // button label, and `diskBannerState` in sync). A custom Revealer+Box rather than
+    // Adw.Banner so we control the layout (full-width tint, centered content).
+    this.diskBannerButton.on('clicked', () => {
+      const path = this.document.currentFile;
+      if (!path) return;
+      if (this.diskBannerState === 'deleted') this.document.save();
+      else this.document.loadFile(path);
+    });
+    // Label + button group, centered within the full-width tinted band: `content`
+    // expands to fill but `halign: center` keeps it at natural width, centered.
+    const content = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 16 });
+    content.setHexpand(true);
+    content.setHalign(Gtk.Align.CENTER);
+    content.append(this.diskBannerLabel);
+    content.append(this.diskBannerButton);
+    const bannerBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    bannerBox.addCssClass('quilx-disk-banner');
+    bannerBox.append(content);
+    this.diskBanner.setChild(bannerBox);
+    this.diskBanner.setRevealChild(false);
+
+    box.setVexpand(true);
+    box.setHexpand(true);
+    const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    outer.append(this.diskBanner);
+    outer.append(box);
+    return outer;
   }
 
   // --- Cursor overlay (hollow caret while unfocused) -------------------------
@@ -1152,8 +1205,6 @@ export class TextEditor implements DocumentHost {
       // This view is now the active one of its (possibly shared) document, so the LSP
       // cursor / dialogs / load-save reactions route here.
       this.document.setActiveHost(this);
-      // Gaining focus is the moment to surface a disk change we noticed earlier.
-      if (this.document.hasDiskChange()) this.document.promptDiskChange();
     });
     focus.on('leave', () => {
       // The search bar is part of the editor: while it holds focus, keep the
@@ -1482,6 +1533,23 @@ export class TextEditor implements DocumentHost {
   /** @internal Surface a load/save error. */
   toast(message: string): void {
     this.onToast(message);
+  }
+
+  /** @internal Show (or hide) the on-disk change banner above the content. */
+  onDiskStateChanged(state: 'synced' | 'changed' | 'deleted', path: string | null): void {
+    this.diskBannerState = state;
+    if (state === 'synced' || !path) {
+      this.diskBanner.setRevealChild(false);
+      return;
+    }
+    if (state === 'deleted') {
+      this.diskBannerLabel.setLabel('file deleted on disk');
+      this.diskBannerButton.setLabel('Save');
+    } else {
+      this.diskBannerLabel.setLabel('file changed on disk');
+      this.diskBannerButton.setLabel('Reload');
+    }
+    this.diskBanner.setRevealChild(true);
   }
 
   /** @internal The cursor for an LSP request (anchors completion/hover at this view).
