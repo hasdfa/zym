@@ -15,6 +15,10 @@ import * as Fs from 'node:fs';
 import type { Plugin, PluginContext } from '../../plugin/types.ts';
 import type { ServerDef } from '../../lang/types.ts';
 import type { ConfigSchema } from '../../util/Config.ts';
+import { activateImagePreview } from './imagePreview.ts';
+
+// File extensions detected as Markdown (drives detection + the image-preview gate).
+export const MARKDOWN_FILE_TYPES = ['md', 'markdown', 'mdown', 'mkd', 'mkdn', 'mdwn', 'ronn', 'workbook'];
 
 // Tree-sitter Markdown is a split grammar: a block grammar (document structure)
 // plus an inline grammar (emphasis, links, code spans) injected into the block
@@ -70,6 +74,11 @@ const CONFIG: Record<string, ConfigSchema> = {
     enum: ['*', '_'],
     description: 'Emphasis (italic) marker to prefer.',
   },
+  'markdown.imagePreview': {
+    type: 'boolean',
+    default: true,
+    description: 'Render local `![alt](src)` images inline below their line.',
+  },
 };
 
 export const markdownPlugin: Plugin = {
@@ -80,11 +89,14 @@ export const markdownPlugin: Plugin = {
   activate(ctx: PluginContext) {
     ctx.languages.registerLanguage({
       id: 'markdown',
-      fileTypes: ['md', 'markdown', 'mdown', 'mkd', 'mkdn', 'mdwn', 'ronn', 'workbook'],
+      fileTypes: MARKDOWN_FILE_TYPES,
       // `markdown` is already a valid LSP languageId, so no `lspId` override.
     });
     ctx.languages.registerServer('markdown', MARKSMAN);
     ctx.registerConfig(CONFIG);
+
+    // Inline image preview: render `![alt](src)` images below their line.
+    activateImagePreview(ctx, MARKDOWN_FILE_TYPES);
 
     // Tree-sitter highlighting lights up the moment the grammar assets are
     // vendored (see tasks/code-editing/syntax-injection.md). Until then we

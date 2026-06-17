@@ -30,6 +30,8 @@ function activate(): { reg: LanguageRegistry; config: Config } {
         for (const key of Object.keys(schema)) config.removeSchema(key);
       });
     },
+    // The image-preview feature subscribes here; no editors exist in this unit test.
+    observeTextEditors: () => new Disposable(() => {}),
   } as unknown as PluginContext;
   markdownPlugin.activate(ctx);
   return { reg, config };

@@ -19,6 +19,7 @@ export const Gio = gi.require('Gio', '2.0');
 export const Pango = gi.require('Pango', '1.0');
 export const PangoCairo = gi.require('PangoCairo', '1.0');
 export const Gdk = gi.require('Gdk', '4.0');
+export const GdkPixbuf = gi.require('GdkPixbuf', '2.0');
 export const Gtk = gi.require('Gtk', '4.0');
 export const Adw = gi.require('Adw', '1');
 export const GtkSource = gi.require('GtkSource', '5');
