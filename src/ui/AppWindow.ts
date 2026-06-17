@@ -104,7 +104,7 @@ const TOAST_TIMEOUT = 15;
 const PULL_NOTICE_KEY = 'git:pull';
 // Expanded width (px) of the workbench sidebar — the full-height column at the very
 // left of the window, outside (left of) the header bar.
-const LAYOUT_SIDEBAR_WIDTH = 240;
+const LAYOUT_SIDEBAR_WIDTH = 280;
 // Collapsed sidebar width (icons only) — toggled by the robot button.
 const LAYOUT_SIDEBAR_COLLAPSED_WIDTH = 48;
 

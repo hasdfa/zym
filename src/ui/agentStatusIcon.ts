@@ -146,5 +146,5 @@ export function agentBranchMarkup(
   // `branch` is the live branch from the workbench's git (so an in-place checkout
   // shows immediately); fall back to the worktree name when detached.
   const name = branch ?? worktree.name;
-  return `<span font_family="${ICON_FONT_FAMILY}">${Icons.git}</span> ${escapeMarkup(name)}`;
+  return escapeMarkup(name);
 }
