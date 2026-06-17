@@ -169,7 +169,7 @@ Features:
     - [ ] **Error lens** — diagnostic message inline below the line (block; reuses diagnostics). *low–med*
     - [ ] **Code lens** — `N references` / `run·debug` above a symbol, clickable (block, `placement: above`; LSP `codeLens`). *med*
     - [ ] **Inline AI ghost text** — multi-line agent completion preview below the cursor (block; agents). *higher*
-    - [ ] **Color swatch / image / math preview** — under CSS colors / markdown `![img]` / `$$` (block; tree-sitter). *low–med*
+    - [~] **Color swatch / image / math preview** — under CSS colors / markdown `![img]` / `$$` (block). Color swatch = `color-preview` plugin; **markdown image preview built** (`plugins/markdown/imagePreview.ts`, local images, `markdown.imagePreview`). Math/remote-image deferred. *low–med*
     - [ ] **Peek references / implementations / type-def** — list + preview inline (peek; reuses find-references). *med — natural next*
     - [ ] **Inline AI edit (Cmd-K)** — focusable prompt under the line → apply as diff (peek; agents). *higher; distinctive*
     - [ ] **Peek commit / blame diff** — inline `DiffViewer` below a line (peek; diff viewer + git). *med*

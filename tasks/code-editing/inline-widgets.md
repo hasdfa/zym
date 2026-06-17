@@ -242,7 +242,14 @@ Each notes the primitive it uses and the existing infra it reuses.
 - **Inline AI ghost text** — multi-line agent completion preview below the cursor,
   accept/dismiss. Reuses the agent infra. *High value, higher effort.*
 - **Color swatch / image / math preview** — a block under a CSS color, a markdown
-  `![img]`, or `$$…$$`. Tree-sitter finds the spans. *Nice, low–medium (markdown/CSS).*
+  `![img]`, or `$$…$$`. *Nice, low–medium (markdown/CSS).*
+  - ✅ **Markdown image preview built** (`src/plugins/markdown/imagePreview.ts`):
+    `![alt](src)` local images (relative / absolute / `file://`) render as a
+    `Gtk.Picture` block below their line via `InlineBlockController`, reconciled on a
+    debounced rescan (blocks keep their identity across edits and track their anchor
+    line, so typing doesn't reload). Textures are downscaled+cached per path/mtime;
+    toggle `markdown.imagePreview`. Remote (`http(s)`/`data:`) deferred (async
+    network). Color swatch is the separate `color-preview` plugin (decoration tint).
 - **Test / coverage results** — pass/fail + message by a test. *Needs a test-runner.*
 
 **Peek (`InlinePeek` — focusable, sibling overlay):**
