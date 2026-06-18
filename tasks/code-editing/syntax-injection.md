@@ -178,15 +178,15 @@ contributes a `yaml` grammar (the Markdown plugin deliberately doesn't own YAML)
 Highlighting is limited to the **visible range** (± `VIEWPORT_MARGIN_LINES`) when
 the view is realized, so large files only pay for what's on screen:
 
-- `refresh()` (on edit) reparses incrementally (as before) then calls `repaint()`;
-  the scroll handler (debounced) calls `repaint()` with **no** reparse, reusing the
-  cached buffer text.
-- `repaint()` queries the base grammar over the visible `startPoint`/`endPoint`
-  (tree-sitter limits captures to the range) and **skips injections entirely
-  off-screen** — the big win for Markdown, which has an `inline` node per paragraph
-  but only parses the visible ones.
-- Tags are cleared over the previously-painted *line* span before each paint
-  (`paintedExtent`), so scrolling can't leave stale highlighting behind.
+- `refresh()` (on edit) reparses incrementally then repaints the viewport fresh; the
+  scroll handler (throttled) calls `paintNewlyVisible()` with **no** reparse, reusing the
+  cached buffer text and painting only not-yet-painted lines.
+- Captures are queried over a `startPoint`/`endPoint` range (tree-sitter limits captures to
+  it) and injections **entirely off-screen are skipped** — the big win for Markdown, which
+  has an `inline` node per paragraph but only parses the visible ones.
+- Highlighting is a **persistent, incremental cache** (`paintedRanges`): a scroll never
+  clears (text unchanged ⇒ tags valid), so highlights persist down-then-up; an edit/fold
+  resets it. See text-editor.md → "Scrolling & open performance".
 - Not realized (initial load / headless) → whole buffer, as before.
 
 ## Later

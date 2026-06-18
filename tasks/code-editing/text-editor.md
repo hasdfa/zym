@@ -51,7 +51,7 @@ longer used).
 | Multiple cursors / block selection | **Built (emulated)** | No native support; emulated on `MarkerLayer` (Option A). |
 | Multiple *views* of one buffer (split, peek) | **Built (A2)** | Each view its own buffer, synced from the `Document` model. |
 | Large line *counts* (M+ lines) | **Native, fine** | Only visible paragraphs are laid out. |
-| Pathological long *single* lines (minified) | **Unfixable** | The one hard wall — see constraints. |
+| Pathological long *single* lines (minified) | **Guarded** | The one hard wall; long-line mode degrades gracefully — see constraints. |
 | IME / bidi / a11y / clipboard / DnD | **Native, free** | The expensive-to-rebuild subsystems all come free here. |
 
 The features GtkSourceView *can't* do natively — multi-cursor, block-select, long
@@ -188,13 +188,11 @@ against unsaved") are just `Document.createView()`.
   indivisible `PangoLayout`, so a giant line defeats visible-only layout; the
   loader may refuse such files (gtk#229, gtksourceview#95/#208). Large line *counts*
   are fine. *Uncertain:* GTK4 crash status, loader thresholds, exact big-O.
-  **Mitigated (long-line guard):** on load, a file with any line ≥ `LONG_LINE_THRESHOLD`
-  (20k chars, VS Code's `maxTokenizationLineLength` default) enters *long-line mode* —
-  soft-wrap forced off (re-flowing a giant line every layout is the worst multiplier) and
-  tree-sitter highlighting dropped (`disableHighlighting`; a minified line is thousands of
-  tag-applies), with a toast. The file opens + scrolls instead of hanging; GtkTextView still
-  renders the wide line as best it can (cairo/pixman may warn on the oversized rect — benign,
-  the genuine wall). `hasLongLine`/`applySyntaxOrLongLineMode` in `TextEditor.ts`.
+  **Mitigated (long-line guard, `hasLongLine`/`applySyntaxOrLongLineMode` in `TextEditor.ts`):**
+  a file with any line ≥ `LONG_LINE_THRESHOLD` (20k, VS Code parity) loads in *long-line mode* —
+  soft-wrap off + tree-sitter highlighting dropped (`disableHighlighting`) + a toast — so it
+  opens/scrolls instead of hanging. GtkTextView still renders the wide line as best it can (the
+  genuine wall; cairo/pixman may warn on the oversized rect — benign).
 - **Extensibility is additive, not replaceable.** Gutter renderers, `TextTag`s,
   `snapshot_layer`, `GtkSourceAnnotations` cover gutter/inline/virtual-text needs —
   but you cannot replace the per-line Pango layout, the part owning the widget
@@ -306,85 +304,38 @@ unchanged runs via the editor's diff-fold method. See [diff.md](diff.md). Diff
 *data* comes from the **Git** workstream; `GitGutter.ts` draws VS Code-style change
 bars (in-process Myers diff of buffer↔index and index↔HEAD).
 
-### Scrolling performance — *pass 2 done*
+### Scrolling & open performance — *done; native rendering is the floor*
 
-Scroll jank traced to **per-frame node-gtk FFI cost**, not GtkTextView layout (only
-visible paragraphs lay out): on every `value-changed`, several widget-coordinate
-overlays / gutter renderers re-run JS draw code that crosses the JS↔native boundary
-once or more *per visible line*. The expensive draw paths, trimmed:
+Scroll/open cost was **per-frame node-gtk FFI** (JS draw/query code crossing the boundary
+once-or-more *per visible line, per frame*), not GtkTextView layout — only visible paragraphs
+lay out. After the work per-frame JS is ~1% CPU; the frame-rate ceiling is now native
+GtkTextView/GSK rendering, beyond which the only lever is the gated custom-widget path
+(Option C). Current mechanisms:
 
-- **`IndentGuides.draw`** (on by default) was the worst — ~16 + `level` FFI calls per
-  visible row (each line read *twice* for blank/indent state, plus a
-  `bufferToWindowCoords` per indent level). Now: one batched `getText` over the
-  visible block with the level math done in JS (`levelsForRange`), and **one**
-  `bufferToWindowCoords` per row (each guide column stepped by `stride` in widget
-  space — buffer→widget is a pure translation within a frame). Output is pixel-
-  identical; ~10× fewer FFI calls/frame.
-- **Line-number gutter** (`SyntaxController.lineNumberWidth`) called `getLineCount()`
-  (an FFI) once *per visible line per paint* for a per-frame constant — now cached,
-  refreshed by `primeLineNumbers` on edits.
-- **Viewport re-highlight is now persistent + incremental + throttled** (replaced the
-  earlier clear-and-repaint-the-band model). Highlighting is a growing cache of painted
-  line ranges (`paintedRanges`, an interval set in `paintRegions.ts`): a scroll paints only
-  the parts of the new visible range NOT already painted (`rangeGaps`) and **never clears**
-  — the text didn't change, so the tags stay valid — so scrolling down then back up costs
-  nothing (highlights persist), fixing two UX bugs: (a) a held `ctrl-d`/`ctrl-u` used to
-  outrun a *trailing debounce* and leave white text — now a **throttle** (`VIEWPORT_THROTTLE_MS`
-  = 16ms, one pass/frame) paints freshly-revealed lines as they appear; (b) the old band
-  model cleared everything outside the viewport, so scrolling back up showed previously-
-  highlighted regions briefly blank. An edit/fold/new-document resets the cache (a reparse can
-  change tokens anywhere, so `repaint()` clears all highlight tags + repaints the viewport +
-  resets `paintedRanges`; scrolling re-accumulates). Verified with a probe over a 3k-line file:
-  scrolling down grows the cache (paints ~26 new lines/tick); scrolling back up is `gaps=0` /
-  zero re-paint. *Open follow-up:* the cache is unbounded — scrolling through an entire huge
-  file accumulates tags for all of it; a far-region eviction cap would bound it.
-  (This also subsumed the earlier `paintedWindow`-vs-`paintedExtent` overhang guard — there's
-  no clearing on scroll now, so the overhang bug can't recur.)
+- **IndentGuides** (`IndentGuides.ts`) — one batched `getText` for the visible block + JS
+  level math (not two FFI line-reads/row); geometry hoists the buffer→widget translation out
+  of the per-row loop and, when all visible rows are the base height (no wrap/scaled line —
+  common for code), derives each row's y arithmetically with no per-row FFI (per-row
+  `getIterLocation` fallback otherwise). ~10× fewer FFI/frame, pixel-identical output.
+- **Line-number gutter** — `lineNumberWidth` caches the digit count (was a `getLineCount` FFI
+  per visible line per paint).
+- **Highlighting: a persistent, incremental, throttled cache** (`paintedRanges` +
+  `syntax/paintRegions.ts`). A scroll paints only the not-yet-painted lines of the visible
+  range (`rangeGaps`) and **never clears** — text unchanged ⇒ tags stay valid — so highlights
+  persist (scroll down then up is free) and a held ctrl-d/ctrl-u keeps up (a **throttle**,
+  `VIEWPORT_THROTTLE_MS`=16ms/frame, not a trailing debounce). Edit/fold/new-doc resets it (a
+  reparse can change tokens anywhere): `repaint()` clears all highlight tags, paints the
+  viewport, resets the cache; scrolling re-accumulates.
+- **First paint is bounded** (`initialPaintRange`, top 250 lines) — pre-size-allocate
+  `visibleRange` is null; rather than highlight the whole buffer (O(file): ~840ms@3k,
+  ~1.45s@8k) it paints the file's head, so open is O(viewport) (~70ms, size-independent).
+  Headless keeps the whole-buffer paint (tests).
 
-**Pass 2 (measured first).** An in-app profiler (temporary `value-changed`-driven
-synthetic scroll over an 8k-line file, since headless can't kinetic-scroll) timed the
-remaining per-frame work. Findings:
-
-- The per-frame JS cost is now **small** — IndentGuides ~8 ms/s, both gutter renderers
-  ~1–3 µs/`queryData` (≈3 ms/s combined), `syntax.repaint` doesn't even fire during a
-  continuous fling (the pass-1 within-band guard + the trailing debounce). Total ≲ 12 ms/s
-  (~1 % CPU). **Pass 1 already captured the JS-side win.**
-- The gutter **does** re-query every visible line every paint, but each call is ~2 µs
-  (`setMarkup` on a tiny string) — not worth optimizing.
-- A/B test (IndentGuides overlay added vs. not) showed **no change** in paint rate: the
-  view repaints ~20×/s under the synthetic driver *regardless* of our overlays. So the
-  frame-rate ceiling is **native GtkTextView/GSK rendering**, not our JS. (The ~20 fps is
-  partly a synthetic-driver artifact — real kinetic scroll uses GTK's frame clock with
-  partial redraws — so don't over-read it; the takeaway is "JS is no longer the limiter.")
-
-So pass 2 targeted the one remaining sizeable JS item, IndentGuides' per-row geometry
-(~3 FFI/row, the bulk of its ~420 µs/draw): hoist the `bufferToWindowCoords` out of the
-loop (buffer→widget is one frame-constant translation) and, when every visible row is the
-base height (no soft-wrap / scaled line on screen — the common case for code), derive each
-row's y arithmetically with **no per-row FFI at all** (a getIterLocation-per-row fallback
-covers wrapped/markdown viewports). ~420 → ~50–100 µs/draw in the common case; output
-verified pixel-identical to pass 1 against the per-row ground truth under synthetic scroll.
-
-Not pursued (measurement says low ROI / high risk): the banded native-scroll rewrite
-(draw guides in a content-sized `add_overlay` surface so they don't repaint per frame) —
-`snapshot_layer`/`add_overlay` still re-run per scroll frame, and the A/B test shows
-IndentGuides isn't the frame-rate limiter anyway. `UnderlineOverlay` (squiggles) still
-redraws per frame under diagnostics; same single-transform trick applies, marginal win.
-The real remaining lever is **native rendering** — the gated custom-widget / Rust-core
-path (Option C above), not more JS micro-optimization.
-
-### Open performance — *bounded first paint*
-
-Opening a large file froze on the **first highlight paint**: the view is realized but not
-yet size-allocated, so `visibleRange()` is null and the paint covered the WHOLE buffer
-(an `applyTag` per capture across every line). Measured ~840 ms at 3k lines, ~1.45 s at 8k
-— it grows with file size. Fix: `initialPaintRange()` bounds that first geometry-less paint
-to the top `INITIAL_PAINT_LINES` (250) — the initial viewport is the file's head — so open
-is **O(viewport), ~65–78 ms regardless of file size** (11–23× faster); the normal viewport
-repaints cover the rest as the view sizes / the user scrolls. A genuinely unrealized view
-(headless / tests) keeps the whole-buffer paint, so tests are unaffected. *Remaining open
-cost not yet addressed:* tree-sitter `preloadGrammars` + plugin activation run synchronously
-before the window shows (unmeasured — see the perf audit).
+Follow-ups (measured, not done): the highlight cache is **unbounded** (far-region eviction
+cap); the **first tree-sitter parse** is O(file) and blocks open (0.4s@20k … 2.5s@100k) —
+defer past the first frame or large-file guard; **startup** ~680ms = module load ~450ms +
+`preloadGrammars` (all grammars) ~230ms — lazy per-language load. `UnderlineOverlay` squiggles
+still redraw per frame under diagnostics (marginal).
 
 ## Related friction evidence
 
