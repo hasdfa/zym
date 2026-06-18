@@ -196,3 +196,23 @@ the view is realized, so large files only pay for what's on screen:
   region parses separately. Fine for correctness; a further optimization.
 - A general `injections.scm` loader (in addition to the TS-declared form) if a
   vendored grammar ships one we'd rather use verbatim.
+
+## Gotcha: grammar wasm libc imports (markdown "no highlighting" + crash)
+
+Each grammar wasm is an emscripten **side module** that imports its libc from the
+web-tree-sitter runtime. The pinned 0.20.x runtime provides the common ctype helpers
+(`iswalpha`/`iswalnum`/`iswspace`/…) but not `towlower`/`strcmp`/`__assert_fail`, which
+the Markdown scanner's `parse_html_block` needs (case-insensitive HTML-block tag
+matching). An unprovided import resolves to `undefined`, so the scanner's first call
+throws `Cannot read properties of undefined (reading 'apply')` mid-parse — markdown with
+any `<...>` block (e.g. `tasks/styling.md`) opened with **no highlighting**, and editing
+it left the tree corrupt so a later incremental `tree.edit` faulted with **memory access
+out of bounds** (whole-process crash).
+
+Fix (`src/syntax/grammar.ts` `initOptions`): supply the missing symbols via `Parser.init`
+(the side-module linker resolves against them, same model as isw*), keyed by emscripten's
+mangled names (`_towlower`/`_strcmp`/`___assert_fail`). `strcmp` needs the wasm heap —
+captured by reading `this.HEAPU8` from `locateFile` (emscripten calls it as a method on
+the runtime Module). Regression test: `src/syntax/injection.test.ts` (HTML-block markdown
+must highlight). To audit a new grammar: `WebAssembly.Module.imports()` on its wasm, then
+check each `env` function name against the runtime.

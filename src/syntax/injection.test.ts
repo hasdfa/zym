@@ -78,3 +78,52 @@ test('injection: a fenced ```ts block in Markdown is painted by the TypeScript g
 
     Fs.unlinkSync(tmp);
   });
+
+// Regression: the vendored Markdown grammar wasm imports libc symbols (towlower,
+// strcmp, __assert_fail) that the pinned web-tree-sitter runtime doesn't provide.
+// `initTreeSitter` shims them; without the shims, the external scanner's
+// `parse_html_block` calls an undefined import the moment markdown contains an
+// HTML block (`<...>`), throwing "Cannot read properties of undefined (reading
+// 'apply')" out of `parse` → the file opens with no highlighting at all (and a
+// later incremental edit faults the wasm with "memory access out of bounds").
+test('injection: HTML-block markdown highlights (grammar libc shims present)',
+  { skip: !hasMarkdownWasm && 'Markdown grammar not vendored' },
+  async () => {
+    try { registerBuiltinPlugins(); } catch { /* already registered by an earlier test in this file */ }
+    await plugins.activateAll();
+    await preloadGrammars();
+
+    // `<span>` / autolink `<https://…>` drive the scanner's parse_html_block, which
+    // lowercases tag-name chars via towlower — the missing import that used to crash.
+    const md = [
+      '# Styling',
+      '',
+      'Inline `<span ...>` runs and an autolink <https://example.com> here.',
+      '',
+      '<div class="note">a raw HTML block</div>',
+      '',
+      'A **bold** word after the block.',
+    ].join('\n') + '\n';
+    const tmp = Path.join(Os.tmpdir(), `quilx-htmlblock-${process.pid}.md`);
+    Fs.writeFileSync(tmp, md);
+
+    const buffer = new GtkSource.Buffer();
+    buffer.setText(md, -1);
+    const view = new GtkSource.View({ buffer });
+    const syntax = new SyntaxController(view, buffer, { folding: false });
+
+    // The whole load+parse+paint runs here; before the shims this threw.
+    assert.equal(syntax.setLanguageForPath(tmp), true, 'tree-sitter should handle the file');
+
+    // It actually produced captures (the heading at least) — i.e. the parse survived
+    // parse_html_block rather than aborting with an undefined-import crash.
+    const counts = syntax.captureCounts();
+    assert.ok((counts['markup.heading.1'] ?? 0) >= 1, 'heading should be captured');
+
+    // And the `**bold**` after the HTML block is still reached by the inline injection.
+    const boldTag = (buffer as any).getTagTable().lookup('ts*bold');
+    const boldIter = asIter((buffer as any).getIterAtOffset(md.indexOf('bold') + 1));
+    assert.ok(boldIter.hasTag(boldTag), 'bold past the HTML block should be highlighted');
+
+    Fs.unlinkSync(tmp);
+  });

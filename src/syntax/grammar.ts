@@ -20,11 +20,49 @@ const Parser = require_('web-tree-sitter') as any;
 
 let initPromise: Promise<void> | null = null;
 
+/*
+ * web-tree-sitter loads each grammar as an emscripten *side module* that imports its
+ * libc from the runtime ("main module"). The pinned 0.20.x runtime exports the common
+ * ctype helpers (iswalpha/iswalnum/iswspace/…) every grammar uses, but not the few the
+ * Markdown scanner additionally needs: `parse_html_block` calls `towlower`/`strcmp`
+ * (matching HTML-block tag names case-insensitively). An unprovided import resolves to
+ * `undefined`, so the scanner's first call to it throws "Cannot read properties of
+ * undefined (reading 'apply')" mid-parse — which blocks highlighting and can leave the
+ * tree corrupt so a later incremental `tree.edit` faults with "memory access out of
+ * bounds". We supply the gap through `Parser.init`: the linker resolves side-module
+ * imports against these (keyed by emscripten's mangled names — a leading underscore).
+ */
+function initOptions(dir: string): Record<string, unknown> {
+  // `strcmp` compares NUL-terminated strings by pointer, so it needs the wasm heap.
+  // emscripten calls `locateFile` as a method on the runtime Module, so we capture it
+  // there and read its `HEAPU8` live (the view is reassigned when the heap grows).
+  let mod: any = null;
+  return {
+    locateFile(this: any, name: string): string { mod = this; return Path.join(dir, name); },
+    // towlower(wint_t): single-code-point Unicode lowercase (WEOF / out-of-range pass through).
+    _towlower(wc: number): number {
+      if (wc < 0 || wc > 0x10ffff) return wc;
+      const lower = String.fromCodePoint(wc).toLowerCase();
+      // Skip code points whose lowering isn't one code point (e.g. İ → i̇); the scanner
+      // only lowercases ASCII tag-name chars, so this never matters in practice.
+      return [...lower].length === 1 ? lower.codePointAt(0)! : wc;
+    },
+    _strcmp(a: number, b: number): number {
+      const heap: Uint8Array | undefined = mod?.HEAPU8;
+      if (!heap) return 0;
+      while (heap[a] !== 0 && heap[a] === heap[b]) { a++; b++; }
+      return heap[a] - heap[b];
+    },
+    // Surface a scanner assertion as a real error rather than an opaque wasm fault.
+    ___assert_fail(): never { throw new Error('tree-sitter grammar scanner assertion failed (__assert_fail)'); },
+  };
+}
+
 /** Initialize the web-tree-sitter runtime exactly once. */
 export function initTreeSitter(): Promise<void> {
   if (!initPromise) {
     const dir = Path.dirname(require_.resolve('web-tree-sitter'));
-    initPromise = Parser.init({ locateFile: (name: string) => Path.join(dir, name) }) as Promise<void>;
+    initPromise = Parser.init(initOptions(dir)) as Promise<void>;
   }
   return initPromise!;
 }
