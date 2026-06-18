@@ -14,6 +14,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
+import { alpha as withAlpha, darken, formatHEXA, lighten, parse } from 'color-bits';
 
 // --- Internal (consumed) shape ---------------------------------------------
 
@@ -165,10 +166,9 @@ const DEFAULT_UI = {
   hint: '#33d17a',
   shadow: 'rgba(0, 0, 0, 0.3)',
   flash: '#f5c21188',
-  diffAddedBg: '#2ec27e26',
-  diffRemovedBg: '#e01b2426',
-  diffAddedWordBg: '#2ec27e66',
-  diffRemovedWordBg: '#e01b2466',
+  // diffAdded/Removed (line + word) backgrounds are not listed here: they're
+  // DERIVED from success/error per appearance at load time (see diffTones). Only
+  // the neutral (hue-less) diff tints have fixed fallbacks.
   diffFillerBg: '#88888820',
   diffFoldBg: '#8888882e',
   prOpen: '#3fb950',
@@ -192,6 +192,30 @@ export function loadTheme(name: string, variant?: string): Theme {
   return adaptZedTheme(zed);
 }
 
+/**
+ * Derive the diff line/word background tints from the theme's success/error
+ * accents, toned by `appearance`: a dark theme DARKENS the accent into a recessed
+ * band that reads on a dark editor; a light theme LIGHTENS it into a pale band on
+ * a light editor. Line tints are more muted and more translucent; word tints share
+ * the hue but are stronger, so changed words stand out within the line. All are
+ * `#rrggbbaa` so they compose over syntax colors (see TextDecorations).
+ */
+function diffTones(
+  success: string,
+  error: string,
+  appearance: 'light' | 'dark',
+): Pick<UiColors, 'diffAddedBg' | 'diffRemovedBg' | 'diffAddedWordBg' | 'diffRemovedWordBg'> {
+  const mute = appearance === 'dark' ? darken : lighten;
+  const line = (c: string): string => formatHEXA(withAlpha(mute(parse(c), 0.25), 0.18));
+  const word = (c: string): string => formatHEXA(withAlpha(mute(parse(c), 0.2), 0.3));
+  return {
+    diffAddedBg: line(success),
+    diffRemovedBg: line(error),
+    diffAddedWordBg: word(success),
+    diffRemovedWordBg: word(error),
+  };
+}
+
 function adaptZedTheme(zed: ZedTheme): Theme {
   const style = zed.style;
   const pick = (...keys: string[]): string | undefined => {
@@ -201,6 +225,12 @@ function adaptZedTheme(zed: ZedTheme): Theme {
     }
     return undefined;
   };
+
+  // success/error drive the diff tints, so resolve them (with their fallbacks)
+  // before building `ui`; the diff.* theme keys still win where a theme sets them.
+  const success = pick('success') ?? DEFAULT_UI.success;
+  const error = pick('error') ?? DEFAULT_UI.error;
+  const diff = diffTones(success, error, zed.appearance);
 
   // Preserve `style.syntax` key order — it drives tag priority (see SyntaxColors).
   const syntax: SyntaxColors = {};
@@ -226,17 +256,17 @@ function adaptZedTheme(zed: ZedTheme): Theme {
     searchMatch: pick('search.match_background') ?? DEFAULT_UI.searchMatch,
     searchMatchCurrent:
       pick('search.match_background.current', 'search.match_background') ?? DEFAULT_UI.searchMatchCurrent,
-    success: pick('success') ?? DEFAULT_UI.success,
+    success,
     warning: pick('warning') ?? DEFAULT_UI.warning,
-    error: pick('error') ?? DEFAULT_UI.error,
+    error,
     info: pick('info') ?? DEFAULT_UI.info,
     hint: pick('hint') ?? DEFAULT_UI.hint,
     shadow: pick('shadow') ?? DEFAULT_UI.shadow,
     flash: pick('editor.flash') ?? DEFAULT_UI.flash,
-    diffAddedBg: pick('diff.added_background') ?? DEFAULT_UI.diffAddedBg,
-    diffRemovedBg: pick('diff.removed_background') ?? DEFAULT_UI.diffRemovedBg,
-    diffAddedWordBg: pick('diff.added_word_background') ?? DEFAULT_UI.diffAddedWordBg,
-    diffRemovedWordBg: pick('diff.removed_word_background') ?? DEFAULT_UI.diffRemovedWordBg,
+    diffAddedBg: pick('diff.added_background') ?? diff.diffAddedBg,
+    diffRemovedBg: pick('diff.removed_background') ?? diff.diffRemovedBg,
+    diffAddedWordBg: pick('diff.added_word_background') ?? diff.diffAddedWordBg,
+    diffRemovedWordBg: pick('diff.removed_word_background') ?? diff.diffRemovedWordBg,
     diffFillerBg: pick('diff.filler_background') ?? DEFAULT_UI.diffFillerBg,
     diffFoldBg: pick('diff.fold_background') ?? DEFAULT_UI.diffFoldBg,
     prOpen: pick('vcs.pr.open') ?? DEFAULT_UI.prOpen,
