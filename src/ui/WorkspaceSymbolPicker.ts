@@ -23,9 +23,9 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 export function openWorkspaceSymbolPicker(
   host: Overlay,
   doc: LspDocument,
+  cwd: string,
   onJump: (path: string, cursor: [number, number]) => void,
 ): void {
-  const cwd = process.cwd();
   // Current results keyed by their (stable, unique) item value, so the row
   // renderer and `locate` can recover the full symbol. Rebuilt on each fetch.
   const byValue = new Map<string, WorkspaceSymbolResult>();

@@ -787,8 +787,9 @@ export class AppWindow {
   // `openAgent` options to resume `session`, restoring its branch/worktree/cwd:
   // spawn in the cwd Claude recorded (where `--resume` resolves the session and the
   // workbench roots). If the agent had moved into a worktree *dynamically* (a sidecar
-  // `effectiveCwd` differing from the transcript cwd), nudge it to `cd` back — it
-  // re-announces via set_worktree and the workbench re-roots there.
+  // `effectiveCwd` differing from the transcript cwd), tell it to re-announce that
+  // worktree via the bridge so the editor re-roots — and to do nothing else, so a
+  // resume just restores the view without kicking off work.
   private resumeOptions(session: AgentSession): { cwd?: string; resume: AgentResume; prompt?: string; title: string } {
     const moved =
       session.effectiveCwd && session.effectiveCwd !== session.cwd ? session.effectiveCwd : null;
@@ -796,7 +797,8 @@ export class AppWindow {
       cwd: session.cwd ?? undefined,
       resume: { sessionId: session.id },
       prompt: moved
-        ? `Resume in the git worktree at ${moved} — run \`cd ${moved}\` before continuing your task there.`
+        ? `Call the set_worktree tool with the path ${moved} now, and do nothing else — ` +
+          `no other tools, commands, or commentary. Then stop and wait for my next instruction.`
         : undefined,
       title: truncate(session.label, 40),
     };
@@ -1016,6 +1018,11 @@ export class AppWindow {
       }
       workbench.fileTree.dispose(); // also holds a git subscription
       workbench.gitPanel.dispose();
+      // The bottom-dock panels subscribe to global signals (diagnostics store,
+      // notifications, keymap) — dispose them so a closed agent leaves nothing behind.
+      workbench.diagnosticsPanel.dispose();
+      workbench.notificationLog.dispose();
+      workbench.keymapPanel.dispose();
       releaseGitRepo(workbench.git); // refcounted; the shared user/worktree repo survives
     }
     this.participants.get(agent.root)?.dispose();
@@ -1795,7 +1802,7 @@ export class AppWindow {
       quilx.notifications.addInfo('No workspace symbol support for this file');
       return;
     }
-    openWorkspaceSymbolPicker(this.overlay, editor.lsp, (path, cursor) =>
+    openWorkspaceSymbolPicker(this.overlay, editor.lsp, this.workbench.cwd, (path, cursor) =>
       this.openOrFocusFile(path, cursor),
     );
   }
@@ -1971,9 +1978,9 @@ export class AppWindow {
   private registerWindowCommands() {
     quilx.commands.add('#AppWindow', {
       'file:open': () => this.openDialog(),
-      'file:find': () => openFilePicker(this.overlay, (path) => this.openFile(path)),
+      'file:find': () => openFilePicker(this.overlay, this.workbench.cwd, (path) => this.openFile(path)),
       'project:search': () =>
-        openSearchPicker(this.overlay, (path, cursor) => this.openFile(path).restoreCursor(cursor)),
+        openSearchPicker(this.overlay, this.workbench.cwd, (path, cursor) => this.openFile(path).restoreCursor(cursor)),
       // Save commands only apply with an editor open.
       'file:save': { didDispatch: () => this.saveActive(), when: () => this.activeEditor !== null },
       'file:save-as': { didDispatch: () => this.saveAsDialog(), when: () => this.activeEditor !== null },

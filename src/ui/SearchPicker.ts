@@ -42,8 +42,7 @@ interface SearchItem extends PickerItem {
   detailText: string;
 }
 
-export function openSearchPicker(host: Overlay, onSelect: SearchTarget): void {
-  const cwd = process.cwd();
+export function openSearchPicker(host: Overlay, cwd: string, onSelect: SearchTarget): void {
   openLocationPicker({
     host,
     placeholder: 'Search in project…',

@@ -23,8 +23,7 @@ const IGNORED_DIRS = new Set([
 const MAX_FILES = 20000;
 const DIRS_PER_TICK = 24; // directories scanned per idle iteration
 
-export function openFilePicker(host: Overlay, onSelect: (path: string) => void): void {
-  const cwd = process.cwd();
+export function openFilePicker(host: Overlay, cwd: string, onSelect: (path: string) => void): void {
   // Open immediately with an empty list; fill it as the background walk streams
   // results, so a large tree never blocks the UI.
   const picker = openPicker({

@@ -329,9 +329,10 @@ re-root independently. Pieces and how they connect:
   transcript still says the launch dir) are handled by a sidecar: on each announce
   `recordSessionWorktree` writes `effectiveCwd` next to the transcript
   (`<id>.quilx-worktree`); on resume we still spawn in the launch cwd (so `--resume`
-  resolves) but inject a one-line *"cd back into `<W>`"* prompt — the agent re-enters
-  the worktree and re-announces, and the workbench re-roots (Tier 1: cooperative,
-  self-healing via the announce loop; no touching Claude's transcript storage).
+  resolves) but inject a terse prompt telling the agent to **only** call
+  `set_worktree(<W>)` and then stop — re-rooting the editor without kicking off work
+  (Tier 1: cooperative, via the announce loop; no touching Claude's transcript
+  storage).
 
 Key files: `git.ts` (pool), `git/cli.ts` (`listWorktrees`), `Workbench.ts`,
 `AppWindow.ts` (build/activate/re-root), `claudeAgent.ts` + `assets/mcp/quilxBridge.mjs`
