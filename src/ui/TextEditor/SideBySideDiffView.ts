@@ -63,11 +63,17 @@ export class SideBySideDiffView {
     // chevron click or z-fold command on either pane folds the other in lockstep.
     // Both sides fold the same unchanged runs (context rows align); label each from
     // the left side's context line (identical content) so the two markers match.
-    const folds = foldUnchanged(left).map((f) => ({ ...f, label: diffFoldLabel(left, f.bodyStart, f.count) }));
-    this.left.setDiffFolds(folds);
-    this.right.setDiffFolds(folds);
-    this.left.setDiffFoldMirror((i) => this.right.toggleDiffFoldIndex(i));
-    this.right.setDiffFoldMirror((i) => this.left.toggleDiffFoldIndex(i));
+    const folds = foldUnchanged(left).map((f) => ({
+      startLine: f.bodyStart,
+      endLine: f.bodyEnd,
+      whole: true,
+      folded: true,
+      placeholder: diffFoldLabel(left, f.bodyStart, f.count),
+    }));
+    this.left.setProvidedFolds(folds);
+    this.right.setProvidedFolds(folds);
+    this.left.setFoldMirror((i) => this.right.toggleProvidedFold(i));
+    this.right.setFoldMirror((i) => this.left.toggleProvidedFold(i));
     this.hunkRows = changeStartRows(left.map((line) => line.kind));
 
     syncScroll(this.left.sourceView, this.right.sourceView);
@@ -125,7 +131,7 @@ export class SideBySideDiffView {
 }
 
 /** A read-only pane for one side, with per-line diff backgrounds applied. Folding
- *  is left enabled (the caller installs the diff folds via `setDiffFolds`). */
+ *  is left enabled (the caller installs the diff folds via `setProvidedFolds`). */
 function makePane(lines: SideLine[], languagePath?: string): TextEditor {
   // Trailing newline terminates the last line so an empty last row can still carry
   // its line background (and both panes stay equal-height for scroll-sync).

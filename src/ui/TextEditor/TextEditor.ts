@@ -11,13 +11,12 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { SyntaxController, type RevealedRange } from '../../syntax/syntax-controller.ts';
+import { SyntaxController, type RevealedRange, type ProvidedFold } from '../../syntax/syntax-controller.ts';
 import { detectIndentation } from './detectIndentation.ts';
 import { handleAutoPairInsert, handleAutoPairBackspace } from './autoPair.ts';
 import { handleTagAutoClose } from './tagClose.ts';
 import { Range } from '../../text/Range.ts';
 import { Point } from '../../text/Point.ts';
-import type { DiffFoldInfo } from '../../util/DiffModel.ts';
 import type { TagName } from '../../syntax/tags.ts';
 import { theme } from '../../theme/theme.ts';
 import { createSourceScheme } from '../../theme/createSourceScheme.ts';
@@ -211,7 +210,7 @@ export interface BufferEditorOptions {
    *  embedded buffer (e.g. a diff pane) still gets syntax highlighting. */
   languagePath?: string;
   /** Folding (chevron gutter + projection). Defaults on. Diff panes leave it on but
-   *  switch to the diff fold *method* (`setDiffFolds`) — unchanged runs, not code
+   *  supply their own fold ranges (`setProvidedFolds`) — unchanged runs, not code
    *  structure; peek/preview panes set it false to disable folding entirely. */
   folding?: boolean;
 }
@@ -297,7 +296,7 @@ export class TextEditor implements DocumentHost {
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
   // Drives the vim `fold:*` commands and owns the fold projection. A diff pane
-  // switches it to the diff fold method (unchanged-run folds) via `setDiffFolds`,
+  // supplies its own fold ranges (unchanged-run folds) via `setProvidedFolds`,
   // which suppresses tree-sitter fold discovery — same machinery either way.
   private readonly syntax: SyntaxController;
   private readonly editorModel: EditorModel;
@@ -1332,18 +1331,18 @@ export class TextEditor implements DocumentHost {
     });
   }
 
-  /** Switch this view to the diff fold method: fold the given unchanged runs (via
-   *  the same projection + chevron as code folding), suppressing syntax folding. */
-  setDiffFolds(regions: readonly DiffFoldInfo[]): void {
-    this.syntax.setDiffFolds(regions);
+  /** Fold an externally-supplied set of ranges (via the same projection + chevron as
+   *  code folding), suppressing parse-driven fold discovery — used for diff views. */
+  setProvidedFolds(folds: readonly ProvidedFold[]): void {
+    this.syntax.setProvidedFolds(folds);
   }
 
-  /** Side-by-side lockstep: toggle the same diff-fold index in a sibling pane. */
-  setDiffFoldMirror(cb: (index: number) => void): void {
-    this.syntax.setDiffFoldMirror(cb);
+  /** Side-by-side lockstep: toggle the same provided-fold index in a sibling pane. */
+  setFoldMirror(cb: (index: number) => void): void {
+    this.syntax.setFoldMirror(cb);
   }
-  toggleDiffFoldIndex(index: number): void {
-    this.syntax.toggleDiffFoldIndex(index);
+  toggleProvidedFold(index: number): void {
+    this.syntax.toggleProvidedFold(index);
   }
 
   /** VIEW line → MODEL line through the fold projection (the diff gutter keys by it). */

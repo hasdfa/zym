@@ -206,9 +206,10 @@ export function splitSides(model: DiffModel): SideBySide {
 /**
  * One collapsible region of unchanged lines (buffer-row indices; the diff buffer
  * holds the real lines verbatim). The body to collapse is `bodyStart..bodyEnd`
- * inclusive, with `count` lines. The diff fold method (SyntaxController.setDiffFolds)
- * collapses that run, whole, to a `⋯ N unchanged lines` placeholder via the fold
- * projection. (`anchorRow`/`placement` are legacy positioning hints, unused now.)
+ * inclusive, with `count` lines. A diff view hands these to the editor as provided
+ * folds (SyntaxController.setProvidedFolds), which collapses each run, whole, to a
+ * `⋯ N unchanged lines` placeholder via the fold projection. (`anchorRow`/`placement`
+ * are legacy positioning hints, unused now.)
  */
 export interface DiffFoldInfo {
   anchorRow: number;
@@ -250,8 +251,9 @@ export function diffFoldLabel(lines: readonly { text: string }[], bodyStart: num
  * Plan which runs of unchanged (`context`-kind) lines to collapse, keeping
  * `context` lines on each side of every change and only folding runs with more
  * than `minHidden` interior lines. Returns the fold regions in **buffer-row
- * indices** (the diff buffer is the line list verbatim); the diff fold method
- * collapses each body to a `⋯ N unchanged lines` placeholder via the fold projection.
+ * indices** (the diff buffer is the line list verbatim); a diff view supplies them
+ * to the editor (as provided folds), collapsing each body to a `⋯ N unchanged lines`
+ * placeholder via the fold projection.
  *
  * Generic over any line carrying a `kind` (unified `DiffLine` or `SideLine`), so
  * the two side-by-side panes — whose context lines sit at identical rows — fold

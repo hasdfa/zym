@@ -4,10 +4,10 @@
  * order — see tasks/code-editing/diff.md), then paints `added`/`removed` line
  * backgrounds via the editor's decoration surface and a `+`/`−` `DiffGutter`.
  *
- * Unchanged runs collapse via the editor's *diff fold method* — the same fold
- * projection + chevron gutter as code folding, with a `⋯ N unchanged lines`
- * placeholder (see SyntaxController.setDiffFolds). The vim z-fold commands
- * (zo/zc/za/zR/zM) drive them through the editor's default fold controller.
+ * Unchanged runs collapse by handing the editor their ranges as *provided folds*
+ * — the same fold projection + chevron gutter as code folding, with a
+ * `⋯ N unchanged lines` placeholder (see SyntaxController.setProvidedFolds). The
+ * vim z-fold commands (zo/zc/za/zR/zM) drive them through the default fold controller.
  *
  * It reuses the buffer-only `TextEditor` (read-only), so it gets vim navigation,
  * search, and the decoration/gutter plumbing for free. Construct at runtime (the
@@ -53,8 +53,14 @@ export class DiffView {
     this.gutter = new DiffGutter(view, model.lines, viewToModel, 3);
     // Collapse the unchanged runs through the fold projection; each marker shows its
     // git-diff-style context line (the enclosing scope), computed from the line texts.
-    this.editor.setDiffFolds(
-      foldUnchanged(model.lines).map((f) => ({ ...f, label: diffFoldLabel(model.lines, f.bodyStart, f.count) })),
+    this.editor.setProvidedFolds(
+      foldUnchanged(model.lines).map((f) => ({
+        startLine: f.bodyStart,
+        endLine: f.bodyEnd,
+        whole: true,
+        folded: true,
+        placeholder: diffFoldLabel(model.lines, f.bodyStart, f.count),
+      })),
     );
     this.hunkRows = changeStartRows(model.lines.map((line) => line.kind));
   }
