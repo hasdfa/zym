@@ -5,10 +5,10 @@ and fonts — and keeps the running UI in sync when the user changes them. The
 guiding rule: **OS appearance and font changes must be followed through at
 runtime**, without a restart.
 
-Today most of these are read **once** at startup, so changing the desktop
-monospace font, the UI font, or the light/dark preference while quilx is running
-has no effect (or only a partial one). This page records what already reacts,
-where the gaps are, and the plan to close them.
+Fonts now react live. The light/dark preference only partially reacts (the
+Adwaita-fallback editor scheme and the terminal flip, but the quilx theme palette
+does not). This page records what already reacts, where the gaps are, and the
+plan to close them.
 
 ## Goal
 
@@ -27,47 +27,52 @@ updates live:
 
 What exists, and whether it reacts to a live change:
 
-- **Editor color scheme** — `TextEditor.followSystemColorScheme` subscribes to
-  `Adw.StyleManager` `notify::dark` and re-applies the GtkSource scheme +
-  re-runs syntax restyle. ✅ *reacts* — **but only when the theme defines no
-  `ui.bg`** (a theme with its own background owns a fixed scheme that does not
-  follow the OS; built once).
-- **Terminal colors** — `Terminal.followSystemColorScheme` clears explicit colors
-  so VTE inherits libadwaita's themed fg/bg, which flip with the system scheme.
-  ✅ *reacts passively* (no explicit handler).
-- **Active theme** — `theme = loadTheme('quilx')` picks a **fixed** Zed variant
-  (the first in the family) at module load. The whole `theme.ui.*` / `theme.syntax.*`
+- **Editor color scheme** — `TextEditor.followSystemColorScheme`
+  (`src/ui/TextEditor/TextEditor.ts`) subscribes to `Adw.StyleManager`
+  `notify::dark`, re-applies the GtkSource scheme, and re-runs `syntax.restyle()`.
+  ✅ *reacts* — **but only when the theme defines no `ui.bg`**: a theme with its
+  own background gets a fixed `createSourceScheme(theme)` built once that does not
+  follow the OS; otherwise it swaps between `Adwaita` / `Adwaita-dark`.
+- **Terminal colors** — `Terminal.followSystemColorScheme` (`src/ui/Terminal.ts`)
+  calls `setColors(null, null, null)` so VTE inherits libadwaita's themed fg/bg,
+  which flip with the system scheme. ✅ *reacts passively* (no explicit handler).
+- **Active theme** — `export const theme = loadTheme('quilx')`
+  (`src/theme/theme.ts`) picks a **fixed** Zed variant (`family.themes[0]`, the
+  first in the family) at module load. The whole `theme.ui.*` / `theme.syntax.*`
   palette is static. ❌ does **not** follow OS light/dark; there is no light↔dark
   variant swap.
-- **`core.followSystemColorScheme` config** — declared in the schema
-  (`src/quilx.ts`) but **not consumed anywhere**. ❌ dead setting; should gate the
-  follow-the-OS behavior once it exists.
-- **Fonts** — ✅ centralized in the `fonts` store (`fonts.ts`). One reactive
-  stylesheet (`styles.set(..., { key: 'app-fonts' })`) carries every CSS widget's
-  font (components register a selector via `fonts.monospace(sel)` / `fonts.ui(sel)`
-  instead of inlining declarations); Pango-markup callers read the live
-  `fonts.monospaceFamily` / `fonts.uiFamily` at render time; `Terminal` subscribes
-  via `fonts.onChange`. The store watches `org.gnome.desktop.interface`
-  (`changed::monospace-font-name` / `font-name`) and re-applies live; `reload()`
-  is public so a future user font setting drives the same path. (The terminal,
-  editor signature/hover, completion docs, and all pickers now update without a
-  restart.)
-- **Match-highlight / accent** — `Picker.HIGHLIGHT_COLOR = theme.ui.textAccent`
-  is a module-load constant baked into row markup. ❌ static (follows neither a
-  theme change nor the OS accent).
-- **Color palette is centralized** — ✅ every color now comes from `theme.ui.*`;
-  there are **no inline color literals outside `src/theme/`**. The loader resolves
-  every `UiColors` field at load (`adaptZedTheme` coalesces each `pick()` with a
-  `DEFAULT_UI` fallback), so the rest of the app reads bare `theme.ui.X` with no
-  `?? '#fallback'`. `bg` stays optional (its absence is the "follow the system
-  scheme" signal); `fg` defaults to white. New semantic tokens were added to carry
-  what used to be hardcoded: `shadow`, `flash`, `diffAddedBg`/`diffRemovedBg`/
-  `diffAddedWordBg`/`diffRemovedWordBg`/`diffFillerBg`/`diffFoldBg`, and
-  `prOpen`/`prMerged`/`prClosed`. Regex-input highlighting reuses `theme.syntax`
+- **`core.followSystemColorScheme` config** — declared in `CONFIG_SCHEMA`
+  (`src/quilx.ts`, default `true`) but **not read anywhere**. ❌ dead setting;
+  should gate the follow-the-OS behavior once it exists.
+- **Fonts** — ✅ centralized in the `fonts` store (`FontStore` in `src/fonts.ts`).
+  One reactive stylesheet (`styles.set(..., { key: 'app-fonts' })`) carries every
+  CSS widget's font — components register a selector via `fonts.monospace(sel)` /
+  `fonts.ui(sel)` instead of inlining declarations; Pango-markup callers read the
+  live `fonts.monospaceFamily` / `fonts.uiFamily` at render time; `Terminal`
+  subscribes via `fonts.onChange`. The store's `init()` watches
+  `org.gnome.desktop.interface`'s `changed` signal for `monospace-font-name` /
+  `font-name` and calls `reload()` live; `reload()` is public so a future user
+  font setting drives the same path. Terminal, editor signature/hover, completion
+  docs, and all pickers update without a restart.
+- **Match-highlight / accent** — `HIGHLIGHT_COLOR = theme.ui.textAccent`
+  (`src/ui/Picker.ts`) is a module-load constant baked into row Pango markup.
+  ❌ static (follows neither a theme change nor the OS accent).
+- **Color palette is centralized** — ✅ chrome/syntax/picker colors come from
+  `theme.ui.*` / `theme.syntax.*`. The loader resolves every `UiColors` field at
+  load (`adaptZedTheme` in `src/theme/theme.ts` coalesces each `pick()` with a
+  `DEFAULT_UI` fallback), so most consumers read bare `theme.ui.X`. `bg` stays
+  optional (its absence is the "follow the system scheme" signal); `fg` defaults
+  to white. Semantic tokens carry what used to be hardcoded: `shadow`, `flash`,
+  `diffAddedBg`/`diffRemovedBg`/`diffAddedWordBg`/`diffRemovedWordBg`/
+  `diffFillerBg`/`diffFoldBg`, and `prOpen`/`prMerged`/`prClosed`. Regex-input
+  highlighting (`src/ui/TextEditor/regexHighlight.ts`) reuses `theme.syntax`
   captures (keyword/punctuation/type/string.escape/constant) instead of its own
-  colors. This is static today (baked at module load, like the rest of the
-  palette) — but it makes the "restyle on theme change" step below a re-emit of
-  the keyed stylesheets + Pango-markup rebuilds, not a literal hunt.
+  colors. Static today (baked at module load) — so "restyle on theme change"
+  below is mostly a re-emit of the keyed stylesheets + Pango-markup rebuilds, not
+  a literal hunt. Known exceptions still holding hardcoded literals:
+  `src/ui/TextEditor/buildDefinitionPeek.ts` (`?? '#1e1e1e'` / `?? '#e0e0e0'`
+  fallbacks), `src/util/lsColors.ts` (the fixed ANSI terminal palette), and
+  `src/plugins/color-preview/colors.ts` (black/white swatch contrast).
 
 ## Gaps (the "not followed through" list)
 
@@ -111,8 +116,8 @@ re-appliable.
   and hold the configured variant; when true (default), follow it.
 - [ ] **Lint guardrail (color drift)** — a check that fails CI when a hex /
   `rgb()` / `foreground="white"` literal appears outside `src/theme/**`, so colors
-  can't creep back inline. Not yet added (the centralization that makes it pass
-  is done).
+  can't creep back inline. Not yet added; would need an allowlist for the known
+  exceptions above (peek fallbacks, ANSI palette, color-preview swatches).
 
 ## Notes / decisions
 

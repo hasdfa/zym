@@ -14,16 +14,14 @@ view must show *less* than the model on a single real line.
 ## Why a projection (the GtkTextView wall)
 
 GtkTextView **cannot visually join two lines of real text across an invisible
-newline** (proven interactively — see the history below). The old invisible-tag fold
-kept the body present but hidden, so header and footer stayed on separate lines; you
-can hide a whole line (it collapses to zero height) but you cannot pull real text
-from line N+3 up onto line N. So to render a fold as one *navigable* line, the view's
-**actual text** must be that one line. We get there without touching the file because
-the A2 document-model ([text-editor.md](text-editor.md)) already separates the
-headless model buffer from each view's own buffer.
+newline**: you can hide a whole line (it collapses to zero height) but you cannot pull
+real text from line N+3 up onto line N. So to render a fold as one *navigable* line,
+the view's **actual text** must be that one line. We get there without touching the
+file because the document-model ([text-editor.md](text-editor.md)) already separates
+the headless model buffer from each view's own buffer.
 
-Earlier dead-ends, for the record: invisible-tag join (newline won't collapse);
-end-of-line `GtkSourceAnnotations` (EOL only, right-aligns under wrap, not navigable);
+Dead-ends ruled out: invisible-tag join (newline won't collapse); end-of-line
+`GtkSourceAnnotations` (EOL only, right-aligns under wrap, not navigable);
 `GtkTextChildAnchor` widget for the marker (a child at the line end blocks the
 newline-join; a U+FFFC char is excluded from `getText` but counted by offsets →
 pervasive off-by-one). The literal-text placeholder in a projected buffer avoids all
@@ -74,10 +72,10 @@ live fold that round-trips through unfold).
     follows. `computeFoldRanges` merges captures per start row (keep-footer wins).
 - `[N]` = lines folded (span for join, hidden body lines for keep-footer).
 - The placeholder carries `foldPlaceholderTag` (muted + `editable:false`).
-- `activeFolds` is the live list of handles; `foldsByHeaderLine` (keyed by line) holds
-  expanded foldable regions from the parse PLUS collapsed ones — but a collapsed fold
-  **does not clobber** a foldable region sharing its line (`} function f2() {` joined
-  onto a collapsed line), so the second region stays reachable by `zc`.
+- `activeFolds` is the live list of fold handles; `foldsByHeaderLine` (keyed by line)
+  holds expanded foldable regions from the parse PLUS collapsed ones — but a collapsed
+  fold **does not clobber** a foldable region sharing its line (`} function f2() {`
+  joined onto a collapsed line), so the second region stays reachable by `zc`.
 - `regionAtCursor` is **offset-precise** off `activeFolds`, so several folds on one
   line each toggle independently; the gutter chevron is line-granular (picks one).
 - Line-number gutter renders `modelLineFor(viewLine)` (file lines, with the collapsed
@@ -118,8 +116,9 @@ Today:
 - `DiagnosticsView` — encodes columns off `modelLineTextForRow`, then
   `viewRangeFromModel(...)` per diagnostic (a fold-internal one lands on its
   placeholder line); re-rendered on `onFoldsChanged`.
-- `InlayHintController` — maps each hint's model line via `viewLineForModelLine`;
-  caches the last fetch so a fold toggle re-places via `rerender()` (no LSP round-trip).
+- `InlayHintController` — translates each hint's model line to a view line (injected
+  `toViewLine`, wired to `viewLineForModelLine`); caches the last fetch (`lastHints`)
+  so a fold toggle re-places via `rerender()` (no LSP round-trip).
 - `GitGutter` — the change bars: diff against the **model** text (not the collapsed
   view, which yields a garbage diff), translate view→model in `queryData`; the gutter
   re-queries on the fold toggle's `queueDraw`, so no subscription needed. `]h`/`[h`
@@ -128,7 +127,7 @@ Today:
 
 When adding a feature that renders model-space ranges (references peek, code lens,
 range code-actions, etc.) apply the same `viewRangeFromModel` / `modelPointFromView`
-**and** re-render on `onFoldsChanged`. This is the standing cost of view≠model and the
+**and** re-render on `onFoldsChanged` — the standing cost of view≠model, and the
 easiest thing to forget.
 
 ## Reusing the projection for other inline markers
@@ -151,7 +150,7 @@ boundary. Overlay/peek content that adds its *own* line still belongs to
   clears the handle, `isFoldAlive` guards the read paths). Covered by tests.
 - Folds are **not persisted** across reload/reopen (`setText` clears them).
 - New **model-coord renderers** must translate *and* re-render on `onFoldsChanged`
-  (see the boundary rule) — the easiest thing to forget.
+  (see the boundary rule).
 - Search reveals folds containing a match **eagerly** (all up front, not lazily as
   you step through); reasonable, but a per-step reveal is possible later.
 - Git **hunk actions** (stage/unstage/revert) unfold all first for correctness; a

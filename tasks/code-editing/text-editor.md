@@ -5,580 +5,302 @@
 > better performance with large files. Consider a JS widget, or a Rust widget
 > with a JS wrapper."*
 
-The question is **whether to keep building on `GtkSource.View` or own the text
-widget**, judged against the features a full editor needs. The short answer:
-**stay on GtkSourceView and emulate the two things it can't do natively
-(multi-cursor, block-select) on the seam the editor model already exposes**;
-treat a custom widget as a gated escape hatch, not the next step. The rest of
-this page is the evidence for that, and what each path actually costs.
+**Decision: stay on `GtkSource.View` and emulate the two things it can't do
+natively (multi-cursor, block-select); own the *model* so each view gets its own
+buffer; treat a from-scratch widget as a gated escape hatch, not the next step.**
 
-This updates the earlier conclusion (keep `GtkSource.View`, proven for
-tree-sitter highlighting + tag-based folding) by extending it to the three
-harder features the task names.
+This page records why, and what each rejected path would have cost. The actual
+text-editor code lives in `src/ui/TextEditor/`.
 
-## Current state (what already sits on the widget)
+## Architecture at a glance
 
-Reused, not rebuilt — see `src/ui/TextEditor/`:
+Two layers sit on the widget (`src/ui/TextEditor/`):
 
-- **`TextEditor.ts`** — `GtkSource.View` + `GtkSource.Buffer`, tree-sitter
-  highlighting + `invisible`-tag folding (`SyntaxController`), a `GtkSource.Map`
-  minimap, file I/O, and modal editing (vim, or `GtkSource.VimIMContext` behind a
-  toggle).
-- **`EditorModel.ts`** — an Atom-`TextEditor`-shaped model over the buffer
-  (`Point`/`Range`, scanning, markers, mutation, undo). **It already surfaces
-  `getCursors()` / `getSelections()` / `getCursorsOrderedByBufferPosition()` as
-  arrays**, today 1-element because `GtkTextBuffer` has a single
-  `insert`/`selection_bound` mark pair. The vim port deferred multi-cursor here
-  on purpose — *this array API is the seam the multi-cursor work plugs into.*
-- **`MarkerLayer.ts` / `Marker.ts`** — markers backed by anonymous
-  `GtkTextMark`s with gravity, the primitive a real multi-cursor implementation
-  needs (extra cursor/selection mark pairs live here).
+- **Document / model layer (we own the text).** `Document.ts` keeps the text in a
+  **headless model `GtkSource.Buffer`** (never shown) that is the single source of
+  truth + undo authority + LSP text source. Each on-screen view gets its **own**
+  `GtkSource.Buffer` via `Document.createView()`, kept in sync from the model. This
+  is the **A2** design (see below): the buffer stops being the model and becomes
+  pure presentation, which is what lets two views of one file have independent
+  cursors, folds, and decorations. `DocumentRegistry.ts` owns multi-host / active-
+  view routing and ref-counting.
+- **Editor logic layer (`EditorModel.ts`).** An Atom-`TextEditor`-shaped model over
+  a view's buffer: `Point`/`Range`, scanning, mutation, undo, plus the seams other
+  features plug into (`onDidChangeText`, viewport/pixel geometry, decorations,
+  cursors/selections). `getCursors()`/`getSelections()` are **N-element** arrays
+  backed by `MarkerLayer.ts` mark pairs — the seam multi-cursor plugs into. Undo is
+  relocated to the `Document` via `setUndoTarget()` so it stays correct across views.
 
-So the editor's *logic* layer is already abstracted away from "one cursor"; only
-the *backing* (one mark pair) and *rendering* (one native caret) are single-cursor.
+`TextEditor.ts` ties it together: a `GtkSource.View` on a `Document` view-buffer,
+tree-sitter highlighting + `invisible`-tag folding (`SyntaxController`), a
+`GtkSource.Map` minimap, file I/O (delegated to `Document`), LSP, and **custom vim
+modal editing** (`vim/`, ported from vim-mode-plus — `GtkSource.VimIMContext` is no
+longer used).
 
 ## Feature checklist vs. GtkSourceView
 
 | Feature | On GtkSourceView | Notes |
 |---|---|---|
-| Syntax highlighting (tree-sitter) | **Built** (ours) | `setHighlightSyntax(false)` + own `TextTag`s. Upstream is regex `.lang` only; tree-sitter is discussed but unmerged (gtksourceview#124). |
+| Syntax highlighting (tree-sitter) | **Built** (ours) | `setHighlightSyntax(false)` + own `TextTag`s. Upstream is regex `.lang` only. |
 | Code folding | **Built** (ours) | No upstream fold API in GtkSource 5; we use the `invisible` `TextTag`. |
-| Gutter (line nums, diagnostics, git bars, breakpoints) | **Native** | `GtkSourceGutterRenderer`; Builder's omni-gutter is the model. |
-| Inline virtual text / diff / blame / inlay hints | **Native-ish** | `GtkSourceAnnotations` (since 5.18); fallbacks: `TextChildAnchor`, `insert_paintable`, overlays. Exact annotation rendering unverified. |
-| Diff display (inline + side-by-side) | **Doable** | Inline via annotations/virtual text; side-by-side via two synced views + blank regions. (index.md item.) |
-| Search UI | **Doable** | `GtkSource.SearchContext` exists; or own box wired to vim `/`. |
-| Minimap | **Native** | `GtkSource.Map` (already used). |
-| Multiple cursors | **Emulate** | No native support — `GtkTextBuffer` has one mark pair. Proven on-top (see Option A). |
-| Rectangular / block / column selection | **Emulate** | No native support; depends on the same multi-cursor infra. |
-| Multiple *views* of one buffer (split, peek) | **Own the model (A2)** | A shared `GtkTextBuffer` renders *all* buffer-level state — tags, marks, selection, cursor, current-line, folds — identically in every `GtkTextView`. The fix is to give each view its **own** buffer, synced from a Document-level text model. See "Document-model direction (A2)". |
+| Gutter (line nums, diagnostics, git bars) | **Native** | `GtkSourceGutterRenderer`. |
+| Inline virtual text / inlay hints / diff | **Built** | `VirtualText.ts` wraps native `GtkSourceAnnotations` (5.18+; we're on 5.20). |
+| Diff display (inline + side-by-side) | **Built** | `DiffView` / `SideBySideDiffView` from synthesized read-only buffers. |
+| Search UI | **Built** | `SearchController` + `SearchBar`. |
+| Minimap | **Native** | `GtkSource.Map`. |
+| Multiple cursors / block selection | **Built (emulated)** | No native support; emulated on `MarkerLayer` (Option A). |
+| Multiple *views* of one buffer (split, peek) | **Built (A2)** | Each view its own buffer, synced from the `Document` model. |
 | Large line *counts* (M+ lines) | **Native, fine** | Only visible paragraphs are laid out. |
 | Pathological long *single* lines (minified) | **Unfixable** | The one hard wall — see constraints. |
-| IME / bidi / a11y / clipboard / DnD | **Native, free** | The expensive-to-rebuild subsystems all come for free here. |
+| IME / bidi / a11y / clipboard / DnD | **Native, free** | The expensive-to-rebuild subsystems all come free here. |
 
-The decisive rows: the features GtkSourceView *can't* do natively are
-multi-cursor, block-select, and long-line performance — and exactly those trace
-to two parts of GtkTextView you can't override (the single mark pair and the
-per-paragraph Pango layout).
+The features GtkSourceView *can't* do natively — multi-cursor, block-select, long
+single lines — trace to two parts of **GtkTextView** (GTK core, below GtkSourceView)
+you can't override: the single `insert`/`selection_bound` mark pair, and the
+per-paragraph `PangoLayout`.
 
-## Options
+## Options considered
 
-### Option A — Stay on GtkSourceView, emulate the gaps **(recommended)**
+### Option A — stay on GtkSourceView, emulate the gaps *(chosen)*
 
-Keep the widget; build multi-cursor and block-select on top, the way **GNOME
-Builder already does**: a list of virtual cursors, each its own
-`insert`+`selection_bound` `GtkTextMark` pair, extra carets drawn via
-`set_visible()` + a highlight `TextTag` (or a `snapshot_layer` pass), every edit
-replayed per cursor in an *after*-handler (`ide-cursor.c`). Rectangular
-selection falls out of the same infra (a column of virtual cursors).
+Build multi-cursor and block-select on top, the way GNOME Builder does
+(`ide-cursor.c`): a list of virtual cursors, each its own mark pair, extra carets
+drawn over the text, every edit replayed per cursor. Rectangular selection is a
+column of virtual cursors. In quilx this lands on the existing seam:
+`EditorModel.getCursors()`/`getSelections()` are N-element over `MarkerLayer`, and
+the vim layer (which iterates those arrays) gets multi-cursor largely for free.
+Pros: keeps the entire built stack (vim, tree-sitter, folding, minimap, I/O); IME/
+bidi/a11y/clipboard stay free; lands incrementally; lowest risk. Cons: emulated
+multi-cursor is real maintenance-heavy code fighting a one-cursor buffer; doesn't
+fix long lines.
 
-In quilx this lands **on the existing seam**: grow `EditorModel`'s
-`getCursors()`/`getSelections()` from 1-element to N-element arrays backed by
-`MarkerLayer` mark pairs, and the vim layer (which already iterates those arrays)
-gets multi-cursor largely for free.
+### Option B — fork GtkSourceView — **rejected**
 
-- **Pros:** keeps the entire built stack (vim, tree-sitter, folding, minimap,
-  file I/O); IME/bidi/a11y/clipboard stay free; lands incrementally on an
-  already-prepared API; lowest risk.
-- **Cons:** emulated multi-cursor is real, maintenance-heavy code that fights a
-  one-cursor buffer (Builder's has filed edge-case bugs: dismissal, write-without-
-  delete, keybinding conflicts); doesn't fix long single lines.
-- **Effort:** medium. **Risk:** low–medium (correctness of edit-replay).
+The things we fight don't live in GtkSourceView; they live in **GtkTextView**,
+which is **GTK core**. To change the model (buffer/presentation split, mid-line
+layout, insert-mark-is-the-cursor coupling) you'd fork GTK itself and ship it
+through node-gtk forever — and the hardest part (long-line layout) still wouldn't
+be fixed because it lives in `GtkTextLayout`. All the cost of owning a text stack
+with none of the design benefit. Off-path for a JS/node-gtk codebase.
 
-### Option B — Fork GtkSourceView
+### Option C — own the widget (custom GTK4 text widget) — **gated escape hatch**
 
-Patch a real multi-mark / block-selection model into the C widget.
+A from-scratch `GtkWidget` whose `snapshot()` paints code via Pango/GSK. The only
+path that fixes long lines *and* makes multi-cursor/block-select native. Research
+is encouraging on **rendering** (GTK4 gives a glyph atlas + retained render-node
+caching; VTE proves the GTK4 path; node-gtk's `examples/gtk-4-custom-widget.js`
+proves a JS `snapshot()` override) and sobering on **the surround**: you'd rebuild
+the private `GtkTextLayout` middle layer (per-line layout cache + viewport
+virtualization — the largest cost), plus IME, bidi, and a11y — exactly what
+GtkSourceView gives free. Telling signal: no major Rust editor uses GTK (Zed/Lapce/
+COSMIC went GPU-direct; the fast GTK editors are C-on-GtkSourceView).
 
-- **Verdict: reject.** Inherits C + a fork to maintain against upstream, and the
-  hardest part (long-line Pango layout) still isn't fixed because it lives in
-  GTK's `GtkTextView`/`GtkTextLayout`, below GtkSourceView. Worst of both — fork
-  cost without solving the thing only a new widget solves. Also off-path for a
-  JS/node-gtk codebase.
+If ever taken, the shape is **C2 — Rust core + JS rendering**: a Rust core (`ropey`
++ tree-sitter + tree-sitter-highlight + cursor model) as a napi-rs addon supplying
+text/highlight-spans/cursor-geometry; the GTK4 widget stays JS/node-gtk. Keeps one
+main loop, one thread, no GObject handoff, no GIR pipeline. (A fully-Rust gtk-rs
+widget exposed via GIR — "C3" — is rejected: needs a manual typelib pipeline the
+gtk-rs toolchain won't automate and has zero precedent.)
 
-### Option C — Own the widget (custom GTK4 text widget)
+**The gate before any C rewrite:** a one-day node-gtk spike answering three
+unknowns — (1) render perf (a `Gtk.Widget` subclass snapshotting ~50 visible lines
+via cached `PangoLayout`s, scrolling/typing smoothly with `snapshot()` driven from
+JS — the per-frame JS↔native FFI cost is unmeasured); (2) IME wired directly
+(`GtkIMContext` commit/preedit); (3) `GtkScrollable` + adjustments. If perf is
+janky, the answer is definitive: stay on GtkSourceView.
 
-A from-scratch `GtkWidget` whose `snapshot()` paints code via Pango/GSK. This is
-the only path that fixes long lines *and* makes multi-cursor/block-select native.
-
-The research is encouraging on **rendering** and sobering on **everything
-around it**:
-
-- **Rendering is the safe part.** GTK4 already gives the two things GPU editors
-  hand-roll: a glyph texture atlas and retained render-node caching (`snapshot()`
-  runs on invalidation, not per frame). **VTE** is the proven GTK4 reference
-  (custom monospace grid via `gsk_text_node_new` + `append_color`, its own
-  `GtkScrollable`, `GtkIMMulticontext`, frame-clock redraws). Per-line
-  PangoLayout/node caching + viewport culling is the documented strategy.
-- **node-gtk can drive it from JS.** Subclassing `Gtk.Widget` and overriding
-  `snapshot()` from JS is demonstrated in the node-gtk repo
-  (`examples/gtk-4-custom-widget.js`). Subject to our known constraints
-  (instantiate after the main loop, ≥3-char GType name, camelCase→snake_case
-  vfunc mapping).
-- **The hard, expensive subsystems you'd rebuild:** the private `GtkTextLayout`
-  middle layer (per-line layout cache, viewport virtualization, display-line vs
-  paragraph, height index) — the largest single cost; **IME** (consume
-  `GtkIMMulticontext`, but preedit splicing + `filter_keypress` ordering are
-  fiddly); **bidi**; **a11y** (`GtkAccessibleText`, needs GTK ≥ 4.14). These are
-  precisely what GtkSourceView gives for free.
-- **The open risk:** per-frame JS↔native FFI cost of doing `snapshot()` from
-  node-gtk is **unmeasured**. Mitigated by GTK's invalidation model (paint on
-  edit/scroll/blink, not 60 fps) and per-line node caching, but unproven here.
-
-Sub-shapes, if Option C is ever taken:
-
-- **C1 — JS-only snapshot widget.** Rope/parse/multi-cursor model in TS, render
-  in JS. Simplest interop (no second language/runtime).
-- **C2 — Rust core + JS rendering (the "Rust widget" the task floats, done
-  right).** Rust **core** (`ropey` + tree-sitter + tree-sitter-highlight +
-  multi-cursor/selection model) as a napi-rs Node addon supplying text,
-  highlight spans, and cursor geometry; the **GTK4 widget stays JS/node-gtk**
-  doing `append_layout` rendering. Keeps one main loop, one thread, no GObject
-  handoff, no GIR generation — lowest-risk way to get a Rust core. No prior art
-  pairs a Rust core with GTK4 custom rendering, but every piece is individually
-  proven.
-- **C3 — fully-Rust gtk-rs widget exposed via GIR.** **Reject.** Works in
-  principle (precedent: `rdw`) but needs a manual C-header → `g-ir-scanner` →
-  typelib pipeline the gtk-rs toolchain won't automate; the pointer-handoff
-  alternative needs a node-gtk patch (`WrapperFromGObject` isn't exported to JS)
-  and has zero precedent. Cost without payoff for an app that owns both sides.
-
-- **Effort (C1/C2):** very large. **Risk:** high (layout-cache rebuild, IME/bidi/
-  a11y correctness, FFI perf). Telling signal: **no major Rust editor uses GTK** —
-  Zed/Lapce/COSMIC all went GPU-direct, Helix is a TUI; the fast GTK editors
-  (GNOME Text Editor, gedit) are C-on-GtkSourceView.
-
-## Recommendation (staged)
-
-1. **Now: Option A.** Multi-cursor and rectangular selection via virtual
-   cursor/selection mark pairs on `MarkerLayer`, surfaced through
-   `EditorModel.getCursors()/getSelections()` (already array-shaped) and rendered
-   with a `snapshot_layer` / `TextTag` pass. Unblocks both named features with no
-   rewrite and no loss of the vim/syntax/fold investment.
-2. **Long lines: accept the upstream guard.** Adopt GtkSourceView's own
-   posture — detect and warn/refuse to fully load pathological single-line files
-   rather than hang. Revisit only if real workloads make it intolerable.
-3. **Keep Option C as a gated escape hatch.** Pursue only if native multi-cursor
-   or long-line editing becomes non-negotiable. If so: **C2** (Rust core + JS
-   snapshot widget), and **gate it behind a one-day node-gtk `snapshot()` FFI
-   perf spike** (render ~50 visible lines, measure frame time + invalidation
-   cadence) before committing. **Never C3.**
-
-## Revisiting (2026-06-16): "are we fighting GtkSourceView?"
-
-Building **inline single-line folding** (`function x() { [...] }`) surfaced the
-recurring question: should we stop emulating and own the widget? The honest read
-on the friction, and the decision framework — kept here so we don't re-litigate
-from scratch each time it bites.
-
-**The friction is one root cause, and it recurs by design.** Every feature that
-has cost a workaround — folding, virtual/inline text, inline widgets (the overlay
-timing dances), per-view cursors, decorations leaking across views — traces to
-the *same* property of **GtkTextView**: its model is "a buffer of text with tags,
-one cursor, one view," and presentation is not separable from the buffer. There
-is also no way to reserve horizontal space mid-line without a real buffer char
-(the wall that pushed single-line folding to an overlay that renders the closing
-delimiter). The roadmap is presentation-heavy (inline AI, peek, code lens, color
-swatches, fold variants, multi-cursor, split views), so the workaround tax
-compounds. This is a legitimate inflection point, not premature optimization. The
-industry signal agrees: serious custom editors (VS Code, Zed, Monaco, CodeMirror,
-Lapce) all own their text rendering.
-
-**The fork (Option B) is definitively out — sharper reason than before.** The
-things we fight don't live in GtkSourceView; they live in **GtkTextView**, which
-is **GTK core**. GtkSourceView is gutters/highlighting/search layered on top of
-GtkTextView's buffer+layout. To change the model (buffer/presentation split,
-mid-line layout, the insert-mark-is-the-cursor coupling) you'd have to fork GTK
-itself, build it, and ship it through node-gtk forever — all the cost of owning a
-text stack with none of the design benefit. Rule it out for good.
-
-**Don't big-bang rewrite; make it data-driven.** A from-scratch `GtkWidget` (the
-existing **Option C / C2**) makes the exact things we fight *free* — we'd own the
-layout pass, so folding, virtual lines, inline widgets, N cursors, and per-view
-cursors are all just "where do I draw." It's the plausible endgame. But the
-decision must hinge on three **node-gtk-specific unknowns**, all answerable by one
-focused, timeboxed spike (this is the gate the recommendation already names,
-concretized):
-
-1. **Render perf (make-or-break)** — a `Gtk.Widget` subclass that snapshots ~50
-   visible lines via cached `PangoLayout`s and implements `GtkScrollable`: does it
-   scroll smoothly and type lag-free, driving `snapshot()` from JS? Mitigated by
-   GTK's invalidation model (paint on edit/scroll/blink, not 60fps) + per-line node
-   caching, but the per-frame JS↔native FFI cost is unmeasured.
-2. **IME** — wire `GtkIMContext` directly into the custom widget; confirm
-   commit/preedit. This is the sharp edge that leaked in the overlay-peek POC, and
-   the subsystem GtkSourceView gives for free.
-3. **GtkScrollable + adjustments** — viewport/scrollbar integration.
-
-If those pass, the custom widget is viable and the rest is (large but derisked)
-work — and it reuses what we already own (tree-sitter model, vim layer, the
-`EditorModel`/`MarkerLayer` seam). If per-frame JS drawing is janky, the answer is
-definitive: stay on GtkSourceView. Either way we replace a guess with a number.
-
-**Ship presentation features as view-layer concerns now — it's non-committal.**
-Folding's single-line marker is being built as a **zero-buffer-footprint overlay**
-(the marker widget renders the closing delimiter + tail, Pango-styled from the
-real text), *not* a `GtkTextChildAnchor` (which would push `U+FFFC` into the buffer
-→ offset shift → corrupt LSP/save while folded, re-coupling model and view exactly
-where the document-registry refactor is paying that coupling down). Treating
-folding (and inline widgets generally) as a pure *view* concern is correct
-regardless of the widget question, and the same logic ports to a custom widget
-unchanged. So feature work does not deepen the GtkSourceView lock-in and does not
-block on the spike.
-
-**Decision rule:** stay on GtkSourceView; build presentation features in the view
-layer (zero buffer footprint); run the render spike to unlock-or-confirm the
-Option C gate before committing to any rewrite. Related friction evidence:
-[inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),
-[virtual-lines.md](virtual-lines.md).
+**Long lines:** adopt GtkSourceView's own posture — detect and warn/refuse
+pathological single-line files rather than hang. Revisit only if real workloads
+make it intolerable.
 
 ## Document-model direction (A2): own the model, keep per-view GtkSourceViews
 
-*(Decided 2026-06-16 after the document-registry work hit the "everything is shared
-across views" wall above. **Implemented** on `prototype/document-model`: a validated
-POC (`src/poc/document-model.ts`) then the full integration — see "Implementation"
-at the end of this section.)*
+*(Decided 2026-06-16, **implemented and merged to master** — `cdfb797`. POC in
+`src/poc/document-model.ts` validated the gates first.)*
 
-A **third path** between Option A (one shared buffer, emulate everything per view)
-and Option C (own the whole widget): keep GtkSourceView as the **renderer**, but make
-**our model the source of truth for text** and give **each view its own
-`GtkSource.Buffer` + `GtkSource.View`**, kept in sync from the model. The buffer stops
-being the model and becomes pure presentation — the exact "presentation isn't
-separable from the buffer" separation the Revisiting section is about, done for the
-multi-view case without a from-scratch widget.
+A third path between Option A (one shared buffer, emulate everything per view) and
+Option C (own the whole widget): keep GtkSourceView as the **renderer**, but make
+**our model the source of truth for text** and give **each view its own buffer**,
+synced from the model. This is how Atom (`TextBuffer` ↔ N `TextEditor`s), VS Code
+(`TextModel` ↔ editors), and CodeMirror 6 (state ↔ views) all work — and our vim
+layer is a port of Atom's vim-mode-plus.
 
-This is **how Atom works** (and our vim layer is a port of Atom's vim-mode-plus):
-`TextBuffer` is a pure model; N `TextEditor` views project from it. VS Code
-(`TextModel` ↔ editors) and CodeMirror 6 (state ↔ views) are the same. The
-`EditorModel` is already "Atom-`TextEditor`-shaped" — the missing piece is making the
-*text* independent of any one `GtkTextBuffer`.
+**Why it was needed: everything buffer-level renders identically in every view.**
+Two `GtkTextView`s on one `GtkTextBuffer` show the *same* cursor, selection,
+current line, brackets, search, and folds, because the *buffer* owns the
+`TextTag`s, the `insert`/`selection_bound` marks (native caret + selection), and
+the `invisible` fold tag; the *view* owns only scroll + child widgets. Per-view
+folding was outright **impossible** (line visibility is a buffer tag). The fix is
+to stop sharing the buffer.
 
-**What it fixes (all the multi-view friction, natively):**
-- Per-view **caret, selection, current-line, search, bracket** become native again
-  (each buffer has its own marks/tags) → **delete `ViewDecorations`, the Phase-2
-  emulated cursor marks, the native-mark mirror, and focus-gating.** Native rendering
-  is more robust than the custom Cairo (no reverse-video glyph redraw to verify).
-- **Per-view folding** — *impossible* with a shared buffer (one `invisible` tag), free
-  with per-view buffers.
-- **Native inline widgets / `GtkSourceAnnotations` / markers per view** — what the
-  inline-widgets + virtual-lines roadmap wants, and what the shared buffer blocked.
-- LSP `didChange` fires once from the model (no "gate to the active view" hack).
+**What A2 fixed (natively, per view):** caret, selection, current-line, search,
+bracket, and **folding** are each native again (each buffer has its own marks/tags)
+— so the v1 shared-buffer workaround (`ViewDecorations` custom-Cairo cursors,
+emulated cursor marks, focus-gating) was deleted, not used. Native inline widgets /
+`GtkSourceAnnotations` / markers per view became possible. LSP `didChange` fires
+once from the model (no "gate to the active view" hack).
 
-**What it does NOT fix** (still GtkTextView, below us): long single lines (per-paragraph
-Pango layout) and native multi-cursor *within* one view (still one mark pair per buffer
-→ extra cursors stay emulated, but now leak-free since each view has its own buffer).
-So A2 is the targeted fix for **multi-view**, not a substitute for the Option C
-endgame on long-lines / native-N-cursor — and it doesn't preclude C later.
+**What A2 does NOT fix** (still GtkTextView, below us): long single lines, and
+native multi-cursor *within* one view (still one mark pair per buffer → extra
+cursors stay emulated, but now leak-free since each view has its own buffer). So A2
+is the targeted fix for **multi-view**, not a substitute for the Option C endgame —
+and it doesn't preclude C later (the `Document` model layer ports unchanged; only
+the views get swapped).
 
-**Mechanics + the undo trick.** The new work is all Document-level: text authority +
-edit propagation + undo.
-- **Propagation:** an edit in any view → apply to the model → mirror to the other view
-  buffers, with a reentrancy guard so the mirror's own `insert-text` doesn't re-fire.
-  Careful around IME commit and the exact `(offset, deleted, inserted)` mirroring.
-- **Undo (the crux):** native `GtkSourceBuffer` undo is per-buffer, so it'd desync
-  views. Clean trick — make the **Document's buffer a headless model buffer** (never
-  shown; just text + the one native undo manager + the LSP text source). View buffers
-  are dumb mirrors with native undo **off**. `u` → `model.undo()` → the model emits the
-  inverse edit → propagate to all views. Native undo kept, just relocated to the unseen
-  authority. Syntax stays per-view (N parses, as today; the model buffer isn't shown).
+**Mechanics + the undo trick.** An edit in any view → apply to the model → mirror
+to the other view buffers, reentrancy-guarded by an `origin`/`suppress` pair (care
+around IME commit and exact `(offset, deleted, inserted)` mirroring). Undo is the
+crux: native per-buffer undo would desync views, so the **headless model buffer**
+holds the one native undo manager (`setEnableUndo(true)`) and view buffers have undo
+**off** (`setEnableUndo(false)`); `EditorModel.setUndoTarget()` routes a
+document-backed view's `undo`/`redo`/`transact` to the `Document`, which propagates
+to every view. Syntax stays per-view (N parses; the model buffer isn't shown).
 
-**Risks:** reverts the v1 emulated-cursor + `ViewDecorations` work (sunk cost, not a
-reason to keep a worse design); **buffer drift** if propagation has a bug (needs guards
-+ maybe a debug consistency check); propagation perf (N buffer edits + N reparses per
-keystroke — fine for 2–3 views, untested at scale); edge cases (IME preedit,
-multi-cursor edit-replay across the mirror, very large pastes).
+`Document.ts` owns the model buffer + `createView()`, file I/O, disk-watching,
+modified-state, and the document-level LSP. `TextEditor` is a view onto a
+`Document`; `AppWindow` split opens a real 2nd view; the live see-definition peek
+(`peek: true`) is a read-only 2nd view. Verified in-app + 576 tests.
 
-**Prototype plan (the gate before migrating).** Spike two views on one Document with
-the headless-model-buffer + mirror, validating the three hard things:
-1. **Edit propagation stays in sync** under typing / paste / undo / redo (and an
-   assertion that the mirrors equal the model).
-2. **Per-view folding + a native annotation** work independently in each view.
-3. **Propagation perf** is acceptable (typing + paste latency with 2–3 mirrors).
+**Deferred polish (not blockers):** undo grouping feel (relies on GTK's native
+coalescing; wrap vim ops in `beginUserAction`/`endUserAction` if needed); IME under
+heavy multi-view load (not stress-tested); extreme pastes (fuzz-tested, not at
+pathological scale); linked scroll for split (panes scroll independently by
+default); double parse (N parses for N views — fine for typical 2–3).
 
-What stays regardless: the `DocumentRegistry`, `Document`, multi-host/active-view
-routing, ref-counting, and the peek/split entry points.
+**Still unblocked but not yet built:** the model as a single authoritative edit
+stream is a foundation for collaborative editing / CRDT, model-layer AI edits, macro
+recording, or history/time-travel; new view types (minimap-as-view, "compare
+against unsaved") are just `Document.createView()`.
 
-### Implementation (`prototype/document-model`)
+## Constraints carried from the research (cited; uncertainties flagged)
 
-The POC (`src/poc/document-model.ts`, 16/16 assertions, ~0.02 ms/edit) validated the
-three gates, then the full integration landed:
-
-- **`Document`** — the headless model `GtkSource.Buffer` (text + undo authority,
-  `setEnableUndo(true)`) + per-view buffers via `createView()` (`setEnableUndo(false)`).
-  A native edit in a view forwards to the model; the model's change signal mirrors it to
-  the other views (reentrancy-guarded by an `origin`/`suppress` pair). Owns the ported
-  file I/O, disk-watching, modified-state, and the **document-level LSP** — one
-  `didOpen`/`didChange`/`didClose` driven off the model (the insert/delete signals carry
-  the deltas), no per-view gating.
-- **Undo trick** — `EditorModel` gained a `setUndoTarget()` seam: buffer-only editors
-  keep native buffer undo; document-backed views route `undo`/`redo`/`transact` to the
-  `Document` (the model's one undo stack), which propagates to every view. So `u` in one
-  split pane reverts in both.
-- **`EditorModel` rendering is untouched** — native cursor / selection / current-line /
-  bracket / search / folds per view (each buffer is its own). `ViewDecorations` and the
-  Phase-2 emulated-cursor machinery from the shared-buffer attempt are **not used**.
-- **`TextEditor`** is a view onto a `Document` (`createView()` buffer, file I/O /
-  modified / title / LSP delegated, `DocumentHost` for the active-view reactions);
-  **`AppWindow` split** opens a real 2nd view sharing the `Document`; the **live
-  see-definition peek** (`peek: true`) is a read-only 2nd view on the open document.
-- **Per-view folding works** — the wall the shared buffer hit. 576/576 tests; verified
-  in-app (split: independent cursors/folds + shared edits/undo; live peek). Merged to
-  master (`cdfb797`).
-
-### Deferred polish (A2; not blockers)
-
-- **Undo grouping feel** — relies on GTK's native coalescing of consecutive inserts on
-  the model buffer (word-ish). If too granular/coarse in use, wrap vim operations in
-  explicit `Document.beginUserAction`/`endUserAction`.
-- **IME under heavy multi-view load** — preedit is correctly local-until-commit, but
-  real IME + live propagation to 2+ panes wasn't stress-tested.
-- **Extreme pastes / multi-line replace** — fuzz-tested (500 random + 1000 inserts),
-  not at pathological scale.
-- **Linked scroll for split** — panes scroll independently (the right default); a
-  side-by-side "follow" mode isn't built.
-- **Double parse** — each view runs its own `SyntaxController` (N parses for N views);
-  inherent to separate buffers. A shared parse would need cross-buffer tag copying.
-  Fine for typical 2–3 views.
-- **Cleanup** — the superseded `refactor/document-registry` branch (shared-buffer +
-  `ViewDecorations` + emulated cursor) was deleted; its learnings live in this doc.
-
-### Unblocked by A2 (buffer is pure presentation; we own the model)
-
-Delivered: per-view folding, split-view of one file, live see-definition peek. Newly
-*possible* (not yet built):
-
-- **Native inline widgets / `GtkSourceAnnotations` per view** — the whole
-  [virtual-lines](virtual-lines.md) / [inline-widgets](inline-widgets.md) roadmap (inlay
-  hints, error lens, git blame, code lens, AI ghost text, inline diff) can use
-  GtkSourceView's native per-view annotation API instead of fighting a shared buffer.
-  **Highest-leverage next step.**
-- **Native per-view decorations** — search / diff / flash are per-buffer tags now (no
-  cross-view leak, no custom Cairo layer to maintain).
-- **Document-level LSP** — one `didOpen`/`didChange`/`didClose` off the model; clean
-  multi-view diagnostics/hover with no per-view gating.
-- **The model as a single authoritative edit stream** — a foundation for collaborative
-  editing / CRDT, AI edits applied at the model layer, macro recording, or a
-  history/time-travel UI; undo is model-owned and correct across views.
-- **New view types** — minimap-as-view, "compare against unsaved", experimental
-  multi-pane layouts: adding a view is just `Document.createView()`.
-- **Cleaner path to Option C** (custom widget) if ever needed — the `Document` model
-  layer ports unchanged; only the GtkSourceView views get swapped.
-
-## Constraints carried from the research (cited; mark-uncertain noted)
-
-- **Single mark pair.** `GtkTextBuffer` has exactly `insert` + `selection_bound`
-  — one cursor, one selection — unchanged in GTK4. No native multi-cursor or
-  rectangular selection. (docs.gtk.org `class.TextBuffer`; GtkSourceView
-  PainPoints wiki.)
+- **Single mark pair.** `GtkTextBuffer` has exactly `insert` + `selection_bound`,
+  unchanged in GTK4 — no native multi-cursor or rectangular selection.
+  (docs.gtk.org `class.TextBuffer`; GtkSourceView PainPoints wiki.)
 - **All buffer-level state renders identically in every view of a buffer.** *(Ours,
-  proven building the document registry — two `GtkTextView`s on one `GtkTextBuffer`
-  for split-view + the see-definition peek.)* The *buffer* owns nearly everything
-  visible — `GtkTextTag`s (syntax, search, bracket, diff, a cursor block tag), the
-  `insert`/`selection_bound` marks (native caret **and** selection highlight),
-  `highlight-current-line` (follows the shared insert mark), and the `invisible` fold
-  tag. The *view* owns only scroll + child widgets/overlays. So two views of one buffer
-  show the **same** cursor, selection, current line, brackets, search, and folds. v1
-  worked around it by custom-drawing those per view (`ViewDecorations`, a Cairo
-  overlay); **per-view folding stayed impossible** (line visibility is a buffer tag).
-  The clean fix is to stop sharing the buffer — see "Document-model direction (A2)".
+  proven building the document registry.)* See A2 above — the clean fix is per-view
+  buffers.
 - **Multi-cursor is proven on top, and fragile.** GNOME Builder's `ide-cursor.c`
-  (parallel mark pairs + per-cursor edit replay). GNOME Text Editor still lacks
-  it; described upstream as needing "deep changes into GtkSourceView"
+  (parallel mark pairs + per-cursor edit replay). GNOME Text Editor still lacks it,
+  described upstream as needing "deep changes into GtkSourceView"
   (gnome-text-editor#253). *Uncertain:* GTK4-era Builder impl details.
 - **Long single lines are the one unfixable wall.** Each paragraph is one
-  indivisible `PangoLayout`, so a giant line defeats visible-only layout; gedit
-  FAQ calls it "a known limitation of GtkTextView [that] cannot be fixed easily,"
-  and GtkSourceView's loader may refuse such files (gtk#229, gtksourceview#95 /
-  #208). Large line *counts* are fine. *Uncertain:* GTK4 crash status, loader
-  thresholds, exact big-O.
-- **No upstream tree-sitter or fold API** in GtkSource 5; both are ours already
-  (highlighting via PCRE2+JIT `.lang` upstream; folding via `invisible` tag).
+  indivisible `PangoLayout`, so a giant line defeats visible-only layout; the
+  loader may refuse such files (gtk#229, gtksourceview#95/#208). Large line *counts*
+  are fine. *Uncertain:* GTK4 crash status, loader thresholds, exact big-O.
 - **Extensibility is additive, not replaceable.** Gutter renderers, `TextTag`s,
-  `snapshot_layer` (BELOW/ABOVE text), `GtkSourceAnnotations` (≥5.18) cover
-  gutter/inline/virtual-text needs — but you cannot replace the per-line Pango
-  layout, which is the part owning the widget would be *for*.
-- **Custom rendering is well-supported; the surround is the cost.** GTK4 atlas +
-  retained nodes make glyph painting cheap (VTE proves the GTK4 path; node-gtk
-  proves the JS `snapshot()` override). The bulk is rebuilding the private
-  `GtkTextLayout` (layout cache + viewport virtualization) plus IME / bidi /
-  a11y. *Uncertain (flagged for a spike):* per-frame node-gtk FFI cost; exact
-  `appendLayout` wrapper name.
-- **Rust-in-process is realistic but not turnkey.** One libgtk + one GType
-  registry + one main loop (node-gtk's) supports co-residency, but exporting a
-  Rust gtk widget needs a manual GIR/typelib pipeline (C2 sidesteps this by
-  keeping rendering in JS and Rust as a pure-logic napi core). Best Rust building
-  blocks: `ropey`, tree-sitter + tree-sitter-highlight; **avoid** cosmic-text
-  inside GTK (redundant with Pango, bypasses GTK's accelerated text path).
-  *Uncertain:* no project proves "Rust core + GTK4 custom snapshot widget" end to
-  end — recommendation is assembled from individually-proven pieces.
+  `snapshot_layer`, `GtkSourceAnnotations` cover gutter/inline/virtual-text needs —
+  but you cannot replace the per-line Pango layout, the part owning the widget
+  would be *for*.
+- **Rust-in-process is realistic but not turnkey.** One libgtk + GType registry +
+  main loop supports co-residency, but exporting a Rust gtk widget needs a manual
+  GIR/typelib pipeline (C2 sidesteps this by keeping rendering in JS, Rust as a
+  pure-logic napi core). Best blocks: `ropey`, tree-sitter; **avoid** cosmic-text
+  inside GTK (redundant with Pango). *Uncertain:* no project proves "Rust core +
+  GTK4 custom snapshot widget" end to end.
 
-## Editor seams other features depend on
+## Shared editor primitives (the seams features plug into)
 
-Since the widget stays on GtkSourceView, the work is a small set of shared
-primitives in the editor layer that the other features (LSP, diff, search, vim
-polish, multi-cursor) plug into. Status:
+All built (`src/ui/TextEditor/`):
 
-- [x] **Buffer change events** — `EditorModel.onDidChangeText` (Atom
-  `{changes:[{oldRange,newRange,oldText,newText}]}` shape), backed by the
-  buffer's `insert-text`/`delete-range` signals (extents computed pre-edit) and
-  flushed post-mutation on `changed`. Replaced the former inert stub. Consumers:
-  vim undo/redo (`misc-command.js`), LSP `didChange` (`TextEditor.installLsp`),
-  and the future multi-cursor edit-replay. (`EditorModel.ts`, tests in
-  `EditorModel.test.ts`.)
-- [x] **Viewport + pixel geometry** — `getFirstVisibleScreenRow` /
-  `getLastVisibleScreenRow` (visible buffer rows) and `pixelRectForBufferPosition`
-  (widget-relative cell rect for anchoring popovers). Realized-view-guarded with
-  whole-buffer / null fallbacks; the realized paths (`getVisibleRect`/
-  `getLineAtY`/`getIterLocation`) need interactive verification. Consumers: LSP
-  hover & code-action popovers, vim H/M/L + scroll commands, side-by-side diff
-  scroll-sync. (`EditorModel.ts`.)
-- [x] **Inline decoration surface** — `TextDecorations` / `DecorationLayer`
-  (`editor.decorations`): clearable, named layers of GtkTextTag *background* spans,
-  re-synced by their producer. Styles: `highlight`/`highlight-strong` (search),
-  `added`/`removed` (diff). Tags sit above syntax priority. (`TextDecorations.ts`,
-  tests in `TextDecorations.test.ts`.)
-- [x] **Drawn-underline overlay** — `UnderlineOverlay`: a transparent
-  `Gtk.DrawingArea` over the text that strokes anti-aliased Cairo sine waves under
-  buffer ranges, replacing GtkTextTag's fixed dense `Pango.Underline.ERROR`
-  squiggle. Used by `DiagnosticsView` for diagnostic squiggles (gutter glyphs stay
-  a Nerd-Font `GutterRendererText`). Wave amplitude/wavelength are tunable
-  constants; the drawn result needs interactive verification (no headless render).
-  Inline virtual text (`GtkSourceAnnotations`, 5.18+ — we're on 5.20) lands with
-  its consumers. (`UnderlineOverlay.ts`, test in `UnderlineOverlay.test.ts`.)
-- [ ] **Virtual lines & inline virtual content** — *investigated, not built.* See
-  [virtual-lines.md](virtual-lines.md): line-trailing text via `GtkSourceAnnotations`,
-  general virtual lines via a `pixels-above/below` gap-tag + buffer-coord overlay
-  (`VirtualLineController` primitive). Wanted by inlay hints, error lens, git
-  blame, code lens, AI ghost text, and live inline diff. POC recommended.
+- **Buffer change events** — `EditorModel.onDidChangeText` (Atom
+  `{changes:[{oldRange,newRange,oldText,newText}]}` shape), backed by the buffer's
+  `insert-text`/`delete-range` signals. Consumers: vim undo/redo, LSP `didChange`,
+  multi-cursor edit-replay. (tests: `EditorModel.test.ts`.)
+- **Viewport + pixel geometry** — `getFirstVisibleScreenRow`/
+  `getLastVisibleScreenRow` and `pixelRectForBufferPosition` (widget-relative cell
+  rect for anchoring popovers), realized-view-guarded with fallbacks. Consumers: LSP
+  hover/code-action popovers, vim H/M/L + scroll, diff scroll-sync.
+- **Inline decorations** — `TextDecorations` / `DecorationLayer` (`editor.decorations`):
+  clearable named layers of `TextTag` background spans (search `highlight`,
+  diff `added`/`removed`), above syntax priority. (tests: `TextDecorations.test.ts`.)
+- **Drawn-underline overlay** — `UnderlineOverlay`: a transparent `Gtk.DrawingArea`
+  stroking anti-aliased Cairo sine waves under buffer ranges (nicer than
+  `Pango.Underline.ERROR`). Used by `DiagnosticsView` squiggles. Drawn result needs
+  interactive verification.
+- **Virtual text** — `VirtualText.ts` wraps native `GtkSourceAnnotations`
+  (end-of-line trailing text, per view; unblocked by A2). Consumers:
+  `InlayHintController`, `DiagnosticsView`. *Note:* annotations are line-anchored
+  (end-of-line only); general mid-line virtual lines would still need the gap-tag +
+  overlay recipe — see [virtual-lines.md](virtual-lines.md) (not built).
 
-## What's next (recommended order)
+## Feature status
 
-The shared primitives above are done, so the remaining work is features that sit
-on them. Ordered by value-given-readiness:
+### Search — *done*
 
-### 1. Search — *done*
+`SearchController` (incremental literal/regex over `EditorModel.scan`, decoration
+highlights, next/previous, replace-current/all with regex backrefs) + `SearchBar`
+(floating top-right; search+replace entries, 3-way case button, regex toggle with
+inline regex highlighting; **Alt+S** case, **Alt+R** regex; Enter/Shift+Enter step,
+Ctrl+Enter replace-all). Vim `/` `?` `n` `N` wired; smartcase default. Tests:
+`SearchController.test.ts`. Not yet (low priority): `*`/`#` word search, history,
+operator-pending search-as-motion.
 
-- [x] **Search engine** — `SearchController` (`SearchController.ts`): incremental
-  literal/regex search over the buffer via `EditorModel.scan`, `highlight` on all
-  matches + `highlight-strong` on the current one through `editor.decorations`,
-  nearest-from-origin seating, `next`/`previous` (direction-aware), cancel-restores-
-  origin, and replace-current / replace-all (regex backrefs). Headless tests in
-  `SearchController.test.ts`.
-- [x] **SearchBar widget** — `SearchBar.ts`: a compact bar floating top-right
-  (`Gtk.Overlay`, theme popover background). One horizontal row: the search and
-  replace `Gtk.Entry`s (both always shown, linked into one control, monospace,
-  fixed-width so the match count can't reflow them), then the count, a 3-way case
-  button (smart / sensitive / insensitive), and a regex toggle. Regex mode adds
-  inline regex/`$`-ref syntax highlighting in both inputs (`regexHighlight.ts`,
-  Pango attributes). Options toggle by key — **Alt+S** cycles case, **Alt+R**
-  toggles regex (shown in tooltips; Alt+C was taken by `tab:close`). Incremental
-  highlight + cursor preview; in search **Enter/Shift+Enter** step (relative to
-  the cursor), in replace **Enter** replaces the current match and **Ctrl+Enter**
-  replaces all. **Esc** confirms at the current match (returns to origin only when
-  there's no match); focus-out (click into editor) confirms. While the bar holds
-  focus the editor keeps its active caret (no inactive-caret flicker).
-- [x] **Vim `/` `?` `n` `N`** — `/`/`?` open the bar (forward/backward), `n`/`N`
-  repeat the last search relative to the cursor (`TextEditor.installSearch`,
-  normal-mode keymap). Smartcase is the default case mode.
+### Command line (`:` ex-commands) — *WON'T DO* (2026-06-14)
 
-Not yet (search refinements, low priority): `*`/`#` word-under-cursor search;
-search history; operator-pending `d/foo<CR>` (search as a motion); `:%s///` via the
-ex command line (below).
+Not building a vim `:` command line. Its commands are already reachable: save via
+`space w`, close via `tab:close`/`pane:close`, open via `space o`, search/replace
+via SearchBar. So `:w`/`:q`/`:e`/`:%s` are covered without a modal prompt.
 
-### 1b. Command line (`:` ex-commands) — *WON'T DO* (decided 2026-06-14)
+### Multi-cursor / blockwise — *done*
 
-We are **not** building a vim `:` ex-command line. The commands it would have
-restored are already reachable elsewhere: save via `space w` (`file:save`),
-close via `tab:close` / `pane:close`, open via `space o` (the fuzzy file picker),
-and search/replace via the SearchBar. So `:w`/`:q`/`:e`/`:%s` are covered without
-a modal command prompt, and the `command-bar-text`/`command-text` status the
-removed `VimIMContext` emitted stays gone.
+Built on Option A. `getCursors()`/`getSelections()` N-element over `MarkerLayer`;
+`hasMultipleCursors`/`mergeCursors`/`mergeIntersectingSelections`/`onDidAddSelection`
+are real; `Selection.onDidDestroy` backs per-selection register clipboard. Entry
+points: blockwise `ctrl-v`, occurrence `c o p`, persistent `ctrl-alt-↑/↓` add-cursor
+(`escape` collapses). Extra carets render as reverse-video block tags (normal/visual)
+and host-drawn beam carets (insert), via `EditorModel.onExtraCursors` → a caret pool
+in `TextEditor.ts`. Multi-cursor ops coalesce into one undo step (`mutateSelections`
+in one `transact`); insert is live-replicated to every cursor on a deferred microtask.
+Tests: `blockwise.test.ts`, `multicursor.test.ts`, `occurrence.test.ts`. Edges
+needing in-app verification: beam visuals + `ctrl-alt-arrow` keys; insert sessions
+can undo in a couple of steps; replication covers inserts + single-line backspaces
+(multi-line deletes fall back to the leave-insert replay).
 
-### 2. Multi-cursor / blockwise — *done*
+### Editor / vim polish — *done*
 
-The widget-evaluation's marquee feature, built on Option A as planned.
-`getCursors()`/`getSelections()` are N-element over `MarkerLayer` mark pairs;
-`hasMultipleCursors`/`mergeCursors`/`mergeIntersectingSelections`/
-`onDidAddSelection` are real (no longer stubs), and `Selection.onDidDestroy`
-backs per-selection register clipboard. Entry points: blockwise `ctrl-v`,
-occurrence `c o p`, and persistent `ctrl-alt-↑/↓` add-cursor (`escape` collapses).
-Extra carets render as reverse-video block tags in normal/visual and host-drawn
-beam carets in insert (`onExtraCursors` → a caret-widget pool in `TextEditor.ts`).
-Multi-cursor operations coalesce into one undo step (`mutateSelections` in one
-`transact`); insert is **live-replicated** to every cursor — each typed
-chunk/backspace is mirrored on a deferred microtask (off the `changed` signal, to
-avoid invalidating the in-flight edit's iters). Tests: `blockwise.test.ts`,
-`multicursor.test.ts`, `occurrence.test.ts`.
+- **Fold-aware motions** — `EditorModel.isFoldedAtBufferRow`/`unfoldBufferRow`
+  delegate to `SyntaxController` via a `FoldProvider` (`setFoldProvider`); vim
+  motions skip/reveal folded rows.
+- **Buffer-only editor mode** — `new TextEditor({ buffer: {...} })`: no file I/O /
+  LSP / line-numbers / minimap; keeps vim + syntax + search; placeholder, `getText`/
+  `setText`, Ctrl+Enter → `onSubmit`. For the Git commit-message editor.
+- **Column-unit reconciliation** — columns are **codepoints** (matching `GtkTextIter`
+  + `lsp/position.ts`); UTF-16 holdouts fixed (`pointAtTextOffset`, `lineLength`,
+  `searchWordUnderCursor`). Tree-sitter `SyntaxController.iterAt` converts web-tree-
+  sitter UTF-16 cols to codepoints, gated on a per-refresh `hasAstral` check.
+  *Remaining holdout:* incremental-parse edit tracking still mixes codepoint offsets
+  with UTF-16 lengths — editing next to an astral char can feed a slightly-wrong edit.
+- **Vim motions** — `H`/`M`/`L`, `ctrl-f/b/d/u/e/y`, flash-on-operate, **`=`/`==`
+  auto-indent** (tree-sitter indent via `SyntaxController.indentLevelForRow` +
+  `EditorModel.setIndentSource`, falls back to copy-line-above).
+- **Matching brackets** — under/before the cursor and its pair, or the innermost
+  enclosing pair when inside (`syntax/bracketMatch.ts`); ignores brackets in
+  strings/comments.
+- **Indent guides** — faint per-level vertical lines (`IndentGuides`, Cairo overlay);
+  toggle `editor.indentGuides`.
+- **Tree-sitter text objects** — `if`/`af`, `ic`/`ac`, `ia`/`aa`, via
+  `SyntaxController` `functionRangeAt`/`classRangeAt`.
+- **Folds query** — driven by a grammar's `folds.scm` (`@fold` captures) when present,
+  else `foldTypes`; plus run-folds (consecutive imports / line comments collapse).
+  `computeFoldRanges` (`syntax/folds.ts`, unit-tested).
+- **JSX/HTML tags** — auto-close (`>` inserts `</name>`, `tagClose.ts`, JSX-vs-generics
+  heuristic + tag-language gate) and co-rename (`tag:rename`, `SyntaxController.tagNamesAt`).
+- **Inlay hints** — LSP parameter/type hints rendered end-of-line via `VirtualText`
+  (`InlayHintController`, `editor.inlayHints`).
 
-Remaining (in-app verification / edges): beam-caret visuals + `ctrl-alt-arrow`
-keys can't be tested headless; an insert *session* undoes in a couple of steps
-(the native keystroke and the mirror flush are separate GTK user actions);
-replication covers insertions + single-line backspaces, with multi-line deletes /
-mid-text replacements falling back to the leave-insert replay.
+### Diff display — *done*
 
-### 3. Quick cleanups — *any time*
+`DiffView` (unified) and `SideBySideDiffView` (two-column) render from synthesized
+read-only buffers — alignment fillers / deleted lines are real padded lines styled
+via `editor.decorations`, sidestepping GtkTextView's lack of virtual lines and
+reusing the buffer-only + decoration + scroll-sync primitives. Unified collapses
+unchanged runs via the editor's diff-fold method. See [diff.md](diff.md). Diff
+*data* comes from the **Git** workstream; `GitGutter.ts` draws VS Code-style change
+bars (in-process Myers diff of buffer↔index and index↔HEAD).
 
-- [x] **Fold-aware motions** — `EditorModel.isFoldedAtBufferRow`/`unfoldBufferRow`
-  now delegate to `SyntaxController` (via a `FoldProvider` the host wires in with
-  `setFoldProvider`), so the vim motions that consult them (`motion.js`/`utils.js`)
-  skip past and reveal folded rows instead of treating the buffer as unfolded.
-- [x] **Buffer-only editor mode** — `new TextEditor({ buffer: { placeholder,
-  initialText, onSubmit } })`: no file I/O / LSP / line-numbers / minimap, keeps
-  vim + syntax + search, a greyed placeholder over the empty buffer, `getText`/
-  `setText`, and Ctrl+Enter → `onSubmit`. For the Git commit-message editor.
-- [x] **Column-unit reconciliation** — convention pinned to **codepoint** columns
-  (matching `GtkTextIter` + `lsp/position.ts`). Fixed the UTF-16 holdouts that fed
-  Points: `EditorModel.pointAtTextOffset` (scan/search), the `.length`-as-column
-  sites in `Cursor.ts` + vendored `operator.js` (via new `EditorModel.lineLength`),
-  and `searchWordUnderCursor`. Tests with emoji/astral chars in `EditorModel.test.ts`.
-  Tree-sitter highlighting is also reconciled: `SyntaxController.iterAt` converts
-  web-tree-sitter's UTF-16 columns to codepoints, gated on a per-refresh
-  `hasAstral` check so BMP-only files (the norm) pay nothing. *Remaining holdout:*
-  the incremental-parse edit tracking (`onInsert`/`onDelete`) still mixes codepoint
-  iter offsets with UTF-16 string lengths, so editing right next to an astral char
-  can feed tree-sitter a slightly-wrong edit — rare; its own task.
-- [x] **Vim polish** — `H`/`M`/`L` screen motions and `ctrl-f/b/d/u/e/y` scroll
-  commands, flash-on-operate, and **`=`/`==` auto-indent** are done. `=` re-indents
-  to a real tree-sitter indent source: `SyntaxController.indentLevelForRow` counts
-  enclosing fold-block nodes (`syntax/indent.ts`), injected into the editor via
-  `EditorModel.setIndentSource` (falls back to copy-the-line-above when no grammar);
-  it also improves paste-reindent.
-- [x] **Matching brackets** — highlights the bracket under (or just before) the
-  cursor and its pair, or — when the cursor sits *inside* a pair (not adjacent) —
-  the innermost *enclosing* pair, so the brackets stay lit as you move between them
-  (`syntax/bracketMatch.ts` + a cursor-driven tag in SyntaxController). Brackets
-  inside strings/comments/regex are ignored (`SyntaxController.isInStringOrComment`,
-  via `indent.ts` `enclosingTypeMatches`).
-- [x] **Indent guides** — faint vertical lines per indentation level, drawn in the
-  leading whitespace (`IndentGuides`, a Cairo overlay like the diagnostic
-  squiggles). Levels follow the actual indentation and continue unbroken through
-  blank lines inside a block. Toggle with `editor.indentGuides`.
-- [x] **Tree-sitter text objects** — `if`/`af` (function), `ic`/`ac` (class /
-  interface / enum), `ia`/`aa` (arguments). Backed by `SyntaxController`'s
-  `functionRangeAt`/`classRangeAt` (the generic `enclosingNodeRange` in `indent.ts`,
-  outer = whole def, inner = body), surfaced via `EditorModel.getFunctionRange`/
-  `getClassRange` to the vim `Function`/`Class` text objects.
-- [x] **Folds query** — folding is driven by a grammar's `folds.scm` (`@fold`
-  captures, incl. multi-line comments; `GrammarDef.foldsPath`, compiled to
-  `Grammar.foldsQuery`) when present, else the `foldTypes` set. Plus **run folds**:
-  consecutive import statements / line comments collapse to their first line. Pure
-  `computeFoldRanges` (`syntax/folds.ts`, unit-tested); `foldTypes` is retained for
-  the indent source. TS ships `queries/{typescript,tsx}/folds.scm`.
-- [x] **JSX/HTML tags** — *auto-close*: typing `>` to finish an opening tag inserts
-  `</name>` and sits between them (`tagClose.ts`, pure + unit-tested). Text-based
-  (the tree is debounced) with a JSX-vs-generics heuristic (the `<` must not follow
-  an identifier) and a tag-language gate (`tsx`/`html`/… — so plain `.ts` generics
-  never close). Fragments → `</>`. *Co-rename*: the `tag:rename` command renames
-  both halves of the pair (or a self-closing tag) in one undo step, via
-  `SyntaxController.tagNamesAt` (tree, `syntax/tags.ts`, unit-tested) + a prefilled
-  prompt. (Live linked-editing — mirror as you type — is a possible follow-up; it
-  needs mark-tracking across the tree's mismatch gap.)
+## Related friction evidence
 
-### 4. Diff display — *investigated; sequence with Git*
-
-See [diff.md](diff.md) for the editor-side investigation. Conclusion: render both
-unified and side-by-side from **synthesized read-only buffers** (the alignment
-fillers / deleted lines are real padded lines, styled via `editor.decorations`),
-which sidesteps GtkTextView's lack of virtual lines and reuses the buffer-only +
-decoration + scroll-sync primitives already landed. No new widget primitive is
-required; the editor-side gaps are small (read-only mode, a diff gutter renderer,
-a couple of decoration styles, scroll-sync, hunk nav). The real dependency is the
-diff *data*, which comes from the **Git** workstream — so build it alongside Git.
+[inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),
+[virtual-lines.md](virtual-lines.md), [decorations.md](decorations.md),
+[folding.md](folding.md), [diff.md](diff.md).

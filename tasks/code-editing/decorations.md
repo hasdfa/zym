@@ -3,7 +3,9 @@
 The editor's decoration surfaces, modeled on **Atom's decoration `type`s** so the
 vocabulary is shared and a new feature reuses a surface instead of inventing an
 ad-hoc one. Naming convention: no `Controller` suffix; the class is named for *what
-it is* (the decoration kind), in `src/ui/TextEditor/`.
+it is* (the decoration kind), in `src/ui/TextEditor/`. Some *consumers* live
+elsewhere — `SyntaxController` (`src/syntax/syntax-controller.ts`), `DiagnosticsView`
+(`src/lsp/diagnostics/DiagnosticsView.ts`).
 
 Atom's types are `line`, `line-number`/`gutter`, `highlight`, `cursor`, `overlay`,
 `block`, plus inline/trailing `text`. Mapped onto our surfaces:

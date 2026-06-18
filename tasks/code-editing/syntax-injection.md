@@ -39,16 +39,18 @@ Key decisions:
   coordinates — no offset math.
 - **Guest parsers are cached** per grammar (`injectionParsers`), recreated when
   the document language changes (`resetTree`).
-- **Injection language resolution** (`resolveGuestLangId` in `grammar.ts`, pure +
-  unit-tested): a captured `@language` node's text, else the injection's static
-  `language`. The name resolves through the **shared `LanguageRegistry`** — as a
-  langId, an alias→extension (```` ```typescript ```` → `ts` → the TS grammar), or
-  an injection-only langId (`markdown-inline`). So a fenced block uses whatever
-  plugin contributed that language's grammar — cross-plugin injection.
+- **Injection language resolution**: the guest name is a captured `@language`
+  node's text, else the injection's static `language`. `collectCaptures` resolves
+  it to a loaded grammar via `grammarForName` (`grammar.ts`), which calls the pure,
+  unit-tested `resolveGuestLangId` (also `grammar.ts`). The name resolves through
+  the **shared `LanguageRegistry`** — as a langId, an alias→extension
+  (```` ```typescript ```` → `ts` → the TS grammar), or an injection-only langId
+  (`markdown-inline`). So a fenced block uses whatever plugin contributed that
+  language's grammar — cross-plugin injection.
 
-`#set!` query directives are **not** exposed by web-tree-sitter 0.20.x, so the
-guest language comes from a captured `@language` node or the injection's static
-`language` field — never a `#set!` directive.
+(`#set!` query directives aren't exposed by web-tree-sitter 0.20.x, which is why
+the guest language comes from a captured `@language` node or the static `language`
+field, never a directive.)
 
 ### Contribution shape
 
@@ -62,8 +64,9 @@ injections: [
 ```
 
 `@content` (or `@injection.content`) marks the region(s); `@language` (or
-`@injection.language`) names the guest by node text. The markdown plugin already
-declares exactly this (gated on the grammar assets being present).
+`@injection.language`) names the guest by node text. The Markdown plugin declares
+exactly this (`MD_INJECTIONS` in `src/plugins/markdown/index.ts`, registered only
+when the grammar assets are present).
 
 ## Markdown grammars (done — vendored)
 
@@ -87,18 +90,16 @@ fence resolves to TypeScript captures.
 `src/plugins/markdown/build-grammars.sh` (the plugin owns its own build) fetches
 `@tree-sitter-grammars/tree-sitter-markdown` (MIT; ships C sources, **no wasm**)
 and compiles its committed **ABI-14** `parser.c` for both the block and inline
-grammars into the plugin's `grammars/`.
+grammars into the plugin's `grammars/`. The script `tree-sitter build --wasm`
+(CLI ≥ 0.24) auto-downloads wasi-sdk into `~/.cache/tree-sitter` — no emscripten,
+no Docker.
 
-The key enabler: `tree-sitter build --wasm` (CLI ≥ 0.24) **auto-downloads
-wasi-sdk** into `~/.cache/tree-sitter` and compiles with that — **no emscripten,
-no Docker**. (Older guidance that it needs `emcc`/Docker is out of date.)
-
-**ABI:** web-tree-sitter is pinned to `0.20.x`, which loads grammar ABI ≤14. We
-compile the package's *existing* `parser.c` (already ABI 14) and deliberately do
-**not** run `tree-sitter generate` — a 0.25+ CLI would regenerate it as ABI 15,
-which fails to load with *"Incompatible language version."* `preloadGrammars` also
-skips a grammar that fails to load (warns) rather than aborting startup, so a bad
-drop-in degrades gracefully.
+**ABI:** web-tree-sitter is pinned to `0.20.x`, which loads grammar ABI ≤14. The
+build compiles the package's *existing* `parser.c` (already ABI 14) and refuses if
+its ABI is > 14; it deliberately does **not** run `tree-sitter generate`, which a
+0.25+ CLI would emit as ABI 15 (fails to load: *"Incompatible language version."*).
+`preloadGrammars` (`grammar.ts`) skips a grammar that fails to load (warns) rather
+than aborting startup, so a bad drop-in degrades gracefully.
 
 ### Queries
 
@@ -131,9 +132,10 @@ benefits every language, Markdown is just the forcing function.
 **Stacking (multiple attributes compose).** Styles are split into separate
 GtkTextTags — one foreground-color tag per capture, plus shared *decoration* tags
 (bold/italic/underline/strikethrough, one per distinct scale, one per distinct
-background) — applied additively. The pure `computeStyleRuns` (`highlightRuns.ts`,
-unit-tested) flattens overlapping captures into runs, with two deliberately
-different rules:
+text-background, one per distinct full-line/paragraph background) — applied
+additively in `paintCaptures` (`syntax-controller.ts`). The pure `computeStyleRuns`
+(`highlightRuns.ts`, unit-tested) flattens overlapping captures into runs, with two
+deliberately different rules:
 
   - **Foreground color**: innermost capture wins *with suppression* — a narrower
     uncolored token shows the default foreground rather than bleeding a broader

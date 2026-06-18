@@ -20,8 +20,9 @@ Core pieces:
 - **`src/keymaps/default.ts`** + **`load.ts`** — the built-in keymap as data,
   plus an optional user `~/.config/quilx/keymap.json` layered at higher priority,
   validated at load.
-- **`src/ui/CommandPicker.ts`** — the command palette (fuzzy, muted `prefix:`,
-  right-aligned descriptions).
+- **`src/ui/CommandPicker.ts`** — the command palette (fuzzy over name +
+  description, muted `prefix:`, right-aligned description and primary keystroke).
+  Built on the shared `ui/Picker.ts`; the command list is sorted alphabetically.
 
 ## Current state
 
@@ -30,7 +31,7 @@ Core pieces:
 - [x] `#id` / tag / class selectors matched on `getName()` + CSS classes
 - [x] Central `default.ts` keymap + user `keymap.json` override (priority) with load-time validation
 - [x] Space leader; `.has-text-input` releases `space` in entries/terminal/insert mode
-- [x] Command palette with descriptions, formatted labels, shortcut column, and frecency ordering
+- [x] Command palette with descriptions, formatted labels, and a shortcut column (alphabetical order)
 - [x] Palette search matches name **and** description, with name matches ranked first (`boostFrom`)
 - [x] Command `when` predicate — the palette dims (and no-ops) commands not currently applicable
 - [x] Window always in the active-element chain, so window-level bindings fire even with no focus
@@ -41,24 +42,25 @@ Core pieces:
   + `getPendingBindings(elements, queue)` (reverse lookup over registered keymaps).
 - [x] **Show the shortcut in the command palette** — each row shows its primary
   keystroke right-aligned beside the description (`CommandPicker`).
-- [x] **which-key leader hints** — after a queued prefix, `KeymapManager` emits
-  `onPendingChanged`; `ui/WhichKey.ts` shows the continuations (after a short delay)
-  and hides on completion/break.
+- [~] **which-key leader hints** — `ui/WhichKey.ts` is implemented (subscribes to
+  `KeymapManager.onPendingChanged`, shows the continuations after a short delay,
+  hides on completion/break) but **currently disabled**: its constructor leaves
+  the `onPendingChanged` subscription commented out, so the hint card never shows.
+  Re-enable by uncommenting that line. (The `KeymapPanel` below uses the same
+  `onPendingChanged` signal and *is* live.)
 - [x] **Live-reload `keymap.json`** — watched with a `Gio.FileMonitor`; edits
   re-register the user layer live (`keymaps/load.ts`, mirrors `config.json`).
 - [x] **Conflict detection at load** — `KeymapManager.findConflicts()` reports
   keystrokes bound to multiple commands at the same selector + priority.
 - [x] **Keymap reference panel** — `ui/KeymapPanel.ts`, a bottom-dock `Gtk.Grid`
   table of every binding with columns **keys · command · description · selector ·
-  source** (source = `default` / `user` / layers), sorted by source then
-  selector/keystroke, with shadowed (overridden) bindings dimmed and the command
-  description as a row hover-hint. While a multi-key sequence is in progress the
-  table narrows to the bindings extending the queued prefix (subscribes to
+  source** (source = `default` / `user` / layers like `vim-mode-plus`), with
+  shadowed (overridden) bindings dimmed. While a multi-key sequence is in progress
+  the table narrows to the bindings extending the queued prefix (subscribes to
   `onPendingChanged`, filters by `queuedKeystrokes`). Backed by
-  `KeymapManager.getAllBindings()` +
-  `onBindingsChanged` (each `KeymapEntry` now carries its `source` + original
-  `selector`), so a live `keymap.json` edit updates it. Toggled via `keymap:show`
-  (`space ?`).
+  `KeymapManager.getAllBindings()` + `onBindingsChanged` (`BindingInfo` carries
+  `source` + `selector`), so a live `keymap.json` edit updates it. Toggled via
+  `keymap:show` (`space ?`), docked in `AppWindow.toggleKeymapPanel`.
 - [ ] **`when` keymap fall-through** — a disabled command currently still
   captures its keystroke (then no-ops); a future step would let the key fall
   through to the next match / the widget when `when` is false.
@@ -75,8 +77,8 @@ Core pieces:
 - `when` is a predicate function on the command's object form
   (`{ didDispatch, description?, when? }`), a closure over live state
   (`when: () => this.activeEditor !== null`) — not a string DSL, since commands
-  are declared in TS with the state in scope. Applied so far to `file:save`/
-  `save-as`, `git:*`, and `agent:stop`.
+  are declared in TS with the state in scope. Applied to `file:save`/`save-as`,
+  `git:*`, and the `agent:*` commands (see `AppWindow`).
 - The `:` ex-command line and richer search are tracked under
   [code-editing](code-editing/text-editor.md) (vim mode), not here — they consume
   this layer rather than extend it.

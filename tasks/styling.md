@@ -7,10 +7,13 @@ reuse so the chrome stays visually consistent.
 
 Styling comes from two places, and which one you use depends on the widget:
 
-- **GTK CSS** — installed via `addStyles(css)` (static, module-init) or
-  `styles.set(css, { key })` (dynamic/theme-derived) from `src/styles.ts`.
-  Selectors target a widget's `setName(...)` identity (`#WorkbenchStatus`) and
-  CSS classes (`.quilx-status-count`). This is the default for component look.
+- **GTK CSS** — installed via `addStyles(css)` (static, queued at module-init,
+  flushed once by `installStyles()` after the display exists) or
+  `styles.set(css, { key })` (dynamic/theme-derived, replaceable in place by key)
+  from `src/styles.ts`. Selectors target a widget's `setName(...)` identity
+  (`#WorkbenchStatus`) and CSS classes (`.quilx-status-count`). Default for
+  component look. Plugin stylesheets use `styles.addRemovable(css)`, which returns
+  a `Disposable` for teardown on deactivation.
 - **Pango markup** — inline `<span ...>` runs inside a single `Gtk.Label` with
   `useMarkup: true`. Used when one label mixes styles across its text — e.g. a
   full-size branch name with a smaller, coloured count after it
@@ -51,11 +54,12 @@ mechanisms can't share a literal. Don't introduce new ad-hoc sizes (`0.9em`,
 ## Colors
 
 Semantic UI colors come from the active theme via `theme.ui` (`src/theme/theme.ts`):
-`fg`, `textMuted`, `success`, `warning`, `error`, `info`, `hint`, `textAccent`,
+`fg`, `textMuted`, `textAccent`, `success`, `warning`, `error`, `info`, `hint`,
 … Interpolate these into CSS/markup rather than hard-coding hex. Severity
 glyph+color pairs (diagnostics) come from `severityStyle()` in
-`src/lsp/diagnostics/severity.ts`, the single source for the gutter, squiggle,
-panel, and header pill.
+`src/lsp/diagnostics/severity.ts`, the single source shared by the gutter and
+squiggle (`DiagnosticsView`), the Diagnostics panel (`DiagnosticsPanel`), and the
+status-bar counts (`WorkbenchStatus`).
 
 ## Icons
 

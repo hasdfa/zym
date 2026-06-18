@@ -1,7 +1,8 @@
 # LSP integration
 
-Language-server support: diagnostics, navigation, and (later) hover/code-actions,
-behind an abstraction the rest of the editor uses.
+Language-server support — diagnostics, navigation, hover, completion, code
+actions, rename, formatting, symbols — behind a GTK-free core the editor drives
+through a small `LspDocument` interface.
 
 ## Decisions
 
@@ -14,90 +15,146 @@ behind an abstraction the rest of the editor uses.
 - **Client libraries:** Microsoft's `vscode-jsonrpc` + `vscode-languageserver-protocol`
   (MIT) — JSON-RPC framing, stream transport, and all LSP types. No hand-rolled
   protocol.
-- **Server configs: Helix `languages.toml`** — the one declarative, parseable source
-  mapping file-types → language → server `command`/`args`/`roots`/`config`. Fetched
-  from GitHub, cached under `$XDG_CONFIG_HOME/quilx/lsp/`, with a vendored snapshot
-  (`src/lsp/languages.toml`) as the offline fallback. Parsed with `smol-toml`.
-  (Zed was evaluated and rejected — its server launch logic is Rust/WASM, not data.)
-  Helix configs assume the binary is on `PATH`; we never download servers.
+- **Server configs: curated, plugin-contributed.** Servers are hand-authored
+  `ServerDef`s registered on the `LanguageRegistry` (`src/lang/`) by plugins
+  (e.g. `src/plugins/typescript/`), not fetched. The earlier runtime-fetch of
+  Helix `languages.toml` was dropped — see
+  [language-config.md](language-config.md) for the registry design and why.
+- **Server install (optional).** `ServerDef.install` (npm package, or a raw
+  `command`) installs a missing binary into a quilx-managed dir
+  (`$XDG_DATA_HOME/quilx/lsp/<server>/`), never the user's env/project. The
+  managed `node_modules/.bin` is searched and put on the spawn `PATH`
+  (`lsp/installer.ts`, `lsp/which.ts`). Missing servers are skipped (not
+  crash-looped); the warning names the exact missing binary.
 
-## Architecture (`src/lsp/`)
+## Architecture
 
-GTK-free core, talking to editors via the small `LspDocument` interface:
+The language layer (`src/lang/`) holds the contribution model; the LSP core
+(`src/lsp/`) is GTK-free and talks to editors through `LspDocument`.
+
+### Language layer (`src/lang/`)
+
+- `types.ts` — `LanguageDef` (file-type → language id detection, LSP `languageId`
+  mapping), `GrammarDef` (tree-sitter binding), `ServerDef` (an LSP server
+  candidate: command, install, root markers, exclusion `group`/`priority`),
+  `ServerOverride`.
+- `LanguageRegistry.ts` — the plugin seam. `registerLanguage`/`registerGrammar`/
+  `registerServer` (disposable); `languageForPath`, `grammarFor`, `serversFor`,
+  and `activeServers(path)` — resolves a file to the servers that should run,
+  applying root-marker gating, exclusion groups (highest `priority` wins within a
+  group; ungrouped linters run additively), and user overrides.
+- `index.ts` — the `languages` singleton, populated by plugins at activation.
+
+### LSP core (`src/lsp/`)
 
 - `position.ts` — `Point`/`Range` ↔ LSP, encoding-aware (utf-8/16/32) + URI helpers.
-- `registry.ts` — fetch/cache/parse `languages.toml`; `serverSpecsForPath` resolution;
-  user overrides (`lsp.servers`), `lsp.disabledLanguages`, `lsp.configUrl`.
-- `LspClient.ts` — transport: spawn + `vscode-jsonrpc` connection + logging/exit events.
+- `LspClient.ts` — transport: spawn + `vscode-jsonrpc` connection + logging/exit
+  events; injects managed/`node_modules` bin dirs onto `PATH`.
 - `LanguageServer.ts` — one server per (server, rootDir): lifecycle, capability +
-  position-encoding negotiation, full-text document sync, diagnostics, definition.
-- `LspManager.ts` — orchestration: root resolution (root markers → `.git` → file dir),
-  server reuse, document lifecycle, diagnostics routing, go-to-definition.
-- `diagnostics/DiagnosticsStore.ts` — per-path diagnostics + `did-update` events.
-- `diagnostics/DiagnosticsView.ts` — per-editor inline squiggles (via the shared
-  `TextDecorations` `diagnostic-*` styles) + Nerd Font gutter glyphs drawn by a
-  `GtkSource.GutterRendererText` (the fold-gutter pattern).
-- `diagnostics/DiagnosticsPanel.ts` — the "Diagnostics" list (bottom-dock tab); a thin
-  consumer of the shared `ui/LocationList` that maps the store to severity-glyph +
-  muted `file:line` + message rows.
-- `ui/LocationList.ts` — shared, keyboard-navigable list of file locations (the
-  `#LocationList` keymap + `core:*` nav), to be reused by project-wide search and other
-  jump-to-location features. Activating a row reveals an already-open editor or opens
-  the file (`AppWindow.openOrFocusFile`, also used by go-to-definition).
-- `diagnostics/severity.ts` — shared per-severity presentation (Nerd Font glyph +
-  color), used by the view and the panel.
+  position-encoding negotiation, document sync (full-text or incremental, per the
+  negotiated `TextDocumentSyncKind`), and the request methods (definition,
+  references, hover, completion + resolve, signatureHelp, codeAction + resolve,
+  rename + prepareRename, formatting/rangeFormatting, workspace/documentSymbol,
+  inlayHint).
+- `LspManager.ts` — orchestration: resolves a file → its `activeServers`, spawns/
+  reuses one process per (server, rootDir), drives didOpen/Change/Save/Close to
+  *every* active server, routes diagnostics into the store, and answers requests
+  against the *primary* server (the language server; ungrouped linters contribute
+  diagnostics only). Root resolution = root markers → `.git` → file dir
+  (`resolveRootDir`). Crash recovery restarts a crashed server with exponential
+  backoff, giving up after a bounded number of rapid crashes (a stable run resets
+  the count). Pure helpers (`resolveRootDir`, `locationToTarget`) are exported for
+  testing.
+- `which.ts` / `installer.ts` — server-binary resolution and managed install (see
+  decisions above).
+- `workspaceEdit.ts` — `applyTextEdits` / `normalizeWorkspaceEdit`: apply a server
+  `WorkspaceEdit` (open editors edited in-buffer, others on disk). Shared by code
+  actions and rename.
+- `workspaceWatcher.ts` — watches the project tree (per-dir `fs.watch`, excluding
+  `node_modules`/`.git`/build output) and feeds `workspace/didChangeWatchedFiles`.
+- `glob.ts` — glob matching for file-watcher filters / language globs.
+- `diagnostics/DiagnosticsStore.ts` — per-path diagnostics + `did-update` events;
+  `paths`/`countsBySeverity` take an `accept(path)` predicate for scoping.
+- `diagnostics/DiagnosticsView.ts` — per-editor inline squiggles (shared
+  `TextDecorations` `diagnostic-*` styles), Nerd Font gutter glyphs drawn by a
+  `GtkSource.GutterRendererText` (the fold-gutter pattern), and **error-lens**
+  trailing text (worst diagnostic per line, via `VirtualText`; toggle
+  `editor.errorLens`).
+- `diagnostics/DiagnosticsPanel.ts` — the "Diagnostics" list (bottom-dock tab); a
+  thin consumer of the shared `ui/LocationList`.
+- `diagnostics/severity.ts` — per-severity presentation (Nerd Font glyph + color),
+  shared by the view and the panel.
 
-Wiring: `quilx.lsp` singleton + `lsp.*` config schema (`quilx.ts`); `TextEditor`
-implements `LspDocument` and drives didOpen/didChange/didSave/didClose; `AppWindow`
-registers `lsp:go-to-definition` (`space l d`) and `lsp:toggle-diagnostics-panel`
-(`space l l`), applies `lsp.*` config (live) + refreshes the catalog on launch, and
-routes `LspManager.onNotice` (server start/ready/exit/failure) into the notification
-log — trace level for routine events, warning/error for exits/failures.
+### Shared UI
+
+- `ui/LocationList.ts` — keyboard-navigable list of file locations (`#LocationList`
+  keymap + `core:*` nav); used by the Diagnostics panel. Activating a row reveals
+  an open editor or opens the file (`AppWindow.openOrFocusFile`).
+- `ui/ReferencesPicker.ts` (`openReferencesPicker`) — fuzzy-filterable list with a
+  source-preview pane, reusing the `ui/LocationPicker` the workspace-symbol /
+  search features use; presents find-references results.
+
+### Wiring
+
+`quilx.lsp` singleton + `lsp.*` config schema (`quilx.ts`: `lsp.enable`,
+`lsp.disabledLanguages`, `lsp.servers` overrides, `lsp.autoInstall`). `TextEditor`
+implements `LspDocument` and drives didOpen/didChange/didSave/didClose. `AppWindow`
+registers the `lsp:*` commands (see Status), applies `lsp.*` config live, and
+routes `LspManager.onNotice` (server start/ready/exit/failure, install actions)
+into the notification log — trace for routine events, warning/error for failures.
+Diagnostics are scoped per workbench: `AppWindow.ownerWorkbenchCwd` assigns each
+path/server-root to the open workbench whose cwd is its longest prefix (a nested
+worktree owns its files; orphans → user workbench), and the header
+`WorkbenchStatus` follows the active workbench.
 
 ## Status
 
-- [x] LSP client implementation + server-config abstraction (Helix-sourced).
-- [x] Diagnostics: inline squiggles, Nerd Font gutter glyphs, "Diagnostics" panel.
-- [x] **Workbench-aware diagnostics + header status** — the manager is already
-  multi-root (servers resolved/keyed per project root); the UI surfaces scope to the
-  owning workbench. `DiagnosticsStore.paths/countsBySeverity` take an `accept(path)`
-  predicate; `ServerStatus` carries `rootDir`. Each workbench's `DiagnosticsPanel`
-  shows only its root's files, and the header `WorkbenchStatus` (pill + LSP
-  indicator) follows the *active* workbench. Ownership = the open workbench whose
-  cwd is the longest prefix of the path/server-root (`AppWindow.ownerWorkbenchCwd`,
-  so a nested worktree owns its files, not the parent; orphans → user workbench);
-  re-scoped on workbench switch and on a worktree re-root.
-- [x] Trace logging of major LSP events to the notification log.
+- [x] LSP client + per-(server, root) lifecycle with crash recovery (exponential
+  backoff) and trace logging.
+- [x] Plugin-contributed server config via `LanguageRegistry`; per-project server
+  selection (root-marker activation + exclusion groups + priority); user
+  overrides (`lsp.servers` / `lsp.disabledLanguages`). See
+  [language-config.md](language-config.md).
+- [x] Server install (`ServerDef.install`, npm or raw command) into a managed dir;
+  "Install" action on the missing-server warning, `lsp:install-server` picker, and
+  `lsp.autoInstall` (default off).
+- [x] Document sync: incremental when the server negotiates it, full-text fallback.
+- [x] Diagnostics: inline squiggles, Nerd Font gutter glyphs, error-lens trailing
+  text (`editor.errorLens`), "Diagnostics" panel, per-workbench scoping + header
+  status.
 - [x] Navigation: definition / declaration / type-definition / implementation
-  (`space l d`/`D`/`t`/`i`), and find-references (`space l r`) presented in a
-  `LocationPicker` (`ui/ReferencesPicker.ts`) — a fuzzy-filterable list with a
-  source-preview pane, reusing the same picker the workspace-symbol / search
-  features use.
-- [x] Hover (`space l k` / vim `K`): `textDocument/hover` → markdown rendered to Pango
-  (`ui/markdownMarkup.ts`, subset renderer) in a floating overlay card, bottom-aligned
-  just above the cursor (an `Gtk.Overlay` child with `valign=END` + margins — no
-  height read; GtkPopover was avoided, it froze the UI under node-gtk). Code blocks
-  are syntax-highlighted by reusing the editor's tree-sitter grammars + queries +
-  theme colors (`syntax/highlightToMarkup.ts`), in the editor monospace font; prose
-  stays proportional. 3s request timeout; dismissed on cursor-move/scroll.
-  Command-triggered (P1); mouse-hover is a later phase.
-- [ ] Code actions.
-- [x] **Inlay hints** — `textDocument/inlayHint` (`LanguageServer.inlayHint` +
-  `inlayHint` client capability; `LspManager.inlayHints` requests the whole doc,
-  normalized to `{line, label}`). Rendered as native **end-of-line annotations** per
-  view (`InlayHintController` → `VirtualText`, debounced on edits), since the
-  annotation API is line-anchored (mid-line column placement would need the overlay
-  recipe — see [virtual-lines.md](virtual-lines.md)). tsserver inlay prefs enabled in
-  the TS plugin. Toggle `editor.inlayHints`.
-- [x] **Error lens** — each line's worst diagnostic message trailing the line
-  (`DiagnosticsView` → `VirtualText`, colored by severity). Toggle
-  `editor.errorLens`.
-- [ ] Later: hover-on-mouse, rename, completion, signature help, incremental sync.
+  (`space l d`/`D`/`t`/`i`), find-references (`space l r`, `ReferencesPicker`),
+  workspace symbols (`space l s`), document symbols / outline (`space l o`), and
+  inline peek-definition (`space l p`, see [inline-widgets.md](inline-widgets.md)).
+- [x] Hover (`space l k` / vim `K`): `textDocument/hover` → markdown rendered to
+  Pango (`ui/markdownMarkup.ts`, subset renderer) in a floating overlay card,
+  bottom-aligned just above the cursor (an `Gtk.Overlay` child with `valign=END` +
+  margins — no height read; GtkPopover was avoided, it froze the UI under
+  node-gtk). Code blocks are syntax-highlighted by reusing the editor's
+  tree-sitter grammars + queries + theme colors (`syntax/highlightToMarkup.ts`),
+  in the editor monospace font; prose stays proportional. 3s timeout; dismissed on
+  cursor-move/scroll. Command-triggered; mouse-hover is a later phase.
+- [x] Completion: `textDocument/completion` (+ resolve) via the primary server
+  (`createLspCompletionSource` / `CompletionController` / `CompletionPopup`),
+  trigger-character support (`.`/`::`), and auto-imports (resolved
+  `additionalTextEdits` applied on accept). See [autocompletion.md](autocompletion.md).
+- [x] Signature help: `textDocument/signatureHelp` — floating card while typing
+  call args, active parameter bold.
+- [x] Code actions: `textDocument/codeAction` (+ resolve) → pick (`space l a`),
+  applied via `workspaceEdit.ts`.
+- [x] Rename: `textDocument/rename` (+ prepareRename) → `space l R`, applied via
+  `workspaceEdit.ts`.
+- [x] Formatting: document / range formatting (`space l f`).
+- [x] Inlay hints: `textDocument/inlayHint` rendered as native end-of-line
+  annotations (`InlayHintController` → `VirtualText`, debounced; toggle
+  `editor.inlayHints`). Mid-line column placement would need the overlay recipe —
+  see [virtual-lines.md](virtual-lines.md).
+- [ ] Later: mouse-hover, code lens, inline-rename UI.
 
 ## Notes / gotchas
 
-- Servers must be on `PATH`. On this machine `clangd`/`rust-analyzer` are present;
-  `typescript-language-server` is not (a `.ts` file resolves but the spawn fails —
-  the manager emits a `failed to start …` log).
-- Document sync is full-text (whole buffer per change) for correctness; incremental
-  sync is a later optimization.
+- Servers must be on `PATH` (or installed into the managed dir). A file whose
+  language resolves to an uninstalled server logs a `failed to start …` notice
+  naming the missing binary.
+- Requests target the *primary* server only; ungrouped linters (e.g. eslint)
+  contribute diagnostics but don't answer navigation/hover/etc.

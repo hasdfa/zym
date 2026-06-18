@@ -1,10 +1,17 @@
 # Session management
 
-Architecture plan for the Session management section. A *session* is the working
-state of one project root: which files/terminals/agents are open, how they're
-laid out, and where the cursors sit — distinct from `quilx.config`, which is
-global app settings. The goal is to persist that state so it can be restored on
-demand, and to never lose unsaved work on exit.
+A *session* is the working state of one project root: which
+files/terminals/agents are open, how they're laid out, and where the cursors sit
+— distinct from `quilx.config`, which is global app settings. State is persisted
+so it can be restored on demand, and unsaved work is never lost on exit.
+
+**Status:** the core is **implemented** — `SessionManager` (`src/SessionManager.ts`,
+storage/format, exposed as `quilx.session`) + `SessionController`
+(`src/SessionController.ts`, per-window policy), wired from
+`src/ui/AppWindow.ts`. See the Phasing checklist at the bottom for what's done vs.
+outstanding. The one large unbuilt feature is **named sessions** (its own section
+below — all `[ ]`). (Note: `tasks/index.md` still lists this whole section as
+unchecked; that index is stale relative to the code and this page.)
 
 This page covers the architecture; per-feature pages can split out later if they
 grow.
@@ -76,8 +83,8 @@ owns the split tree, so it owns the layout walk.
 
 ### 1. Serialize / deserialize (saving & restoring shape)
 
-A small registry on a new **`SessionManager` (`quilx.session`)**, mirroring
-`atom.deserializers`:
+A small registry on **`SessionManager` (`quilx.session`)**, mirroring
+`atom.deserializers` (actual signatures):
 
 ```ts
 interface Serializable<T> {
@@ -85,20 +92,21 @@ interface Serializable<T> {
 }
 
 // quilx.session
-registerDeserializer(name: string, build: (state: any) => Widget | null): void;
-deserialize(state: { kind: string }): Widget | null;
+registerDeserializer(kind: string, build: (state: TabState) => unknown | null): Disposable;
+deserialize(state: TabState): unknown | null;
 ```
 
-Leaf widgets implement `serialize()` returning a tagged `TabState`; AppWindow
-registers a deserializer per `kind` that knows how to construct the widget and
-re-wire it (the same wiring `openFile`/`openTerminal`/`openAgent` do today). This
-keeps claude/agent specifics and editor specifics out of `SessionManager`.
+Leaf widgets (`TextEditor`/`Terminal`/`AgentTerminal`) implement `serialize()`
+returning a tagged `TabState`. The widget construction/wiring lives in
+`SessionController`'s `deserialize` (file → `createEditorTab`, terminal →
+`createTerminalTab`, agent → relaunch via `restoreAgent`), which AppWindow
+supplies — keeping claude/agent and editor specifics out of `SessionManager`.
 
-`PanelGroup` grows the tree walk (it owns the tree):
+`PanelGroup` owns the tree walk:
 
 ```ts
 serializeLayout(serializeChild: (w: Widget) => TabState | null): PanelNode;
-restoreLayout(node: PanelNode, deserializeChild: (s: TabState) => Widget | null): void;
+restoreLayout(node: PanelNode, buildChild: (s: TabState) => RestoredChild | null): void;
 ```
 
 ### 2. Modified-status (the exit prompt)
@@ -128,11 +136,13 @@ interface SessionParticipant {
 
 ## Storage format
 
+Actual shapes (`src/SessionManager.ts`):
+
 ```ts
 type TabState =
-  | { kind: 'file';     path: string; cursor?: [number, number] }
+  | { kind: 'file';     path: string; cursor?: [number, number]; scroll?: number; dirty?: boolean }
   | { kind: 'terminal'; cwd: string }
-  | { kind: 'agent';    command: string[]; cwd: string; prompt?: string };
+  | { kind: 'agent';    command: string[]; cwd: string; prompt?: string; sessionId?: string };
 
 type PanelNode =
   | { type: 'leaf';  tabs: TabState[]; activeIndex: number }
@@ -145,31 +155,33 @@ interface WorkspaceState {
   root: string;                 // the cwd / worktree path
   layout: PanelNode;
   fileTree?: { expanded: string[] };
+  agent?: AgentTabState;        // present → this is an agent workbench (relaunch on restore)
 }
 
 interface SessionState {
-  version: 1;
+  version: number;              // SESSION_VERSION (currently 1)
   name?: string;                // user-given; absent → label = basename(primaryRoot)
-  savedAt: string;              // ISO timestamp
-  workspaces: WorkspaceState[]; // MVP writes exactly one; format allows many
+  savedAt: string;              // ISO timestamp, stamped by save()
+  workspaces: WorkspaceState[]; // MVP runtime writes one user workspace + one per live agent
   activeWorkspace: number;      // index into workspaces; MVP: 0
-  docks?: { notificationLog: boolean; leftSplit?: number }; // window-level, shared
+  docks?: { notificationLog: boolean; leftSplit?: number };  // window-level, shared
+  window?: { width: number; height: number; maximized: boolean };
 }
 ```
 
 `workspaces[0].root` is the **primary root** — the hash source and the default
-label. The MVP always writes a single workspace and `activeWorkspace: 0`; the
-runtime carries no root-switch yet. Restoring just rebuilds `workspaces[active]`.
-Layering multi-root on later means: keep more than one workspace, and let the
-active-root switch swap which one drives `FileTree`/`GitRepo`/`GitBranchButton`/title —
-no format change.
+label. `activeWorkspace` is always 0; the runtime carries no root-switch yet, so
+restore rebuilds `workspaces[0]` (the user workspace) and relaunches the rest as
+agent workbenches. Layering multi-root on later means: let the active-root switch
+swap which workspace drives `FileTree`/`GitRepo`/`GitBranchButton`/title — no
+format change.
 
 `SessionManager` resolves the path
 (`<state>/quilx/sessions/<slug(name) ?? hash(primaryRoot)>.json`), reads/writes via
-sync `Fs` (mkdir -p, atomic temp+rename), validates `version`, and refuses to apply
-a session whose primary root doesn't match the current cwd (until the root-switch
-lands). The hash keeps filenames short and avoids path-length limits; the label
-never shows it (see Naming/identity).
+sync `Fs` (mkdir -p, atomic temp+rename), and validates `version`. Loading is keyed
+by the current root's hash (`load(root)`), so a session is only ever loaded for its
+own root — there's no separate cross-root guard yet. The hash keeps filenames short
+and avoids path-length limits; the label never shows it (see Naming/identity).
 
 ## Lifecycle
 
@@ -203,24 +215,28 @@ Registered on `quilx.config` like the rest; editable via the existing
 
 ## Commands
 
-- `session:save` — force a save now.
+- `session:save` — force a save now. **Built** (`space s s`).
 - `session:restore` — restore the current cwd's session into the workbench.
+  **Built** (`space s r`).
 - `session:open` — picker over *all* stored sessions (other roots) — **future**,
   pairs with multi-root.
 
-Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
+Handlers on `#AppWindow`; bindings in `src/keymaps/default.ts`.
 
-## Feature: named sessions (plan)
+## Feature: named sessions — NOT IMPLEMENTED (plan)
 
 Goal: let a project keep **several named sessions** and switch between them — e.g.
 "review", "feature-x", "debugging" — instead of the single per-root autosave.
+Nothing in this section is wired into the runtime yet; the phasing below is all
+`[ ]`.
 
-**Already in place** (no format change needed): `SessionState.name?`, the filename
-resolver `slug(name) ?? hash(root)` (named sessions get their own json + own
-`<file>.buffers/` dir for free), `SessionManager.list()`, `label(state)` =
-`name ?? basename(root)`, and `delete(state)`. The storage layer already supports
-named files; what's missing is the **runtime notion of an active session name** and
-the commands to drive it.
+**Storage groundwork already in place** (no format change needed):
+`SessionState.name?`; `SessionManager` already keys files by `slug(name)` when
+named and `hash(root)` otherwise (`fileName()`, private), and `pathFor()` follows
+suit — so a named session writes its own json (and gets its own `<file>.buffers/`
+for free). Public helpers `list()`, `label(state)` (= `name ?? basename(root)`),
+and `delete(state)` exist. What's missing is the **runtime notion of an active
+session name** (no `currentName` anywhere yet) and the commands to drive it.
 
 ### The one runtime addition
 
@@ -317,28 +333,9 @@ autosave/flush target the *active named* file. Switching sessions sets it.
       preserved).
 - [ ] Multi-root sessions + `session:open` picker — co-design with agent worktrees.
 
-## Settled
-
-The four prior open questions, now decided:
-
-- **Filename/identity** → **hash of the primary root**, unless the user names the
-  session (then a name-slug). The raw hash is never shown; labels resolve to
-  `name ?? basename(primaryRoot)`.
-- **Multi-root** → not in the MVP *runtime*, but the **format is prepared for it
-  now** (`workspaces[]` + `activeWorkspace`), so it's a later runtime change, not a
-  migration. Co-designed with agents.md's active-root switch.
-- **Agents in sessions** → each agent workbench is its own workspace; on restore
-  they're **relaunched resumed** (restore is explicit / opt-in, so this is the
-  user's intent, not a surprise) — the original launch prompt is not re-run. A
-  **running** agent (status not `exited`) **does** block exit and is listed in the
-  prompt — it's live work in progress. Plain terminals do not block; unsaved
-  editors do.
-- **Restore semantics** → `session:restore` **replaces** the current workbench
-  ("reopen my session"), consistent with the workspace-swap model.
-- **Unsaved buffer text** → **persisted** via a per-session buffer cache (restore
-  reopens dirty tabs from it, re-marked modified); the exit prompt still guards.
-
 ## Open questions
 
-None blocking — the above are settled. Remaining choices are implementation-level
-(e.g. the exact debounce wiring, hash function) and can be made during phase 1.
+None blocking for the built core — the decisions above are settled and shipped.
+The remaining design debates (default ↔ named relationship, switching with live
+agents, persisting the last-active session) all sit under the unbuilt named-sessions
+feature; see "Decisions to settle" there.

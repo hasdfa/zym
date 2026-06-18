@@ -1,26 +1,33 @@
 # Virtual lines & inline virtual content
 
-Investigation of how to show content that **isn't in the buffer** — trailing
-text, full virtual lines, inline widgets — on our GtkSourceView 5.20 editor. This
-is a cross-cutting capability several features want; diff is just one. All APIs
-below were probed and **exist in our node-gtk build**.
+Survey of how to show content that **isn't in the buffer** — trailing text, full
+virtual lines, inline widgets — on our GtkSourceView 5.20 editor. This is a
+cross-cutting capability several features want; diff is just one. All APIs below
+were probed and **exist in our node-gtk build**.
 
-> **Update — the general virtual-line / inline-widget mechanism (§2 below) is
-> chosen and planned in [inline-widgets.md](inline-widgets.md).** The exact APIs
-> are re-confirmed in `Gtk-4.0.gir`: `gtk_text_view_add_overlay`/`move_overlay`/
-> `remove` take **buffer coordinates** (so the overlay child scrolls with the text
-> natively — no manual scroll-follow), `get_iter_location` returns the anchor's
-> rect in buffer coords, and `Gtk.TextTag.pixels-below-lines`/`pixels-above-lines`
-> reserve the gap. First consumers: the diff fold placeholder (replacing the
-> synthesized `FoldRow`) and a see-definition peek.
->
-> **Update 2 — showing *less* than the model (single-line navigable code folding)
-> uses a third mechanism: a view-side text *projection*. See
+Two of the three tiers surveyed here are now built:
+
+- **Tier 1 (§1) line-trailing annotations** → `VirtualText`
+  (`src/ui/TextEditor/VirtualText.ts`), used by error-lens and end-of-line inlay
+  hints.
+- **Tier 2 (§2) gap-tag + overlay virtual line** → `BlockDecorations`
+  (`src/ui/TextEditor/BlockDecorations.ts`), specced in
+  [inline-widgets.md](inline-widgets.md). `add_overlay`/`move_overlay` take
+  **buffer coordinates** (so the child scrolls with the text natively — no manual
+  scroll-follow), `get_iter_location` returns the anchor's rect in buffer coords,
+  and `Gtk.TextTag.pixels-below-lines`/`pixels-above-lines` reserve the gap.
+  Consumers: the markdown image preview and the see-definition peek (which uses a
+  sibling-overlay variant for focus — see inline-widgets.md).
+- **Tier 3 (§3) child-anchor / read-only synthesized text** is still
+  surveyed-only (used conceptually by the diff viewer's synthesized buffers).
+
+> **Note — showing *less* than the model (single-line navigable code folding)
+> uses a different mechanism: a view-side text *projection*. See
 > [folding.md](folding.md).** GtkTextView can't join two real lines across an
 > invisible newline, so the view buffer physically holds the collapsed one-liner
 > (`import {[N]} from 'x'`) with the model as source of truth + view↔model
-> translation. Complements the overlay/annotation tiers here (those *add* content;
-> the projection *removes* it).
+> translation. Complements the tiers here (those *add* content; the projection
+> *removes* it).
 
 ## Features that want it
 
@@ -49,8 +56,8 @@ trailing content.
 
 - **Fits:** error lens, git blame, simple end-of-line inlay hints — with hover.
 - **Limits:** line-anchored only (no column → no true *mid-line* inlay hints);
-  end-of-line slot, not a full virtual line that pushes text down; brand-new API
-  (landed late 2024 — verify rendering + node-gtk provider vfunc binding in a POC).
+  end-of-line slot, not a full virtual line that pushes text down. (Built — see
+  `VirtualText` below for the realized findings.)
 
 ### 2. Gap tag + overlay — the general virtual-LINE recipe
 
@@ -61,8 +68,9 @@ trailing content.
 - **`view.addOverlay(child, bufX, bufY)` / `moveOverlay`** — a real widget at
   fixed *buffer* coordinates that scrolls with the text but takes no layout space
   (it sits in the reserved gap); or
-- **`snapshot_layer`** custom drawing (we already do this for the diagnostic
-  squiggle via a DrawingArea overlay) — draw text/lines into the gap.
+- **`snapshot_layer`** custom drawing (the diagnostic squiggle does this via a
+  DrawingArea overlay — `src/ui/TextEditor/UnderlineOverlay.ts`) — draw
+  text/lines into the gap.
 
 So: **tag reserves the vertical space (pushing real lines apart), overlay/snapshot
 renders the virtual line into it.** This is the reusable "virtual line" engine.
@@ -92,60 +100,58 @@ For a *viewer* (diff), make the virtual content real text in a throwaway buffer
 and style it. Sidesteps all of the above. Only works when not editing the live
 file (see [diff.md](diff.md)).
 
-## Recommendation
+## Outcome (built tiers)
 
-Two pieces cover everything, both reusing primitives already landed
-(`editor.decorations`, the pixel-geometry getters, the overlay pattern from the
-squiggle layer):
+Two pieces cover most needs, both reusing primitives already landed (the
+pixel-geometry getters on `EditorModel`, the overlay pattern from the squiggle
+layer):
 
-1. **Use `GtkSourceAnnotations` for line-trailing text** — error lens, git blame,
-   end-of-line inlay hints. Purpose-built, hover for free. Cheapest path; POC it
-   first to confirm rendering + the provider binding.
-   - ✅ **Built** (`src/ui/TextEditor/VirtualText.ts`, POC
+1. **`GtkSourceAnnotations` for line-trailing text** — error lens, git blame,
+   end-of-line inlay hints. Purpose-built, hover for free.
+   - ✅ **Built** as `VirtualText` (`src/ui/TextEditor/VirtualText.ts`; POC
      `src/poc/annotations.ts`). Per-view (one of the things the A2 document-model
      unblocked — a shared buffer would render annotations in every view). Consumers:
-     **error lens** (`DiagnosticsView`) and **end-of-line inlay hints**
-     (`InlayHintController`). Concrete API: `GtkSource.Annotation.new(description, icon,
-     line, style)` + a `GtkSource.AnnotationProvider` (concrete, no subclass) +
-     `view.getAnnotations().addProvider()`.
+     **error lens** (`src/lsp/diagnostics/DiagnosticsView.ts`) and **end-of-line
+     inlay hints** (`src/ui/TextEditor/InlayHintController.ts`). Concrete API:
+     `GtkSource.Annotation.new(description, icon, line, style)` + a concrete
+     `GtkSource.AnnotationProvider` (no subclass) + `view.getAnnotations().addProvider()`.
    - **Findings:** (a) **render** only happens for a *populated* provider added to the
      view — mutating an already-registered provider (late `addAnnotation`) doesn't
-     repaint, so the controller re-adds the provider each update. (b) **Color** comes
+     repaint, so `VirtualText` re-adds the provider each update. (b) **Color** comes
      from the *style scheme's* diff styles — `ERROR`→`diff:removed-line` fg,
      `WARNING`→`diff:changed-line`, `ACCENT`→`diff:added-line`, `NONE`→drawn-spaces
-     color; our generated scheme now defines them (`createSourceScheme.ts`). (c)
+     color; our generated scheme defines them (`src/theme/createSourceScheme.ts`). (c)
      **Line-anchored, no column/alignment control** — and with **soft-wrap on the
      annotations right-align** to the wrap width rather than trailing immediately after
      the text (a GtkSourceView rendering behaviour, no API to change it). Mid-line /
      trail-immediately placement wants the §2 overlay recipe instead.
-2. **Build a small `VirtualLineController` primitive** on the *gap-tag + overlay*
-   recipe (§2): given a buffer row and a widget (or drawn content), reserve the
-   gap via a `pixels-above/below` tag and position an overlay child in it,
-   repositioning on scroll/edit (it can reuse `UnderlineOverlay`'s scroll-follow
-   approach). This is the general capability behind code lens, ghost text, inline
-   expanded diagnostics, and live inline-diff. Mid-line inlay hints (a column
-   position annotations can't do) also fall here, via an overlay at the iter's
-   pixel rect.
-3. **`GtkTextChildAnchor`** only inside **read-only / synthesized** buffers
-   (it dirties the live buffer); **synthesized buffers** stay the answer for the
-   diff *viewer*.
-
-## Risks / to verify in a POC
-
-- `GtkSourceAnnotations` is very new (5.18); confirm it renders as expected and
-  that node-gtk can drive the provider (`populateHoverAsync` vfunc).
-- The gap-tag + overlay recipe needs a realized view — confirm a `pixels-above-lines`
-  tag reserves a per-line gap and that an `add_overlay` child lands and scrolls
-  correctly in it (geometry via the existing `pixelRectForBufferPosition`).
-- Overlay repositioning cost on scroll/edit (we already do this for the squiggle
-  overlay, so the pattern is proven; measure with many virtuals).
+2. **Gap-tag + overlay virtual line** (§2).
+   - ✅ **Built** as `BlockDecorations` (`src/ui/TextEditor/BlockDecorations.ts`;
+     POC `src/poc/inline-overlay.ts`; specced in [inline-widgets.md](inline-widgets.md)).
+     Given a buffer row and a widget, it reserves the band via a per-block
+     `pixels-above/below` tag, drops a pooled "slot" `Gtk.Box` as an `add_overlay`
+     child at the anchor's buffer-Y, and repositions via a tick callback on layout
+     changes (`add_overlay` follows scroll for free but not fold-toggle/edit shifts).
+     Consumers: markdown image preview (`src/plugins/markdown/imagePreview.ts`) and
+     the see-definition peek (`src/ui/TextEditor/Peek.ts`, which uses a focusable
+     sibling-overlay variant — `add_overlay` children leak IM input). This is the
+     general capability behind code lens, ghost text, inline expanded diagnostics,
+     and live inline-diff; mid-line inlay hints (a column annotations can't do) also
+     fall here, via an overlay at the iter's pixel rect.
+   - **Gotchas** (all handled in `BlockDecorations`): the view must be **mapped**
+     before placing (pre-realize `get_iter_location` is 0; defer + retry);
+     `gtk_text_view_remove` is a no-op in this node-gtk build, so removal hides and
+     **pools** the slot rather than unparenting (unparenting corrupts the
+     `GtkTextViewChild` overlay list → snapshot assertion); adding an overlay +
+     changing the gap tag don't trigger `size_allocate`, so force `queueResize`.
+3. **`GtkTextChildAnchor`** (§3) — *surveyed only*. Use only inside **read-only /
+   synthesized** buffers (it dirties the live buffer); synthesized buffers stay the
+   answer for the diff *viewer*.
 
 ## Net
 
 No custom widget or fork is needed: line-trailing virtual text has a native API
-(`GtkSourceAnnotations`), and general virtual lines are buildable from
-`pixels-above/below` tags + buffer-coordinate overlays — a small
-`VirtualLineController` primitive that, like the search/decoration/buffer-only
-work, sits on top of GtkSourceView rather than replacing it. Recommend a one-day
-POC of both (annotations + the gap-tag overlay) before committing a feature to
-either.
+(`GtkSourceAnnotations`, built as `VirtualText`), and general virtual lines are
+built from `pixels-above/below` tags + buffer-coordinate overlays (`BlockDecorations`)
+— both sit on top of GtkSourceView rather than replacing it, like the
+search/decoration/buffer-only work.

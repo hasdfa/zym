@@ -22,7 +22,8 @@ What already exists and is reused, not rebuilt:
   slots** — its own `center`, `fileTree`, Source-Control, `leftPanel`, and the four
   bottom-dock panels — with an `owner` field naming its person. **Each person in the
   WorkbenchList owns a fully self-contained `Workbench`; nothing is shared or reparented
-  across workbenches.** `buildWorkbench(owner)` constructs those widgets and hands them
+  across workbenches.** `buildWorkbench(owner, cwd)` constructs those widgets (rooted at
+  `cwd`) and hands them
   to `new Workbench(owner, contents, { showSideDock })` (which docks the center, and
   Source-Control for the user); it registers the workbench in `AppWindow.workbenches`
   (owner → `Workbench`). `AppWindow` holds only `this.workbench` (the active one) and
@@ -36,7 +37,7 @@ What already exists and is reused, not rebuilt:
   editors survive a switch. An agent's workbench opens terminal-only — `showSideDock` is
   false for agents, so Files/Source-Control isn't docked on open; the panel is still built
   (so `this.workbench.fileTree`/`gitPanel` stay valid and `file-tree:focus`/git commands
-  can reveal it). The terminal auto-opens on creation (`openAgent` → `buildWorkbench(agent)`);
+  can reveal it). The terminal auto-opens on creation (`openAgent` → `buildWorkbench(agent, cwd)`);
   `closeAgent` drops it from `workbenches` and disposes its editors / file tree /
   git panel / bottom-dock panels (no leak). **Done since:** per-workbench roots +
   pooled `GitRepo` (see *git worktree integration* below); session restore of agent
@@ -59,6 +60,7 @@ What already exists and is reused, not rebuilt:
     `Stop`/`SessionStart`→idle.
 - **`src/AgentManager.ts` — `quilx.agents`** — the registry: `add`/`remove`/
   `getAgents` (launch order) + `onDidAddAgent`/`onDidRemoveAgent`.
+  The agent list / sidebar is `WorkbenchList` (not a separate `AgentList`).
 - **`src/ui/WorkbenchList.ts`** — the contents of the **WorkbenchSidebar** (the
   full-height column at the very left of the window, outside/left of the header
   bar; AppWindow wraps everything in a top-level horizontal `Gtk.Paned` —
@@ -153,9 +155,10 @@ hook-based status. So:
 
 Concrete, mostly small additions on top of what exists:
 
-- **Lifecycle commands** (registered on `AgentList` / `AppWindow`, bound centrally):
+- **Lifecycle commands** (registered on `AppWindow`, bound centrally in
+  `src/keymaps/default.ts`; the list dispatches the selected row's command):
   - `agent:stop` — terminate the process (SIGTERM the VTE child) but keep the
-    widget listed (it flips to `exited`, restartable). The list's `X` row action.
+    widget listed (it flips to `exited`, restartable). The list's `x` key / row action.
   - Closing the agent's tab (`tab:close`) never retires the agent, whatever its state:
     the terminal-tab close is vetoed (the terminal stays in its workbench — a running
     agent keeps working in the background, a stopped one stays listed) and the view falls
@@ -163,17 +166,18 @@ Concrete, mostly small additions on top of what exists:
   - `agent:close` — close for good: terminate the child if it's still running, remove its
     workbench, and retire it from the list (`closeAgent`). The list's `d d` key; acts on the
     selected row, or the active/last-focused agent from the command palette.
-  - `agent:restart` — respawn an exited (or running, after confirm) agent with the
-    same profile/cwd; reuse the row.
-  - `agent:reveal` / `agent:focus-next` / `agent:focus-prev` — navigation.
-- **Attention notifications** — the high-value win now that status exists: when an
-  agent transitions to **waiting** (needs permission) or **working→idle**
-  (finished) while its tab is **not focused**, post a `quilx.notifications` event
-  ("Agent *name* needs permission" / "…finished"). Add an **attention badge/count**
-  on the AgentList header (number of `waiting` agents).
-- **List ergonomics** — vim bare-key bindings while `#AgentList` is focused
-  (`j`/`k` move, Enter reveal, `x` close, `r` restart), mirroring FileTree; hover
-  action buttons on rows.
+  - `agent:restart` (list `r`) / `agent:resume` (`space a r`) — respawn an exited
+    agent in place, resuming its conversation; reuse the row.
+  - `agent:focus-next` / `agent:focus-prev` — navigation (`focusAdjacentAgent`).
+- **Attention notifications** — *partly done*: `AppWindow.notifyAgentAttention`
+  posts an in-app `quilx.notifications` toast (click → reveal) when an agent goes
+  **waiting** (needs input) or **working→idle** (finished) while its tab isn't the
+  active panel child. Still **todo**: an **attention badge/count** on the sidebar
+  header (number of `waiting` agents) and desktop notifications when the window is
+  unfocused (see *More ideas → OS notifications*).
+- **List ergonomics** — *done*: vim bare-key bindings while the WorkbenchList is
+  focused (`j`/`k` move, `x` stop, `r` restart, `R` rename, `b` branch, `d d`
+  close, `o` open-changes), mirroring FileTree; hover action buttons on rows.
 - **Rename** — *done*: `AgentTerminal.rename()` pins a display name over the CLI's
   reported title (`renamed` reports whether pinned); `agent:rename` prompts via the
   picker (the `R` key in the list).
@@ -185,7 +189,8 @@ Concrete, mostly small additions on top of what exists:
 
 Claude Code stores every session as a JSONL transcript at
 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (the dir name is the cwd with
-`/` and `_` → `-`). A session is resumed with `claude --resume <id>` (or
+*every non-alphanumeric char* → `-`; see `agentSessions.ts:transcriptDir`). A
+session is resumed with `claude --resume <id>` (or
 `--continue` for the latest); `--fork-session` branches a copy instead of
 appending. These compose with our `--settings` block, so status hooks keep working.
 
@@ -199,9 +204,12 @@ appending. These compose with our `--settings` block, so status hooks keep worki
   the JSONL format is Claude Code's internal one (subject to change).
 - **Resume** — `AgentTerminal` takes a `resume: { sessionId? | continue?; fork? }`
   option → prepends `--resume <id>` / `--continue` (+ `--fork-session`) to the
-  claude argv. Commands: `agent:resume` (a picker of past sessions, excluding any
-  currently live, label + relative time → `space a r`) and `agent:continue`
-  (`space a c`).
+  claude argv. Commands: `agent:resume` (`space a r`, resume the current *exited*
+  agent in place), `agent:resume-conversation` (`space a R`, a picker of past
+  sessions excluding any currently live — label + relative time),
+  `agent:continue` (`space a c`, latest conversation in this folder), and
+  `agent:branch` (`space a b` / list `b`, fork the current agent via
+  `--fork-session`).
 - **Persist across editor restarts** — `AgentTerminal.serialize()` now records
   `sessionId`; the (Session-management-owned) restore can relaunch a saved agent as
   `--resume <id>` to continue the conversation rather than start fresh. The
@@ -415,7 +423,9 @@ container that steals focus from the Vte; see index.md).
 - [ ] Claude arg builder (model / tools / permission-mode / system-prompt) merged
       with the status `--settings`
 - [ ] Picker/starter: choose a profile when launching
-- [ ] Attention notifications (waiting / finished while unfocused) + header badge
+- [~] Attention notifications: in-app toasts on waiting / working→idle while the
+      tab is inactive are done (`notifyAgentAttention`); header `waiting` badge and
+      OS notifications while the window is unfocused are still todo
 - [x] Lifecycle commands: kill / close / restart / focus-next/prev (+ bindings,
       per-row hover actions)
 - [x] Status in the tab title; rename
@@ -436,8 +446,6 @@ container that steals focus from the Vte; see index.md).
   prefix in the prompt entry vs per-profile `agent:new:<name>` commands?
 - **Generic-tool status**: leave non-claude agents at alive/exited, or attempt a
   generic "waiting for input" heuristic (PTY idle / prompt detection)?
-- ~~**Worktree re-rooting**: scoped vs full re-root~~ — **resolved (2026-06-17):**
-  full per-workbench root; chrome/pickers follow the active workbench.
 - **Review granularity inside a shared worktree**: N agents per worktree means the
   worktree's `git diff` mixes them — is the default review view the *worktree* diff,
   the *per-agent* (baseline) diff, or both side by side? Baselines are the precise
@@ -445,8 +453,6 @@ container that steals focus from the Vte; see index.md).
 - **Baseline cost**: snapshot-on-first-edit (`PreToolUse` copy) is cheap per file
   but unbounded across a long session — cap by count/size, or rely on git for large
   files? And dedupe baselines when several agents share a worktree + file.
-- **Kill semantics**: SIGTERM the VTE child directly, or `claude`-aware graceful
-  shutdown? (Closing a *running* agent's tab does **not** kill it — it backgrounds the
-  agent; only `agent:stop` terminates the child. Resolved.)
-- **Rename vs CLI title**: when the user renames, does the agent's reported (OSC)
-  title still override, or is the manual name pinned?
+- **Kill semantics**: `agent:stop` SIGTERMs the VTE child directly — could add a
+  `claude`-aware graceful shutdown. (Closing a *running* agent's tab does **not**
+  kill it — it backgrounds the agent.)

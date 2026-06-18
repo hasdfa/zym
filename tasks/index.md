@@ -1,11 +1,11 @@
 # Tasks
 
-Each task can have it own page with research, design, and implementation details.
-File name name the header structure, e.g. `git.md` for the git section, `code-editing/lsp-integration.md` for the LSP integration section, etc. When a header has more than one subheader, it should be a directory with an `index.md` file for the main section.
+Each task can have its own page with research, design, and implementation details.
+File names mirror the header structure, e.g. `git.md` for the git section, `code-editing/lsp-integration.md` for the LSP integration section, etc. When a header has more than one subheader, it becomes a directory with an `index.md` file for the main section.
 
 The task documents should be updated as the implementation progresses, with notes on research findings, design decisions, and implementation details. This will help keep track of the progress and provide context for future reference.
 
-## Architecure
+## Architecture
 
 ### Commands & keymaps
 
@@ -35,11 +35,13 @@ rule, `theme.ui` color tokens, Nerd Font icons, and `.linked` button groups.
 
 ### Plugin system
 
-See [plugins.md](plugins.md) for the architecture (Atom-inspired). A plugin is a
-manifest + `activate(ctx)`/`deactivate`; the `PluginContext` exposes
+See [plugins.md](plugins.md) for the architecture (Atom-inspired) and
+[plugin-creation.md](plugin-creation.md) for the step-by-step guide to adding one.
+A plugin is a manifest + `activate(ctx)`/`deactivate`; the `PluginContext` exposes
 disposable-tracked contribution points (languages/grammars/LSP servers, keymaps,
-commands, config schema, stylesheets) so deactivation tears everything down. The
-`PluginRegistry` (`quilx`-level `plugins` singleton) owns activation state.
+commands, config schema, stylesheets, `observeTextEditors`) so deactivation tears
+everything down. The `PluginRegistry` (`quilx`-level `plugins` singleton) owns
+activation state.
 
 - [x] **Plugin core** — `src/plugin/` (`types.ts`, `PluginContext.ts`,
   `PluginRegistry.ts`, `index.ts`). Contribution registries made
@@ -58,6 +60,12 @@ commands, config schema, stylesheets) so deactivation tears everything down. The
   injections*: `<style>` → a CSS grammar this plugin vendors injection-only, and
   `<script>` → the TypeScript plugin's tsx grammar (`js`), each a no-op if its
   guest grammar isn't registered.
+- [x] **More bundled plugins** (`registerBuiltinPlugins()` in `src/plugin/index.ts`
+  registers all 8): **markdown** (LSP + config + vendored block/inline grammars +
+  image preview), **css** (CSS/SCSS/Sass; bundled + vendored grammars), **json**
+  (JSON/JSONC), **cpp** (C/C++; clangd), **rust** (rust-analyzer), and
+  **color-preview** (the `observeTextEditors` reference consumer — no language
+  layer). See [plugins.md](plugins.md) → Bundled plugins.
 - [ ] UI-component / panel contributions (register a `Panel`/dock widget).
 - [ ] Snippets, menus, and command-palette categories as contribution points.
 - [ ] Out-of-repo plugin discovery + loading (npm-style packages, a manifest
@@ -83,8 +91,11 @@ See [git/index.md](git/index.md) for the architecture and per-feature status.
 
 - [x] **Status viewer** — `GitPanel` (`src/ui/GitPanel.ts`), a sibling tab of the
   file tree; staged/changes/untracked lists with stage/unstage/discard/stage-all,
-  cursor nav + bare-key bindings (`s`/`u`/`A`/`X`/`c c`). File-level only (no
-  in-panel diffs / hunk staging).
+  cursor nav + bare-key bindings.
+- [x] **Staging view + hunk staging** — `GitStagingView` (`src/ui/GitStagingView.ts`,
+  `space g o`): a tab with an inline read-only `DiffViewer` accordion per file
+  (`o` expands). Hunk-level stage/unstage/revert is in the editor diff gutter
+  (`GitGutter.stageHunk`/`unstageHunk` via `git apply --cached`; `space h s`/`u`/`r`).
 - [x] **Commit interface** — `c c` opens `.git/COMMIT_EDITMSG` in a normal editor
   tab; save+close commits (`git commit -F`). No amend/sign-off yet.
 - [x] **GitHub forge** — `src/git/github.ts` + `GithubButtons`/pickers (via `gh`):
@@ -93,8 +104,10 @@ See [git/index.md](git/index.md) for the architecture and per-feature status.
   Remaining: `#123`-in-text detection, open file/line on web, GitLab.
 - [x] **Branch** (switch/create/delete/merge/rename) + **stash**
   (push/pop/apply/drop) pickers; per-line **diff gutter** in the editor.
-- [x] **Backend** — `src/git/cli.ts` (`gitSync`/`git` over the CLI, porcelain-v2
-  status parsing); libgit2 `GitRepo` reads (FileTree/branch button) stay as-is.
+- [x] **Backend** — fully git-CLI now (libgit2/Ggit removed). `src/git/cli.ts`
+  (`gitSync`/`git`, porcelain-v2 status parsing); `src/git.ts` exposes the
+  `GitRepo` interface backed by `CliGitRepo`, with `acquireGitRepo`/`releaseGitRepo`
+  pooling one polling repo per root.
 
 ## Code editing
 
@@ -114,7 +127,8 @@ See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the d
 - [x] Formatting — `textDocument/formatting` (+ range); `space l f` applies the edits to the buffer. Options from `editor.tabLength`/`insertSpaces`.
 - [x] Completion — `textDocument/completion` (+ resolve, auto-import `additionalTextEdits`, `textEdit` ranges). See the Autocompletion section.
 - [x] Signature help — `textDocument/signatureHelp`; floating card while typing call args, anchored at the callee name, active parameter bold, syntax-highlighted. Backend in `src/lsp/`; card in `TextEditor`.
-- [ ] Later: document symbols (outline), workspace symbols, inlay hints, semantic tokens, document highlight, format-on-save, command-only code actions (`workspace/executeCommand`) + `WorkspaceEdit` resource ops (create/rename/delete file).
+- [x] Document symbols (`DocumentSymbolPicker`) + workspace symbols (`WorkspaceSymbolPicker`); inlay hints (`InlayHintController`, `editor.inlayHints`) and diagnostic **error-lens** trailing text (`editor.errorLens`), both via `VirtualText` (EOL `GtkSourceAnnotations`).
+- [ ] Later: semantic tokens, document highlight, format-on-save, command-only code actions (`workspace/executeCommand`) + `WorkspaceEdit` resource ops (create/rename/delete file).
 
 ### Grammar
 
@@ -158,7 +172,7 @@ See [code-editing/autocompletion.md](code-editing/autocompletion.md).
 
 See [code-editing/text-editor.md](code-editing/text-editor.md) for the widget evaluation (GtkSourceView vs. custom/Rust), the shared editor-layer primitives, and the prioritized "What's next".
 
-**Recommended next:** buffer-only editor mode and multi-cursor are **done** (see below). Remaining editor-side work is mostly diff/Git integration and small vim polish (`=` auto-indent needs a real indent source). (The vim `:` ex-command line is **won't-do** — see text-editor.md.)
+The widget question is settled (**stay on GtkSourceView + emulate**), and the A2 document model, multi-cursor, vim mode, diff, folding, and inline widgets have all shipped (see below). Remaining editor work is mostly polish and the future inline-widget consumers. (The vim `:` ex-command line is **won't-do** — see text-editor.md.)
 
 Shared primitives now in place (in `EditorModel` / `TextDecorations`):
 
@@ -169,12 +183,12 @@ Shared primitives now in place (in `EditorModel` / `TextDecorations`):
 Features:
 
 - [~] Consider a custom widget or a fork of GtkSourceView for better control and features. Research how to implement features like multiple cursors, rectangular selection, and better performance with large files. Consider a JS widget, or a Rust widget with a JS wrapper. — **Decided: stay on GtkSourceView and emulate (Option A).** Multi-cursor + blockwise are now built on top (virtual selection/cursor mark pairs via `MarkerLayer`, surfaced through the array-shaped `getCursors()`/`getSelections()`); see Vim mode below. A custom/Rust widget remains a gated escape hatch only if long single lines become intolerable (see text-editor.md).
-- [~] Diff display (inline/unified + side-by-side) — **mostly done**. See [code-editing/diff.md](code-editing/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). Built: `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; fold-unchanged (`foldUnchanged`/`DiffFold` — long context runs collapse to a `⋯ N unchanged lines` row with a ▸/▾ gutter chevron, both panes in lockstep); `git:diff-current` command (`space g d`) → working-tree vs HEAD in a tab. Remaining: more git diff sources (staged/commit/PR) and the bigger Git-workstream integration. (Try it: `node scripts/diff-demo.ts`.)
+- [x] Diff display (unified + side-by-side) — see [code-editing/diff.md](code-editing/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; fold-unchanged (`foldUnchanged` collapses long context runs to a `⋯ N unchanged lines` row via the editor's fold projection, both panes in lockstep); `git:diff-current` (`space g d`) → working-tree vs HEAD in a tab. Remaining: more git diff sources (commit/PR). (Try it: `node scripts/diff-demo.ts`.)
 - [x] Search interface — `SearchBar` (top-right) + `SearchController` over `EditorModel.scan`: case/regex toggles, replace + replace-all, highlights via `editor.decorations`. Bound to vim `/` `?` `n` `N`.
-- [x] **Code folding (single-line, navigable)** — view-side text *projection*: a model range is physically collapsed to a `[N]` placeholder in the view buffer (model stays source of truth + view↔model translation), so `import {[N]} from 'x'` is one real navigable line; import/function/standalone-`if` fold single-line, `if/else` 1-per-line. See [code-editing/folding.md](code-editing/folding.md). Reusable for any "show less than the model" marker. Remaining: generalize `joinFooter` beyond JS, fold persistence, model-coord renderers must translate.
-- [~] Inline widgets / virtual lines — gap-tag + overlay, two flavors (see [code-editing/inline-widgets.md](code-editing/inline-widgets.md); survey in [virtual-lines.md](code-editing/virtual-lines.md)). **Done:** `BlockDecorations` (text-window `add_overlay`, scrolls natively, non-interactive) → the diff **fold placeholder** (replaced the synthesized `FoldRow`); `Peek` (sibling `Gtk.Overlay` child positioned via `get-child-position`, focusable, no IM leak) → **see-definition** (`lsp:peek-definition` / `space l p`, read-only highlighted slice). The focusable path required a node-gtk fix (`get-child-position` out-struct, **#444 / PR #445**). **Remaining:** make the peek share an open file's live buffer (edits + modified dot) — needs the **document-registry** refactor (chosen, deferred — see [code-editing/document-registry.md](code-editing/document-registry.md)); polish (center the def slice, jump-to button).
+- [x] **Code folding (single-line, navigable)** — view-side text *projection*: a model range is physically collapsed to a `[N]` placeholder in the view buffer (model stays source of truth + view↔model translation), so `import {[N]} from 'x'` is one real navigable line. Fold style is grammar-declared in `folds.scm` (`@fold` joins the footer; `@fold.keepFooter` keeps `} else {`-style chains on their own line — only the TypeScript plugin ships keep-footer queries so far). See [code-editing/folding.md](code-editing/folding.md). Reusable for any "show less than the model" marker. Remaining: fold persistence across reload.
+- [~] Inline widgets / virtual lines — three mechanisms (see [code-editing/inline-widgets.md](code-editing/inline-widgets.md) and the API survey in [virtual-lines.md](code-editing/virtual-lines.md)). **Done:** `BlockDecorations` (text-window `add_overlay`, scrolls natively, non-interactive) → **markdown image preview** (`plugins/markdown/imagePreview.ts`); `Peek` (sibling `Gtk.Overlay` child positioned via `get-child-position`, focusable, no IM leak) → **see-definition** (`lsp:peek-definition` / `space l p`) — now a **live** read-only view of the file's shared `Document` when open, snapshot otherwise (the document-registry refactor shipped); `VirtualText` (EOL `GtkSourceAnnotations`) → inlay hints + error-lens. The focusable peek path required a node-gtk fix (`get-child-position` out-struct, **#444 / PR #445**). **Remaining:** polish (center the def slice, jump-to button) and the future consumers below.
   - Future consumers (ideas to split; detail + infra-reuse + priority in [inline-widgets.md](code-editing/inline-widgets.md)):
-    - [ ] **Error lens** — diagnostic message inline below the line (block; reuses diagnostics). *low–med*
+    - [x] **Error lens** — diagnostic message as trailing text (`VirtualText`, `editor.errorLens`; in `DiagnosticsView`).
     - [ ] **Code lens** — `N references` / `run·debug` above a symbol, clickable (block, `placement: above`; LSP `codeLens`). *med*
     - [ ] **Inline AI ghost text** — multi-line agent completion preview below the cursor (block; agents). *higher*
     - [~] **Color swatch / image / math preview** — under CSS colors / markdown `![img]` / `$$` (block). Color swatch = `color-preview` plugin; **markdown image preview built** (`plugins/markdown/imagePreview.ts`, local images, `markdown.imagePreview`). Math/remote-image deferred. *low–med*
@@ -182,8 +196,8 @@ Features:
     - [ ] **Inline AI edit (Cmd-K)** — focusable prompt under the line → apply as diff (peek; agents). *higher; distinctive*
     - [ ] **Peek commit / blame diff** — inline `DiffViewer` below a line (peek; diff viewer + git). *med*
     - [ ] **Inline rename** — small inline editor for LSP rename + preview (peek). *med*
-    - [ ] **EOL trailing text** (`GtkSourceAnnotations`, separate mechanism, not built) — inlay hints, git blame, trailing error-lens. Needs its own POC.
-- [ ] Document registry — split `Document` (buffer + syntax + LSP + modified + undo) from the `TextEditor` view, N views per document with per-view cursors. Enables the live see-definition peek and split-view-of-same-file. **Chosen, deferred** (sizable `EditorModel` cursor refactor). See [code-editing/document-registry.md](code-editing/document-registry.md).
+    - [x] **EOL trailing text** (`VirtualText` over `GtkSourceAnnotations`) — built; powers inlay hints + error-lens. Remaining idea: git blame.
+- [x] Document registry — `Document` (buffer + syntax + LSP + modified + undo) split from the `TextEditor` view via `DocumentRegistry` (ref-counted `acquire`/`release`), N views per document, each with its own native `GtkSource.Buffer`/cursor (the A2 model). Enables the live see-definition peek and split-view-of-same-file. See [code-editing/document-registry.md](code-editing/document-registry.md).
 
 #### Vim mode
 
@@ -204,12 +218,19 @@ It replaced `GtkSource.VimIMContext` and is now the default (no flag).
 
 ## Session management
 
-See [session-management.md](session-management.md) for the architecture plan.
+See [session-management.md](session-management.md) for the architecture. The core
+is implemented.
 
-- [ ] Define session structure and storage format (e.g. JSON file with open files, unsaved changes, terminal sessions, agent sessions, etc).
-- [ ] Define session main path(s?) (the CWD for the session)
-- [ ] Implement session saving and loading, including handling of edge cases (e.g. missing files, conflicts with unsaved changes, etc).
-- [ ] Integrate session management with the rest of the application (e.g. prompt to save session on exit, option to restore previous session on startup, etc). Hooks for each widget to prompt and save/restore their own state as part of the session.
+- [x] Storage format + manager — `SessionManager` (`src/SessionManager.ts`) persists
+  a versioned `SessionState` (open files w/ cursor+scroll, unsaved buffers, terminals,
+  agents, split/dock layout, window geometry) keyed by repo root.
+- [x] Save/restore wired up — `SessionController` (`src/SessionController.ts`) drives a
+  serialize/deserialize seam each widget implements (`TextEditor`/`Terminal`/
+  `AgentTerminal`/`FileTree`/`PanelGroup`); debounced autosave + on-quit flush;
+  `Adw.AlertDialog` prompt for unsaved buffers on exit. Commands `session:save`
+  (`space s s`) / `session:restore` (`space s r`).
+- [ ] Named sessions (storage groundwork exists; no UI) and multi-root + a
+  `session:open` picker.
 
 ## Agents
 
@@ -218,7 +239,7 @@ See [agents.md](agents.md) for the architecture plan.
 - [x] Basic agent runner (claude in terminal tab)
 - [x] Basic AgentManager, sidebar list, and picker/starter
 - [x] Live agent status (idle/working/waiting/exited) via Claude Code hooks
-- [x] Management UX: attention notifications + waiting badge, kill / focus-next/prev, vim list nav
+- [x] Management UX: kill, focus-next/prev, vim list nav; in-app attention toasts (`AppWindow.notifyAgentAttention` on waiting / working→idle while inactive). Sidebar waiting badge + OS notifications still TODO (see below)
 - [x] Send editor context to an agent (selection / file → current / picked / new agent)
 - [x] Resume / continue past conversations (transcript enumeration + `--resume`/`--continue`); capture session id for restore
 - [x] More management UX: restart (resume conversation), rename, stop, close — keyboard/command driven (`r`/`R`/`x`/`d d`); status glyph in the tab title
