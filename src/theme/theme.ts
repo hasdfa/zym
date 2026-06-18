@@ -170,7 +170,7 @@ const DEFAULT_UI = {
   diffAddedWordBg: '#2ec27e66',
   diffRemovedWordBg: '#e01b2466',
   diffFillerBg: '#88888820',
-  diffFoldBg: '#88888814',
+  diffFoldBg: '#8888882e',
   prOpen: '#3fb950',
   prMerged: '#a371f7',
   prClosed: '#f85149',

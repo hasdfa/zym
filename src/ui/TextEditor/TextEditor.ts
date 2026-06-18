@@ -17,6 +17,7 @@ import { handleAutoPairInsert, handleAutoPairBackspace } from './autoPair.ts';
 import { handleTagAutoClose } from './tagClose.ts';
 import { Range } from '../../text/Range.ts';
 import { Point } from '../../text/Point.ts';
+import type { DiffFoldInfo } from '../../util/DiffModel.ts';
 import type { TagName } from '../../syntax/tags.ts';
 import { theme } from '../../theme/theme.ts';
 import { createSourceScheme } from '../../theme/createSourceScheme.ts';
@@ -209,8 +210,9 @@ export interface BufferEditorOptions {
   /** A file path/name whose extension selects the tree-sitter grammar, so an
    *  embedded buffer (e.g. a diff pane) still gets syntax highlighting. */
   languagePath?: string;
-  /** Tree-sitter code folding (chevron gutter). Defaults on; diff panes turn it
-   *  off — they fold by unchanged-region (DiffFold), not by code structure. */
+  /** Folding (chevron gutter + projection). Defaults on. Diff panes leave it on but
+   *  switch to the diff fold *method* (`setDiffFolds`) — unchanged runs, not code
+   *  structure; peek/preview panes set it false to disable folding entirely. */
   folding?: boolean;
 }
 
@@ -271,16 +273,6 @@ function signatureMarkup(
   );
 }
 
-/** What the editor's `fold:*` commands drive — SyntaxController by default, or a
- *  diff pane's DiffFold. (SyntaxController already satisfies this structurally.) */
-export interface FoldProvider {
-  toggleFoldAtCursor(): RevealedRange | null;
-  setFoldAtCursor(folded: boolean): RevealedRange | null;
-  foldAll(): void;
-  unfoldAll(): void;
-  revealLine(row: number): void;
-}
-
 export class TextEditor implements DocumentHost {
   readonly root: InstanceType<typeof Gtk.Box>;
 
@@ -297,11 +289,10 @@ export class TextEditor implements DocumentHost {
   private readonly releaseDocument: (() => void) | null;
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
+  // Drives the vim `fold:*` commands and owns the fold projection. A diff pane
+  // switches it to the diff fold method (unchanged-run folds) via `setDiffFolds`,
+  // which suppresses tree-sitter fold discovery — same machinery either way.
   private readonly syntax: SyntaxController;
-  // What the vim `fold:*` commands drive. Defaults to the tree-sitter folder
-  // (SyntaxController); a diff pane swaps in its own DiffFold (unchanged-region
-  // folds) via `setFoldProvider`, since it runs SyntaxController folding off.
-  private foldProvider: FoldProvider | null = null;
   private readonly editorModel: EditorModel;
   private readonly vimState: VimState;
   private readonly textDecorations: TextDecorations;
@@ -1313,32 +1304,46 @@ export class TextEditor implements DocumentHost {
 
   private installFoldCommands() {
     // The fold keys live in the vim keymap (normal-mode, z-prefix); they dispatch
-    // these commands on this view, which drive the fold provider (SyntaxController,
-    // or a diff pane's DiffFold). Registered per-view so a keystroke folds the
-    // focused editor.
+    // these commands on this view, which drive the SyntaxController fold machinery
+    // (tree-sitter folds, or a diff pane's unchanged-run folds). Registered per-view
+    // so a keystroke folds the focused editor.
     quilx.commands.add(this.view, {
-      'fold:toggle': () => this.selectRevealedFold(this.foldController.toggleFoldAtCursor()),
-      'fold:open': () => this.selectRevealedFold(this.foldController.setFoldAtCursor(false)),
-      'fold:close': () => this.foldController.setFoldAtCursor(true),
-      'fold:open-all': () => this.foldController.unfoldAll(),
-      'fold:close-all': () => this.foldController.foldAll(),
+      'fold:toggle': () => this.selectRevealedFold(this.syntax.toggleFoldAtCursor()),
+      'fold:open': () => this.selectRevealedFold(this.syntax.setFoldAtCursor(false)),
+      'fold:close': () => this.syntax.setFoldAtCursor(true),
+      'fold:open-all': () => this.syntax.unfoldAll(),
+      'fold:close-all': () => this.syntax.foldAll(),
     });
 
     // Keep the cursor visible: if a move (w, /, G, a click, …) lands it inside a
     // folded body, open the fold (Vim's `foldopen`). Closing a fold moves the
     // cursor to the still-visible header, so this never fights `fold:close`.
     this.buffer.on('notify::cursor-position', () => {
-      this.foldController.revealLine(this.editorModel.getCursorBufferPosition().row);
+      this.syntax.revealLine(this.editorModel.getCursorBufferPosition().row);
     });
   }
 
-  /** Swap in a custom fold provider (a diff pane uses its DiffFold). */
-  setFoldProvider(provider: FoldProvider): void {
-    this.foldProvider = provider;
+  /** Switch this view to the diff fold method: fold the given unchanged runs (via
+   *  the same projection + chevron as code folding), suppressing syntax folding. */
+  setDiffFolds(regions: readonly DiffFoldInfo[]): void {
+    this.syntax.setDiffFolds(regions);
   }
 
-  private get foldController(): FoldProvider {
-    return this.foldProvider ?? this.syntax;
+  /** Side-by-side lockstep: toggle the same diff-fold index in a sibling pane. */
+  setDiffFoldMirror(cb: (index: number) => void): void {
+    this.syntax.setDiffFoldMirror(cb);
+  }
+  toggleDiffFoldIndex(index: number): void {
+    this.syntax.toggleDiffFoldIndex(index);
+  }
+
+  /** VIEW line → MODEL line through the fold projection (the diff gutter keys by it). */
+  modelLineForViewLine(line: number): number {
+    return this.document.modelLineForViewLine(this.buffer, line);
+  }
+  /** MODEL line → VIEW line (a folded run's model lines have no view line). */
+  viewLineForModelLine(line: number): number {
+    return this.document.viewPointFromModel(this.buffer, new Point(line, 0)).row;
   }
 
   /** Highlight the text a fold revealed (when the caret was on its marker) — `zo`
