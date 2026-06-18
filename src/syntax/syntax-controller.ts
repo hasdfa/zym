@@ -414,24 +414,17 @@ export class SyntaxController {
     const langId = langIdForPath(path);
     const grammar = langId ? getGrammar(langId) : null;
 
+    if (!grammar) {
+      this.disableHighlighting();
+      return false;
+    }
+
     // New document content: drop any prior tree so the next parse is full, not
     // an incremental reparse against the previous file.
     this.resetTree();
     // Reserve the gutter width now (content is loaded, line count known) so the deferred
-    // gutter install doesn't shift the text. Both the grammar and no-grammar paths need it.
+    // gutter install doesn't shift the text.
     this.reserveGutterSpace();
-
-    if (!grammar) {
-      this.grammar = null;
-      this.parser = null;
-      this.clearHighlight();
-      this.foldsByHeaderLine.clear();
-      // No parse/paint to ride on, but the gutter (line numbers) must still appear — defer
-      // it the same way so it only queries the visible lines.
-      this.scheduleGutterInstall();
-      this.view.queueDraw();
-      return false;
-    }
 
     this.grammar = grammar;
     this.parser = createParser(grammar);
@@ -440,6 +433,21 @@ export class SyntaxController {
     this.refresh();
     this.scheduleGutterInstall();
     return true;
+  }
+
+  /** Drop tree-sitter highlighting — for an unsupported language, or a caller (TextEditor)
+   *  bailing out on a pathological long-line file so it opens instead of hanging. Clears
+   *  the highlight tags but keeps the deferred line-number gutter, and leaves grammar null
+   *  so scheduleRefresh short-circuits (no reparse/paint cost on edits either). */
+  disableHighlighting(): void {
+    this.resetTree();
+    this.reserveGutterSpace();
+    this.grammar = null;
+    this.parser = null;
+    this.clearHighlight();
+    this.foldsByHeaderLine.clear();
+    this.scheduleGutterInstall();
+    this.view.queueDraw();
   }
 
   /** Diagnostic: capture-name counts from the current parse tree (for tests). */

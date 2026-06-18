@@ -188,6 +188,13 @@ against unsaved") are just `Document.createView()`.
   indivisible `PangoLayout`, so a giant line defeats visible-only layout; the
   loader may refuse such files (gtk#229, gtksourceview#95/#208). Large line *counts*
   are fine. *Uncertain:* GTK4 crash status, loader thresholds, exact big-O.
+  **Mitigated (long-line guard):** on load, a file with any line ≥ `LONG_LINE_THRESHOLD`
+  (20k chars, VS Code's `maxTokenizationLineLength` default) enters *long-line mode* —
+  soft-wrap forced off (re-flowing a giant line every layout is the worst multiplier) and
+  tree-sitter highlighting dropped (`disableHighlighting`; a minified line is thousands of
+  tag-applies), with a toast. The file opens + scrolls instead of hanging; GtkTextView still
+  renders the wide line as best it can (cairo/pixman may warn on the oversized rect — benign,
+  the genuine wall). `hasLongLine`/`applySyntaxOrLongLineMode` in `TextEditor.ts`.
 - **Extensibility is additive, not replaceable.** Gutter renderers, `TextTag`s,
   `snapshot_layer`, `GtkSourceAnnotations` cover gutter/inline/virtual-text needs —
   but you cannot replace the per-line Pango layout, the part owning the widget
@@ -361,6 +368,19 @@ IndentGuides isn't the frame-rate limiter anyway. `UnderlineOverlay` (squiggles)
 redraws per frame under diagnostics; same single-transform trick applies, marginal win.
 The real remaining lever is **native rendering** — the gated custom-widget / Rust-core
 path (Option C above), not more JS micro-optimization.
+
+### Open performance — *bounded first paint*
+
+Opening a large file froze on the **first highlight paint**: the view is realized but not
+yet size-allocated, so `visibleRange()` is null and the paint covered the WHOLE buffer
+(an `applyTag` per capture across every line). Measured ~840 ms at 3k lines, ~1.45 s at 8k
+— it grows with file size. Fix: `initialPaintRange()` bounds that first geometry-less paint
+to the top `INITIAL_PAINT_LINES` (250) — the initial viewport is the file's head — so open
+is **O(viewport), ~65–78 ms regardless of file size** (11–23× faster); the normal viewport
+repaints cover the rest as the view sizes / the user scrolls. A genuinely unrealized view
+(headless / tests) keeps the whole-buffer paint, so tests are unaffected. *Remaining open
+cost not yet addressed:* tree-sitter `preloadGrammars` + plugin activation run synchronously
+before the window shows (unmeasured — see the perf audit).
 
 ## Related friction evidence
 

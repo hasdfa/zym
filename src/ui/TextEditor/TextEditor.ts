@@ -122,6 +122,25 @@ addStyles(`
 
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;
+// A line this many characters or longer makes GtkTextView's per-paragraph PangoLayout
+// pathological (minified/generated files, big one-line JSON, base64 blobs). When a file
+// has one, we disable soft-wrap (re-flowing a giant line every layout is the worst cost)
+// and tree-sitter highlighting (a minified line is thousands of tag applies), and warn —
+// so the file opens and scrolls instead of hanging. Matches VS Code's long-line
+// degradation threshold (`editor.maxTokenizationLineLength`, default 20000).
+const LONG_LINE_THRESHOLD = 20_000;
+
+// Whether `text` contains a line at least `threshold` chars long. Scans newline gaps and
+// bails on the first long one, so a minified one-liner is detected immediately.
+function hasLongLine(text: string, threshold: number): boolean {
+  let start = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', start);
+    if (nl === -1) return text.length - start >= threshold;
+    if (nl - start >= threshold) return true;
+    start = nl + 1;
+  }
+}
 // LSP hover card width (px) — set as a size request, since GtkFixed sizes its
 // children to their *minimum* width (it ignores GtkLabel max-width-chars). The
 // label fills this width and wraps. HOVER_GAP keeps the card clear of the cursor.
@@ -383,6 +402,12 @@ export class TextEditor implements DocumentHost {
   private pendingUnsaved: string | null = null;
   private onActivate: (() => void) | null = null;
   private mapHandler: (() => void) | null = null;
+
+  // Set when the loaded file has a pathologically long line (see LONG_LINE_THRESHOLD):
+  // soft-wrap and tree-sitter highlighting are then disabled for it. `applyWrap` re-applies
+  // the wrap mode from the config *and* this flag (set up in createView; file mode only).
+  private longLineMode = false;
+  private applyWrap: () => void = () => {};
 
   constructor(options: TextEditorOptions = {}) {
     this.onToast = options.onToast ?? (() => {});
@@ -979,10 +1004,15 @@ export class TextEditor implements DocumentHost {
       view.setRightMarginPosition(RIGHT_MARGIN);
       // Soft-wrap (live-toggled by `editor.softWrap`): wrap long lines to the
       // editor width instead of scrolling horizontally. Vim display-line motion
-      // (j/k, gj/gk) is wrap-aware via EditorModel.displayLineMove.
-      const applyWrap = (v: unknown) =>
-        view.setWrapMode(v === false ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
-      const wrapSub = quilx.config.observe('editor.softWrap', applyWrap);
+      // (j/k, gj/gk) is wrap-aware via EditorModel.displayLineMove. Forced off in
+      // long-line mode (wrapping a giant line re-flows it on every layout).
+      let wrapEnabled = quilx.config.get('editor.softWrap') !== false;
+      this.applyWrap = () =>
+        view.setWrapMode(this.longLineMode || !wrapEnabled ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
+      const wrapSub = quilx.config.observe('editor.softWrap', (v) => {
+        wrapEnabled = v !== false;
+        this.applyWrap();
+      });
       view.on('destroy', () => wrapSub.dispose());
     }
     return view;
@@ -1545,10 +1575,29 @@ export class TextEditor implements DocumentHost {
     this.pendingReloadCaret = null;
     this.applyDetectedIndentation(content);
     if (!reload) this.view.grabFocus(); // a background reload mustn't steal focus
-    this.applyViewSyntaxForPath(path);
+    this.applySyntaxOrLongLineMode(content, path);
     this.diagnostics.render();
     this.inlayHints.scheduleRefresh();
     this.gitGutter?.refresh();
+  }
+
+  /** Highlight `path` normally, unless its content has a pathologically long line — then
+   *  enter long-line mode (no soft-wrap, no tree-sitter highlighting) so it opens instead
+   *  of hanging. Used by both the initial load and a split/peek of an already-open file. */
+  private applySyntaxOrLongLineMode(content: string, path: string): void {
+    const longLines = !this.bufferMode && hasLongLine(content, LONG_LINE_THRESHOLD);
+    if (longLines === this.longLineMode && longLines) return; // already degraded (e.g. reload)
+    this.longLineMode = longLines;
+    this.applyWrap(); // force wrap off (or restore the config value when leaving the mode)
+    if (longLines) {
+      // Drop all highlighting (tree-sitter and the .lang fallback); keep the line-number gutter.
+      this.buffer.setHighlightSyntax(false);
+      this.buffer.setLanguage(null);
+      this.syntax.disableHighlighting();
+      this.onToast('Long lines detected — syntax highlighting and soft-wrap disabled for performance.');
+    } else {
+      this.applyViewSyntaxForPath(path);
+    }
   }
 
   /** Set up this view for an already-loaded shared `Document` — a second view (split /
@@ -1558,7 +1607,7 @@ export class TextEditor implements DocumentHost {
   attachToLoadedDocument(): void {
     const path = this.document.currentFile;
     if (!path) return;
-    this.applyViewSyntaxForPath(path);
+    this.applySyntaxOrLongLineMode(this.getText(), path);
     this.editorModel.setCursorBufferPosition({ row: 0, column: 0 });
     this.applyDetectedIndentation(this.getText());
     this.diagnostics?.render();
