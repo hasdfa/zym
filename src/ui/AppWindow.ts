@@ -54,6 +54,7 @@ import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
 import { openWorktreePicker } from './WorktreePicker.ts';
+import { openModelPicker } from './ModelPicker.ts';
 import {
   openBranchPicker,
   openDeleteBranchPicker,
@@ -713,12 +714,13 @@ export class AppWindow {
   }
 
   /** Launch (or resume) an agent and show it in a center tab. */
-  private openAgent(options: { prompt?: string; resume?: AgentResume; title?: string; cwd?: string } = {}): AgentTerminal {
+  private openAgent(options: { prompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[] } = {}): AgentTerminal {
     // The agent's root: an explicit worktree (launch-time picker, Phase 3) or the
     // window cwd. Its workbench is built rooted at the same path.
     const cwd = options.cwd ?? process.cwd();
     const agent = new AgentTerminal({
       cwd,
+      command: options.command,
       prompt: options.prompt,
       resume: options.resume,
       title: options.title,
@@ -2169,7 +2171,10 @@ export class AppWindow {
         didDispatch: () => openScriptRunner(this.overlay, this.workbench.cwd, (name) => this.runScript(name)),
         description: 'Run a package.json script in a terminal',
       },
-      'agent:new': () => this.openAgent(),
+      'agent:new': () =>
+        openModelPicker(this.overlay, (extraArgs) =>
+          this.openAgent({ command: ['claude', ...extraArgs] }),
+        ),
       // Pick an existing worktree to launch the agent in (its workbench is rooted
       // there). New worktrees are created by the agent itself, then detected live.
       'agent:new-in-worktree': () =>
