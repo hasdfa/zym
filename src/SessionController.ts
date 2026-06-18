@@ -31,14 +31,25 @@ export interface SessionControllerOptions {
   fileTree: FileTree;
   /** Serialize one tab's widget to its persistent state (`null` to skip). */
   serializeChild: Parameters<PanelGroup['serializeLayout']>[0];
-  /** Build a file editor tab for restore (no panel attach); `null` to skip. */
-  createEditorTab: (path: string, cursor?: [number, number]) => RestoredChild | null;
+  /** Build a file editor tab for restore (no panel attach); `null` to skip. The
+   *  restore carries the saved cursor, scroll, and any cached unsaved content. */
+  createEditorTab: (
+    path: string,
+    restore: { cursor?: [number, number]; scroll?: number; unsavedText?: string },
+  ) => RestoredChild | null;
   /** Build a terminal tab for restore (no panel attach); `null` to skip. */
   createTerminalTab: (cwd: string) => RestoredChild | null;
   /** Current window-level dock state, for serialization. */
   getDocks: () => SessionDocks;
   /** Apply restored window-level dock state. */
   applyDocks: (docks: SessionDocks) => void;
+  /** Current window geometry, for serialization (omit if unavailable). */
+  getWindow?: () => SessionState['window'];
+  /** Apply restored window geometry. */
+  applyWindow?: (window: NonNullable<SessionState['window']>) => void;
+  /** The unsaved contents of currently-modified editors, cached so a restore can
+   *  bring the edits back. */
+  collectUnsaved?: () => { path: string; text: string }[];
   /** One `WorkspaceState` per open agent workbench (root + layout + `agent`
    *  identity), appended after the user workspace. Empty when no agents. */
   serializeAgentWorkspaces?: () => WorkspaceState[];
@@ -52,6 +63,8 @@ export class SessionController {
   // Files skipped during the in-flight restore (no longer on disk), aggregated
   // into a single notification at the end.
   private missing: string[] = [];
+  // The session being restored, so `deserialize` can read cached unsaved buffers.
+  private restoringState: SessionState | null = null;
 
   constructor(opts: SessionControllerOptions) {
     this.opts = opts;
@@ -73,13 +86,17 @@ export class SessionController {
       workspaces: [user, ...(this.opts.serializeAgentWorkspaces?.() ?? [])],
       activeWorkspace: 0,
       docks: this.opts.getDocks(),
+      window: this.opts.getWindow?.(),
     };
   }
 
-  /** Persist the current session now (best effort; never throws to the caller). */
+  /** Persist the current session now (best effort; never throws to the caller).
+   *  Also caches the unsaved contents of modified editors beside the session. */
   saveNow(): void {
     try {
-      quilx.session.save(this.serialize());
+      const state = this.serialize();
+      quilx.session.save(state);
+      quilx.session.writeBuffers(state, this.opts.collectUnsaved?.() ?? []);
     } catch (error) {
       console.warn(`[session] save failed: ${(error as Error).message}`);
     }
@@ -123,9 +140,11 @@ export class SessionController {
     if (!user) return false;
 
     this.missing = [];
+    this.restoringState = state;
     this.opts.center.restoreLayout(user.layout, (tab) => this.deserialize(tab));
     if (user.fileTree) this.opts.fileTree.restoreExpanded(user.fileTree.expanded);
     if (state.docks) this.opts.applyDocks(state.docks);
+    if (state.window) this.opts.applyWindow?.(state.window);
 
     // Relaunch the agent workbenches (resumed to their conversation/worktree). This
     // only runs on an explicit restore / opt-in launch, so re-running them is the
@@ -133,6 +152,7 @@ export class SessionController {
     for (const ws of state.workspaces.slice(1)) {
       if (ws.agent) this.opts.restoreAgent?.(ws);
     }
+    this.restoringState = null;
 
     if (this.missing.length > 0) {
       const n = this.missing.length;
@@ -148,16 +168,28 @@ export class SessionController {
     return quilx.config.get('session.restoreOnLaunch') === true && quilx.session.load(this.opts.root) !== null;
   }
 
+  /** The saved window geometry for this root, without a full restore — so the host
+   *  can size the window before mapping it (GTK4 ignores resize once shown). */
+  loadWindow(): SessionState['window'] {
+    return quilx.session.load(this.opts.root)?.window;
+  }
+
   // Rebuild one tab. Files that vanished are skipped (and counted); terminals are
   // respawned in their cwd; agents are not relaunched here (see the phase plan).
   private deserialize(tab: TabState): RestoredChild | null {
     switch (tab.kind) {
-      case 'file':
+      case 'file': {
         if (!Fs.existsSync(tab.path)) {
           this.missing.push(tab.path);
           return null;
         }
-        return this.opts.createEditorTab(tab.path, tab.cursor);
+        // Restore unsaved edits from the buffer cache when this tab was dirty.
+        const unsavedText =
+          tab.dirty && this.restoringState
+            ? quilx.session.readBuffer(this.restoringState, tab.path) ?? undefined
+            : undefined;
+        return this.opts.createEditorTab(tab.path, { cursor: tab.cursor, scroll: tab.scroll, unsavedText });
+      }
       case 'terminal':
         return this.opts.createTerminalTab(tab.cwd);
       case 'agent':

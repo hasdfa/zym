@@ -31,6 +31,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space /': 'project:search', // full-text search (ripgrep)
   'space q': 'app:quit',
   'space t': 'terminal:new',
+  'space p r': 'scripts:run', // "p"ackage "r"un — run a package.json script in a terminal
   'space a a': 'agent:picker', // open the agent picker (agents, conversations, new)
   'space a l': 'workbench-list:focus', // focus the workbench sidebar
   'space a n': 'agent:new', // launch a new agent

@@ -380,6 +380,10 @@ export class TextEditor implements DocumentHost {
   // owner (AppWindow) do its post-load wiring, and `mapHandler` is detached after firing.
   private activated = false;
   private pendingCursor: [number, number] | null = null;
+  // Like pendingCursor, applied once the (lazily-opened) doc loads: a restored
+  // scroll offset (top buffer row) and restored unsaved content (session restore).
+  private pendingScroll: number | null = null;
+  private pendingUnsaved: string | null = null;
   private onActivate: (() => void) | null = null;
   private mapHandler: (() => void) | null = null;
 
@@ -1450,10 +1454,15 @@ export class TextEditor implements DocumentHost {
    * `opts.cursor` is restored after load; `opts.onActivate` runs once, post-load, for the
    * owner's wiring (e.g. registering the editor with the workspace once it has content).
    */
-  prepareFile(path: string, opts: { cursor?: [number, number]; onActivate?: () => void } = {}): void {
+  prepareFile(
+    path: string,
+    opts: { cursor?: [number, number]; scroll?: number; unsavedText?: string; onActivate?: () => void } = {},
+  ): void {
     if (this.bufferMode) return;
     this.document.assignPath(path);
     this.pendingCursor = opts.cursor ?? null;
+    this.pendingScroll = opts.scroll ?? null;
+    this.pendingUnsaved = opts.unsavedText ?? null;
     this.onActivate = opts.onActivate ?? null;
     const onMap = () => this.activate();
     this.mapHandler = onMap;
@@ -1475,9 +1484,19 @@ export class TextEditor implements DocumentHost {
     // the per-view setup). ensureLoaded is idempotent either way.
     if (this.document.isLoaded) this.attachToLoadedDocument();
     else this.document.ensureLoaded();
+    // Restored unsaved content first (it replaces the buffer + resets the cursor),
+    // then the saved cursor, then the saved scroll (overrides cursor-centering).
+    if (this.pendingUnsaved !== null) {
+      this.document.restoreUnsaved(this.pendingUnsaved);
+      this.pendingUnsaved = null;
+    }
     if (this.pendingCursor) {
       this.restoreCursor(this.pendingCursor);
       this.pendingCursor = null;
+    }
+    if (this.pendingScroll !== null) {
+      this.editorModel.scrollToBufferPosition({ row: this.pendingScroll, column: 0 });
+      this.pendingScroll = null;
     }
     this.onActivate?.();
     this.onActivate = null;
@@ -1616,13 +1635,48 @@ export class TextEditor implements DocumentHost {
     // A lazily-opened tab that was never shown has an empty model, so fall back to its
     // pending (saved) cursor rather than reporting 0,0.
     let cursor: [number, number];
+    let scroll: number;
     if (this.document.isLoaded) {
       const c = this.editorModel.getCursorBufferPosition();
       cursor = [c.row, c.column];
+      scroll = this.editorModel.getFirstVisibleScreenRow();
     } else {
       cursor = this.pendingCursor ?? [0, 0];
+      scroll = this.pendingScroll ?? 0;
     }
-    return { kind: 'file', path: this._currentFile, cursor };
+    // `dirty` flags an editor with unsaved edits; the host caches its text so a
+    // restore brings the edits back (see SessionManager.writeBuffers).
+    const dirty = this.unsavedSnapshot() !== null;
+    return { kind: 'file', path: this._currentFile, cursor, scroll, ...(dirty ? { dirty: true } : {}) };
+  }
+
+  /** The text to cache for restore: the live buffer when modified, or the pending
+   *  restored-unsaved text for a tab restored-but-not-yet-shown; null when there's
+   *  nothing unsaved. (Covers the lazy case so a save doesn't prune its cache.) */
+  unsavedSnapshot(): string | null {
+    if (this.bufferMode || !this._currentFile) return null;
+    if (this.pendingUnsaved !== null) return this.pendingUnsaved;
+    return this.isModified() ? this.getText() : null;
+  }
+
+  /** Restore a saved scroll offset — put `row` at the top of the viewport. Deferred
+   *  to `activate` for a lazily-opened tab whose view isn't realized yet. */
+  restoreScroll(row: number): void {
+    if (!this.bufferMode && !this.document.isLoaded) {
+      this.pendingScroll = row;
+      return;
+    }
+    this.editorModel.scrollToBufferPosition({ row, column: 0 });
+  }
+
+  /** Restore unsaved content (session restore): replace the buffer and keep it
+   *  modified. Deferred for a lazily-opened tab. */
+  restoreUnsaved(text: string): void {
+    if (!this.bufferMode && !this.document.isLoaded) {
+      this.pendingUnsaved = text;
+      return;
+    }
+    this.document.restoreUnsaved(text);
   }
 
   /** Restore a saved cursor position (clamped to the buffer) and reveal it. For a lazily-

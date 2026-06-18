@@ -44,6 +44,7 @@ import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import { Workbench, type BottomDock } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
+import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
@@ -620,12 +621,34 @@ export class AppWindow {
     return terminal;
   }
 
+  // Run a `package.json` script in a new terminal tab via the detected package
+  // manager. The shell runs `<pm> run <name>` then execs a login shell, so the
+  // tab stays open on the script's output (and ready to re-run) instead of
+  // closing the moment the script exits.
+  private runScript(name: string): void {
+    const cwd = this.workbench.cwd;
+    const pm = detectPackageManager(cwd);
+    const shell = process.env.SHELL || '/bin/bash';
+    const run = `${pm} run ${name}`;
+    const built = this.createTerminalTab(cwd, {
+      command: [shell, '-l', '-c', `${run}; exec ${shell} -l`],
+      title: run,
+    });
+    const child = this.workbench.center.add(built.widget, { title: built.title });
+    built.onAttached?.(child);
+    this.terminals.get(built.widget)!.focus();
+  }
+
   // Construct + wire a terminal tab WITHOUT attaching it to a panel. Shared by
-  // openTerminal and session restore (a restored terminal is a fresh shell in cwd).
-  private createTerminalTab(cwd: string): RestoredChild {
+  // openTerminal, the script runner, and session restore (a restored terminal is
+  // a fresh shell in cwd). `command`/`title` let a caller run something other than
+  // a login shell (e.g. a package script).
+  private createTerminalTab(cwd: string, options: { command?: string[]; title?: string } = {}): RestoredChild {
     let child: PanelChild | null = null;
     const terminal = new Terminal({
       cwd,
+      command: options.command,
+      title: options.title,
       // The shell exiting (`exit`/Ctrl-D) closes its tab.
       onExit: () => child?.close(),
     });
@@ -2066,6 +2089,10 @@ export class AppWindow {
   private registerTerminalCommands() {
     quilx.commands.add('#AppWindow', {
       'terminal:new': () => this.openTerminal(),
+      'scripts:run': {
+        didDispatch: () => openScriptRunner(this.overlay, this.workbench.cwd, (name) => this.runScript(name)),
+        description: 'Run a package.json script in a terminal',
+      },
       'agent:new': () => this.openAgent(),
       // Pick an existing worktree to launch the agent in (its workbench is rooted
       // there). New worktrees are created by the agent itself, then detected live.

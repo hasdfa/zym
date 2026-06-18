@@ -32,7 +32,7 @@ export const SESSION_VERSION = 1;
 
 /** One tab's restorable state — a discriminated union over the tab kinds. */
 export type TabState =
-  | { kind: 'file'; path: string; cursor?: [number, number] }
+  | { kind: 'file'; path: string; cursor?: [number, number]; scroll?: number; dirty?: boolean }
   | { kind: 'terminal'; cwd: string }
   | { kind: 'agent'; command: string[]; cwd: string; prompt?: string; sessionId?: string };
 
@@ -77,6 +77,8 @@ export interface SessionState {
   activeWorkspace: number;
   /** Window-level, shared across workspaces. */
   docks?: { notificationLog: boolean; leftSplit?: number };
+  /** Window geometry, restored with the session. */
+  window?: { width: number; height: number; maximized: boolean };
 }
 
 // --- Serialization seams -----------------------------------------------------
@@ -192,6 +194,46 @@ export class SessionManager {
   /** Absolute path of the file backing `state`. */
   pathFor(state: SessionState): string {
     return Path.join(this.stateDir, this.fileName(state.name, this.primaryRoot(state)));
+  }
+
+  // --- Unsaved-buffer cache --------------------------------------------------
+  //
+  // A per-session directory beside the json (<file>.buffers/<sha1(path)>) holding
+  // the *unsaved* contents of modified editors, so a restore can bring back edits
+  // that were never written to disk. Keyed by sha1 of the absolute path.
+
+  private bufferDir(state: SessionState): string {
+    return this.pathFor(state).replace(/\.json$/, '.buffers');
+  }
+  private bufferName(path: string): string {
+    return createHash('sha1').update(path).digest('hex');
+  }
+
+  /** Persist the unsaved contents of `entries`; drops any cached buffer whose path
+   *  isn't listed (no longer modified). Best-effort; never throws. */
+  writeBuffers(state: SessionState, entries: { path: string; text: string }[]): void {
+    const dir = this.bufferDir(state);
+    try {
+      if (entries.length === 0) {
+        Fs.rmSync(dir, { recursive: true, force: true });
+        return;
+      }
+      Fs.mkdirSync(dir, { recursive: true });
+      const keep = new Set(entries.map((e) => this.bufferName(e.path)));
+      for (const name of Fs.readdirSync(dir)) if (!keep.has(name)) Fs.rmSync(Path.join(dir, name), { force: true });
+      for (const e of entries) Fs.writeFileSync(Path.join(dir, this.bufferName(e.path)), e.text);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** The cached unsaved content for `path` in `state`'s session, or null. */
+  readBuffer(state: SessionState, path: string): string | null {
+    try {
+      return Fs.readFileSync(Path.join(this.bufferDir(state), this.bufferName(path)), 'utf8');
+    } catch {
+      return null;
+    }
   }
 
   /** Absolute path of the (unnamed) autosave session for a given root. */

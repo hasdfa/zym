@@ -181,6 +181,14 @@ export class Document {
     this.model.setModified(false);
   }
 
+  /** Restore *unsaved* content on session restore: replace the buffer like
+   *  `setText`, but mark it modified (the edits were never written to disk, so the
+   *  exit prompt must still protect them). */
+  restoreUnsaved(text: string): void {
+    this.setText(text);
+    this.model.setModified(true);
+  }
+
   isModified(): boolean {
     return this.model.getModified();
   }

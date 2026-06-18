@@ -108,6 +108,12 @@ addStyles(`
   #PickerRow {
     padding: 0.5em 1em;
   }
+  /* When a leading prompt slot is present (a promptIcon / fetch spinner), the
+     entry text is inset to clear it. Inset the match rows by the same amount so a
+     row's text lines up under the typed query rather than under the icon. */
+  #Picker.has-prompt #PickerRow {
+    padding-left: ${PROMPT_INSET + PROMPT_SLOT + PROMPT_GAP}px;
+  }
   /* Two-column rows (e.g. the file picker): filename on the left, its directory
      right-aligned and muted. Highlights still show through the dimming. */
   #PickerRow > .picker-detail {
@@ -456,6 +462,9 @@ export function openPicker(options: PickerOptions): PickerHandle {
   panel.setHalign(Gtk.Align.CENTER);
   panel.setValign(Gtk.Align.START);
   panel.setMarginTop(48);
+  // Mirror the entry's `has-prompt` onto the card so the rows inset to align with
+  // the (icon-offset) entry text — see the `#Picker.has-prompt #PickerRow` rule.
+  if (entry.hasCssClass('has-prompt')) panel.addCssClass('has-prompt');
   panel.append(entryHost);
   if (options.preview) {
     // Horizontal split: the result list keeps a fixed width, the preview pane

@@ -215,9 +215,11 @@ Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
 - **Missing files** on restore → skip the tab, aggregate into one notification
   ("N files no longer exist"). Never block the restore.
 - **Cursor out of range** (file shrank on disk) → clamp to the buffer's bounds.
-- **Unsaved buffer *contents*** are *not* persisted in the MVP — only path +
-  cursor. The exit prompt is the data-loss guard. Persisting actual unsaved text
-  (a buffer cache keyed off the session) is a noted future enhancement.
+- **Unsaved buffer *contents*** are now persisted: a per-session buffer cache
+  (`<sessionfile>.buffers/<sha1(path)>`, `SessionManager.writeBuffers`/`readBuffer`)
+  stores modified editors' text on each save; restore reopens dirty tabs from the
+  cache and re-marks them modified (`Document.restoreUnsaved`). Path + cursor +
+  scroll are stored regardless; the exit prompt remains the guard for unwritten work.
 - **Agents** are recorded as their own workspaces (one `WorkspaceState` per agent
   workbench, marked by an `agent` field — its relaunch identity from
   `AgentTerminal.serialize`) after the primary (user) workspace. On **restore** each
@@ -225,10 +227,10 @@ Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
   restores its worktree (see agents.md) and does *not* re-run the original launch
   prompt. Relaunch is fine here because restore is explicit (or the opt-in
   `restoreOnLaunch`), not a surprise. An agent with no session id is relaunched
-  fresh with its prompt; one already open is skipped (no duplicate). **Deferred:**
-  restoring each agent workbench's work-area file tabs (the layout is recorded for
-  forward-compat but not yet rebuilt — the pinned-agent center makes a generic
-  layout-restore awkward).
+  fresh with its prompt; one already open is skipped (no duplicate). After relaunch,
+  the agent's work-area **files are reopened** from its saved layout (rooted in that
+  workbench); the work-area *split geometry* isn't preserved (the pinned-agent center
+  doesn't fit the generic `restoreLayout` path, so files reopen as a flat strip).
 - **Stale/corrupt session file** → warn and ignore (like the config loader); never
   throw, never block startup.
 - **Empty/placeholder tabs** serialize to `null` and are dropped.
@@ -246,10 +248,17 @@ Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
       `session:save` commands + keymap; launch-arg suppresses restore.
       (`SessionController`, wired from `AppWindow`; `space s s` / `space s r`.)
 - [x] Cursor save/restore (with clamping) and missing-file skip notifications.
+- [x] Scroll save/restore (top visible row → top on restore, deferred via the
+      lazy-open pendingScroll path).
+- [x] Window geometry (width/height/maximized) in the session; applied pre-`present`
+      at launch (GTK4 ignores resize once mapped).
+- [x] Unsaved-buffer cache (`<sessionfile>.buffers/`): modified editors' text saved
+      on each save; restore reopens dirty tabs from cache, re-marked modified.
 - [x] Agents in sessions — each agent workbench serialized as a `WorkspaceState`
       (with an `agent` relaunch identity); relaunched resumed (worktree restored) on
       explicit `session:restore` / `restoreOnLaunch`, deduped against live agents.
-      Work-area file-tab layout deferred.
+      Work-area files are reopened from the saved layout (split geometry not
+      preserved).
 - [ ] Multi-root sessions + `session:open` picker — co-design with agent worktrees.
 
 ## Settled
@@ -270,8 +279,8 @@ The four prior open questions, now decided:
   editors do.
 - **Restore semantics** → `session:restore` **replaces** the current workbench
   ("reopen my session"), consistent with the workspace-swap model.
-- **Unsaved buffer text** → **not persisted** in the MVP; path + cursor + the exit
-  prompt is the guard. A buffer cache is a noted future enhancement.
+- **Unsaved buffer text** → **persisted** via a per-session buffer cache (restore
+  reopens dirty tabs from it, re-marked modified); the exit prompt still guards.
 
 ## Open questions
 
