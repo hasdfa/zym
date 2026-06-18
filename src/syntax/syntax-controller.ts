@@ -24,7 +24,8 @@ import { indentLevelAt, enclosingTypeMatches, enclosingNodeRange, type NodeRowRa
 import { computeFoldRanges } from './folds.ts';
 import { tagNamesAt, type TagName } from './tags.ts';
 import { isFunctionNodeType, isClassNodeType, STRING_COMMENT_RE, RUN_FOLD_RE } from './nodeTypes.ts';
-import { collectCaptures, extentOf, type RawCapture, type VisibleRange } from './injection.ts';
+import { collectCaptures, type RawCapture, type VisibleRange } from './injection.ts';
+import { rangeGaps, mergeRange, type LineRange } from './paintRegions.ts';
 import { HighlightTags } from './highlightTags.ts';
 import { FoldRenderer, LineNumberRenderer } from './gutterRenderers.ts';
 /** The view↔model projection a SyntaxController folds through (the editor's Document). */
@@ -40,9 +41,11 @@ export interface FoldHost {
 }
 
 const HIGHLIGHT_DEBOUNCE_MS = 60;
-// Repaint after scrolling settles — snappy, and cheap (no reparse, just a
-// re-query over the new visible range).
-const VIEWPORT_DEBOUNCE_MS = 30;
+// Paint newly-revealed lines this often *during* a scroll (a throttle, not a trailing
+// debounce — so a held ctrl-d/ctrl-u keeps up instead of leaving white text until it
+// stops). One frame; the gap painted per tick is bounded by the visible range, and
+// already-painted lines are skipped, so this stays cheap.
+const VIEWPORT_THROTTLE_MS = 16;
 // Highlight this many lines above/below the viewport, so scrolling within the
 // band shows highlighted text immediately while a repaint catches up.
 const VIEWPORT_MARGIN_LINES = 80;
@@ -175,7 +178,7 @@ export class SyntaxController {
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
   private debounceId = 0;
-  private viewportDebounceId = 0;
+  private viewportThrottleId = 0;
   // The vadjustment our scroll-repaint handler is bound to. The ScrolledWindow swaps
   // the view's adjustment when it's parented, so we rebind when it changes (a plain
   // "already connected" guard would pin us to the throwaway default → scroll never
@@ -195,17 +198,12 @@ export class SyntaxController {
   // Set by a fold toggle so the next refresh reparses from scratch (not incrementally
   // from the fold's large structural edit, which leaves drifted node positions).
   private fullReparseNext = false;
-  // The line span our highlight tags currently cover, cleared before the next
-  // paint; null = "unknown, clear the whole buffer". This is the capture *bounding
-  // box*, which can overhang the queried window when a multi-line node (string,
-  // comment, JSX, big block) crosses the edge — so it's used for clearing, NOT for
-  // the scroll-skip guard (those overhang lines only get the one broad tag, not full
-  // token highlighting).
-  private paintedExtent: { fromLine: number; toLine: number } | null = null;
-  // The line window actually re-highlighted by the last paint (the visibleRange ± its
-  // margin). Every line here received its full set of token captures, so this — not the
-  // overhang-prone paintedExtent — is what the scroll-skip guard checks against.
-  private paintedWindow: { fromLine: number; toLine: number } | null = null;
+  // The line ranges whose token highlighting is currently applied and valid — a PERSISTENT
+  // cache that grows as the view scrolls (we never clear it on scroll: the text didn't
+  // change, so the tags stay correct). Sorted, non-overlapping, inclusive `[from, to]`.
+  // A scroll only paints the parts of the new visible range not already in here; an edit
+  // (or fold / new document) resets it, since a reparse can change tokens anywhere.
+  private paintedRanges: LineRange[] = [];
   // Whether folding is active at all (chevron gutter + the fold projection). When
   // off (e.g. peek views) there is no folding of any method.
   private readonly foldingEnabled: boolean;
@@ -313,7 +311,7 @@ export class SyntaxController {
     if (this.disposed) return;
     this.disposed = true;
     if (this.debounceId) { GLib.sourceRemove(this.debounceId); this.debounceId = 0; }
-    if (this.viewportDebounceId) { GLib.sourceRemove(this.viewportDebounceId); this.viewportDebounceId = 0; }
+    if (this.viewportThrottleId) { GLib.sourceRemove(this.viewportThrottleId); this.viewportThrottleId = 0; }
     for (const { target, event, cb } of this.connections) {
       try { target.off(event, cb); } catch { /* target already finalized — nothing to detach */ }
     }
@@ -393,10 +391,8 @@ export class SyntaxController {
       this.tree.delete();
       this.tree = null;
     }
-    // New document: forget the painted span so the next paint clears the whole
-    // buffer (the previous file's tags), not a stale line range.
-    this.paintedExtent = null;
-    this.paintedWindow = null;
+    // New document: forget the persistent highlight cache (it described the previous file).
+    this.paintedRanges = [];
     // Drop guest parsers from the previous document's injections.
     for (const parser of this.injectionParsers.values()) parser.delete();
     this.injectionParsers.clear();
@@ -521,27 +517,51 @@ export class SyntaxController {
   }
 
   /**
-   * Re-highlight the visible range (base grammar + injected layers) from the
-   * current tree — NO reparse. Used after an edit and on scroll. Captures are
-   * limited to the viewport (± a margin) when the view is realized, so large
-   * files only pay for what's on screen; off-screen, the whole buffer is done
-   * (small files / headless). Clears the previously-painted line span first so a
-   * scroll can't leave stale tags behind.
+   * Re-highlight after a reparse (edit / fold / new content). A reparse can change tokens
+   * anywhere, so this drops ALL of our highlight tags and repaints the viewport fresh, then
+   * RESETS the persistent cache (`paintedRanges`) to that viewport — scrolling re-accumulates
+   * the rest. Bounded to the viewport (± a margin) when the view is realized, so large files
+   * only pay for what's on screen; off-screen, the whole buffer is done (small files / headless).
    */
   private repaint(): void {
     if (!this.grammar || !this.tree) return;
     this.lineTextCache.clear();
+    const buffer = this.buffer as any;
+    // Clear only OUR highlight tags (the fold `invisible` tag is separate and untouched).
+    this.highlight.clear(buffer, buffer.getStartIter(), buffer.getEndIter());
     const range = this.visibleRange() ?? this.initialPaintRange();
+    this.paintRange(range);
+    this.paintedRanges = range
+      ? [[range.startPoint.row, range.endPoint.row]]
+      : [[0, buffer.getLineCount() - 1]];
+  }
+
+  /** Paint token highlighting for `range` (base grammar + injected layers) from the current
+   *  tree, WITHOUT clearing — additive, so it never disturbs already-painted neighbours. A
+   *  null range covers the whole buffer (headless / pre-layout). */
+  private paintRange(range: VisibleRange | null): void {
+    if (!this.grammar || !this.tree) return;
     const captures: RawCapture[] = [];
     collectCaptures(this.grammar, this.tree.rootNode, this.cachedText, captures, 0, range, (g) => this.injectionParser(g));
-    this.clearPainted();
     this.highlight.paint(this.buffer, captures, (row, col) => this.iterAt(row, col));
-    this.paintedExtent = extentOf(captures);
-    // The fully-highlighted window = exactly the queried range (every token capture in it
-    // was applied). A null range means the whole buffer was painted (headless / pre-layout).
-    this.paintedWindow = range
-      ? { fromLine: range.startPoint.row, toLine: range.endPoint.row }
-      : { fromLine: 0, toLine: (this.buffer as any).getLineCount() - 1 };
+  }
+
+  /** On scroll (no reparse): paint just the parts of the visible range not already in the
+   *  persistent cache, then record the visible range. Never clears — existing tags stay valid
+   *  because the text didn't change — so previously-highlighted regions persist across scrolls
+   *  (scroll down then back up costs nothing) and re-painting only touches freshly-revealed lines. */
+  private paintNewlyVisible(): void {
+    if (!this.grammar || !this.tree) return;
+    const range = this.visibleRange();
+    if (!range) return; // unrealized / headless — only the edit path (whole buffer) runs there
+    const top = range.startPoint.row;
+    const bottom = range.endPoint.row;
+    const gaps = rangeGaps(this.paintedRanges, top, bottom);
+    if (gaps.length === 0) return; // visible rows already highlighted — nothing to do
+    this.lineTextCache.clear();
+    for (const [a, b] of gaps) this.paintRange(this.lineRange(a, b));
+    this.paintedRanges = mergeRange(this.paintedRanges, top, bottom);
+    (this.view as any).queueDraw();
   }
 
   /** Install the gutter once the view is sized (its line metrics validated). Deferred off
@@ -616,41 +636,18 @@ export class SyntaxController {
     }
   }
 
-  /** Schedule a viewport-only repaint after scrolling settles (no reparse). */
+  /** Paint newly-revealed lines while scrolling. A THROTTLE (one pass per frame), not a
+   *  trailing debounce — so a held ctrl-d/ctrl-u stays highlighted as it goes instead of
+   *  showing white until it stops. `paintNewlyVisible` skips already-painted lines, so a
+   *  pass that reveals nothing new is nearly free. */
   private scheduleViewportRepaint(): void {
     if (this.disposed || !this.grammar) return;
-    if (this.viewportDebounceId) GLib.sourceRemove(this.viewportDebounceId);
-    this.viewportDebounceId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, VIEWPORT_DEBOUNCE_MS, () => {
-      this.viewportDebounceId = 0;
-      // Skip the tree-sitter re-query + re-tag when the visible rows are already inside
-      // the painted band (a small scroll within the ±margin). Repainting an already-
-      // highlighted region is the main scroll-stop hitch; the highlight tags are still
-      // applied over [fromLine, toLine], so the visible text stays highlighted.
-      if (!this.visibleWithinPainted()) {
-        this.repaint();
-        (this.view as any).queueDraw();
-      }
+    if (this.viewportThrottleId) return; // a pass is already pending this interval
+    this.viewportThrottleId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, VIEWPORT_THROTTLE_MS, () => {
+      this.viewportThrottleId = 0;
+      this.paintNewlyVisible();
       return false;
     });
-  }
-
-  /** Whether the actual visible rows (no margin) sit within the fully-highlighted window
-   *  of the last paint — then a scroll repaint is redundant. Checks `paintedWindow` (the
-   *  region every token capture covered), NOT `paintedExtent` (which can overhang via a
-   *  multi-line node whose far lines only got the one broad tag). False when unknown. */
-  private visibleWithinPainted(): boolean {
-    if (!this.paintedWindow) return false;
-    const view = this.view as any;
-    if (!view.getRealized()) return false;
-    const rect = view.getVisibleRect();
-    if (!rect || !rect.height) return false;
-    const lineAtY = (y: number): number => {
-      const r = view.getLineAtY(y);
-      return asIter(Array.isArray(r) ? r[0] : r).getLine();
-    };
-    const top = lineAtY(rect.y);
-    const bottom = lineAtY(rect.y + rect.height);
-    return top >= this.paintedWindow.fromLine && bottom <= this.paintedWindow.toLine;
   }
 
   /** The visible buffer range (± a margin), or null (whole buffer) when the view
@@ -668,10 +665,19 @@ export class SyntaxController {
     const last = buffer.getLineCount() - 1;
     const top = Math.max(0, lineAtY(rect.y) - VIEWPORT_MARGIN_LINES);
     const bottom = Math.min(last, lineAtY(rect.y + rect.height) + VIEWPORT_MARGIN_LINES);
-    const startIter = asIter(buffer.getIterAtLine(top));
-    const endIter = bottom >= last ? buffer.getEndIter() : asIter(buffer.getIterAtLine(bottom + 1));
+    return this.lineRange(top, bottom);
+  }
+
+  /** A `VisibleRange` spanning view lines `[from, to]` (clamped), for `collectCaptures`. */
+  private lineRange(from: number, to: number): VisibleRange {
+    const buffer = this.buffer as any;
+    const last = buffer.getLineCount() - 1;
+    const f = Math.max(0, Math.min(from, last));
+    const t = Math.max(f, Math.min(to, last));
+    const startIter = asIter(buffer.getIterAtLine(f));
+    const endIter = t >= last ? buffer.getEndIter() : asIter(buffer.getIterAtLine(t + 1));
     return {
-      startPoint: { row: top, column: 0 },
+      startPoint: { row: f, column: 0 },
       endPoint: { row: endIter.getLine(), column: endIter.getLineOffset() },
       startIndex: startIter.getOffset(),
       endIndex: endIter.getOffset(),
@@ -683,36 +689,8 @@ export class SyntaxController {
    *  the file's head — so open is O(viewport) not O(file). A genuinely unrealized view
    *  (headless / tests) returns null so the whole buffer is still painted. */
   private initialPaintRange(): VisibleRange | null {
-    const view = this.view as any;
-    if (!view.getRealized()) return null;
-    const buffer = this.buffer as any;
-    const last = buffer.getLineCount() - 1;
-    const bottom = Math.min(last, INITIAL_PAINT_LINES);
-    const endIter = bottom >= last ? buffer.getEndIter() : asIter(buffer.getIterAtLine(bottom + 1));
-    return {
-      startPoint: { row: 0, column: 0 },
-      endPoint: { row: endIter.getLine(), column: endIter.getLineOffset() },
-      startIndex: 0,
-      endIndex: endIter.getOffset(),
-    };
-  }
-
-  /** Remove all highlight tags over the previously-painted line span (whole
-   *  buffer when unknown). Line-based so it's immune to UTF-16/codepoint skew. */
-  private clearPainted(): void {
-    const buffer = this.buffer as any;
-    let from: any, to: any;
-    if (this.paintedExtent === null) {
-      from = buffer.getStartIter();
-      to = buffer.getEndIter();
-    } else {
-      const last = buffer.getLineCount() - 1;
-      from = asIter(buffer.getIterAtLine(Math.max(0, Math.min(this.paintedExtent.fromLine, last))));
-      to = this.paintedExtent.toLine >= last
-        ? buffer.getEndIter()
-        : asIter(buffer.getIterAtLine(this.paintedExtent.toLine + 1));
-    }
-    this.highlight.clear(buffer, from, to);
+    if (!(this.view as any).getRealized()) return null;
+    return this.lineRange(0, INITIAL_PAINT_LINES);
   }
 
   /** The syntactic indent level for `row` (enclosing fold-block depth), or null

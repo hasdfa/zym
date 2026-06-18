@@ -323,19 +323,23 @@ once or more *per visible line*. The expensive draw paths, trimmed:
 - **Line-number gutter** (`SyntaxController.lineNumberWidth`) called `getLineCount()`
   (an FFI) once *per visible line per paint* for a per-frame constant — now cached,
   refreshed by `primeLineNumbers` on edits.
-- **Viewport re-highlight** (`scheduleViewportRepaint`) re-queried tree-sitter and
-  re-applied tags on *every* scroll-settle; now skipped when the visible rows are
-  already inside the painted band (`visibleWithinPainted`), so a scroll within the
-  ±80-line margin costs nothing. The band must be `paintedWindow` (the queried
-  `visibleRange` — the region every token capture was applied to), **not**
-  `paintedExtent` (the capture *bounding box*, kept for `clearPainted`): a multi-line
-  node — a long block comment / string / JSX — that overhangs the window stretches the
-  bbox far past the fully-highlighted region, so guarding on it let the skip fire over
-  lines that only had the one broad tag → **stale/missing highlighting after scrolling
-  back to them** (the bug; fixed by tracking `paintedWindow`. `paintedWindow ⊆
-  paintedExtent` always, so the guard is strictly more conservative — it can never skip
-  a needed repaint). Confirmed with a probe: a 1000-line block comment produced 136
-  over-skips under the old guard, 0 under the new.
+- **Viewport re-highlight is now persistent + incremental + throttled** (replaced the
+  earlier clear-and-repaint-the-band model). Highlighting is a growing cache of painted
+  line ranges (`paintedRanges`, an interval set in `paintRegions.ts`): a scroll paints only
+  the parts of the new visible range NOT already painted (`rangeGaps`) and **never clears**
+  — the text didn't change, so the tags stay valid — so scrolling down then back up costs
+  nothing (highlights persist), fixing two UX bugs: (a) a held `ctrl-d`/`ctrl-u` used to
+  outrun a *trailing debounce* and leave white text — now a **throttle** (`VIEWPORT_THROTTLE_MS`
+  = 16ms, one pass/frame) paints freshly-revealed lines as they appear; (b) the old band
+  model cleared everything outside the viewport, so scrolling back up showed previously-
+  highlighted regions briefly blank. An edit/fold/new-document resets the cache (a reparse can
+  change tokens anywhere, so `repaint()` clears all highlight tags + repaints the viewport +
+  resets `paintedRanges`; scrolling re-accumulates). Verified with a probe over a 3k-line file:
+  scrolling down grows the cache (paints ~26 new lines/tick); scrolling back up is `gaps=0` /
+  zero re-paint. *Open follow-up:* the cache is unbounded — scrolling through an entire huge
+  file accumulates tags for all of it; a far-region eviction cap would bound it.
+  (This also subsumed the earlier `paintedWindow`-vs-`paintedExtent` overhang guard — there's
+  no clearing on scroll now, so the overhang bug can't recur.)
 
 **Pass 2 (measured first).** An in-app profiler (temporary `value-changed`-driven
 synthetic scroll over an 8k-line file, since headless can't kinetic-scroll) timed the
