@@ -1,5 +1,5 @@
 /*
- * DecorationController — the editor's generic inline decoration surface: styled
+ * TextDecorations — the editor's generic inline decoration surface: styled
  * spans painted over buffer ranges with GtkTextTags, grouped into named,
  * clearable *layers*.
  *
@@ -16,17 +16,19 @@
  * raised to the top of the tag-table priority so a decoration sits above the
  * syntax colors.
  *
- * Two things deliberately live elsewhere: DIAGNOSTICS render their inline
- * squiggles as custom-drawn Cairo waves (`UnderlineOverlay`) plus gutter
- * source-marks (`lsp/diagnostics/DiagnosticsView`), not tags; and GUTTER icons /
- * inline VIRTUAL TEXT (inlay hints, inline-diff ghosts) want GtkSource
- * source-marks and `GtkSourceAnnotations` (5.18+; we're on 5.20), which land with
- * their consumers. This surface is text-tag background spans only.
+ * Two surfaces compose here: tag background-spans (the layers below) AND drawn
+ * diagnostic squiggles — an internal `UnderlineOverlay` (Cairo waves), pushed via
+ * `setUnderlines`, so a producer never holds the overlay directly. What still lives
+ * with its consumer: GUTTER icons and trailing VIRTUAL TEXT (inlay hints, error
+ * lens) — gutter source-marks + `GtkSourceAnnotations` (see `VirtualText`).
  */
 import { Gdk, Gtk, type SourceBuffer } from '../../gi.ts';
 import { Range, type RangeLike } from '../../text/Range.ts';
 import { theme } from '../../theme/theme.ts';
 import type { EditorModel } from './EditorModel.ts';
+import { UnderlineOverlay, type Underline } from './UnderlineOverlay.ts';
+
+export type { Underline };
 
 /** The built-in decoration styles. Producers re-sync layers using these keys. */
 export type DecorationStyle =
@@ -66,14 +68,31 @@ function parseColor(hex: string): InstanceType<typeof Gdk.RGBA> {
   return rgba;
 }
 
-export class DecorationController {
+export class TextDecorations {
   private readonly editor: EditorModel;
   private readonly buffer: SourceBuffer;
   private readonly layers = new Map<string, DecorationLayer>();
+  // Drawn diagnostic squiggles live here too — an internal Cairo overlay, so producers
+  // push underlines through this one surface rather than holding the overlay directly.
+  private readonly underlines: UnderlineOverlay;
 
   constructor(editor: EditorModel) {
     this.editor = editor;
     this.buffer = editor.buffer;
+    this.underlines = new UnderlineOverlay(editor.view, editor);
+  }
+
+  /** The squiggle overlay's widget — the editor adds it to its overlay layer once. */
+  get underlineWidget(): InstanceType<typeof Gtk.DrawingArea> {
+    return this.underlines.widget;
+  }
+  /** Replace the full set of drawn underlines (diagnostic squiggles). */
+  setUnderlines(items: Underline[]): void {
+    this.underlines.setUnderlines(items);
+  }
+  /** Clear all drawn underlines. */
+  clearUnderlines(): void {
+    this.underlines.clear();
   }
 
   /** Get (or create) the decoration layer `name`. One layer per producer. */

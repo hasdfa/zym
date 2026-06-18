@@ -5,7 +5,7 @@
  * `gtk_widget_snapshot_child: assertion '_gtk_widget_get_parent (child) == widget'
  * failed` (a dangling overlay child during snapshot).
  *
- * It drives the real InlineBlockController: place several blocks in a realized
+ * It drives the real BlockDecorations: place several blocks in a realized
  * view, then remove some and force a redraw (scroll + queue_draw) — the add/remove
  * churn the image preview does. Run and watch stderr:
  *
@@ -14,7 +14,7 @@
  * Clean run prints nothing.
  */
 import { Gtk, Gdk, Adw, GtkSource, GLib, Gio, startLoop } from '../gi.ts';
-import { InlineBlockController, type InlineBlockHandle } from '../ui/TextEditor/InlineBlockController.ts';
+import { BlockDecorations, type BlockDecorationHandle } from '../ui/TextEditor/BlockDecorations.ts';
 
 const SAMPLE = Array.from({ length: 60 }, (_, i) => `line ${String(i + 1).padStart(2, ' ')}  — text to scroll past`).join('\n');
 const LINES = [4, 8, 12, 16, 20]; // anchor lines for the blocks
@@ -35,7 +35,7 @@ app.on('activate', () => {
     const view: any = new GtkSource.View({ buffer });
     view.setMonospace(true);
     buffer.setText(SAMPLE, -1);
-    const blocks = new InlineBlockController(view);
+    const blocks = new BlockDecorations(view);
 
     const scrolled = new Gtk.ScrolledWindow();
     scrolled.setChild(view);
@@ -45,7 +45,7 @@ app.on('activate', () => {
     window.on('close-request', () => { loop.quit(); app.quit(); return false; });
     window.present();
 
-    const handles: InlineBlockHandle[] = LINES.map((line) => blocks.add({ line, widget: makeCard(`block @${line}`), placement: 'below' }));
+    const handles: BlockDecorationHandle[] = LINES.map((line) => blocks.add({ line, widget: makeCard(`block @${line}`), placement: 'below' }));
 
     // After the view is realized + blocks placed: remove half, force redraws, scroll.
     GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {

@@ -23,9 +23,9 @@ import { Range } from '../../text/Range.ts';
 import { lspToRange } from '../position.ts';
 import { isLineFolded } from '../../syntax/syntax-controller.ts';
 import { severityStyle } from './severity.ts';
-import { AnnotationController, type AnnotationStyleName } from '../../ui/TextEditor/AnnotationController.ts';
+import { VirtualText, type AnnotationStyleName } from '../../ui/TextEditor/VirtualText.ts';
 import type { EditorModel } from '../../ui/TextEditor/EditorModel.ts';
-import type { UnderlineOverlay, Underline } from '../../ui/TextEditor/UnderlineOverlay.ts';
+import type { TextDecorations, Underline } from '../../ui/TextEditor/TextDecorations.ts';
 
 /** Map an LSP severity to an annotation style for error-lens trailing text. */
 function annotationStyle(severity: number): AnnotationStyleName {
@@ -38,31 +38,31 @@ export class DiagnosticsView {
   private readonly view: SourceView;
   private readonly model: EditorModel;
   private readonly getPath: () => string | null;
-  private readonly underlines: UnderlineOverlay;
+  private readonly decorations: TextDecorations;
   private readonly renderer: any;
   // line → most-severe DiagnosticSeverity on that line (lower number = worse).
   private readonly severityByLine = new Map<number, number>();
   // Error lens: native end-of-line trailing message per line (GtkSourceAnnotations).
-  private readonly annotations: AnnotationController;
+  private readonly annotations: VirtualText;
   private readonly subscriptions = new CompositeDisposable();
 
   constructor(
     view: SourceView,
-    underlines: UnderlineOverlay,
+    decorations: TextDecorations,
     model: EditorModel,
     getPath: () => string | null,
   ) {
     this.view = view;
     this.model = model;
     this.getPath = getPath;
-    this.underlines = underlines;
+    this.decorations = decorations;
 
     this.renderer = new DiagnosticGutterRenderer();
     this.renderer.severityByLine = this.severityByLine;
     this.renderer.buffer = (view as any).getBuffer();
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
 
-    this.annotations = new AnnotationController(view);
+    this.annotations = new VirtualText(view);
 
     this.subscriptions.add(
       quilx.lsp.diagnostics.onDidUpdate((path) => {
@@ -105,7 +105,7 @@ export class DiagnosticsView {
         }
       }
     }
-    this.underlines.setUnderlines(underlines);
+    this.decorations.setUnderlines(underlines);
     this.renderer.queueDraw();
 
     // Error lens: the worst message per line, trailing the line (`+N` when several).
@@ -123,7 +123,7 @@ export class DiagnosticsView {
   }
 
   dispose(): void {
-    this.underlines.clear();
+    this.decorations.clearUnderlines();
     this.severityByLine.clear();
     this.annotations.dispose();
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.renderer);

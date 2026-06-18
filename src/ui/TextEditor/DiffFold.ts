@@ -4,7 +4,7 @@
  * SourceView, it hides each fold's body with an `invisible` GtkTextTag, draws a
  * ▸/▾ chevron in the left gutter on the anchor line, and — while collapsed —
  * renders the `⋯ N unchanged lines` placeholder as an *inline block* (an overlay
- * widget with zero buffer footprint, via InlineBlockController), so the
+ * widget with zero buffer footprint, via BlockDecorations), so the
  * placeholder is no longer editable/selectable buffer text. Regions start folded.
  *
  * It is its own fold mechanism, independent of SyntaxController's tree-sitter code
@@ -22,7 +22,7 @@ import { Gtk, GtkSource, registerClass, type SourceBuffer, type SourceView } fro
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
 import type { DiffFoldInfo } from '../../util/DiffModel.ts';
-import type { InlineBlockController, InlineBlockHandle } from './InlineBlockController.ts';
+import type { BlockDecorations, BlockDecorationHandle } from './BlockDecorations.ts';
 
 const CHEVRON_FOLDED = '▸';
 const CHEVRON_OPEN = '▾';
@@ -42,7 +42,7 @@ addStyles(`
 interface Region extends DiffFoldInfo {
   index: number;
   folded: boolean;
-  block: InlineBlockHandle | null;
+  block: BlockDecorationHandle | null;
 }
 
 class DiffFoldRenderer extends GtkSource.GutterRendererText {
@@ -70,7 +70,7 @@ registerClass(DiffFoldRenderer);
 export class DiffFold {
   private readonly view: SourceView;
   private readonly buffer: SourceBuffer;
-  private readonly inlineBlocks: InlineBlockController;
+  private readonly inlineBlocks: BlockDecorations;
   private readonly tag: any;
   private readonly regions: Region[];
   private readonly byAnchor = new Map<number, Region>();
@@ -84,7 +84,7 @@ export class DiffFold {
   constructor(
     view: SourceView,
     folds: readonly DiffFoldInfo[],
-    inlineBlocks: InlineBlockController,
+    inlineBlocks: BlockDecorations,
     onActivate: (index: number) => void,
   ) {
     this.view = view;

@@ -33,7 +33,7 @@ export const colorPreviewPlugin: Plugin = {
       const layer = editor.decorations.layer(LAYER);
       let timer = 0;
 
-      // Re-sync the whole layer from the current buffer (the DecorationController
+      // Re-sync the whole layer from the current buffer (the TextDecorations
       // pattern: producers recompute their full set, tags track edits in between).
       const refresh = (): void => {
         layer.clear();

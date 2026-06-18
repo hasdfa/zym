@@ -13,13 +13,13 @@
  */
 import { GLib, type SourceView } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
-import { AnnotationController } from './AnnotationController.ts';
+import { VirtualText } from './VirtualText.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';
 
 const DEBOUNCE_MS = 400;
 
 export class InlayHintController {
-  private readonly annotations: AnnotationController;
+  private readonly annotations: VirtualText;
   private readonly getDoc: () => LspDocument | null;
   private timer = 0;
   private seq = 0; // drops stale async responses
@@ -33,7 +33,7 @@ export class InlayHintController {
   private readonly toViewLine: (line: number) => number;
 
   constructor(view: SourceView, getDoc: () => LspDocument | null, toViewLine?: (line: number) => number) {
-    this.annotations = new AnnotationController(view);
+    this.annotations = new VirtualText(view);
     this.getDoc = getDoc;
     this.toViewLine = toViewLine ?? ((line) => line);
   }

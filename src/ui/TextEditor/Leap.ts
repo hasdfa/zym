@@ -1,5 +1,5 @@
 /*
- * LeapController — the host side of the vim `g s` / `g S` leap motion
+ * Leap — the host side of the vim `g s` / `g S` leap motion
  * (leap.nvim-style labeled jump).
  *
  * The vim layer's `Leap` motion is fully host-driven (see motion.js): it calls
@@ -65,7 +65,7 @@ export interface LeapRequest {
   onCancel(): void;
 }
 
-export interface LeapControllerOptions {
+export interface LeapOptions {
   editor: EditorModel;
   /** Overlay layer the mark widgets live on (positioned in widget coords). */
   labelLayer: InstanceType<typeof Gtk.Fixed>;
@@ -73,7 +73,7 @@ export interface LeapControllerOptions {
   readChar(): Promise<string | null>;
 }
 
-export class LeapController {
+export class Leap {
   private readonly editor: EditorModel;
   private readonly labelLayer: InstanceType<typeof Gtk.Fixed>;
   private readonly readChar: () => Promise<string | null>;
@@ -82,7 +82,7 @@ export class LeapController {
   private dimTag: InstanceType<typeof Gtk.TextTag> | null = null;
   private active = false;
 
-  constructor(options: LeapControllerOptions) {
+  constructor(options: LeapOptions) {
     this.editor = options.editor;
     this.labelLayer = options.labelLayer;
     this.readChar = options.readChar;

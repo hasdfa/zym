@@ -1419,7 +1419,7 @@ class SearchBackwards extends SearchBase {
 
 // Leap (leap.nvim-style two-character labeled jump), as a motion so it composes
 // with operators (`d g s`), visual mode, and dot-repeat. Like SearchBase, quilx
-// drives the host (TextEditor's LeapController) through the multi-char
+// drives the host (TextEditor's Leap) through the multi-char
 // `focusInput` bridge (VimState.setLeapInput): the host reads the 2 search chars,
 // labels the matches, reads the chosen label, and hands back the target's *start*
 // position (or null on cancel / no match). An exclusive motion, like search.

@@ -8,7 +8,7 @@
  * (FlashManager and the visual-mode parts of CursorStyleManager are real now).
  */
 import type VimState from './vim-state.js';
-import { DecorationController } from '../DecorationController.ts';
+import { TextDecorations } from '../TextDecorations.ts';
 import { Range } from '../../../text/Range.ts';
 import { Point } from '../../../text/Point.ts';
 import type { Marker } from '../Marker.ts';
@@ -79,11 +79,11 @@ const FLASH_DURATION: Record<string, number> = {
 const DEFAULT_FLASH_DURATION = 250;
 
 export class FlashManager {
-  private readonly decorations: DecorationController;
+  private readonly decorations: TextDecorations;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(vimState: VimState) {
-    this.decorations = new DecorationController(vimState.editor);
+    this.decorations = new TextDecorations(vimState.editor);
     vimState.onDidDestroy(() => this.destroy());
   }
 
@@ -143,7 +143,7 @@ export class ScrollManager {
  * operator restricts itself to). Ported from vim-mode-plus's OccurrenceManager.
  *
  * Adaptations to quilx's primitives:
- *  - Atom's `decorateMarkerLayer` is replaced by a DecorationController layer
+ *  - Atom's `decorateMarkerLayer` is replaced by a TextDecorations layer
  *    re-synced (`renderMarkers`) whenever the marker set changes — quilx markers
  *    move with edits but don't carry their own decoration.
  *  - quilx's `MarkerLayer.findMarkers` only filters by `containsBufferPosition`,
@@ -156,7 +156,7 @@ export class OccurrenceManager {
   private readonly vimState: VimState;
   private readonly emitter = new Emitter();
   private readonly markerLayer: MarkerLayer;
-  private readonly decorations: DecorationController;
+  private readonly decorations: TextDecorations;
   private patterns: RegExp[] = [];
 
   constructor(vimState: VimState) {
@@ -165,7 +165,7 @@ export class OccurrenceManager {
     vimState.onDidDestroy(() => this.destroy());
 
     this.markerLayer = editor.addMarkerLayer();
-    this.decorations = new DecorationController(editor);
+    this.decorations = new TextDecorations(editor);
 
     // All marker create/destroy is driven by reacting to pattern changes.
     this.onDidChangePatterns(({ pattern, occurrenceType }) => {

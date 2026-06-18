@@ -1,5 +1,5 @@
 /*
- * IndentGuideOverlay — faint vertical lines marking each indentation level, drawn
+ * IndentGuides — faint vertical lines marking each indentation level, drawn
  * in the leading whitespace. A transparent `Gtk.DrawingArea` stacked over the text
  * (like UnderlineOverlay), repainted on scroll and edits.
  *
@@ -23,7 +23,7 @@ function asIter(r: any): any {
   return Array.isArray(r) ? r[r.length - 1] : r;
 }
 
-export class IndentGuideOverlay {
+export class IndentGuides {
   readonly widget: InstanceType<typeof Gtk.DrawingArea>;
 
   private readonly view: SourceView;

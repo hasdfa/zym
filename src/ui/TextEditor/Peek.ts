@@ -1,8 +1,8 @@
 /*
- * InlinePeek — a focusable widget shown in a reserved gap below a line, e.g. a
+ * Peek — a focusable widget shown in a reserved gap below a line, e.g. a
  * see-definition peek that inlines a nested editor. Unlike the diff fold
  * placeholder (a non-interactive `add_overlay` child in the text window, see
- * InlineBlockController), the peek must take keyboard focus — so it lives in the
+ * BlockDecorations), the peek must take keyboard focus — so it lives in the
  * editor's sibling `Gtk.Overlay` (the hover/caret layer host), NOT as a descendant
  * of the GtkTextView. A sibling release the outer view's IM on focus, so typing in
  * the peek doesn't leak into the file behind it (see tasks/code-editing/inline-widgets.md).
@@ -21,7 +21,7 @@ import { Gtk, type SourceView } from '../../gi.ts';
 
 const asIter = (res: any): any => (Array.isArray(res) ? res[1] : res);
 
-export interface InlinePeekOptions {
+export interface PeekOptions {
   /** Anchor line (buffer row); the peek sits below it. */
   line: number;
   widget: InstanceType<typeof Gtk.Widget>;
@@ -38,7 +38,7 @@ interface Current {
   onClose?: () => void;
 }
 
-export class InlinePeek {
+export class Peek {
   private readonly view: SourceView;
   private readonly overlay: any;
   private readonly buffer: any;
@@ -59,7 +59,7 @@ export class InlinePeek {
   }
 
   /** Open the peek (replacing any current one). */
-  show(options: InlinePeekOptions): void {
+  show(options: PeekOptions): void {
     this.close();
     this.wireOnce();
 

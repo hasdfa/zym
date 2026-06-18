@@ -37,7 +37,7 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
 - **Buffer-only editor mode** (`TextEditor({ buffer })`) — no file/LSP/minimap,
   `getText`/`setText`. The base for a diff pane.
 - **`editor.decorations`** — clearable tag layers with `added`/`removed` line
-  backgrounds already defined (`DecorationController`).
+  backgrounds already defined (`TextDecorations`).
 - **Scroll/viewport API on `EditorModel`** — `getScrollTop`/`setScrollTop`,
   `getVadjustment`, `getFirst/LastVisibleScreenRow`, `scrollToBufferPosition`:
   the basis for side-by-side scroll-sync and hunk navigation.
@@ -57,7 +57,7 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
    dedicated `DiffView`. Leaning reuse.
 3. **Decoration styles** — have `added`/`removed` (line bg). Add: `modified`
    (line bg), intra-line **word-level** styles (`word-add`/`word-del`, stronger
-   char-range bg), and a dimmed/hatched **filler** look. Small `DecorationController`
+   char-range bg), and a dimmed/hatched **filler** look. Small `TextDecorations`
    additions; char-range decoration already works.
 4. **Diff gutter renderer** — `+ / − / ~` (or a colored change bar) per line, from
    a per-line change map. New `GtkSource.GutterRendererText` (pattern exists).
@@ -129,7 +129,7 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
      them over the line background. Pure part unit-tested; carried into
      side-by-side. Shared `applyDiffDecorations` helper.
    - [x] Full-line (paragraph) backgrounds — `added`/`removed`/`filler` now paint
-     full-width via `paragraph-background` (a `DecorationController` `LINE_STYLES`
+     full-width via `paragraph-background` (a `TextDecorations` `LINE_STYLES`
      split).
    - [x] Hunk navigation — `next/prevHunk()` on both views (jump cursor + scroll
      to each changed region via `diffNav.revealRow`; side-by-side scrolls the left,
@@ -157,7 +157,7 @@ investigated separately in [virtual-lines.md](virtual-lines.md).
      hides each fold's body with an `invisible` tag, draws a ▸/▾ chevron in the
      gutter (click to toggle), and — while collapsed — renders the
      `⋯ N unchanged lines` placeholder as an **inline block** (an overlay widget
-     via `InlineBlockController`, zero buffer footprint — not editable/selectable;
+     via `BlockDecorations`, zero buffer footprint — not editable/selectable;
      replaced the old synthesized placeholder line). Regions open collapsed. The
      two side-by-side panes fold from matching plans in lockstep (context rows
      align), so the scroll-sync stays valid. Diff panes turn SyntaxController's

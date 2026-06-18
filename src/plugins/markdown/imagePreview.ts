@@ -1,7 +1,7 @@
 /*
  * Markdown inline image preview — render `![alt](src)` images directly below the
  * line that references them, as real widgets in a reserved gap (zero buffer
- * footprint) via the editor's `InlineBlockController`.
+ * footprint) via the editor's `BlockDecorations`.
  *
  * Scope (v1): **local** images — paths relative to the document, absolute paths,
  * and `file://` URLs. Remote (`http(s)://`, `data:`) sources are skipped (loading
@@ -22,7 +22,7 @@ import { Disposable } from '../../util/eventKit.ts';
 import type { PluginContext } from '../../plugin/types.ts';
 import type { TextEditor } from '../../ui/TextEditor/index.ts';
 import type { ScanMatchResult } from '../../ui/TextEditor/EditorModel.ts';
-import type { InlineBlockHandle } from '../../ui/TextEditor/InlineBlockController.ts';
+import type { BlockDecorationHandle } from '../../ui/TextEditor/BlockDecorations.ts';
 
 // Coalesce rapid edits before re-scanning. Loading images is heavier than the
 // color-preview regex pass, so a slightly longer idle than that plugin's.
@@ -120,9 +120,9 @@ export function activateImagePreview(ctx: PluginContext, markdownFileTypes: read
 
     // Active image blocks, keyed by `${absPath}#${ordinal}` — a stable identity per
     // distinct image occurrence, so blocks survive edits that merely shift their
-    // line (the InlineBlockController anchor mark tracks the move); we only add/
+    // line (the BlockDecorations anchor mark tracks the move); we only add/
     // remove when images actually appear, disappear, or change source.
-    const blocks = new Map<string, InlineBlockHandle>();
+    const blocks = new Map<string, BlockDecorationHandle>();
     const cache = new Map<string, CachedTexture>();
     let timer = 0;
 

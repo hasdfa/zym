@@ -3,7 +3,7 @@
  * the vim `/` `?` `n` `N` bindings.
  *
  * It is GTK-widget-free: it drives a buffer through `EditorModel` (regex scan,
- * cursor moves) and paints matches through the shared `DecorationController`
+ * cursor moves) and paints matches through the shared `TextDecorations`
  * (`highlight` on every match, `highlight-strong` on the current one), so it is
  * unit-testable on a headless buffer. The `SearchBar` owns the UI and forwards
  * the query, the options, and navigation here.
@@ -17,7 +17,7 @@
 import { Point } from '../../text/Point.ts';
 import type { Range } from '../../text/Range.ts';
 import type { EditorModel } from './EditorModel.ts';
-import type { DecorationController } from './DecorationController.ts';
+import type { TextDecorations } from './TextDecorations.ts';
 
 /**
  * Case handling: `sensitive` always matches case, `insensitive` never does, and
@@ -47,7 +47,7 @@ export class SearchController {
   readonly options: SearchOptions = { caseMode: 'smart', useRegex: false };
 
   private readonly editor: EditorModel;
-  private readonly decorations: DecorationController;
+  private readonly decorations: TextDecorations;
 
   private query = '';
   private matches: Range[] = [];
@@ -63,7 +63,7 @@ export class SearchController {
   // publish it to the vim layer (globalState.lastSearchPattern) for `gn`/`gN`.
   private onPattern?: (regex: RegExp) => void;
 
-  constructor(editor: EditorModel, decorations: DecorationController) {
+  constructor(editor: EditorModel, decorations: TextDecorations) {
     this.editor = editor;
     this.decorations = decorations;
   }

@@ -6,7 +6,7 @@
  */
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
-import type { DecorationLayer } from './DecorationController.ts';
+import type { DecorationLayer } from './TextDecorations.ts';
 import type { WordRange } from '../../util/DiffModel.ts';
 
 interface DecoratableLine {

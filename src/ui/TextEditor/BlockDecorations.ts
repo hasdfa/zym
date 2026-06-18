@@ -1,5 +1,5 @@
 /*
- * InlineBlockController — show a real widget *between* buffer lines with zero
+ * BlockDecorations — show a real widget *between* buffer lines with zero
  * buffer footprint (no synthesized text line). The "proper" virtual-line
  * mechanism from tasks/code-editing/inline-widgets.md, proven in
  * src/poc/inline-overlay.ts.
@@ -33,16 +33,16 @@
  */
 import { Gtk, GLib, type SourceView } from '../../gi.ts';
 
-export type InlineBlockPlacement = 'below' | 'above';
+export type BlockDecorationPlacement = 'below' | 'above';
 
-export interface InlineBlockOptions {
+export interface BlockDecorationOptions {
   /** Anchor line (buffer row). The band sits below it ('below') or above it ('above'). */
   line: number;
   widget: InstanceType<typeof Gtk.Widget>;
-  placement?: InlineBlockPlacement;
+  placement?: BlockDecorationPlacement;
 }
 
-export interface InlineBlockHandle {
+export interface BlockDecorationHandle {
   /** Remove the band + overlay and drop the anchor mark. */
   remove(): void;
   /** Re-measure the widget height and reposition (after the widget's size changes). */
@@ -54,7 +54,7 @@ interface Block {
   tag: any; // per-block gap tag
   slot: any; // controller-owned Gtk.Box that IS the overlay child (holds `widget`)
   widget: any; // the consumer's widget, parented inside `slot`
-  placement: InlineBlockPlacement;
+  placement: BlockDecorationPlacement;
   height: number;
   placed: boolean; // overlay (the slot) added to the view yet (deferred until mapped)
   lastY: number; // last buffer-Y the overlay was moved to (skip no-op moves)
@@ -67,7 +67,7 @@ const REPOSITION_FRAMES = 6;
 /** getIter*, defensively unwrapping node-gtk's [ok, iter] return shape. */
 const unwrap = (res: any): any => (Array.isArray(res) ? res[1] : res);
 
-export class InlineBlockController {
+export class BlockDecorations {
   private readonly view: SourceView;
   private readonly buffer: any;
   private readonly blocks = new Set<Block>();
@@ -105,7 +105,7 @@ export class InlineBlockController {
     vadj.on('changed', () => this.scheduleReposition());
   }
 
-  add(options: InlineBlockOptions): InlineBlockHandle {
+  add(options: BlockDecorationOptions): BlockDecorationHandle {
     const placement = options.placement ?? 'below';
     const lineIter = unwrap(this.buffer.getIterAtLine(options.line));
     // Reuse a pooled slot (already an overlay child of the view) if available, else

@@ -101,7 +101,7 @@ squiggle layer):
 1. **Use `GtkSourceAnnotations` for line-trailing text** — error lens, git blame,
    end-of-line inlay hints. Purpose-built, hover for free. Cheapest path; POC it
    first to confirm rendering + the provider binding.
-   - ✅ **Built** (`src/ui/TextEditor/AnnotationController.ts`, POC
+   - ✅ **Built** (`src/ui/TextEditor/VirtualText.ts`, POC
      `src/poc/annotations.ts`). Per-view (one of the things the A2 document-model
      unblocked — a shared buffer would render annotations in every view). Consumers:
      **error lens** (`DiagnosticsView`) and **end-of-line inlay hints**

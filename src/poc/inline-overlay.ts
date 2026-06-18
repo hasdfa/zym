@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /*
- * POC: exercise the real `InlineBlockController` (gap-tag + text-view overlay).
+ * POC: exercise the real `BlockDecorations` (gap-tag + text-view overlay).
  *
  * Throwaway harness (separate from the editor) that drives the actual controller
- * from src/ui/TextEditor/InlineBlockController.ts, so running it validates the
+ * from src/ui/TextEditor/BlockDecorations.ts, so running it validates the
  * primitive itself — map-deferred placement, measure-to-fit gap, reposition, and
  * clean add/remove — not just raw GTK calls. See tasks/code-editing/inline-widgets.md.
  *
@@ -16,7 +16,7 @@
  */
 import { createRequire } from 'node:module';
 import { Gtk, Gdk, Adw, GtkSource, GLib, Gio, startLoop } from '../gi.ts';
-import { InlineBlockController, type InlineBlockHandle } from '../ui/TextEditor/InlineBlockController.ts';
+import { BlockDecorations, type BlockDecorationHandle } from '../ui/TextEditor/BlockDecorations.ts';
 
 // (createRequire kept available for parity with other POCs; unused here.)
 createRequire(import.meta.url);
@@ -26,8 +26,8 @@ const SAMPLE = Array.from({ length: 40 }, (_, i) => `line ${String(i + 1).padSta
 
 let view: any;
 let buffer: any;
-let blocks: InlineBlockController;
-let handle: InlineBlockHandle | null = null;
+let blocks: BlockDecorations;
+let handle: BlockDecorationHandle | null = null;
 
 function buildEditor() {
   buffer = new GtkSource.Buffer();
@@ -35,7 +35,7 @@ function buildEditor() {
   view.setMonospace(true);
   view.setLeftMargin(8);
   view.setTopMargin(4);
-  blocks = new InlineBlockController(view);
+  blocks = new BlockDecorations(view);
 }
 
 /** A clickable placeholder card — the fold-placeholder shape (no nested editor:
@@ -95,7 +95,7 @@ app.on('activate', () => {
   const scrolled = new Gtk.ScrolledWindow();
   scrolled.setChild(view);
   const window = new Adw.ApplicationWindow({ application: app });
-  window.setTitle('quilx POC — InlineBlockController (Ctrl+Space toggle, click the card)');
+  window.setTitle('quilx POC — BlockDecorations (Ctrl+Space toggle, click the card)');
   window.setDefaultSize(640, 520);
   window.setContent(scrolled);
   window.on('close-request', () => { loop.quit(); app.quit(); return false; });
