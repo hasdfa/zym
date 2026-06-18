@@ -46,6 +46,14 @@ const VIEWPORT_DEBOUNCE_MS = 30;
 // Highlight this many lines above/below the viewport, so scrolling within the
 // band shows highlighted text immediately while a repaint catches up.
 const VIEWPORT_MARGIN_LINES = 80;
+// On the very first paint the view is realized but not yet size-allocated, so the
+// viewport geometry is unknown (visibleRange is null). Rather than highlight the WHOLE
+// buffer then — O(file): on a dense 3k-line file that's ~840ms of frozen open, ~1.5s at
+// 8k — paint just this many lines from the top (the initial viewport is the file's head).
+// Generous enough to cover any real monitor's text area, so there's no first-frame flicker;
+// a taller viewport (or any scroll) is covered by the normal viewport repaints. Makes open
+// O(viewport) — roughly constant regardless of file size.
+const INITIAL_PAINT_LINES = 250;
 
 // Chars scanned each side of the cursor for the matching bracket — bounds the
 // cost on huge buffers (a far-away or unmatched bracket simply isn't highlighted).
@@ -515,7 +523,7 @@ export class SyntaxController {
   private repaint(): void {
     if (!this.grammar || !this.tree) return;
     this.lineTextCache.clear();
-    const range = this.visibleRange();
+    const range = this.visibleRange() ?? this.initialPaintRange();
     const captures: RawCapture[] = [];
     collectCaptures(this.grammar, this.tree.rootNode, this.cachedText, captures, 0, range, (g) => this.injectionParser(g));
     this.clearPainted();
@@ -658,6 +666,25 @@ export class SyntaxController {
       startPoint: { row: top, column: 0 },
       endPoint: { row: endIter.getLine(), column: endIter.getLineOffset() },
       startIndex: startIter.getOffset(),
+      endIndex: endIter.getOffset(),
+    };
+  }
+
+  /** Fallback range when `visibleRange` is null. A *realized but not-yet-sized* view (the
+   *  first paint on open) bounds to the top INITIAL_PAINT_LINES — the initial viewport is
+   *  the file's head — so open is O(viewport) not O(file). A genuinely unrealized view
+   *  (headless / tests) returns null so the whole buffer is still painted. */
+  private initialPaintRange(): VisibleRange | null {
+    const view = this.view as any;
+    if (!view.getRealized()) return null;
+    const buffer = this.buffer as any;
+    const last = buffer.getLineCount() - 1;
+    const bottom = Math.min(last, INITIAL_PAINT_LINES);
+    const endIter = bottom >= last ? buffer.getEndIter() : asIter(buffer.getIterAtLine(bottom + 1));
+    return {
+      startPoint: { row: 0, column: 0 },
+      endPoint: { row: endIter.getLine(), column: endIter.getLineOffset() },
+      startIndex: 0,
       endIndex: endIter.getOffset(),
     };
   }
