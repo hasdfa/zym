@@ -565,7 +565,10 @@ export class AppWindow {
     options: { focus?: boolean; owner?: Workbench<'user' | AgentTerminal> } = {},
   ): TextEditor {
     const focus = options.focus ?? true;
-    const existing = [...this.editors.values()].find((editor) => editor.currentFile === path);
+    const targetOwner = options.owner ?? this.workbench;
+    const existing = [...this.editors.entries()].find(
+      ([widget, editor]) => editor.currentFile === path && this.editorOwners.get(widget) === targetOwner,
+    )?.[1];
     if (existing) {
       this.editorChildren.get(existing.root)?.select();
       if (focus) existing.focus();
