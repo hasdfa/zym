@@ -173,17 +173,23 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'c c': 'git:commit', // commit: edit the message in a tab, save+close to commit
   },
 
-  // Tab-hosted staging view (git:open-staging): list nav + file-level staging. The
-  // commit box is a buffer editor (Ctrl+Enter commits); the right pane is a normal
-  // editor (its own keys, incl. space h s/u hunk staging) once focused.
+  // Tab-hosted staging view (git:open-staging): list nav + file-level staging. `o`
+  // expands the file's inline diff (and focuses it); `c c` commits via COMMIT_EDITMSG.
   '#GitStagingView': {
     j: 'core:down',
     k: 'core:up',
-    o: 'core:right', // open the selected file in the diff pane (and focus it)
+    o: 'core:right', // expand the selected file's inline diff (and focus it)
     s: 'git:stage', // stage the file under the cursor
     u: 'git:unstage', // unstage the file under the cursor
     X: 'git:discard', // restore (tracked) / delete (untracked, no prompt) the file
     'c c': 'git:commit', // commit: opens .git/COMMIT_EDITMSG in the editor area
+  },
+  // While an inline diff (read-only editor) is focused: close it back to the list.
+  // `q` is pager-style (no editing use in a read-only view); the selector is more
+  // specific than the vim `#TextEditor` bindings, so it wins there.
+  '#GitStagingView #TextEditor': {
+    q: 'git:close-diff',
+    'escape escape': 'git:close-diff',
   },
 
   // Workbench list (the left sidebar): shared list navigation (l reveals the selected

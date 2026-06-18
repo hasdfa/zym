@@ -9,7 +9,7 @@
  * `hunks` are the contiguous changed regions, for hunk navigation / fold-unchanged
  * (each points at a `lines` row range). See tasks/code-editing/diff.md.
  */
-import { diffChars } from 'diff';
+import { diffWordsWithSpace } from 'diff';
 import { diffLines } from './lineDiff.ts';
 
 export type DiffLineKind = 'context' | 'added' | 'removed';
@@ -89,9 +89,12 @@ export function computeDiff(oldText: string, newText: string): DiffModel {
 }
 
 /**
- * Char-level diff of two line texts: the spans removed from `oldText` and the
+ * Word-level diff of two line texts: the spans removed from `oldText` and the
  * spans added in `newText` (codepoint offsets), plus whether the lines share any
- * content (so a wholesale replacement can skip intra-line highlighting).
+ * content (so a wholesale replacement can skip intra-line highlighting). Word-level
+ * (not char-level) keeps the highlight on whole tokens — far less noisy than
+ * scattering it over individual characters. Whitespace is significant
+ * (`diffWordsWithSpace`), so indentation/spacing changes still show.
  */
 export function computeIntraLineDiff(
   oldText: string,
@@ -102,7 +105,7 @@ export function computeIntraLineDiff(
   let oi = 0;
   let ni = 0;
   let hasCommon = false;
-  for (const part of diffChars(oldText, newText)) {
+  for (const part of diffWordsWithSpace(oldText, newText)) {
     const len = [...part.value].length; // codepoints (buffer columns are codepoints)
     if (part.added) {
       newRanges.push([ni, ni + len]);
@@ -147,6 +150,8 @@ export interface SideLine {
   text: string;
   /** Intra-line change spans (for a modified row), copied from the source line. */
   wordRanges?: WordRange[];
+  /** 0-based file row this line is (this side's old/new row); null for a filler. */
+  row: number | null;
 }
 
 export interface SideBySide {
@@ -171,10 +176,14 @@ export function splitSides(model: DiffModel): SideBySide {
     const n = Math.max(dels.length, adds.length);
     for (let i = 0; i < n; i++) {
       left.push(
-        i < dels.length ? { kind: 'removed', text: dels[i].text, wordRanges: dels[i].wordRanges } : { kind: 'filler', text: '' },
+        i < dels.length
+          ? { kind: 'removed', text: dels[i].text, wordRanges: dels[i].wordRanges, row: dels[i].oldRow }
+          : { kind: 'filler', text: '', row: null },
       );
       right.push(
-        i < adds.length ? { kind: 'added', text: adds[i].text, wordRanges: adds[i].wordRanges } : { kind: 'filler', text: '' },
+        i < adds.length
+          ? { kind: 'added', text: adds[i].text, wordRanges: adds[i].wordRanges, row: adds[i].newRow }
+          : { kind: 'filler', text: '', row: null },
       );
     }
     dels = [];
@@ -186,8 +195,8 @@ export function splitSides(model: DiffModel): SideBySide {
     else if (line.kind === 'added') adds.push(line);
     else {
       flush();
-      left.push({ kind: 'context', text: line.text });
-      right.push({ kind: 'context', text: line.text });
+      left.push({ kind: 'context', text: line.text, row: line.oldRow });
+      right.push({ kind: 'context', text: line.text, row: line.newRow });
     }
   }
   flush();
@@ -196,11 +205,10 @@ export function splitSides(model: DiffModel): SideBySide {
 
 /**
  * One collapsible region of unchanged lines (buffer-row indices; the diff buffer
- * holds the real lines verbatim — no synthesized placeholder). The hidden body is
- * `bodyStart..bodyEnd` inclusive; the placeholder block + gutter chevron attach to
- * `anchorRow` — the still-visible line just below the body (`placement: 'below'`),
- * or, for a fold at the very top of the file, the line just below it
- * (`placement: 'above'`, the band sits above that line).
+ * holds the real lines verbatim). The body to collapse is `bodyStart..bodyEnd`
+ * inclusive, with `count` lines. The diff fold method (SyntaxController.setDiffFolds)
+ * collapses that run, whole, to a `⋯ N unchanged lines` placeholder via the fold
+ * projection. (`anchorRow`/`placement` are legacy positioning hints, unused now.)
  */
 export interface DiffFoldInfo {
   anchorRow: number;
@@ -208,14 +216,42 @@ export interface DiffFoldInfo {
   bodyStart: number;
   bodyEnd: number;
   count: number;
+  /** The collapsed placeholder text. Filled by the caller (it needs the line
+   *  texts — see `diffFoldLabel`); `foldUnchanged` leaves it unset. */
+  label?: string;
+}
+
+/** Leading-whitespace width (spaces/tabs) of `s`. */
+function leadingIndent(s: string): number {
+  let i = 0;
+  while (i < s.length && (s[i] === ' ' || s[i] === '\t')) i++;
+  return i;
+}
+
+/**
+ * The placeholder text for a collapsed unchanged run, à la `git diff`'s hunk
+ * header: the nearest preceding line that is *less indented* than the run (its
+ * enclosing scope — a function/class/block header), trimmed. Closing-bracket lines
+ * are skipped (they're the end of a sibling block, not an enclosing header). Falls
+ * back to `⋯ N unchanged lines` when there's no such line (e.g. a top-level run).
+ */
+export function diffFoldLabel(lines: readonly { text: string }[], bodyStart: number, count: number): string {
+  const ref = leadingIndent(lines[bodyStart]?.text ?? '');
+  for (let k = bodyStart - 1; k >= 0; k--) {
+    const text = lines[k]?.text ?? '';
+    const trimmed = text.trim();
+    if (trimmed === '' || /^[)}\]]/.test(trimmed)) continue; // blank / closing bracket
+    if (leadingIndent(text) < ref) return trimmed;
+  }
+  return `⋯ ${count} unchanged line${count === 1 ? '' : 's'}`;
 }
 
 /**
  * Plan which runs of unchanged (`context`-kind) lines to collapse, keeping
  * `context` lines on each side of every change and only folding runs with more
  * than `minHidden` interior lines. Returns the fold regions in **buffer-row
- * indices** (the diff buffer is the line list verbatim); `DiffFold` hides each
- * body and renders the placeholder as an inline widget (no buffer footprint).
+ * indices** (the diff buffer is the line list verbatim); the diff fold method
+ * collapses each body to a `⋯ N unchanged lines` placeholder via the fold projection.
  *
  * Generic over any line carrying a `kind` (unified `DiffLine` or `SideLine`), so
  * the two side-by-side panes — whose context lines sit at identical rows — fold

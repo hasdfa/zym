@@ -39,6 +39,9 @@ interface DiffViewerOptions {
   title?: string;
   /** A file path/name selecting the grammar for syntax highlighting in the panes. */
   languagePath?: string;
+  /** Show the top bar (title + stats + change-nav + mode toggle). Default true;
+   *  embedders that supply their own chrome (e.g. the inline staging diff) pass false. */
+  header?: boolean;
 }
 
 export class DiffViewer {
@@ -54,11 +57,16 @@ export class DiffViewer {
     this.stack = new Gtk.Stack();
     this.stack.setVexpand(true);
     this.stack.setHexpand(true);
+    // Size to the *visible* pane, not the largest — otherwise the (taller, filler-
+    // padded) side-by-side pane inflates the height even while unified is shown,
+    // which an inline (height-bounded) embedder gets wrong per file.
+    this.stack.setVhomogeneous(false);
+    this.stack.setHhomogeneous(false);
     this.stack.addTitled(this.unified.root, 'unified', 'Unified');
     this.stack.addTitled(this.sideBySide.root, 'sbs', 'Side by side');
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.append(this.buildHeader(model, options));
+    if (options.header !== false) this.root.append(this.buildHeader(model, options));
     this.root.append(this.stack);
   }
 
@@ -125,8 +133,13 @@ export class DiffViewer {
     return box;
   }
 
-  /** The renderer currently shown (drives prev/next-change). */
-  private active(): { nextHunk(): void; prevHunk(): void } {
+  /** Focus the visible diff pane (so vim nav + fold keys act on it). */
+  focus(): void {
+    this.active().focus();
+  }
+
+  /** The renderer currently shown (drives prev/next-change + focus). */
+  private active(): { nextHunk(): void; prevHunk(): void; focus(): void } {
     return this.stack.getVisibleChildName() === 'sbs' ? this.sideBySide : this.unified;
   }
 

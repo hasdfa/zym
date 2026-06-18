@@ -11,12 +11,12 @@
  */
 import { Gtk, type SourceView } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
-import { TextEditor, type FoldProvider } from './TextEditor.ts';
+import { TextEditor } from './TextEditor.ts';
 import { DiffGutter } from './DiffGutter.ts';
-import { DiffFold } from './DiffFold.ts';
+import { DiffLineNumberGutter, sideLineLabels } from './DiffLineNumberGutter.ts';
 import { applyDiffDecorations } from './applyDiffDecorations.ts';
 import { revealRow, changeStartRows } from './diffNav.ts';
-import { splitSides, foldUnchanged, type DiffModel, type SideLine } from '../../util/DiffModel.ts';
+import { splitSides, foldUnchanged, diffFoldLabel, type DiffModel, type SideLine } from '../../util/DiffModel.ts';
 
 // `Tab` switches focus between the two panes — registered once (selector-scoped to
 // this widget's descendant views); each instance registers the command handler.
@@ -30,41 +30,44 @@ function registerDiffKeymapsOnce(): void {
   });
 }
 
-export class SideBySideDiffView implements FoldProvider {
+export class SideBySideDiffView {
   readonly root: InstanceType<typeof Gtk.Paned>;
   private readonly left: TextEditor;
   private readonly right: TextEditor;
   private readonly gutters: DiffGutter[];
-  private readonly folds: DiffFold[];
-  // Hunk navigation: padded-buffer rows where each changed region starts (left and
-  // right are aligned, so the same row applies to both). `hunkIndex` last revealed.
+  private readonly lineNumbers: DiffLineNumberGutter[];
+  // Hunk navigation: padded-buffer (model) rows where each changed region starts
+  // (left and right are aligned). `hunkIndex` last revealed.
   private readonly hunkRows: number[];
   private hunkIndex = -1;
 
   constructor(model: DiffModel, options: { languagePath?: string } = {}) {
     const { left, right } = splitSides(model);
     // The two sides have context (and therefore fold) rows at identical indices,
-    // so the plans match index-for-index — fold them in lockstep to stay aligned.
-    const leftFolds = foldUnchanged(left);
-    const rightFolds = foldUnchanged(right);
+    // so the fold plans match index-for-index — fold them in lockstep to stay aligned.
     this.left = makePane(left, options.languagePath);
     this.right = makePane(right, options.languagePath);
+    const leftToModel = (line: number) => this.left.modelLineForViewLine(line);
+    const rightToModel = (line: number) => this.right.modelLineForViewLine(line);
+    // Each side shows its own file's line numbers (old on the left, new on the right),
+    // left of the +/− mark; both key by MODEL row (translated through the folds).
+    this.lineNumbers = [
+      new DiffLineNumberGutter(this.left.sourceView, sideLineLabels(left), leftToModel, 1),
+      new DiffLineNumberGutter(this.right.sourceView, sideLineLabels(right), rightToModel, 1),
+    ];
     this.gutters = [
-      new DiffGutter(this.left.sourceView, left),
-      new DiffGutter(this.right.sourceView, right),
+      new DiffGutter(this.left.sourceView, left, leftToModel, 2),
+      new DiffGutter(this.right.sourceView, right, rightToModel, 2),
     ];
-    const toggleBoth = (index: number) => {
-      this.folds[0].toggle(index);
-      this.folds[1].toggle(index);
-    };
-    this.folds = [
-      new DiffFold(this.left.sourceView, leftFolds, this.left.inlineBlocks, toggleBoth),
-      new DiffFold(this.right.sourceView, rightFolds, this.right.inlineBlocks, toggleBoth),
-    ];
-    // Vim z-fold commands route here from whichever pane is focused and apply to
-    // both panes (their folds share indices), keeping the two sides aligned.
-    this.left.setFoldProvider(this);
-    this.right.setFoldProvider(this);
+    // Each pane folds its own unchanged runs (same indices); then mirror toggles so a
+    // chevron click or z-fold command on either pane folds the other in lockstep.
+    // Both sides fold the same unchanged runs (context rows align); label each from
+    // the left side's context line (identical content) so the two markers match.
+    const folds = foldUnchanged(left).map((f) => ({ ...f, label: diffFoldLabel(left, f.bodyStart, f.count) }));
+    this.left.setDiffFolds(folds);
+    this.right.setDiffFolds(folds);
+    this.left.setDiffFoldMirror((i) => this.right.toggleDiffFoldIndex(i));
+    this.right.setDiffFoldMirror((i) => this.left.toggleDiffFoldIndex(i));
     this.hunkRows = changeStartRows(left.map((line) => line.kind));
 
     syncScroll(this.left.sourceView, this.right.sourceView);
@@ -81,6 +84,11 @@ export class SideBySideDiffView implements FoldProvider {
     // raw controller, so it stays consistent with the rest of the app's bindings.
     quilx.commands.add(this.root, { 'diff:focus-other-pane': () => this.toggleFocus() });
     registerDiffKeymapsOnce();
+  }
+
+  /** Focus the diff (the left pane; Tab switches to the right). */
+  focus(): void {
+    this.left.focus();
   }
 
   /** Move focus to the other pane (defaults to the left when neither has it). */
@@ -105,48 +113,24 @@ export class SideBySideDiffView implements FoldProvider {
     if (this.hunkRows.length === 0) return;
     const n = this.hunkRows.length;
     this.hunkIndex = ((index % n) + n) % n;
-    // Reveal on the left; the scroll-sync carries the right pane along.
-    revealRow(this.left.sourceView, this.hunkRows[this.hunkIndex]);
-  }
-
-  // FoldProvider — fold commands from either pane apply to both (indices match).
-  private cursorIndex(): number {
-    // Use the focused pane's cursor; rows are aligned, so the index applies to both.
-    const fold = this.folds[1].viewHasFocus() ? this.folds[1] : this.folds[0];
-    return fold.regionIndexAtCursor();
-  }
-  toggleFoldAtCursor(): null {
-    const i = this.cursorIndex();
-    if (i !== -1) for (const fold of this.folds) fold.toggle(i);
-    return null;
-  }
-  setFoldAtCursor(folded: boolean): null {
-    const i = this.cursorIndex();
-    if (i !== -1) for (const fold of this.folds) fold.setFolded(i, folded);
-    return null;
-  }
-  foldAll(): void {
-    for (const fold of this.folds) fold.setAll(true);
-  }
-  unfoldAll(): void {
-    for (const fold of this.folds) fold.setAll(false);
-  }
-  revealLine(row: number): void {
-    for (const fold of this.folds) fold.revealRow(row);
+    // hunkRows are model rows; map through the left pane's folds. Reveal on the left;
+    // the scroll-sync carries the right pane along.
+    revealRow(this.left.sourceView, this.left.viewLineForModelLine(this.hunkRows[this.hunkIndex]));
   }
 
   dispose(): void {
     for (const gutter of this.gutters) gutter.dispose();
-    for (const fold of this.folds) fold.dispose();
+    for (const gutter of this.lineNumbers) gutter.dispose();
   }
 }
 
-/** A read-only pane for one side, with per-line diff backgrounds applied. */
+/** A read-only pane for one side, with per-line diff backgrounds applied. Folding
+ *  is left enabled (the caller installs the diff folds via `setDiffFolds`). */
 function makePane(lines: SideLine[], languagePath?: string): TextEditor {
   // Trailing newline terminates the last line so an empty last row can still carry
   // its line background (and both panes stay equal-height for scroll-sync).
   const editor = new TextEditor({
-    buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n') + '\n', languagePath, folding: false },
+    buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n') + '\n', languagePath },
   });
   applyDiffDecorations(editor.decorations.layer('diff'), lines);
   return editor;

@@ -21,9 +21,12 @@ const COLOR: Record<'added' | 'removed', string> = { added: theme.ui.success, re
 class DiffGutterRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)
   kindByLine!: Map<number, 'added' | 'removed'>;
+  // VIEW line → MODEL line: the map is keyed by model row, but folds collapse the
+  // view, so a queried view line must be translated back (identity when no folds).
+  viewToModel!: (line: number) => number;
 
   queryData(_lines: any, line: number) {
-    const kind = this.kindByLine?.get(line);
+    const kind = this.kindByLine?.get(this.viewToModel ? this.viewToModel(line) : line);
     if (!kind) {
       this.setMarkup(' ', -1);
       return;
@@ -38,7 +41,12 @@ export class DiffGutter {
   private readonly renderer: DiffGutterRenderer;
   private readonly kindByLine = new Map<number, 'added' | 'removed'>();
 
-  constructor(view: SourceView, lines: readonly KindedLine[]) {
+  constructor(
+    view: SourceView,
+    lines: readonly KindedLine[],
+    viewToModel?: (line: number) => number,
+    position = 0,
+  ) {
     this.view = view;
     lines.forEach((line, row) => {
       if (line.kind === 'added' || line.kind === 'removed') this.kindByLine.set(row, line.kind);
@@ -46,7 +54,11 @@ export class DiffGutter {
 
     this.renderer = new DiffGutterRenderer();
     (this.renderer as any).kindByLine = this.kindByLine;
-    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
+    (this.renderer as any).viewToModel = viewToModel ?? ((line: number) => line);
+    this.renderer.setXpad(4); // breathing room around the +/− glyph
+    // `position` orders gutter renderers L→R; the diff line-number gutter sits left
+    // of the +/− mark.
+    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, position);
   }
 
   dispose(): void {

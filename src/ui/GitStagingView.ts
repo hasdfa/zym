@@ -31,7 +31,7 @@ import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
-import { computeDiff, type DiffModel } from '../util/DiffModel.ts';
+import { computeDiff, foldUnchanged, type DiffModel } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import type { GitRepo } from '../git.ts';
 import {
@@ -79,9 +79,10 @@ const STATE_LETTER: Record<GitFileState, string> = {
 // dock background — paint it with the theme editor background explicitly.
 const FILES_BG = theme.ui.bg ?? theme.ui.popoverBg;
 
-// Inline-diff height estimate (the inner view scrolls past the cap).
+// Inline-diff height estimate (the inner view scrolls past the cap). No header bar
+// (the staging diff passes `header: false`), so only a little vertical padding.
 const DIFF_LINE_PX = 20;
-const DIFF_HEADER_PX = 38;
+const DIFF_HEADER_PX = 12;
 const DIFF_MAX_PX = 480;
 
 // File paths use the app monospace font (same as the editor), via the central sheet.
@@ -96,7 +97,8 @@ addStyles(`
     padding: 6px 8px 3px 8px;
   }
   #GitStagingView row { min-height: 0; }
-  #GitStagingView #GitRow { padding: 0 8px; }
+  /* Indent the file rows under their group header, like terminal \`git status\`. */
+  #GitStagingView #GitRow { padding: 0 8px 0 20px; }
   /* The full path is colored like \`git status\`: staged green, unstaged/untracked red. */
   #GitStagingView #GitRow.staged .git-path,
   #GitStagingView #GitRow.staged .git-badge { color: ${theme.ui.success}; }
@@ -170,6 +172,7 @@ export class GitStagingView {
       'git:unstage': () => this.act((c) => unstage(this.repo!, c.relPath, this.done)),
       'git:discard': () => this.discardSelected(),
       'git:commit': () => this.onCommit(),
+      'git:close-diff': () => this.closeFocusedDiff(), // `q` while a diff is focused
     });
   }
 
@@ -229,7 +232,7 @@ export class GitStagingView {
       // Bail if the list was rebuilt (refresh) while the diff was loading — the
       // refresh path re-opens persisted diffs against the fresh rows itself.
       if (this.openDiffs.has(key) || info.row.getParent() !== this.list) return;
-      const viewer = new DiffViewer(model, { title: '', languagePath: info.change.path });
+      const viewer = new DiffViewer(model, { languagePath: info.change.path, header: false });
       viewer.root.setVexpand(false);
       viewer.root.setSizeRequest(-1, this.diffHeight(model));
 
@@ -240,7 +243,24 @@ export class GitStagingView {
       row.addCssClass('git-diff-row');
       this.list.insert(row, info.row.getIndex() + 1); // directly beneath the file row
       this.openDiffs.set(key, { row, viewer });
+      viewer.focus(); // opening with `o` moves focus into the diff
     });
+  }
+
+  // Close the inline diff that currently holds focus (the `git:close-diff` command,
+  // bound to `q` while a diff editor is focused) and return focus to the file list.
+  private closeFocusedDiff(): void {
+    const win = this.root.getRoot() as { getFocus?: () => InstanceType<typeof Gtk.Widget> | null } | null;
+    const focus = win?.getFocus?.() ?? null;
+    for (const [key, entry] of this.openDiffs) {
+      for (let node = focus; node; node = node.getParent()) {
+        if (node === entry.viewer.root) {
+          this.closeDiff(key);
+          this.focus();
+          return;
+        }
+      }
+    }
   }
 
   private closeDiff(key: string): void {
@@ -278,12 +298,14 @@ export class GitStagingView {
     }
   }
 
-  // A snug height for the inline diff (changed lines + a little context), capped;
-  // the DiffViewer's own ScrolledWindow scrolls anything past the cap.
+  // A snug height for the inline diff, capped (the editor scrolls past the cap). Use
+  // the exact number of *displayed* rows: total lines minus the folded bodies, plus
+  // one marker line per fold (the unchanged runs start collapsed).
   private diffHeight(model: DiffModel): number {
-    const changed = model.stats.added + model.stats.removed;
-    const visible = Math.min(30, Math.max(3, changed + model.hunks.length * 2 + 2));
-    return Math.min(DIFF_MAX_PX, DIFF_HEADER_PX + visible * DIFF_LINE_PX);
+    const folds = foldUnchanged(model.lines);
+    const hidden = folds.reduce((sum, f) => sum + f.count, 0);
+    const displayed = Math.max(1, model.lines.length - hidden + folds.length);
+    return Math.min(DIFF_MAX_PX, DIFF_HEADER_PX + displayed * DIFF_LINE_PX);
   }
 
   // --- Change list -----------------------------------------------------------
@@ -355,6 +377,12 @@ export class GitStagingView {
   }
 
   private buildRow(change: GitChange, kind: RowKind): InstanceType<typeof Gtk.ListBoxRow> {
+    // A fixed-width status column at the left holding the `D` of a deletion (the only
+    // porcelain letter we keep) — reserved even when blank so every path lines up.
+    const badge = new Gtk.Label({ label: change.state === 'deleted' ? STATE_LETTER.deleted : '', xalign: 0 });
+    badge.addCssClass('git-badge');
+    badge.setWidthChars(1);
+
     const name = new Gtk.Label({ label: change.relPath, xalign: 0, hexpand: true });
     name.addCssClass('git-path'); // monospace; colored green/red by the row's kind class
     name.setEllipsize(Pango.EllipsizeMode.START); // keep the filename end visible
@@ -362,14 +390,8 @@ export class GitStagingView {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     box.setName('GitRow');
     box.addCssClass(kind); // `staged` | `unstaged` — drives the path (and badge) color
+    box.append(badge);
     box.append(name);
-
-    // The porcelain letter is dropped except for deletions, where it's the only cue.
-    if (change.state === 'deleted') {
-      const badge = new Gtk.Label({ label: STATE_LETTER.deleted });
-      badge.addCssClass('git-badge');
-      box.append(badge);
-    }
 
     const row = new Gtk.ListBoxRow();
     row.setChild(box);

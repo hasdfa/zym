@@ -23,6 +23,7 @@ import { computeStyleRuns, type StyleSpan } from './highlightRuns.ts';
 import { findBracketPair } from './bracketMatch.ts';
 import { indentLevelAt, enclosingTypeMatches, enclosingNodeRange } from './indent.ts';
 import { computeFoldRanges } from './folds.ts';
+import type { DiffFoldInfo } from '../util/DiffModel.ts';
 import { tagNamesAt, type TagName } from './tags.ts';
 /** The view↔model projection a SyntaxController folds through (the editor's Document). */
 export interface FoldHost {
@@ -93,7 +94,19 @@ interface FoldRegion {
   folded: boolean;   // whether the body is currently collapsed in this view
   handle?: any;      // the Document fold handle while collapsed
   joinFooter?: boolean; // collapse the footer onto the header line (single-line fold)
+  // Diff-fold method only: collapse the *whole* [startLine..endLine] run (no header
+  // line kept) into `placeholder`. `origStart`/`origEnd` are the run's lines in the
+  // unfolded buffer, used to recompute the current lines as other runs collapse.
+  whole?: boolean;
+  placeholder?: string;
+  origStart?: number;
+  origEnd?: number;
 }
+
+/** How a SyntaxController discovers foldable regions: from the tree-sitter parse
+ *  ('syntax', the default) or from injected unchanged-run ranges ('diff'). The two
+ *  are mutually exclusive — enabling diff folds disables syntax fold discovery. */
+export type FoldMethod = 'syntax' | 'diff';
 
 // A view range [[row,col],[row,col]] revealed by opening a fold the caret was on —
 // the editor selects it so the just-unfolded text reads "as the cursor".
@@ -207,6 +220,8 @@ export class SyntaxController {
   private readonly invisibleTag: any;
   // Styles each collapsed-fold placeholder ([...]) — muted + non-editable.
   private readonly foldPlaceholderTag: any;
+  // Like foldPlaceholderTag but for whole-run diff folds: adds a full-width band.
+  private readonly diffFoldPlaceholderTag: any;
   // The projection folds collapse through (editor's Document; null for diff panes).
   private foldHost: FoldHost | null = null;
   // Active fold handles, one per collapsed region (bodies live only in the model).
@@ -254,9 +269,19 @@ export class SyntaxController {
   // The line span our highlight tags currently cover, cleared before the next
   // paint; null = "unknown, clear the whole buffer".
   private paintedExtent: { fromLine: number; toLine: number } | null = null;
-  // Whether tree-sitter code folding is active (chevron gutter + fold discovery).
-  // Off for diff panes, which fold by unchanged-region instead (see DiffFold).
+  // Whether folding is active at all (chevron gutter + the fold projection). When
+  // off (e.g. peek views) there is no folding of any method.
   private readonly foldingEnabled: boolean;
+  // Where foldable regions come from. 'syntax' = the tree-sitter parse (default);
+  // 'diff' = injected unchanged-run ranges (`setDiffFolds`), with parse-driven
+  // discovery suppressed. The diff runs, in unfolded-buffer line coords, so their
+  // current lines can be recomputed as other runs collapse (read-only buffer).
+  private foldMethod: FoldMethod = 'syntax';
+  private diffFolds: FoldRegion[] = [];
+  // Side-by-side lockstep: a sibling pane to toggle the same diff-fold index on, so
+  // the two sides stay row-aligned (their unchanged runs match index-for-index).
+  private diffMirror: ((index: number) => void) | null = null;
+  private mirroring = false;
 
   constructor(
     view: SourceView,
@@ -305,6 +330,15 @@ export class SyntaxController {
     (buffer as any).getTagTable().add(this.invisibleTag);
     this.foldPlaceholderTag = new Gtk.TextTag({ name: 'ts:fold-placeholder', editable: false, foreground: theme.ui.textMuted } as any);
     (buffer as any).getTagTable().add(this.foldPlaceholderTag);
+    // Diff fold placeholder: a full-width band (paragraph background) behind the
+    // git-diff-style context line, so the collapsed-run marker reads as its own row.
+    this.diffFoldPlaceholderTag = new Gtk.TextTag({
+      name: 'ts:diff-fold-placeholder',
+      editable: false,
+      foreground: theme.ui.textMuted,
+      paragraphBackground: theme.ui.diffFoldBg,
+    } as any);
+    (buffer as any).getTagTable().add(this.diffFoldPlaceholderTag);
 
     // Bracket-match highlight (subtle box-like background + bold).
     this.bracketMatchTag = mk({
@@ -558,7 +592,10 @@ export class SyntaxController {
     // Recompute fold regions; derive folded state from the live invisible tag so
     // it tracks edits (tags move with the text).
     this.foldsByHeaderLine.clear();
-    if (this.foldingEnabled) this.walkFolds(tree.rootNode);
+    // 'diff' suppresses tree-sitter fold discovery — the folds are the injected
+    // unchanged runs, re-keyed to their current lines.
+    if (this.foldMethod === 'diff') this.rebuildDiffFoldMap();
+    else if (this.foldingEnabled) this.walkFolds(tree.rootNode);
     (this.view as any).queueDraw();
   }
 
@@ -956,19 +993,31 @@ export class SyntaxController {
       region.folded = false;
       region.handle = undefined;
     } else if (!region.folded && this.foldHost) {
-      // Collapse: physically replace the body (after `{` .. the `}`) with `[N]` in the
-      // VIEW buffer — the model keeps the full text. Only move the caret if it was
-      // *inside* the removed body (closing a fold shouldn't jump the cursor otherwise).
-      const join = region.joinFooter !== false;
-      const viewStart = this.lineEndIter(region.startLine).getOffset();
-      // join: collapse through the footer's `}` (single line). keep-footer: collapse to
-      // the newline ending the last body line, so `}`/`} else …` stays on its own line.
-      const viewEnd = join
-        ? this.footerContentStart(region.endLine).getOffset()
-        : this.lineEndIter(region.endLine - 1).getOffset();
+      // Collapse: physically replace the body with a placeholder in the VIEW buffer —
+      // the model keeps the full text. Only move the caret if it was *inside* the
+      // removed body (closing a fold shouldn't jump the cursor otherwise).
+      let viewStart: number;
+      let viewEnd: number;
+      let placeholder: string;
+      if (region.whole) {
+        // Diff fold: collapse the whole [startLine..endLine] run into the placeholder
+        // (no header line kept) — the newline after the run stays, so it reads as one
+        // `⋯ N unchanged lines` line.
+        viewStart = this.lineStartIter(region.startLine).getOffset();
+        viewEnd = this.lineEndIter(region.endLine).getOffset();
+        placeholder = region.placeholder ?? `[${region.endLine - region.startLine + 1}]`;
+      } else {
+        const join = region.joinFooter !== false;
+        viewStart = this.lineEndIter(region.startLine).getOffset();
+        // join: collapse through the footer's `}` (single line). keep-footer: collapse to
+        // the newline ending the last body line, so `}`/`} else …` stays on its own line.
+        viewEnd = join
+          ? this.footerContentStart(region.endLine).getOffset()
+          : this.lineEndIter(region.endLine - 1).getOffset();
+        const lines = join ? region.endLine - region.startLine + 1 : region.endLine - region.startLine - 1;
+        placeholder = `[${lines}]`; // lines folded
+      }
       const cursorInside = cursorOff > viewStart && cursorOff < viewEnd;
-      const lines = join ? region.endLine - region.startLine + 1 : region.endLine - region.startLine - 1;
-      const placeholder = `[${lines}]`; // lines folded
       const handle = this.foldHost.foldViewRange(this.buffer, viewStart, viewEnd, placeholder);
       // foldViewRange may have subsumed folds nested in this range — drop their handles.
       this.pruneDeadFolds();
@@ -977,15 +1026,95 @@ export class SyntaxController {
         region.folded = true;
         region.handle = handle;
         const [ps, pe] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
-        buffer.applyTag(this.foldPlaceholderTag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
+        const tag = region.whole ? this.diffFoldPlaceholderTag : this.foldPlaceholderTag;
+        buffer.applyTag(tag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
         if (cursorInside) buffer.placeCursor(asIter(buffer.getIterAtOffset(ps)));
       }
     }
     // The collapse/expand edited the view buffer → a reparse is scheduled (rebuilds
-    // the fold state); repaint now for responsiveness.
+    // the fold state); repaint now for responsiveness. In diff mode there's no
+    // parse-driven rebuild, so re-key the fold map to the shifted lines now.
+    if (this.foldMethod === 'diff') {
+      this.rebuildDiffFoldMap();
+      if (this.diffMirror && !this.mirroring) {
+        const idx = this.diffFolds.indexOf(region);
+        if (idx >= 0) this.diffMirror(idx);
+      }
+    }
     (this.view as any).queueDraw();
     this.emitFoldsChanged();
     return revealed;
+  }
+
+  // --- diff fold method ------------------------------------------------------
+
+  /**
+   * Switch this controller to the 'diff' fold method: fold the given unchanged
+   * runs (in unfolded-buffer line coords) instead of tree-sitter regions, and
+   * suppress parse-driven fold discovery. Each run collapses, whole, to a
+   * `⋯ N unchanged lines` placeholder. Regions start folded. Call once, after the
+   * diff text is set. Requires folding enabled + a fold host (the Document).
+   */
+  setDiffFolds(regions: readonly DiffFoldInfo[]): void {
+    if (!this.foldingEnabled || !this.foldHost) return;
+    this.foldMethod = 'diff';
+    this.diffFolds = regions.map((r) => ({
+      startLine: r.bodyStart,
+      endLine: r.bodyEnd,
+      origStart: r.bodyStart,
+      origEnd: r.bodyEnd,
+      folded: false,
+      whole: true,
+      placeholder: r.label ?? `⋯ ${r.count} unchanged line${r.count === 1 ? '' : 's'}`,
+    }));
+    // Collapse bottom-up so an earlier run's lines stay valid while a later one folds.
+    for (const region of [...this.diffFolds].sort((a, b) => b.origStart! - a.origStart!)) {
+      this.toggleFold(region);
+    }
+    this.rebuildDiffFoldMap();
+  }
+
+  /** Lockstep sibling: called with a diff-fold index whenever one toggles here, so
+   *  the owner can fold the same index in the other side-by-side pane. */
+  setDiffFoldMirror(cb: (index: number) => void): void {
+    this.diffMirror = cb;
+  }
+
+  /** Toggle diff fold `index` without re-firing the mirror (the sibling calls this). */
+  toggleDiffFoldIndex(index: number): void {
+    const region = this.diffFolds[index];
+    if (!region) return;
+    this.mirroring = true;
+    try {
+      this.toggleFold(region);
+    } finally {
+      this.mirroring = false;
+    }
+  }
+
+  // Re-key foldsByHeaderLine to each diff run's *current* start line. The buffer is
+  // read-only, so the only line shifts come from other folds: a folded run of L
+  // body lines occupies 1 line, removing L-1... — i.e. (origEnd-origStart) lines —
+  // from everything below it. Recompute analytically (no marks needed).
+  private rebuildDiffFoldMap(): void {
+    this.foldsByHeaderLine.clear();
+    const buffer = this.buffer as any;
+    for (const region of this.diffFolds) {
+      let removedAbove = 0;
+      for (const other of this.diffFolds) {
+        if (other !== region && other.folded && other.origStart! < region.origStart!) {
+          removedAbove += other.origEnd! - other.origStart!;
+        }
+      }
+      region.startLine = region.origStart! - removedAbove;
+      region.endLine = region.folded ? region.startLine : region.origEnd! - removedAbove;
+      this.foldsByHeaderLine.set(region.startLine, region);
+      // Keep the placeholder styled (a repaint may have cleared its run).
+      if (region.folded && region.handle) {
+        const [ps, pe] = this.foldHost!.foldPlaceholderRange(this.buffer, region.handle);
+        buffer.applyTag(this.diffFoldPlaceholderTag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
+      }
+    }
   }
 
   /** Subscribe to fold open/close — the editor re-renders fold-dependent decorations. */
@@ -1006,6 +1135,10 @@ export class SyntaxController {
   }
 
   /** End-of-line iter for a buffer line (the position of its trailing newline). */
+  private lineStartIter(line: number): any {
+    return asIter((this.buffer as any).getIterAtLine(line));
+  }
+
   private lineEndIter(line: number): any {
     const iter = asIter((this.buffer as any).getIterAtLine(line));
     if (!iter.endsLine()) iter.forwardToLineEnd();
