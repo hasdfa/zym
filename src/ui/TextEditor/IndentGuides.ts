@@ -93,21 +93,42 @@ export class IndentGuides {
     // FFI-heavy per-row line reads) — the bulk of the old per-frame scroll cost.
     const levels = this.levelsForRange(top, bottom, last, tabLength);
 
+    // Geometry, computed ONCE per frame. The column-0 x and the buffer→widget translation
+    // are constant across a frame, so hoist them out of the per-row loop (the old code did
+    // a bufferToWindowCoords per row). `dy` is the vertical translation; `wx` the (constant)
+    // column-0 widget x. When every visible row is the same height — no soft-wrap or scaled
+    // line on screen, the common case for code — each row's y follows arithmetically with NO
+    // per-row FFI; otherwise we fall back to a getIterLocation per row.
+    const topCell = view.getIterLocation(this.lineStartIter(top));
+    const lineHeight = topCell.height;
+    const [wx, wyTop] = view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, topCell.x, topCell.y);
+    const dy = topCell.y - wyTop;
+    const botCell = bottom === top ? topCell : view.getIterLocation(this.lineStartIter(bottom));
+    // Both endpoints at the base height AND an exact total span ⟹ every row in between is
+    // exactly `lineHeight` tall: rows are never shorter than the base, so a wrapped or
+    // scaled (e.g. markdown heading) row would make the span larger and force the fallback.
+    const uniform =
+      botCell.height === lineHeight && botCell.y - topCell.y === (bottom - top) * lineHeight;
+
     cr.setLineWidth(LINE_WIDTH);
     cr.setSourceRgba(this.rgba.red, this.rgba.green, this.rgba.blue, this.rgba.alpha);
     for (let row = top; row <= bottom; row++) {
       const level = levels[row - top];
       if (level <= 0) continue;
-      // Convert the row's column-0 cell to widget coords ONCE (buffer→widget is a pure
-      // translation in a frame), then step each guide column by `stride` in widget space.
-      // The old code converted per indent level — a bufferToWindowCoords FFI call for
-      // every guide on every scroll frame.
-      const cell = view.getIterLocation(this.lineStartIter(row));
-      const [wx, wy] = view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
+      let wy: number;
+      let height: number;
+      if (uniform) {
+        wy = wyTop + (row - top) * lineHeight;
+        height = lineHeight;
+      } else {
+        const cell = row === top ? topCell : view.getIterLocation(this.lineStartIter(row));
+        wy = cell.y - dy; // same translation the hoisted bufferToWindowCoords applied
+        height = cell.height;
+      }
       for (let k = 0; k < level; k++) {
         const x = Math.round(wx + k * stride) + 0.5; // +0.5 → crisp 1px line
         cr.moveTo(x, wy);
-        cr.lineTo(x, wy + cell.height);
+        cr.lineTo(x, wy + height);
       }
     }
     cr.stroke();

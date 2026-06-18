@@ -299,6 +299,69 @@ unchanged runs via the editor's diff-fold method. See [diff.md](diff.md). Diff
 *data* comes from the **Git** workstream; `GitGutter.ts` draws VS Code-style change
 bars (in-process Myers diff of buffer↔index and index↔HEAD).
 
+### Scrolling performance — *pass 2 done*
+
+Scroll jank traced to **per-frame node-gtk FFI cost**, not GtkTextView layout (only
+visible paragraphs lay out): on every `value-changed`, several widget-coordinate
+overlays / gutter renderers re-run JS draw code that crosses the JS↔native boundary
+once or more *per visible line*. The expensive draw paths, trimmed:
+
+- **`IndentGuides.draw`** (on by default) was the worst — ~16 + `level` FFI calls per
+  visible row (each line read *twice* for blank/indent state, plus a
+  `bufferToWindowCoords` per indent level). Now: one batched `getText` over the
+  visible block with the level math done in JS (`levelsForRange`), and **one**
+  `bufferToWindowCoords` per row (each guide column stepped by `stride` in widget
+  space — buffer→widget is a pure translation within a frame). Output is pixel-
+  identical; ~10× fewer FFI calls/frame.
+- **Line-number gutter** (`SyntaxController.lineNumberWidth`) called `getLineCount()`
+  (an FFI) once *per visible line per paint* for a per-frame constant — now cached,
+  refreshed by `primeLineNumbers` on edits.
+- **Viewport re-highlight** (`scheduleViewportRepaint`) re-queried tree-sitter and
+  re-applied tags on *every* scroll-settle; now skipped when the visible rows are
+  already inside the painted band (`visibleWithinPainted`), so a scroll within the
+  ±80-line margin costs nothing. The band must be `paintedWindow` (the queried
+  `visibleRange` — the region every token capture was applied to), **not**
+  `paintedExtent` (the capture *bounding box*, kept for `clearPainted`): a multi-line
+  node — a long block comment / string / JSX — that overhangs the window stretches the
+  bbox far past the fully-highlighted region, so guarding on it let the skip fire over
+  lines that only had the one broad tag → **stale/missing highlighting after scrolling
+  back to them** (the bug; fixed by tracking `paintedWindow`. `paintedWindow ⊆
+  paintedExtent` always, so the guard is strictly more conservative — it can never skip
+  a needed repaint). Confirmed with a probe: a 1000-line block comment produced 136
+  over-skips under the old guard, 0 under the new.
+
+**Pass 2 (measured first).** An in-app profiler (temporary `value-changed`-driven
+synthetic scroll over an 8k-line file, since headless can't kinetic-scroll) timed the
+remaining per-frame work. Findings:
+
+- The per-frame JS cost is now **small** — IndentGuides ~8 ms/s, both gutter renderers
+  ~1–3 µs/`queryData` (≈3 ms/s combined), `syntax.repaint` doesn't even fire during a
+  continuous fling (the pass-1 within-band guard + the trailing debounce). Total ≲ 12 ms/s
+  (~1 % CPU). **Pass 1 already captured the JS-side win.**
+- The gutter **does** re-query every visible line every paint, but each call is ~2 µs
+  (`setMarkup` on a tiny string) — not worth optimizing.
+- A/B test (IndentGuides overlay added vs. not) showed **no change** in paint rate: the
+  view repaints ~20×/s under the synthetic driver *regardless* of our overlays. So the
+  frame-rate ceiling is **native GtkTextView/GSK rendering**, not our JS. (The ~20 fps is
+  partly a synthetic-driver artifact — real kinetic scroll uses GTK's frame clock with
+  partial redraws — so don't over-read it; the takeaway is "JS is no longer the limiter.")
+
+So pass 2 targeted the one remaining sizeable JS item, IndentGuides' per-row geometry
+(~3 FFI/row, the bulk of its ~420 µs/draw): hoist the `bufferToWindowCoords` out of the
+loop (buffer→widget is one frame-constant translation) and, when every visible row is the
+base height (no soft-wrap / scaled line on screen — the common case for code), derive each
+row's y arithmetically with **no per-row FFI at all** (a getIterLocation-per-row fallback
+covers wrapped/markdown viewports). ~420 → ~50–100 µs/draw in the common case; output
+verified pixel-identical to pass 1 against the per-row ground truth under synthetic scroll.
+
+Not pursued (measurement says low ROI / high risk): the banded native-scroll rewrite
+(draw guides in a content-sized `add_overlay` surface so they don't repaint per frame) —
+`snapshot_layer`/`add_overlay` still re-run per scroll frame, and the A/B test shows
+IndentGuides isn't the frame-rate limiter anyway. `UnderlineOverlay` (squiggles) still
+redraws per frame under diagnostics; same single-transform trick applies, marginal win.
+The real remaining lever is **native rendering** — the gated custom-widget / Rust-core
+path (Option C above), not more JS micro-optimization.
+
 ## Related friction evidence
 
 [inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),
