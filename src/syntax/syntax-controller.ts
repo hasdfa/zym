@@ -188,8 +188,16 @@ export class SyntaxController {
   // from the fold's large structural edit, which leaves drifted node positions).
   private fullReparseNext = false;
   // The line span our highlight tags currently cover, cleared before the next
-  // paint; null = "unknown, clear the whole buffer".
+  // paint; null = "unknown, clear the whole buffer". This is the capture *bounding
+  // box*, which can overhang the queried window when a multi-line node (string,
+  // comment, JSX, big block) crosses the edge — so it's used for clearing, NOT for
+  // the scroll-skip guard (those overhang lines only get the one broad tag, not full
+  // token highlighting).
   private paintedExtent: { fromLine: number; toLine: number } | null = null;
+  // The line window actually re-highlighted by the last paint (the visibleRange ± its
+  // margin). Every line here received its full set of token captures, so this — not the
+  // overhang-prone paintedExtent — is what the scroll-skip guard checks against.
+  private paintedWindow: { fromLine: number; toLine: number } | null = null;
   // Whether folding is active at all (chevron gutter + the fold projection). When
   // off (e.g. peek views) there is no folding of any method.
   private readonly foldingEnabled: boolean;
@@ -380,6 +388,7 @@ export class SyntaxController {
     // New document: forget the painted span so the next paint clears the whole
     // buffer (the previous file's tags), not a stale line range.
     this.paintedExtent = null;
+    this.paintedWindow = null;
     // Drop guest parsers from the previous document's injections.
     for (const parser of this.injectionParsers.values()) parser.delete();
     this.injectionParsers.clear();
@@ -512,6 +521,11 @@ export class SyntaxController {
     this.clearPainted();
     this.highlight.paint(this.buffer, captures, (row, col) => this.iterAt(row, col));
     this.paintedExtent = extentOf(captures);
+    // The fully-highlighted window = exactly the queried range (every token capture in it
+    // was applied). A null range means the whole buffer was painted (headless / pre-layout).
+    this.paintedWindow = range
+      ? { fromLine: range.startPoint.row, toLine: range.endPoint.row }
+      : { fromLine: 0, toLine: (this.buffer as any).getLineCount() - 1 };
   }
 
   /** Install the gutter once the view is sized (its line metrics validated). Deferred off
@@ -604,10 +618,12 @@ export class SyntaxController {
     });
   }
 
-  /** Whether the actual visible rows (no margin) sit within the currently-painted line
-   *  span — then a scroll repaint is redundant. False when unknown (always repaint). */
+  /** Whether the actual visible rows (no margin) sit within the fully-highlighted window
+   *  of the last paint — then a scroll repaint is redundant. Checks `paintedWindow` (the
+   *  region every token capture covered), NOT `paintedExtent` (which can overhang via a
+   *  multi-line node whose far lines only got the one broad tag). False when unknown. */
   private visibleWithinPainted(): boolean {
-    if (!this.paintedExtent) return false;
+    if (!this.paintedWindow) return false;
     const view = this.view as any;
     if (!view.getRealized()) return false;
     const rect = view.getVisibleRect();
@@ -618,7 +634,7 @@ export class SyntaxController {
     };
     const top = lineAtY(rect.y);
     const bottom = lineAtY(rect.y + rect.height);
-    return top >= this.paintedExtent.fromLine && bottom <= this.paintedExtent.toLine;
+    return top >= this.paintedWindow.fromLine && bottom <= this.paintedWindow.toLine;
   }
 
   /** The visible buffer range (± a margin), or null (whole buffer) when the view
