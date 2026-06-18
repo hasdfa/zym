@@ -613,7 +613,6 @@ export class AppWindow {
     // it; a second view (split / restore) attaches to the already-loaded shared model.
     const { document } = this.documents.acquire(path);
     const editor = new TextEditor({
-      onToast: (message) => this.toast(message),
       onClose: () => child?.close(),
       git: owner.git, // the owning workbench's repo draws the gutter (follows re-root)
       document,

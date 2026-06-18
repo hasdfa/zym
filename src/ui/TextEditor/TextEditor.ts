@@ -5,9 +5,6 @@
  * TextEditor per open file (one per tab). It owns its file I/O, its fold-key
  * bindings, and follows the system light/dark scheme. The assembled widget is
  * exposed via `root`.
- *
- * Load/save failures are reported through the injected `onToast` callback (the
- * toast overlay is window-level).
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -101,18 +98,21 @@ addStyles(`
     padding: 6px 8px;
     box-shadow: 0 1px 3px ${theme.ui.shadow};
   }
-  /* On-disk change warning banner, pinned above the editor content. The warning
-     color is mostly muted into the UI background (just a tint) so it isn't garish;
-     text/button keep the normal foreground. Compact button keeps the bar slim. */
-  .quilx-disk-banner {
-    background-color: mix(${theme.ui.bg ?? theme.ui.popoverBg}, ${theme.ui.warning}, 0.25);
+  /* Info banner pinned above the editor content. Color tint is mostly muted into
+     the UI background so it isn't garish; text/buttons keep the normal foreground.
+     Compact buttons keep the bar slim. Two variants: warning (disk change) and
+     error (load/save failure). */
+  .quilx-banner-warning,
+  .quilx-banner-error {
     color: ${theme.ui.fg};
     padding: 2px 8px;
   }
-  .quilx-disk-banner label {
-    font-weight: bold;
-  }
-  .quilx-disk-banner button {
+  .quilx-banner-warning { background-color: mix(${theme.ui.bg ?? theme.ui.popoverBg}, ${theme.ui.warning}, 0.25); }
+  .quilx-banner-error   { background-color: mix(${theme.ui.bg ?? theme.ui.popoverBg}, ${theme.ui.error},   0.25); }
+  .quilx-banner-warning label,
+  .quilx-banner-error   label { font-weight: bold; }
+  .quilx-banner-warning button,
+  .quilx-banner-error   button {
     color: ${theme.ui.fg};
     min-height: 0;
     padding: 1px 8px;
@@ -168,8 +168,6 @@ function registerSearchKeymapsOnce(): void {
 }
 
 export interface TextEditorOptions {
-  /** Surface a load/save message (the toast overlay is window-level). */
-  onToast?: (message: string) => void;
   /**
    * Close request for this editor. Was fired by the `:q`/`:wq`/`:x` ex-commands;
    * dormant until the custom vim layer grows an ex-command line. Closing is
@@ -306,14 +304,13 @@ export class TextEditor implements DocumentHost {
   private leap!: Leap; // built in buildEditorArea (needs the overlay)
   private completion!: CompletionController; // built in buildEditorArea (needs the overlay)
   private searchBar!: SearchBar; // built in buildEditorArea (needs the overlay)
-  // On-disk change warning, pinned above the content (a Revealer wrapping a
-  // left-aligned label + button); the button reloads (changed) or saves (deleted)
-  // per `diskBannerState`. Wired up in buildEditorArea.
-  private readonly diskBanner = new Gtk.Revealer();
-  private readonly diskBannerLabel = new Gtk.Label({ xalign: 0 });
-  private readonly diskBannerButton = new Gtk.Button();
-  private diskBannerState: 'synced' | 'changed' | 'deleted' = 'synced';
-  private readonly onToast: (message: string) => void;
+  // Info banner pinned above the content: a single Revealer used for disk-change
+  // warnings, load errors, and save errors. `showBanner` / `hideBanner` drive it.
+  private readonly banner = new Gtk.Revealer();
+  private readonly bannerLabel = new Gtk.Label({ xalign: 0 });
+  private readonly bannerButton = new Gtk.Button();
+  private readonly bannerBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+  private bannerAction: (() => void) | null = null;
 
   // LSP: a document adapter the LspManager drives, and the per-editor diagnostics
   // renderer. Wired in `installLsp` once the model and root exist.
@@ -384,7 +381,6 @@ export class TextEditor implements DocumentHost {
   private mapHandler: (() => void) | null = null;
 
   constructor(options: TextEditorOptions = {}) {
-    this.onToast = options.onToast ?? (() => {});
     this.bufferMode = options.buffer ?? null;
     this.peekMode = options.peek ?? false;
     this.gitRepo = options.git ?? null;
@@ -1145,34 +1141,27 @@ export class TextEditor implements DocumentHost {
       box.on('destroy', () => sub.dispose());
     }
 
-    // On-disk change banner pinned above the content (replaces a transient toast,
-    // so the warning persists until the user acts). A centered message + button;
-    // the button's action depends on the state (`onDiskStateChanged` keeps the label,
-    // button label, and `diskBannerState` in sync). A custom Revealer+Box rather than
+    // Unified info banner: disk-change warnings, load errors, and save errors all use
+    // this single Revealer. `showBanner` sets the color class, message, and optional
+    // action button; `hideBanner` collapses it. A custom Revealer+Box rather than
     // Adw.Banner so we control the layout (full-width tint, centered content).
-    this.diskBannerButton.on('clicked', () => {
-      const path = this.document.currentFile;
-      if (!path) return;
-      if (this.diskBannerState === 'deleted') this.document.save();
-      else this.document.loadFile(path);
-    });
-    // Label + button group, centered within the full-width tinted band: `content`
-    // expands to fill but `halign: center` keeps it at natural width, centered.
-    const content = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 16 });
-    content.setHexpand(true);
-    content.setHalign(Gtk.Align.CENTER);
-    content.append(this.diskBannerLabel);
-    content.append(this.diskBannerButton);
-    const bannerBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    bannerBox.addCssClass('quilx-disk-banner');
-    bannerBox.append(content);
-    this.diskBanner.setChild(bannerBox);
-    this.diskBanner.setRevealChild(false);
+    this.bannerButton.on('clicked', () => this.bannerAction?.());
+    const bannerDismiss = new Gtk.Button({ label: 'Dismiss' });
+    bannerDismiss.on('clicked', () => this.banner.setRevealChild(false));
+    const bannerContent = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 16 });
+    bannerContent.setHexpand(true);
+    bannerContent.setHalign(Gtk.Align.CENTER);
+    bannerContent.append(this.bannerLabel);
+    bannerContent.append(this.bannerButton);
+    bannerContent.append(bannerDismiss);
+    this.bannerBox.append(bannerContent);
+    this.banner.setChild(this.bannerBox);
+    this.banner.setRevealChild(false);
 
     box.setVexpand(true);
     box.setHexpand(true);
     const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    outer.append(this.diskBanner);
+    outer.append(this.banner);
     outer.append(box);
     return outer;
   }
@@ -1592,26 +1581,21 @@ export class TextEditor implements DocumentHost {
     return (this.view as any).hasFocus();
   }
 
-  /** @internal Surface a load/save error. */
-  toast(message: string): void {
-    this.onToast(message);
+  /** @internal Show a persistent info banner above the content. */
+  showBanner(message: string, kind: 'error' | 'warning', action?: { label: string; onClick: () => void }): void {
+    this.bannerBox.removeCssClass('quilx-banner-warning');
+    this.bannerBox.removeCssClass('quilx-banner-error');
+    this.bannerBox.addCssClass(`quilx-banner-${kind}`);
+    this.bannerLabel.setLabel(message);
+    this.bannerAction = action?.onClick ?? null;
+    this.bannerButton.setLabel(action?.label ?? '');
+    this.bannerButton.setVisible(action != null);
+    this.banner.setRevealChild(true);
   }
 
-  /** @internal Show (or hide) the on-disk change banner above the content. */
-  onDiskStateChanged(state: 'synced' | 'changed' | 'deleted', path: string | null): void {
-    this.diskBannerState = state;
-    if (state === 'synced' || !path) {
-      this.diskBanner.setRevealChild(false);
-      return;
-    }
-    if (state === 'deleted') {
-      this.diskBannerLabel.setLabel('file deleted on disk');
-      this.diskBannerButton.setLabel('Save');
-    } else {
-      this.diskBannerLabel.setLabel('file changed on disk');
-      this.diskBannerButton.setLabel('Reload');
-    }
-    this.diskBanner.setRevealChild(true);
+  /** @internal Hide the info banner. */
+  hideBanner(): void {
+    this.banner.setRevealChild(false);
   }
 
   /** @internal The cursor for an LSP request (anchors completion/hover at this view).
