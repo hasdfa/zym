@@ -52,7 +52,7 @@ app.on('activate', () => {
   const natHeight = () => (view as any).measure(Gtk.Orientation.VERTICAL, -1)[1];
 
   {
-    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+    setTimeout(() => {
       const before = natHeight();
       const regions = syntax.foldsByHeaderLine.size;
       const captureBefore = syntax.captureCounts();
@@ -67,11 +67,11 @@ app.on('activate', () => {
       // `42` literal should appear as an extra @number capture.
       (buffer as any).insert((buffer as any).getEndIter(), '\nconst answer = 42;\n', -1);
 
-      GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+      setTimeout(() => {
         const afterZa = natHeight();
         const captureAfterEdit = syntax.captureCounts();
         syntax.foldAll();
-        GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+        setTimeout(() => {
           const afterAll = natHeight();
           console.log(JSON.stringify({
             grammarHandled: handled,
@@ -86,15 +86,12 @@ app.on('activate', () => {
           }, null, 2));
           loop.quit();
           app.quit();
-          return false;
-        });
-        return false;
-      });
-      return false;
-    });
+        }, 400);
+      }, 400);
+    }, 400);
   }
 
-  GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 5000, () => { loop.quit(); app.quit(); return false; });
+  setTimeout(() => { loop.quit(); app.quit(); }, 5000);
 
   createRequire(import.meta.url)('node-gtk').startLoop();
   loop.run();

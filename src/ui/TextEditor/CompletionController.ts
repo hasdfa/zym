@@ -14,7 +14,7 @@
  * Tab/Shift-Tab cycle the candidates (re-filling), Enter commits, Esc is left to
  * vim (it exits insert mode); the host dismisses on any leave-insert.
  */
-import { Gdk, GLib, Gtk } from '../../gi.ts';
+import { Gdk, Gtk } from '../../gi.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 import type { EditorModel } from './EditorModel.ts';
@@ -46,7 +46,7 @@ export class CompletionController {
   private readonly sources: CompletionSource[] = [];
 
   private requestSeq = 0; // drops stale async source responses
-  private debounceId = 0;
+  private debounceId: NodeJS.Timeout | null = null;
   private suppressQuery = false; // ignore the buffer change from our own edits
   // Tab/arrows cycle a list whose selection runs from -1 (nothing selected, the
   // original typed text) through the candidates and loops back to -1. The selected
@@ -86,8 +86,8 @@ export class CompletionController {
   /** Close the popup and cancel any pending query. */
   dismiss(): void {
     if (this.debounceId) {
-      GLib.sourceRemove(this.debounceId);
-      this.debounceId = 0;
+      clearTimeout(this.debounceId);
+      this.debounceId = null;
     }
     this.requestSeq++; // invalidate in-flight queries
     this.previewRange = null;
@@ -133,12 +133,11 @@ export class CompletionController {
   }
 
   private scheduleQuery(trigger: CompletionTrigger, triggerCharacter?: string): void {
-    if (this.debounceId) GLib.sourceRemove(this.debounceId);
-    this.debounceId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
-      this.debounceId = 0;
+    if (this.debounceId) clearTimeout(this.debounceId);
+    this.debounceId = setTimeout(() => {
+      this.debounceId = null;
       this.query(trigger, triggerCharacter);
-      return false;
-    });
+    }, DEBOUNCE_MS);
   }
 
   private query(trigger: CompletionTrigger, triggerCharacter?: string): void {

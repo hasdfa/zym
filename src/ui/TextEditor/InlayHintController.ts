@@ -11,7 +11,7 @@
  * Refetches the whole document (debounced) on edits + on demand; cheap timeout-bounded
  * LSP request. Gated by `editor.inlayHints`.
  */
-import { GLib, type SourceView } from '../../gi.ts';
+import type { SourceView } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
 import { VirtualText } from './VirtualText.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';
@@ -21,7 +21,7 @@ const DEBOUNCE_MS = 400;
 export class InlayHintController {
   private readonly annotations: VirtualText;
   private readonly getDoc: () => LspDocument | null;
-  private timer = 0;
+  private timer: NodeJS.Timeout | null = null;
   private seq = 0; // drops stale async responses
   private disposed = false;
   // Last-fetched hints (MODEL lines), kept so a fold toggle can re-place them at the
@@ -40,12 +40,11 @@ export class InlayHintController {
 
   /** Recompute after a short idle (coalesces a burst of edits into one request). */
   scheduleRefresh(): void {
-    if (this.timer) GLib.sourceRemove(this.timer);
-    this.timer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
-      this.timer = 0;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = null;
       void this.refresh();
-      return GLib.SOURCE_REMOVE;
-    });
+    }, DEBOUNCE_MS);
   }
 
   /** Fetch inlay hints for the whole document and render them end-of-line per line. */
@@ -93,8 +92,8 @@ export class InlayHintController {
 
   dispose(): void {
     this.disposed = true;
-    if (this.timer) GLib.sourceRemove(this.timer);
-    this.timer = 0;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
     this.annotations.dispose();
   }
 }

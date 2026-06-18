@@ -13,7 +13,7 @@
  * this widget just presents status. The assembled panel is exposed via `root`.
  */
 import * as Path from 'node:path';
-import { GLib, Gtk, Pango } from '../gi.ts';
+import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
@@ -284,10 +284,9 @@ export class GitPanel {
 
     // Reapply the scroll offset once the rebuilt rows have been laid out (the
     // adjustment's range is only correct after allocation).
-    GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+    setTimeout(() => {
       this.scrolled.getVadjustment().setValue(scrollValue);
-      return false;
-    });
+    }, 0);
   }
 
   private addGroup(title: string, changes: GitChange[], kind: RowKind): void {

@@ -16,7 +16,7 @@
  * `foldAll`/`unfoldAll` methods; the editor wires them to `fold:*` commands that
  * the vim keymap's `z`-prefix (za/zo/zc/zR/zM) dispatches.
  */
-import { Gtk, GLib, Pango, type SourceBuffer, type SourceView } from '../gi.ts';
+import { Gtk, Pango, type SourceBuffer, type SourceView } from '../gi.ts';
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
 import { theme } from '../theme/theme.ts';
 import { findBracketPair } from './bracketMatch.ts';
@@ -162,8 +162,8 @@ export class SyntaxController {
   private readonly lineTextCache = new Map<number, string>();
   readonly foldsByHeaderLine = new Map<number, FoldRegion>();
 
-  private debounceId = 0;
-  private viewportDebounceId = 0;
+  private debounceId: NodeJS.Timeout | null = null;
+  private viewportDebounceId: NodeJS.Timeout | null = null;
   // The vadjustment our scroll-repaint handler is bound to. The ScrolledWindow swaps
   // the view's adjustment when it's parented, so we rebind when it changes (a plain
   // "already connected" guard would pin us to the throwaway default → scroll never
@@ -292,8 +292,8 @@ export class SyntaxController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.debounceId) { GLib.sourceRemove(this.debounceId); this.debounceId = 0; }
-    if (this.viewportDebounceId) { GLib.sourceRemove(this.viewportDebounceId); this.viewportDebounceId = 0; }
+    if (this.debounceId) { clearTimeout(this.debounceId); this.debounceId = null; }
+    if (this.viewportDebounceId) { clearTimeout(this.viewportDebounceId); this.viewportDebounceId = null; }
     for (const { target, event, cb } of this.connections) {
       try { target.off(event, cb); } catch { /* target already finalized — nothing to detach */ }
     }
@@ -446,12 +446,11 @@ export class SyntaxController {
 
   private scheduleRefresh(): void {
     if (this.disposed || !this.grammar) return;
-    if (this.debounceId) GLib.sourceRemove(this.debounceId);
-    this.debounceId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, HIGHLIGHT_DEBOUNCE_MS, () => {
-      this.debounceId = 0;
+    if (this.debounceId) clearTimeout(this.debounceId);
+    this.debounceId = setTimeout(() => {
+      this.debounceId = null;
       this.refresh();
-      return false;
-    });
+    }, HIGHLIGHT_DEBOUNCE_MS);
   }
 
   /** On edit: reparse incrementally, then re-highlight the viewport + recompute folds. */
@@ -585,13 +584,12 @@ export class SyntaxController {
   /** Schedule a viewport-only repaint after scrolling settles (no reparse). */
   private scheduleViewportRepaint(): void {
     if (this.disposed || !this.grammar) return;
-    if (this.viewportDebounceId) GLib.sourceRemove(this.viewportDebounceId);
-    this.viewportDebounceId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, VIEWPORT_DEBOUNCE_MS, () => {
-      this.viewportDebounceId = 0;
+    if (this.viewportDebounceId) clearTimeout(this.viewportDebounceId);
+    this.viewportDebounceId = setTimeout(() => {
+      this.viewportDebounceId = null;
       this.repaint();
       (this.view as any).queueDraw();
-      return false;
-    });
+    }, VIEWPORT_DEBOUNCE_MS);
   }
 
   /** The visible buffer range (± a margin), or null (whole buffer) when the view

@@ -16,7 +16,7 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Gdk, GdkPixbuf, GLib, Gtk } from '../../gi.ts';
+import { Gdk, GdkPixbuf, Gtk } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
 import { Disposable } from '../../util/eventKit.ts';
 import type { PluginContext } from '../../plugin/types.ts';
@@ -124,7 +124,7 @@ export function activateImagePreview(ctx: PluginContext, markdownFileTypes: read
     // remove when images actually appear, disappear, or change source.
     const blocks = new Map<string, BlockDecorationHandle>();
     const cache = new Map<string, CachedTexture>();
-    let timer = 0;
+    let timer: NodeJS.Timeout | null = null;
 
     const refresh = (): void => {
       const enabled = quilx.config.get('markdown.imagePreview') !== false;
@@ -160,12 +160,11 @@ export function activateImagePreview(ctx: PluginContext, markdownFileTypes: read
     };
 
     const schedule = (): void => {
-      if (timer) GLib.sourceRemove(timer);
-      timer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
-        timer = 0;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
         refresh();
-        return false; // GLib.SOURCE_REMOVE
-      });
+      }, DEBOUNCE_MS);
     };
 
     const sub = editor.model.onDidChangeText(schedule);
@@ -173,7 +172,7 @@ export function activateImagePreview(ctx: PluginContext, markdownFileTypes: read
     refresh(); // initial paint of the loaded content
 
     return new Disposable(() => {
-      if (timer) GLib.sourceRemove(timer);
+      if (timer) clearTimeout(timer);
       sub.dispose();
       configSub.dispose();
       for (const handle of blocks.values()) handle.remove();

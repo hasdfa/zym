@@ -13,7 +13,6 @@
  * files whose path no longer exists are skipped and surfaced as one notification.
  */
 import * as Fs from 'node:fs';
-import { GLib } from './gi.ts';
 import { quilx } from './quilx.ts';
 import { SESSION_VERSION, type SessionState, type TabState, type WorkspaceState } from './SessionManager.ts';
 import type { PanelGroup, RestoredChild } from './ui/PanelGroup.ts';
@@ -59,7 +58,7 @@ export interface SessionControllerOptions {
 
 export class SessionController {
   private readonly opts: SessionControllerOptions;
-  private autosaveTimer = 0;
+  private autosaveTimer: NodeJS.Timeout | null = null;
   // Files skipped during the in-flight restore (no longer on disk), aggregated
   // into a single notification at the end.
   private missing: string[] = [];
@@ -107,20 +106,19 @@ export class SessionController {
   /** Schedule a debounced autosave, if `session.autosave` is enabled. */
   scheduleAutosave(): void {
     if (quilx.config.get('session.autosave') !== true) return;
-    if (this.autosaveTimer) GLib.sourceRemove(this.autosaveTimer);
+    if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
     const ms = Math.max(0, Number(quilx.config.get('session.autosaveDebounceMs') ?? 1000));
-    this.autosaveTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, ms, () => {
-      this.autosaveTimer = 0;
+    this.autosaveTimer = setTimeout(() => {
+      this.autosaveTimer = null;
       this.saveNow();
-      return GLib.SOURCE_REMOVE;
-    });
+    }, ms);
   }
 
   /** Cancel any pending autosave and flush once on quit (if autosave is on). */
   flush(): void {
     if (this.autosaveTimer) {
-      GLib.sourceRemove(this.autosaveTimer);
-      this.autosaveTimer = 0;
+      clearTimeout(this.autosaveTimer);
+      this.autosaveTimer = null;
     }
     if (quilx.config.get('session.autosave') === true) this.saveNow();
   }

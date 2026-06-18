@@ -48,7 +48,7 @@ app.on('activate', () => {
     const handles: BlockDecorationHandle[] = LINES.map((line) => blocks.add({ line, widget: makeCard(`block @${line}`), placement: 'below' }));
 
     // After the view is realized + blocks placed: remove half, force redraws, scroll.
-    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 400, () => {
+    setTimeout(() => {
       handles[1].remove();
       handles[3].remove();
       view.queueDraw();
@@ -57,21 +57,18 @@ app.on('activate', () => {
       const vadj = view.getVadjustment();
       if (vadj) vadj.setValue(120);
       view.queueDraw();
-      return false;
-    });
+    }, 400);
 
     // A second churn round (re-add at a removed slot), then quit.
-    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 800, () => {
+    setTimeout(() => {
       blocks.add({ line: 8, widget: makeCard('re-added @8'), placement: 'below' });
       view.queueDraw();
-      return false;
-    });
-    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 1400, () => {
+    }, 800);
+    setTimeout(() => {
       process.stderr.write('[POC] done\n');
       loop.quit();
       app.quit();
-      return false;
-    });
+    }, 1400);
 
     startLoop();
     loop.run();

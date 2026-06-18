@@ -25,7 +25,7 @@
  * See tasks/git/staging-interface.md for the design and decisions.
  */
 import * as Fs from 'node:fs';
-import { GLib, Gtk, Pango } from '../gi.ts';
+import { Gtk, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
@@ -361,10 +361,9 @@ export class GitStagingView {
       if (info) this.openDiff(info);
     }
 
-    GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+    setTimeout(() => {
       this.root.getVadjustment().setValue(scrollValue);
-      return false;
-    });
+    }, 0);
   }
 
   private addGroup(title: string, changes: GitChange[], kind: RowKind): void {

@@ -13,7 +13,6 @@
  * The parsing/contrast logic is the pure, unit-tested `colors.ts`; this file is
  * just the editor wiring.
  */
-import { GLib } from '../../gi.ts';
 import { Disposable } from '../../util/eventKit.ts';
 import type { Plugin, PluginContext } from '../../plugin/types.ts';
 import { COLOR_LITERAL_RE, colorTint } from './colors.ts';
@@ -31,7 +30,7 @@ export const colorPreviewPlugin: Plugin = {
   activate(ctx: PluginContext) {
     ctx.observeTextEditors((editor) => {
       const layer = editor.decorations.layer(LAYER);
-      let timer = 0;
+      let timer: NodeJS.Timeout | null = null;
 
       // Re-sync the whole layer from the current buffer (the TextDecorations
       // pattern: producers recompute their full set, tags track edits in between).
@@ -44,19 +43,18 @@ export const colorPreviewPlugin: Plugin = {
       };
 
       const schedule = (): void => {
-        if (timer) GLib.sourceRemove(timer);
-        timer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
-          timer = 0;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
           refresh();
-          return false; // GLib.SOURCE_REMOVE
-        });
+        }, DEBOUNCE_MS);
       };
 
       const sub = editor.model.onDidChangeText(schedule);
       refresh(); // initial paint of the loaded content
 
       return new Disposable(() => {
-        if (timer) GLib.sourceRemove(timer);
+        if (timer) clearTimeout(timer);
         sub.dispose();
         layer.clear();
       });

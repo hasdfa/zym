@@ -23,7 +23,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Adw, Gio, GLib, GtkSource, type SourceBuffer } from '../../gi.ts';
+import { Adw, Gio, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
 import { Point } from '../../text/Point.ts';
 import type { LspDocument, DocumentEdit } from '../../lsp/LspManager.ts';
@@ -116,7 +116,7 @@ export class Document {
   private diskMtimeMs: number | null = null;
   private diskState: 'synced' | 'changed' | 'deleted' = 'synced';
   private fileMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private deletionCheckTimer = 0;
+  private deletionCheckTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.model = new GtkSource.Buffer();
@@ -558,8 +558,8 @@ export class Document {
   dispose(): void {
     this.fileMonitor?.cancel();
     this.fileMonitor = null;
-    if (this.deletionCheckTimer) GLib.sourceRemove(this.deletionCheckTimer);
-    this.deletionCheckTimer = 0;
+    if (this.deletionCheckTimer) clearTimeout(this.deletionCheckTimer);
+    this.deletionCheckTimer = null;
     // Only close an LSP doc we actually opened — a lazily-assigned, never-shown document
     // has a path but never ran didOpen.
     if (this.contentLoaded) quilx.lsp.didClose(this.lspDocument);
@@ -714,15 +714,14 @@ export class Document {
 
   private scheduleDeletionCheck(): void {
     if (this.deletionCheckTimer) return;
-    this.deletionCheckTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 200, () => {
-      this.deletionCheckTimer = 0;
+    this.deletionCheckTimer = setTimeout(() => {
+      this.deletionCheckTimer = null;
       if (this._currentFile && this.statMtimeMs(this._currentFile) === null) {
         this.setDiskState('deleted');
       } else if (this._currentFile) {
         this.onDiskChanged();
       }
-      return GLib.SOURCE_REMOVE;
-    });
+    }, 200);
   }
 
   private setDiskState(state: 'synced' | 'changed' | 'deleted'): void {

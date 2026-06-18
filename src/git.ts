@@ -21,7 +21,7 @@
  */
 import * as Path from 'node:path';
 import * as Fs from 'node:fs';
-import { GLib, Gio } from './gi.ts';
+import { Gio } from './gi.ts';
 import * as cli from './git/cli.ts';
 import { checkoutPullRequest as ghCheckoutPullRequest } from './github.ts';
 import { parseStatus, parseNumstat, parseLsFiles, type LineDelta, type ParsedStatus } from './git/status.ts';
@@ -226,7 +226,7 @@ class CliGitRepo implements GitRepo {
 
   private readonly listeners = new Set<() => void>();
   private monitor: FileMonitor | null = null;
-  private pollId = 0;
+  private pollId: NodeJS.Timeout | null = null;
   private watching = false;
   private reading = false; // a poll's git calls are in flight — don't overlap
   private busyCount = 0;
@@ -330,8 +330,8 @@ class CliGitRepo implements GitRepo {
     this.monitor?.cancel();
     this.monitor = null;
     if (this.pollId) {
-      GLib.sourceRemove(this.pollId);
-      this.pollId = 0;
+      clearInterval(this.pollId);
+      this.pollId = null;
     }
   }
 
@@ -373,10 +373,9 @@ class CliGitRepo implements GitRepo {
 
     // Working-tree edits have no single file to watch; poll and diff the
     // signature so listeners only fire when the visible numbers actually move.
-    this.pollId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, POLL_INTERVAL_MS, () => {
+    this.pollId = setInterval(() => {
       this.pollOnce();
-      return true; // keep polling
-    });
+    }, POLL_INTERVAL_MS);
   }
 
   /** Async refresh: status + numstat; on a signature change, also refresh the

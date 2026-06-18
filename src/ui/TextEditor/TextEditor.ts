@@ -54,7 +54,6 @@ import type { TabState } from '../../SessionManager.ts';
 import {
   Adw,
   Gdk,
-  GLib,
   Gtk,
   GtkSource,
   type SourceBuffer,
@@ -335,7 +334,7 @@ export class TextEditor implements DocumentHost {
   private readonly signatureLabel = new Gtk.Label({ useMarkup: true, wrap: true, xalign: 0 });
   private signatureOverlay!: OverlayDecoration;
   private signatureSeq = 0;
-  private signatureTimer = 0;
+  private signatureTimer: NodeJS.Timeout | null = null;
   // Whether the signature card's position is fixed for the current call (set on
   // first show, cleared on dismiss) — so it stays put as arguments are typed.
   private signatureAnchored = false;
@@ -675,12 +674,11 @@ export class TextEditor implements DocumentHost {
   // Debounced (re)request — coalesces the autopair edits + cursor moves of one
   // keystroke into a single request against the settled cursor.
   private scheduleSignatureRequest() {
-    if (this.signatureTimer) GLib.sourceRemove(this.signatureTimer);
-    this.signatureTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, SIGNATURE_DEBOUNCE_MS, () => {
-      this.signatureTimer = 0;
+    if (this.signatureTimer) clearTimeout(this.signatureTimer);
+    this.signatureTimer = setTimeout(() => {
+      this.signatureTimer = null;
       this.requestSignatureHelp();
-      return false;
-    });
+    }, SIGNATURE_DEBOUNCE_MS);
   }
 
   private requestSignatureHelp() {
@@ -722,8 +720,8 @@ export class TextEditor implements DocumentHost {
 
   private dismissSignature() {
     if (this.signatureTimer) {
-      GLib.sourceRemove(this.signatureTimer);
-      this.signatureTimer = 0;
+      clearTimeout(this.signatureTimer);
+      this.signatureTimer = null;
     }
     this.signatureSeq++; // invalidate any in-flight request
     this.signatureAnchored = false; // the next call re-anchors at its own site
@@ -1003,7 +1001,7 @@ export class TextEditor implements DocumentHost {
       const vadj = scrolled.getVadjustment();
       let pastEndEnabled = quilx.config.get('editor.scrollPastEnd') !== false;
       let lastMargin = -1;
-      let pendingId = 0;
+      let pendingId: NodeJS.Timeout | null = null;
       const applyPastEnd = () => {
         const margin = pastEndEnabled
           ? Math.max(0, Math.round(vadj.getPageSize() - this.editorModel.getLineHeightInPixels()))
@@ -1020,15 +1018,14 @@ export class TextEditor implements DocumentHost {
       // allocation cycle settles. One pending pass at a time.
       const scheduleApply = () => {
         if (pendingId) return;
-        pendingId = GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
-          pendingId = 0;
+        pendingId = setTimeout(() => {
+          pendingId = null;
           applyPastEnd();
-          return false; // G_SOURCE_REMOVE
-        });
+        }, 0);
       };
       vadj.on('changed', scheduleApply);
       this.view.on('destroy', () => {
-        if (pendingId) GLib.sourceRemove(pendingId);
+        if (pendingId) clearTimeout(pendingId);
       });
       const pastEndSub = quilx.config.observe('editor.scrollPastEnd', (v) => {
         pastEndEnabled = v !== false;

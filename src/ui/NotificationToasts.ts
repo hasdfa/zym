@@ -13,7 +13,7 @@
  * the model stays in sync. Meant to be added as an overlay child aligned to the
  * bottom-right; the assembled stack is exposed via `root`.
  */
-import { GLib, Gtk } from '../gi.ts';
+import { Gtk } from '../gi.ts';
 import type { Notification } from '../Notification.ts';
 import { Icons, iconLabel } from './icons.ts';
 
@@ -92,10 +92,9 @@ export class NotificationToasts {
     this.root.prepend(revealer);
     // Flip to revealed once mapped so the transition actually plays (toggling it
     // synchronously on an unmapped widget would snap straight to shown).
-    GLib.idleAdd(GLib.PRIORITY_DEFAULT, () => {
+    setTimeout(() => {
       revealer.setRevealChild(true);
-      return GLib.SOURCE_REMOVE;
-    });
+    }, 0);
     if (key) this.replaceable.set(key, { card, revealer, cancelTimer, notification });
     notification.setDisplayed(true);
   }
@@ -104,10 +103,9 @@ export class NotificationToasts {
   private animateOut(revealer: Revealer): void {
     if (!revealer.getParent()) return; // already removed
     revealer.setRevealChild(false);
-    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, TRANSITION_MS, () => {
+    setTimeout(() => {
       if (revealer.getParent()) this.root.remove(revealer);
-      return GLib.SOURCE_REMOVE;
-    });
+    }, TRANSITION_MS);
   }
 
   // (Re)fill `card` with `notification`'s content + behavior. Returns a function
@@ -180,11 +178,11 @@ export class NotificationToasts {
     // Auto-expire non-dismissable toasts; dismissable ones wait for the close
     // button. `dismiss()` on removal keeps the model in sync (a no-op for the
     // non-dismissable case, which is already considered dismissed).
-    let timeoutId = 0;
+    let timeoutId: NodeJS.Timeout | null = null;
     const cancelTimer = () => {
       if (timeoutId) {
-        GLib.sourceRemove(timeoutId);
-        timeoutId = 0;
+        clearTimeout(timeoutId);
+        timeoutId = null;
       }
     };
     const forget = () => {
@@ -211,13 +209,12 @@ export class NotificationToasts {
       card.addController(click);
     }
     if (!notification.isDismissable()) {
-      timeoutId = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, this.timeout * 1000, () => {
-        timeoutId = 0;
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
         this.animateOut(revealer);
         notification.dismiss();
         forget();
-        return false; // one-shot: remove the source
-      });
+      }, this.timeout * 1000);
     }
 
     return cancelTimer;

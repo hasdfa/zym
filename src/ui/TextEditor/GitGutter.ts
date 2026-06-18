@@ -18,7 +18,7 @@
  * line→kind map, repainted with `queueDraw()`.
  */
 import * as Path from 'node:path';
-import { GLib, Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
+import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../../util/hunkPatch.ts';
@@ -107,7 +107,7 @@ export class GitGutter {
   // Bumped per base fetch so a late async result for a superseded file is dropped.
   private baseGeneration = 0;
   // Pending debounced recompute (a GLib timeout id; 0 when none).
-  private updateTimer = 0;
+  private updateTimer: NodeJS.Timeout | null = null;
   // Cache the repo root per path so the sync `rev-parse` isn't run on every fetch.
   private cachedRoot: string | null = null;
   private cachedRootPath: string | null = null;
@@ -186,12 +186,11 @@ export class GitGutter {
 
   /** Debounced re-diff of the live buffer against the cached bases (on edits). */
   scheduleUpdate(): void {
-    if (this.updateTimer) GLib.sourceRemove(this.updateTimer);
-    this.updateTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
-      this.updateTimer = 0;
+    if (this.updateTimer) clearTimeout(this.updateTimer);
+    this.updateTimer = setTimeout(() => {
+      this.updateTimer = null;
       this.recompute();
-      return false;
-    });
+    }, DEBOUNCE_MS);
   }
 
   /** Sorted buffer rows where each git hunk begins — a hunk is a maximal run of
@@ -245,7 +244,7 @@ export class GitGutter {
   }
 
   dispose(): void {
-    if (this.updateTimer) GLib.sourceRemove(this.updateTimer);
+    if (this.updateTimer) clearTimeout(this.updateTimer);
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.renderer);
     this.gitUnsub?.();
     this.subs.dispose();

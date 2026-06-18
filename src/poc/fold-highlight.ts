@@ -378,7 +378,7 @@ app.on('activate', () => {
   // rendered height must shrink. Prints PASS/FAIL and quits.
   if (process.env.POC_VERIFY) {
     const natHeight = () => view.measure(Gtk.Orientation.VERTICAL, -1)[1];
-    GLib.timeoutAdd(0, 600, () => {
+    setTimeout(() => {
       const before = natHeight();
       const regions = foldsByHeaderLine.size;
 
@@ -391,7 +391,7 @@ app.on('activate', () => {
       if (first.folded) toggleFold(first); // restore before folding everything
 
       for (const region of foldsByHeaderLine.values()) if (!region.folded) toggleFold(region);
-      GLib.timeoutAdd(0, 600, () => {
+      setTimeout(() => {
         const after = natHeight();
         console.log(JSON.stringify({
           highlightCaptures: lastCaptureCount,
@@ -402,10 +402,8 @@ app.on('activate', () => {
           folding: after < before ? 'PASS (height shrank → lines hidden)' : 'FAIL',
         }, null, 2));
         loop.quit(); app.quit();
-        return false;
-      });
-      return false;
-    });
+      }, 600);
+    }, 600);
   }
 
   gi.startLoop();

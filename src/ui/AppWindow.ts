@@ -15,7 +15,6 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import {
   Adw,
-  GLib,
   Gtk,
   type Application,
   type ApplicationWindow,
@@ -203,8 +202,8 @@ export class AppWindow {
   // Unsubscribe for the upstream-behind watch on the active workbench's git;
   // swapped by `rebindGitChrome` on every workbench switch.
   private upstreamUnsub: (() => void) | null = null;
-  // Background `git fetch` timer (a GLib timeout id; 0 when disabled).
-  private autoFetchTimer = 0;
+  // Background git fetch interval timer (null when disabled).
+  private autoFetchTimer: NodeJS.Timeout | null = null;
 
   // Watches the user config file and syncs edits into quilx.config; cancelled on
   // close.
@@ -470,7 +469,7 @@ export class AppWindow {
   // the clean-exit path and, after confirmation, the unsaved-work path.
   private teardownAndQuit() {
     this.sessionController.flush(); // final autosave before the workbench goes away
-    if (this.autoFetchTimer) GLib.sourceRemove(this.autoFetchTimer);
+    if (this.autoFetchTimer) clearInterval(this.autoFetchTimer);
     this.upstreamUnsub?.();
     this.branchButton.dispose();
     this.githubButtons.dispose();
@@ -1183,10 +1182,9 @@ export class AppWindow {
         const terminal = this.terminals.get(widget);
         if (terminal instanceof AgentTerminal) {
           if (this.workbench.owner === terminal)
-            GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            setTimeout(() => {
               if (this.workbench.owner === terminal) this.activateOwner('user');
-              return GLib.SOURCE_REMOVE;
-            });
+            }, 0);
           return false;
         }
         return true;
@@ -1799,10 +1797,9 @@ export class AppWindow {
   // close-page signal emission, since it reparents the dock (an ancestor of the
   // emitting tab view) and that's unsafe to do mid-emission.
   private hideBottomDock(which: Exclude<BottomDock, null>): boolean {
-    GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+    setTimeout(() => {
       if (this.workbench.bottomDock === which) this.setBottomDock(null);
-      return GLib.SOURCE_REMOVE;
-    });
+    }, 0);
     return false;
   }
 
@@ -2383,10 +2380,9 @@ export class AppWindow {
   private startAutoFetch() {
     const minutes = Number(quilx.config.get('git.autoFetchMinutes') ?? 0);
     if (!(minutes > 0)) return;
-    this.autoFetchTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, minutes * 60_000, () => {
+    this.autoFetchTimer = setInterval(() => {
       if (this.workbench.git.getBranch() !== null) this.workbench.git.fetch();
-      return true; // keep fetching
-    });
+    }, minutes * 60_000);
   }
 
   // Notification log: show/hide the bottom-dock history, and clear it. Handlers

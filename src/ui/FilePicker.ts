@@ -12,7 +12,7 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { openPicker, type PickerItem } from './Picker.ts';
-import { GLib, Gtk } from '../gi.ts';
+import { Gtk } from '../gi.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -68,7 +68,7 @@ function collectFiles(root: string, onUpdate: (files: string[]) => void): void {
   const files: string[] = [];
   const stack: string[] = [root];
 
-  GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+  const tick = () => {
     let scanned = 0;
     let added = false;
     while (stack.length > 0 && scanned < DIRS_PER_TICK && files.length < MAX_FILES) {
@@ -96,6 +96,7 @@ function collectFiles(root: string, onUpdate: (files: string[]) => void): void {
 
     if (added) onUpdate(files.slice());
     const done = stack.length === 0 || files.length >= MAX_FILES;
-    return !done; // keep the idle source alive until the walk finishes
-  });
+    if (!done) setTimeout(tick, 0);
+  };
+  setTimeout(tick, 0);
 }
