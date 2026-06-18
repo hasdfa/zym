@@ -76,7 +76,7 @@ function walkFoldTypes(node: any, foldTypes: Set<string>, add: (s: number, e: nu
 }
 
 /** Fold maximal runs of >= 2 consecutive same-type siblings matching `re`. */
-function walkRuns(node: any, re: RegExp, add: (s: number, e: number) => void): void {
+function walkRuns(node: any, re: RegExp, add: (s: number, e: number, joinFooter?: boolean) => void): void {
   const children: any[] = node.namedChildren;
   let i = 0;
   while (i < children.length) {
@@ -84,8 +84,11 @@ function walkRuns(node: any, re: RegExp, add: (s: number, e: number) => void): v
     if (c && re.test(c.type)) {
       let j = i;
       while (j + 1 < children.length && children[j + 1] && children[j + 1].type === c.type) j++;
-      // endRow = last member's row + 1 → folding hides every line but the first.
-      if (j > i) add(children[i].startPosition.row, children[j].endPosition.row + 1);
+      // endRow = last member's row + 1 → folding hides every line but the first. That
+      // footer row is the line *after* the run (the next statement), which is NOT part
+      // of the fold — so never join it onto the header (that pulled the next line of
+      // code up onto the folded comment/import run).
+      if (j > i) add(children[i].startPosition.row, children[j].endPosition.row + 1, false);
       i = j + 1;
     } else {
       if (c) walkRuns(c, re, add);

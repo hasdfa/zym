@@ -17,6 +17,7 @@ import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
 import { theme } from '../theme/theme.ts';
 import { frecency } from '../util/Frecency.ts';
+import { enableReadline } from './readline.ts';
 
 // The picker card is monospace; the opt-in `.prose-entry` overrides to the UI
 // font. Both are registered with the central font store (so they follow the
@@ -188,8 +189,11 @@ export interface PickerOptions {
   /** Initial entry text (e.g. seed an action prompt with the editor selection). */
   query?: string;
   /** Invoked with the chosen item's `value` (and the full item, for callers that
-   *  attach extra data to their items). */
-  onSelect: (value: string, item: PickerItem) => void;
+   *  attach extra data to their items). Normally returns nothing and the picker
+   *  closes; return a string to instead **navigate in place** — the entry text is
+   *  replaced with it and the list re-queried, keeping the picker open (used by the
+   *  file opener to descend into a chosen folder). */
+  onSelect: (value: string, item: PickerItem) => void | string;
   action?: PickerAction;
   /**
    * Show the `action` row only when the query matches no items (rather than
@@ -389,6 +393,8 @@ export function openPicker(options: PickerOptions): PickerHandle {
   entry.setName('PickerEntry');
   entry.addCssClass('has-text-input'); // release the `space` leader so it types
   if (options.proseEntry) entry.addCssClass('prose-entry');
+  // Emacs/readline editing chords (ctrl-a/e, alt-f/b, ctrl-w/u/k, …) on the entry.
+  const readlineSub = enableReadline(entry);
 
   // Leading prompt slot: a fixed-width icon/spinner overlaid on the entry's left
   // inset. Present for `fetch` (async) pickers — which spin it while fetching —
@@ -531,6 +537,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     if (closed) return;
     closed = true;
     commandsSub?.dispose();
+    readlineSub.dispose();
     promptSpinner?.stop();
     if (previewTimer) GLib.sourceRemove(previewTimer);
     host.removeOverlay(panel);
@@ -683,9 +690,19 @@ export function openPicker(options: PickerOptions): PickerHandle {
     }
     const item = results[target.getIndex()];
     if (item === undefined) return;
+    const next = options.onSelect(item.value, item);
+    // A returned query navigates in place (e.g. descending into a chosen folder):
+    // replace the entry text and re-list, keeping the picker open instead of
+    // selecting. A `fetch` source is re-run at once so the new directory's
+    // contents appear immediately rather than after the search debounce.
+    if (typeof next === 'string') {
+      entry.setText(next);
+      entry.setPosition(-1);
+      if (options.fetch) runFetch();
+      return;
+    }
     if (frecencyNs) frecency.record(frecencyNs, item.value);
     close(false);
-    options.onSelect(item.value, item);
   };
 
   // A `fetch` source re-queries its candidate pool (debounced) as the query
@@ -791,7 +808,10 @@ export function openPicker(options: PickerOptions): PickerHandle {
   panel.addController(focus);
 
   host.addOverlay(panel);
-  if (options.query) entry.setText(options.query); // prefill (e.g. a seeded prompt)
+  if (options.query) {
+    entry.setText(options.query); // prefill (e.g. a seeded prompt / a full path)
+    entry.setPosition(-1); // cursor at the end, ready to keep typing
+  }
   rebuild();
   runFetch(); // populate a `fetch` source for the initial (possibly empty) query
   entry.grabFocus();

@@ -29,6 +29,24 @@ const EVENT_STOP_PROPAGATION = true;
 // that need the raw key — e.g. `space` in a text entry, terminal, or insert mode.
 const UNSET = 'unset!';
 
+// Whether a keystroke's nearest *complete* binding should fire now rather than
+// wait on a still-open chord. `fullIndices`/`partialIndices` are the matches'
+// positions in the focus chain (0 = focused element, larger = farther ancestor).
+//
+// A complete binding preempts the wait only if every unfinished (chord) match
+// lives strictly farther up the chain than it does: a focused entry's readline
+// `ctrl-w` (index 0) beats the window's `ctrl-w …` pane chord (a far ancestor),
+// whether or not the entry is in a modal — it's about focus proximity, the same
+// "nearest scope wins" principle the focus chain already encodes. A chord at the
+// same element as (or nearer than) the complete binding still blocks, so
+// same-scope sequences (vim `y` vs `y s`, the `#AppWindow` `space …` leader)
+// keep deferring. With no complete match there's nothing to preempt with.
+export function preemptsChord(fullIndices: number[], partialIndices: number[]): boolean {
+  if (fullIndices.length === 0) return false;
+  const nearestFull = Math.min(...fullIndices);
+  return partialIndices.every(i => i > nearestFull);
+}
+
 // How long an incomplete chord prefix is held before it's abandoned. While a
 // prefix is queued every key is swallowed (so e.g. `ctrl-d` never reaches a
 // terminal as long as `ctrl-d ctrl-d` might still complete); after this idle gap
@@ -512,7 +530,14 @@ export class KeymapManager {
     // chain breaks, so e.g. `y` (Yank) survives even though `y s` (Surround) is
     // a longer candidate. A prefix that only extends (no full match of its own)
     // keeps the previously-remembered fallback.
-    if (partialMatches.length > 0) {
+    //
+    // Exception: don't wait on a chord that lives farther up the focus chain than
+    // this keystroke's own complete binding — a nearer scope wins. That's what
+    // lets a focused entry's readline `ctrl-w` fire immediately instead of
+    // stalling on the window's `ctrl-w …` pane chord (see `preemptsChord`).
+    const indexIn = (m: KeybindingMatch) => elements.indexOf(m.element);
+    const preempt = preemptsChord(fullMatches.map(indexIn), partialMatches.map(indexIn));
+    if (partialMatches.length > 0 && !preempt) {
       if (fullMatches.length > 0) this.deferredFullMatches = fullMatches;
       this.setQueue(keystrokes);
       return EVENT_STOP_PROPAGATION;

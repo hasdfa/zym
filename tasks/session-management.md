@@ -210,6 +210,62 @@ Registered on `quilx.config` like the rest; editable via the existing
 
 Handlers on `#AppWindow`; bindings added centrally in `src/keymaps/default.ts`.
 
+## Feature: named sessions (plan)
+
+Goal: let a project keep **several named sessions** and switch between them — e.g.
+"review", "feature-x", "debugging" — instead of the single per-root autosave.
+
+**Already in place** (no format change needed): `SessionState.name?`, the filename
+resolver `slug(name) ?? hash(root)` (named sessions get their own json + own
+`<file>.buffers/` dir for free), `SessionManager.list()`, `label(state)` =
+`name ?? basename(root)`, and `delete(state)`. The storage layer already supports
+named files; what's missing is the **runtime notion of an active session name** and
+the commands to drive it.
+
+### The one runtime addition
+
+`SessionController` is keyed only by `root`, so its `serialize()` always writes the
+default (hash) file. Add a `currentName: string | null` (null = the default
+autosave session): `serialize()` stamps `state.name = currentName ?? undefined`, so
+autosave/flush target the *active named* file. Switching sessions sets it.
+
+### Commands (`#AppWindow`, bound in `keymaps/default.ts`)
+
+- `session:save-as` — prose-entry picker for a name → set `currentName`, `saveNow()`
+  (writes `<slug>.json`). "Save the current workbench as a named session."
+- `session:open` — picker over this root's sessions (`list()` filtered to
+  `primaryRoot === cwd`, label + `relativeTime(savedAt)`, default session included
+  as its basename). Selecting **switches**: flush the current session first, then
+  load + apply the target (same path as `restore`: rebuild user layout, relaunch
+  agents, apply docks/window), and set `currentName`. Replace semantics (the locked
+  decision), so the previous workbench is torn down.
+- `session:rename` — rename the active session (write under the new name, delete the
+  old file + its `.buffers`, update `currentName`).
+- `session:delete` — pick a session → `delete()` it (+ its buffer dir); refuse/guard
+  deleting the active one (or switch to default first).
+
+### Decisions to settle
+
+- **Default ↔ named relationship:** the unnamed hash session is the implicit
+  autosave; `save-as` forks the current state into a named file and makes it active
+  (the default file stays as-is). Confirm fork-vs-move.
+- **Switching with live agents:** replace semantics tears down the current
+  workbench — running agents in the old session are closed (consistent with
+  `closeAgent`). Confirm vs. carry-over.
+- **Scope of `session:open`:** **this root only** for named sessions (no window
+  re-root). Cross-root open (other projects) stays the separate multi-root item
+  below — it needs the active-root switch (now cheap given per-workbench cwd/git).
+- **Remember active across launches:** optionally persist the last-active session
+  name (tiny window-state) so a relaunch reopens it; MVP launches the default.
+
+### Phasing
+
+- [ ] `currentName` in `SessionController` (serialize stamps `name`; save/flush target
+      the named file); `session:save-as` + `session:rename`.
+- [ ] `session:open` picker (this root) → flush-then-switch (reuse the restore path).
+- [ ] `session:delete` + active-session guard; (later) persist last-active across launches.
+- [ ] Cross-root `session:open` — folds into the multi-root item below.
+
 ## Edge cases
 
 - **Missing files** on restore → skip the tab, aggregate into one notification

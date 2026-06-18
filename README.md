@@ -17,7 +17,7 @@ A keyboard-driven, modern code editor — blending the best from neovim, atom, z
 
 ## Highlights
 
-- ⌨️ **Vim beyond its best**: the `vim-mode-plus` plugin ported from Atom — so good it's better than the original. Multi-cursor, occurences, text objects, operators, and more (target.vim, leap.nvim, etc).
+- ⌨️ **Vim beyond its best**: the `vim-mode-plus` plugin ported from Atom — so good it's better than the original. Multi-cursor, occurrences, text objects, operators, and more (target.vim, leap.nvim, etc).
 - 🤖 **Agents** (well at least `claude`) — you work alongside your minions. Jump to their workbench to see what they edited. Jump to your workbench to work on your own.
 - 🪟 **Built for simplicity** — a `space`-leader scheme (thanks Spacemacs) and fuzzy finders for everything.
 - 🎨 **Native GNOME look** — Adwaita with simple theming support.

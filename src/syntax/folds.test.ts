@@ -42,9 +42,13 @@ test('folds: block folds (folds.scm) + import run + comment run', async () => {
   const root = parser.parse(SRC).rootNode;
   const query = lang.query(Fs.readFileSync(foldsScm, 'utf8'));
 
-  const ranges = computeFoldRanges(root, query, FOLD_TYPES, RUN_RE).map((r): [number, number] => [r.startRow, r.endRow]);
+  const all = computeFoldRanges(root, query, FOLD_TYPES, RUN_RE);
+  const ranges = all.map((r): [number, number] => [r.startRow, r.endRow]);
   // import run [0..2] → endRow 3; comment run [4..5] → endRow 6; function body 6..9; object 7..8 too short (1 line → dropped).
   assert.deepEqual(ranges, [[0, 3], [4, 6], [6, 9]]);
+  // Run folds (import/comment) end on the line AFTER the run → joinFooter:false so that
+  // next line isn't pulled onto the fold; the block fold joins its `}`.
+  assert.deepEqual(all.map((r) => r.joinFooter), [false, false, true]);
 });
 
 test('folds: foldTypes fallback when no folds query (no comment folding)', async () => {

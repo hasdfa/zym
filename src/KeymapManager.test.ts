@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 // quilx.ts instantiates a KeymapManager at load; import it first so the class is
 // defined before that runs (KeymapManager ↔ quilx is a circular import).
 import './quilx.ts';
-import { KeymapManager } from './KeymapManager.ts';
+import { KeymapManager, preemptsChord } from './KeymapManager.ts';
 
 test('getAllBindings flattens registered bindings with source, selector and priority', () => {
   const km = new KeymapManager();
@@ -44,4 +44,30 @@ test('onBindingsChanged fires on add and remove, and stops after dispose', () =>
   sub.dispose();
   km.add('s2', { '#AppWindow': { b: 'cmd:b' } });
   assert.equal(count, 2, 'no notification after unsubscribe');
+});
+
+test('preemptsChord: a nearer complete binding beats a farther chord', () => {
+  // Focus chain indices: 0 = focused entry, 5 = the window ancestor.
+  // readline `ctrl-w` (complete, index 0) vs window `ctrl-w …` (partial, index 5).
+  assert.equal(preemptsChord([0], [5]), true);
+});
+
+test('preemptsChord: a same-or-nearer chord still defers', () => {
+  // vim `y` (complete) and `y s` (partial) on the same element → defer.
+  assert.equal(preemptsChord([2], [2]), false);
+  // A chord nearer than the complete binding also blocks.
+  assert.equal(preemptsChord([4], [1]), false);
+});
+
+test('preemptsChord: nothing to preempt with when there is no complete match', () => {
+  // A pure multi-key prefix (e.g. `space` of `space …`) must keep deferring.
+  assert.equal(preemptsChord([], [3]), false);
+});
+
+test('preemptsChord: uses the NEAREST complete match against all partials', () => {
+  // Complete bindings at indices 0 and 6; the nearest (0) is closer than the
+  // lone partial at 5 → preempt.
+  assert.equal(preemptsChord([6, 0], [5]), true);
+  // But if any partial is at/nearer than the nearest complete, defer.
+  assert.equal(preemptsChord([6, 3], [3]), false);
 });

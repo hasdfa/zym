@@ -31,6 +31,24 @@ test('folding collapses the body to a placeholder in the view, not the model', (
   assert.equal(doc.getText(), 'function f() {\n  a;\n  b;\n}\nafter\n', 'model keeps the body');
 });
 
+test('folding an indented function joins `}` flush (hides leading indent)', () => {
+  const { syntax, textOf } = setup('class C {\n  method() {\n    a;\n    b;\n  }\n}\n');
+  // The method body: header line 1 (`  method() {`), footer line 4 (`  }`). The
+  // indentation before `}` must be hidden so the footer joins flush, like top level.
+  syntax.foldsByHeaderLine.set(1, { startLine: 1, endLine: 4, folded: false });
+  syntax.toggleHeaderLine(1);
+  assert.equal(textOf(), 'class C {\n  method() {[4]}\n}\n');
+});
+
+test('folding a comment/import run keeps the following line on its own line', () => {
+  const { syntax, textOf } = setup('// one\n// two\n// three\nconst x = 1;\n');
+  // A run's endLine is the line AFTER the run (the next statement) — joinFooter:false
+  // so it is not pulled onto the folded run. (walkRuns sets this in computeFoldRanges.)
+  syntax.foldsByHeaderLine.set(0, { startLine: 0, endLine: 3, folded: false, joinFooter: false });
+  syntax.toggleHeaderLine(0);
+  assert.equal(textOf(), '// one[2]\nconst x = 1;\n');
+});
+
 test('unfolding restores the body in the view', () => {
   const { doc, syntax, textOf, registerFoldable } = setup('function f() {\n  a;\n}\nafter\n');
   registerFoldable(0, 2);

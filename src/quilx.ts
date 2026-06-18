@@ -87,6 +87,11 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: true,
     description: 'Show LSP inlay hints (parameter names / inferred types) trailing each line.',
   },
+  'ui.lsColors': {
+    type: 'boolean',
+    default: true,
+    description: 'Color file names in the path opener (file:open-path) using the $LS_COLORS environment variable.',
+  },
   'editor.scrollPastEnd': {
     type: 'boolean',
     default: true,

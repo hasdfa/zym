@@ -1033,7 +1033,10 @@ export class SyntaxController {
    *  the leading indentation and the `}` joins the header flush. */
   private footerContentStart(line: number): any {
     const iter = asIter((this.buffer as any).getIterAtLine(line));
-    while (!iter.endsLine() && (iter.getChar() === 0x20 || iter.getChar() === 0x09)) iter.forwardChar();
+    // getChar() returns the character as a STRING, not a codepoint number — comparing
+    // it to 0x20/0x09 was always false, so indentation before `}` was never skipped
+    // (it only looked right when `}` sat at column 0).
+    while (!iter.endsLine() && (iter.getChar() === ' ' || iter.getChar() === '\t')) iter.forwardChar();
     return iter;
   }
 

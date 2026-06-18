@@ -44,6 +44,7 @@ import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import { Workbench, type BottomDock } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
+import { openFileOpener } from './FileOpener.ts';
 import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
@@ -68,7 +69,7 @@ import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
 import { quilx } from '../quilx.ts';
-import { type SessionParticipant, type TabState, type WorkspaceState } from '../SessionManager.ts';
+import { type SessionParticipant, type TabState, type WorkspaceState, type SessionState, type PanelNode } from '../SessionManager.ts';
 import { SessionController } from '../SessionController.ts';
 import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
@@ -276,7 +277,7 @@ export class AppWindow {
       center: userWorkbench.center,
       fileTree: userWorkbench.fileTree,
       serializeChild: (widget) => this.serializeChild(widget),
-      createEditorTab: (path, cursor) => this.createEditorTab(path, cursor),
+      createEditorTab: (path, restore) => this.createEditorTab(path, restore),
       createTerminalTab: (cwd) => this.createTerminalTab(cwd),
       getDocks: () => ({ notificationLog: this.workbench.bottomDock === 'notifications' }),
       applyDocks: (docks) => {
@@ -284,6 +285,19 @@ export class AppWindow {
       },
       serializeAgentWorkspaces: () => this.serializeAgentWorkspaces(),
       restoreAgent: (ws) => this.restoreAgent(ws),
+      getWindow: () => ({
+        width: this.window.getWidth(),
+        height: this.window.getHeight(),
+        maximized: this.window.isMaximized(),
+      }),
+      applyWindow: (geom) => this.applyWindowGeometry(geom),
+      // Cache the unsaved contents of modified editors so a restore brings them back
+      // (unsavedSnapshot also covers a restored tab not yet reopened).
+      collectUnsaved: () =>
+        [...this.editors.values()].flatMap((e) => {
+          const text = e.unsavedSnapshot();
+          return e.currentFile && text !== null ? [{ path: e.currentFile, text }] : [];
+        }),
     });
 
     const toolbarView = new Adw.ToolbarView();
@@ -422,17 +436,28 @@ export class AppWindow {
       this.promptModifiedThenQuit(modified);
       return true;
     });
+    // On a bare launch, restore the saved session if opted in; an explicit file
+    // arg always suppresses restore. Window geometry must be applied *before*
+    // present (GTK4 `setDefaultSize` no-ops once mapped), so do it here.
+    const willRestore = !explicitFile && this.sessionController.shouldRestoreOnLaunch();
+    if (willRestore) {
+      const geom = this.sessionController.loadWindow();
+      if (geom) this.applyWindowGeometry(geom);
+    }
     this.window.present();
 
-    // On a bare launch, restore the saved session if opted in; an explicit file
-    // arg always suppresses restore. Fall back to opening the initial file.
-    const restored =
-      !explicitFile &&
-      this.sessionController.shouldRestoreOnLaunch() &&
-      this.sessionController.restore();
+    const restored = willRestore && this.sessionController.restore();
     // Relaunching agents activates each in turn; settle back on the user workbench.
     if (restored) this.activateOwner('user');
     if (!restored && initialFile) this.openFile(initialFile);
+  }
+
+  // Apply restored window geometry. Size only takes effect before the window is
+  // mapped (a GTK4 constraint), so the launch path calls this pre-`present`; for a
+  // session:restore on an already-shown window only `maximize` has visible effect.
+  private applyWindowGeometry(geom: NonNullable<SessionState['window']>): void {
+    if (geom.width > 0 && geom.height > 0) this.window.setDefaultSize(geom.width, geom.height);
+    if (geom.maximized) this.window.maximize();
   }
 
   // --- Shutdown --------------------------------------------------------------
@@ -550,7 +575,7 @@ export class AppWindow {
   // splitPane; openFileIn reveals instead. `owner` is the workbench the editor lives
   // in (its git feeds the gutter); defaults to the active one.
   private openFileViewIn(path: string, panel: Panel, owner: Workbench<'user' | AgentTerminal> = this.workbench): TextEditor {
-    const built = this.createEditorTab(path, undefined, owner);
+    const built = this.createEditorTab(path, { owner });
     const child = panel.add(built.widget, {
       title: built.title,
       requireTabBar: built.requireTabBar,
@@ -567,9 +592,14 @@ export class AppWindow {
   // onActiveChanged resolves the active editor.
   private createEditorTab(
     path: string,
-    cursor?: [number, number],
-    owner: Workbench<'user' | AgentTerminal> = this.workbench,
+    restore: {
+      cursor?: [number, number];
+      scroll?: number;
+      unsavedText?: string;
+      owner?: Workbench<'user' | AgentTerminal>;
+    } = {},
   ): RestoredChild {
+    const owner = restore.owner ?? this.workbench;
     let child: PanelChild | null = null;
     // A ref-counted shared Document from the registry: the first view to be *shown* loads
     // it; a second view (split / restore) attaches to the already-loaded shared model.
@@ -589,7 +619,9 @@ export class AppWindow {
     // session-restored tab does no work until it's selected. The editor's activate()
     // decides load-vs-attach off the shared document's loaded state.
     editor.prepareFile(path, {
-      cursor,
+      cursor: restore.cursor,
+      scroll: restore.scroll,
+      unsavedText: restore.unsavedText,
       // Announce to the workspace so editor-observing plugins (color preview, …) can
       // attach; registered after load so their first pass sees the file's content.
       onActivate: () => this.editorRegistrations.set(editor.root, quilx.workspace.addTextEditor(editor)),
@@ -860,13 +892,25 @@ export class AppWindow {
     if (!a) return;
     // Don't duplicate an agent that's already open (explicit restore over a live session).
     if (a.sessionId && quilx.agents.getAgents().some((ag) => ag.sessionId === a.sessionId)) return;
+    let agent: AgentTerminal;
     if (a.sessionId) {
       const session = listResumableSessions(this.agentSessionRoots()).find((s) => s.id === a.sessionId);
-      if (session) this.openAgent(this.resumeOptions(session));
-      else this.openAgent({ cwd: a.cwd, resume: { sessionId: a.sessionId } });
-      return;
+      agent = session ? this.openAgent(this.resumeOptions(session)) : this.openAgent({ cwd: a.cwd, resume: { sessionId: a.sessionId } });
+    } else {
+      agent = this.openAgent({ cwd: a.cwd, prompt: a.prompt });
     }
-    this.openAgent({ cwd: a.cwd, prompt: a.prompt });
+    // Reopen the files that were in this agent's work area (its reviewed files). The
+    // agent leaf itself is recreated by openAgent; the work-area split geometry
+    // isn't preserved — we just reopen the file tabs, rooted in this workbench.
+    const workbench = this.workbenches.get(agent);
+    if (workbench) {
+      const panel = workbench.center.openPanel;
+      for (const tab of fileTabsOf(ws.layout)) {
+        if (Fs.existsSync(tab.path)) {
+          this.openFileIn(tab.path, panel, { focus: false, owner: workbench });
+        }
+      }
+    }
   }
 
   // Resume a past conversation: pick one of the project's saved sessions (newest
@@ -1543,6 +1587,7 @@ export class AppWindow {
     quilx.commands.describe({
       // File / app
       'file:open': 'Open a file (dialog)',
+      'file:open-path': 'Open a file by path',
       'file:find': 'Find a file by name',
       'project:search': 'Search file contents (ripgrep)',
       'file:save': 'Save the current file',
@@ -2047,6 +2092,7 @@ export class AppWindow {
     quilx.commands.add('#AppWindow', {
       'file:open': () => this.openDialog(),
       'file:find': () => openFilePicker(this.overlay, this.workbench.cwd, (path) => this.openFile(path)),
+      'file:open-path': () => openFileOpener(this.overlay, this.workbench.cwd, (path) => this.openFile(path)),
       'project:search': () =>
         openSearchPicker(this.overlay, this.workbench.cwd, (path, cursor) => this.openFile(path).restoreCursor(cursor)),
       // Save commands only apply with an editor open.
@@ -2704,5 +2750,14 @@ function truncate(text: string, max: number): string {
 // `/a/bc` doesn't count as under `/a/b`).
 function isUnderRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(Path.sep) ? root : root + Path.sep);
+}
+
+// The `file` tabs in a saved center layout, depth-first — used to reopen an agent
+// workbench's reviewed files on restore (the agent leaf is recreated separately).
+function fileTabsOf(node: PanelNode): Extract<TabState, { kind: 'file' }>[] {
+  if (node.type === 'leaf') {
+    return node.tabs.filter((t): t is Extract<TabState, { kind: 'file' }> => t.kind === 'file');
+  }
+  return [...fileTabsOf(node.start), ...fileTabsOf(node.end)];
 }
 
