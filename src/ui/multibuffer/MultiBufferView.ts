@@ -1,27 +1,37 @@
 /*
- * MultiBufferView — Phase 1a of the multibuffer (tasks/code-editing/multibuffer.md): ONE
- * read-only editor stitching excerpts from many files, each with a filename header, each
- * highlighted by its own grammar. It IS a `TextEditor` (buffer mode, read-only) so it gets
- * vim navigation, search, selection, and decorations for free; the per-file highlighting
- * comes from an `ExcerptSyntaxProjection` the editor's painter renders through (one painter
- * on the buffer — no second highlighter, no parsing the concatenation as one language).
+ * MultiBufferView — ONE editor stitching excerpts from many files, each with a filename
+ * header, each highlighted by its own grammar (tasks/code-editing/multibuffer.md). It IS a
+ * `TextEditor` (buffer mode) so it gets vim navigation, search, selection, and decorations for
+ * free; the per-file highlighting comes from an `ExcerptSyntaxProjection` the editor's painter
+ * renders through (one painter on the buffer — no second highlighter, no parsing the
+ * concatenation as one language).
  *
- * Read-only snapshot: each unique source is a bare GtkSource.Buffer + its own
- * `DocumentSyntax` (the Phase-0 per-Document parse), read from disk once. Reusing a *live*
- * open Document (so an edited file re-projects) is the seam Phase 1b/2 fill.
- *
- * Navigation: the cursor row resolves through the coordinate map to `(path, row)`; Enter or
- * double-click fires `onActivate` so the caller opens the file at that line.
+ * Two modes:
+ *   - READ-ONLY (default, project-search browse): each unique source is a bare
+ *     `GtkSource.Buffer` read from disk once + its own `DocumentSyntax`. Enter / double-click
+ *     jump to the file.
+ *   - EDITABLE (project search → edit-in-place / replace-all, G6): each source is a LIVE
+ *     `Document` from the registry, so an edit writes through to the file's model — updating
+ *     any open tab live and saving via the Document. The `ProjectionView` routes each edit to
+ *     its source (in-place; a row-count change re-segments analytically) and coordinates undo
+ *     across the touched files as one step. Block (header/gap) rows reject edits; in NORMAL
+ *     mode Enter still jumps to the file, in INSERT mode it's a newline.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { TextEditor } from '../TextEditor/TextEditor.ts';
+import { Document } from '../TextEditor/Document.ts';
+import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import { ViewProjection } from '../TextEditor/ViewProjection.ts';
 import { ProjectionView } from '../TextEditor/ProjectionView.ts';
-import { excerptsToItems, type Excerpt, type Segment } from './MultiBufferModel.ts';
+import { excerptsToItems, type Excerpt, type Segment, type MatchRange } from './MultiBufferModel.ts';
 import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
+import { MultiBufferGutter } from './MultiBufferGutter.ts';
+import { buildHeaderWidget } from './MultiBufferHeader.ts';
+import { Range } from '../../text/Range.ts';
+import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
 
 /** One file's contribution: the regions (source model row spans) to show. */
 export interface ExcerptInput {
@@ -29,6 +39,8 @@ export interface ExcerptInput {
   /** Header label; defaults to a path relative to `cwd` (or the basename). */
   label?: string;
   regions: Array<{ startRow: number; endRow: number }>;
+  /** Spans to highlight (e.g. the search hits), in SOURCE (row, codepoint-column) coords. */
+  matches?: MatchRange[];
 }
 
 export interface MultiBufferOptions {
@@ -37,12 +49,19 @@ export interface MultiBufferOptions {
   cwd?: string;
   /** Fired when the user activates a row (Enter / double-click) over real source. */
   onActivate?: (location: { path: string; row: number }) => void;
+  /** Edit-in-place: back each source with a LIVE `Document` (write-through to the file +
+   *  cross-source undo + save) instead of a read-only disk snapshot. Requires `documents`. */
+  editable?: boolean;
+  /** The app's document registry — required when `editable` (sources are shared Documents). */
+  documents?: DocumentRegistry;
 }
 
 interface SourceEntry {
   buffer: SourceBuffer;
   syntax: DocumentSyntax;
   lines: string[];
+  /** Editable mode: the live Document backing this source (released on dispose). */
+  document?: Document;
 }
 
 const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
@@ -52,34 +71,106 @@ export class MultiBufferView {
   readonly editor: TextEditor;
   private readonly sources = new Map<string, SourceEntry>();
   private readonly projectionView: ProjectionView;
-  private readonly projection: ViewProjection;
   private readonly onActivate?: (location: { path: string; row: number }) => void;
+  private readonly editable: boolean;
+  private readonly registry?: DocumentRegistry;
+  private readonly gutter: MultiBufferGutter;
+  private readonly headerHandles: BlockDecorationHandle[] = [];
   private disposed = false;
+
+  /** The LIVE coordinate map (re-segmentation swaps the underlying projection, so always read
+   *  it through the ProjectionView rather than caching it). */
+  private get projection(): ViewProjection {
+    return this.projectionView.view;
+  }
 
   constructor(options: MultiBufferOptions) {
     this.onActivate = options.onActivate;
+    this.editable = !!options.editable;
+    this.registry = options.documents;
+    if (this.editable && !this.registry) {
+      throw new Error('MultiBufferView: editable mode requires a DocumentRegistry');
+    }
 
-    // Resolve each unique source once (read from disk, parse with its grammar), then back the
-    // editor with a ProjectionView over those source buffers — the SAME substrate the
-    // single-file editor uses. The PV materializes + would reverse-sync the view buffer; the
-    // editor renders it (read-only) and the painter highlights each excerpt from its source's
-    // own parse via the ExcerptSyntaxProjection over the PV's coordinate map.
+    // Resolve each unique source once (live Document when editable, else a disk snapshot), then
+    // back the editor with a ProjectionView over those source buffers — the SAME substrate the
+    // single-file editor uses. The painter highlights each excerpt from its source's own parse
+    // via the ExcerptSyntaxProjection over the PV's (live) coordinate map.
     const excerpts = this.buildExcerpts(options.excerpts, options.cwd);
     const sourceBuffers = new Map([...this.sources].map(([key, entry]) => [key, entry.buffer] as const));
-    this.projectionView = new ProjectionView(excerptsToItems(excerpts), sourceBuffers);
-    this.projection = this.projectionView.view;
+    // Headers are real widgets anchored above each excerpt (not navigable buffer rows), so the
+    // item list carries only segments + gaps.
+    this.projectionView = new ProjectionView(excerptsToItems(excerpts, { headers: 'widget' }), sourceBuffers);
     const syntaxMap = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
     const syntaxProjection = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
 
     this.editor = new TextEditor({
-      buffer: { readOnly: true, folding: false, syntaxProjection, externalBuffer: this.projectionView.buffer },
+      buffer: {
+        readOnly: !this.editable,
+        folding: false,
+        syntaxProjection,
+        externalBuffer: this.projectionView.buffer,
+        // Editable: route undo through the PV (coordinates the touched sources as one step).
+        undoTarget: this.editable ? this.projectionView : undefined,
+      },
     });
     this.root = this.editor.root;
+
+    if (this.editable) {
+      // Vim operators bypass the native editable tag, so gate them on the live map: only a
+      // wholly-editable, single-source view range accepts an edit (block / spanning ranges
+      // reject). The materialize layer already read-only-tags block rows for interactive input.
+      this.editor.model.setEditableCheck((s, e) => this.projectionView.view.isViewRangeEditable(s, e));
+    }
     this.installNavigation();
+    // Per-excerpt source line numbers: a left gutter that asks the live projection for the
+    // source row behind each view row (blank on header/gap/blank). Sized to the widest source.
+    let maxLine = 1;
+    for (const entry of this.sources.values()) maxLine = Math.max(maxLine, entry.lines.length);
+    this.gutter = new MultiBufferGutter(this.editor.sourceView, () => this.projectionView.view, maxLine);
+    this.highlightMatches(options.excerpts);
+    this.installHeaderWidgets(excerpts);
+    // Materializing the buffer (setText) leaves the caret at the END; start at the top.
+    this.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
   }
 
-  /** Resolve sources from disk + parse them, and turn region inputs into Excerpts. Files
-   *  that can't be read are skipped; regions are clamped to the file's line count. */
+  /** Anchor a filename-header widget above each excerpt's first row (BlockDecorations places it
+   *  in a reserved band, deferring until the view is mapped). The anchor mark tracks edits that
+   *  shift the row; clicking the header jumps to the file. */
+  private installHeaderWidgets(excerpts: Excerpt[]): void {
+    const projection = this.projectionView.view;
+    for (const excerpt of excerpts) {
+      const first = excerpt.segments[0];
+      if (!first) continue;
+      const anchor = projection.viewRowForSource(first.sourceKey, first.startRow);
+      if (anchor === null) continue;
+      const widget = buildHeaderWidget(excerpt.header, first.sourceKey, () =>
+        this.onActivate?.({ path: first.sourceKey, row: first.startRow }),
+      );
+      this.headerHandles.push(this.editor.inlineBlocks.add({ line: anchor, widget, placement: 'above' }));
+    }
+  }
+
+  /** Paint the search hits: map each match's SOURCE (row, col) span to view coords through the
+   *  projection and decorate it on the shared `search` layer (the same highlight `/`-search
+   *  uses). Tags anchor to buffer positions, so they track in-place edits; a re-materialize
+   *  (reverse-sync) would drop them — fine for a browse/edit surface. */
+  private highlightMatches(excerpts: ExcerptInput[]): void {
+    const layer = this.editor.decorations.layer('search');
+    const projection = this.projectionView.view;
+    for (const excerpt of excerpts) {
+      for (const m of excerpt.matches ?? []) {
+        const start = projection.sourceToView(excerpt.path, m.row, m.startCol);
+        const end = projection.sourceToView(excerpt.path, m.row, m.endCol);
+        if (!start || !end) continue; // match row not projected (shouldn't happen — regions wrap matches)
+        layer.decorate(new Range(start, end), 'highlight');
+      }
+    }
+  }
+
+  /** Resolve sources + parse them, and turn region inputs into Excerpts. Files that can't be
+   *  read are skipped; regions are clamped to the file's line count. Editable excerpts are
+   *  `editable` real segments (write-through); read-only ones are not. */
   private buildExcerpts(inputs: ExcerptInput[], cwd?: string): Excerpt[] {
     const excerpts: Excerpt[] = [];
     for (const input of inputs) {
@@ -91,7 +182,7 @@ export class MultiBufferView {
           sourceKey: input.path,
           startRow: Math.max(0, Math.min(r.startRow, lastRow)),
           endRow: Math.max(0, Math.min(r.endRow, lastRow)),
-          editable: false,
+          editable: this.editable,
           kind: 'real',
         }))
         .filter((s) => s.endRow >= s.startRow);
@@ -102,10 +193,40 @@ export class MultiBufferView {
     return excerpts;
   }
 
-  /** Read + parse a source once; returns null if unreadable. */
+  /** Resolve a source once: a live Document (editable) or a disk-snapshot buffer (read-only).
+   *  Returns null if unreadable. */
   private ensureSource(path: string): SourceEntry | null {
     const existing = this.sources.get(path);
     if (existing) return existing;
+    const entry = this.editable ? this.acquireLiveSource(path) : this.readSnapshotSource(path);
+    if (entry) this.sources.set(path, entry);
+    return entry;
+  }
+
+  /** Editable: take a ref on the shared Document (loading it if this is its first view), and
+   *  use its model buffer as the source + its own parse for highlighting (no double parse). */
+  private acquireLiveSource(path: string): SourceEntry | null {
+    const { document } = this.registry!.acquire(path);
+    if (!document.isLoaded) document.loadFile(path);
+    if (!document.isLoaded) {
+      // The file couldn't be read (deleted / unreadable) — don't hold a phantom ref.
+      this.registry!.release(document);
+      return null;
+    }
+    // Select the grammar + parse so the painter has captures. A tab already showing this file
+    // had its SyntaxController do this; a file opened only by the search did not — without it,
+    // only the already-open file got highlighted. Idempotent (reuses an existing parse).
+    document.syntax.setLanguageForPath(path);
+    return {
+      buffer: document.modelBuffer,
+      syntax: document.syntax, // owned by the Document; not disposed here
+      lines: document.getText().split('\n'),
+      document,
+    };
+  }
+
+  /** Read-only: read + parse the file once into a bare buffer this view owns. */
+  private readSnapshotSource(path: string): SourceEntry | null {
     let text: string;
     try {
       text = Fs.readFileSync(path, 'utf8');
@@ -117,27 +238,26 @@ export class MultiBufferView {
     buffer.setText(text, -1);
     const syntax = new DocumentSyntax(buffer);
     syntax.setLanguageForPath(path); // synchronous parse (grammars are preloaded)
-    const entry: SourceEntry = { buffer, syntax, lines: text.split('\n') };
-    this.sources.set(path, entry);
-    return entry;
+    return { buffer, syntax, lines: text.split('\n') };
   }
 
   /** Enter (on the focused view) + double-click activate the row under the cursor/pointer.
-   *  Capture phase so Enter jumps before the vim layer treats it as a motion (this is a
-   *  read-only results surface — Enter-opens is the expected quickfix UX). */
+   *  Capture phase so Enter jumps before the vim layer treats it as a motion. In editable mode
+   *  Enter only jumps in NORMAL mode (when the view isn't accepting text input) — in INSERT
+   *  mode it stays a newline — and double-click keeps its word-select behaviour. */
   private installNavigation(): void {
     const view = this.editor.sourceView as any;
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => {
-      if (keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter) {
-        this.activateRow(this.cursorRow());
-        return true;
-      }
-      return false;
+      if (keyval !== Gdk.KEY_Return && keyval !== Gdk.KEY_KP_Enter) return false;
+      if (this.editable && view.getEditable()) return false; // insert mode: Enter is a newline
+      this.activateRow(this.cursorRow());
+      return true;
     });
     view.addController(keys);
 
+    if (this.editable) return; // word-select stays double-clickable while editing
     const click = new Gtk.GestureClick();
     click.on('pressed', (nPress: number, x: number, y: number) => {
       if (nPress < 2) return; // double-click only
@@ -159,6 +279,17 @@ export class MultiBufferView {
     if (target.kind === 'source') this.onActivate?.({ path: target.sourceKey, row: target.row });
   }
 
+  /** Whether any edited source has unsaved changes (editable mode). */
+  isModified(): boolean {
+    for (const entry of this.sources.values()) if (entry.document?.isModified()) return true;
+    return false;
+  }
+
+  /** Save every edited source back to its file (editable mode; no-op read-only). */
+  save(): void {
+    for (const entry of this.sources.values()) if (entry.document?.isModified()) entry.document.save();
+  }
+
   focus(): void {
     this.editor.focus();
   }
@@ -166,9 +297,19 @@ export class MultiBufferView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.projectionView.dispose(); // detach the PV's source-buffer signal handlers
-    for (const entry of this.sources.values()) entry.syntax.dispose();
-    this.sources.clear();
+    for (const handle of this.headerHandles) handle.remove();
+    this.headerHandles.length = 0;
+    this.gutter.dispose();
+    this.projectionView.dispose(); // detach the PV's source-buffer signal handlers first
     this.editor.dispose();
+    for (const entry of this.sources.values()) {
+      // Editable: drop the shared ref. A file ALSO open in a tab survives (the tab holds a ref
+      // and shows the unsaved edit); a file edited ONLY here is disposed with the rest — so
+      // unsaved multibuffer-only edits are discarded on close, like an unsaved scratch buffer.
+      // FOLLOW-UP: a close-confirmation / unsaved-snapshot for multibuffer-only edits (G11).
+      if (entry.document) this.registry!.release(entry.document);
+      else entry.syntax.dispose(); // read-only: this view owns the snapshot's parse
+    }
+    this.sources.clear();
   }
 }

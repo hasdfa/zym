@@ -2116,7 +2116,10 @@ export class AppWindow {
       'project:search': () =>
         openSearchPicker(this.overlay, this.workbench.cwd, (path, cursor) => this.openFile(path).restoreCursor(cursor)),
       // Save commands only apply with an editor open.
-      'file:save': { didDispatch: () => this.saveActive(), when: () => this.activeEditor !== null },
+      'file:save': {
+        didDispatch: () => this.saveActive(),
+        when: () => this.activeEditor !== null || this.activeMultibuffer() !== null,
+      },
       'file:save-as': { didDispatch: () => this.saveAsDialog(), when: () => this.activeEditor !== null },
       'git:diff-current': {
         didDispatch: () => this.diffActiveAgainstHead(),
@@ -2190,6 +2193,11 @@ export class AppWindow {
       const view = new MultiBufferView({
         excerpts,
         cwd,
+        // Editable results: edit in place (write-through to each file's live Document + save),
+        // and replace across files as undo-coordinated steps (G6). NORMAL-mode Enter still
+        // jumps to the file; INSERT-mode Enter is a newline.
+        editable: true,
+        documents: this.documents,
         onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
       });
       const child = this.workbench.center.add(view.root, {
@@ -2811,10 +2819,25 @@ export class AppWindow {
   // --- File operations (routed to the active editor) -------------------------
 
   private saveActive() {
+    // An editable multibuffer (project search) saves every file it touched, not one Document.
+    const mbv = this.activeMultibuffer();
+    if (mbv) {
+      mbv.save();
+      return;
+    }
     const editor = this.activeEditor;
     if (!editor) return;
     if (editor.currentFile) editor.save();
     else this.saveAsDialog();
+  }
+
+  /** The multibuffer hosted by the active center/focused child, if any (for save routing). */
+  private activeMultibuffer(): MultiBufferView | null {
+    const focused = Panel.active?.activeChild;
+    const focusedMb = focused ? this.multibufferViews.get(focused) : undefined;
+    if (focusedMb) return focusedMb;
+    const centerChild = this.workbench.center.activePanel.activeChild;
+    return centerChild ? this.multibufferViews.get(centerChild) ?? null : null;
   }
 
   private openDialog() {

@@ -10,15 +10,19 @@
 import { spawn } from 'node:child_process';
 import * as Path from 'node:path';
 import type { ExcerptInput } from './MultiBufferView.ts';
+import type { MatchRange } from './MultiBufferModel.ts';
 
 const MAX_MATCHES = 1000; // cap rows parsed from rg across all files
 const MAX_OUTPUT = 16 * 1024 * 1024; // cap accumulated stdout; kill rg past it
 const DEFAULT_CONTEXT = 2; // lines of context each side of a match
 
-/** Matches in one file, in file order of first appearance; `rows` are 0-based, deduped. */
+/** Matches in one file, in file order of first appearance; `rows` are 0-based, deduped.
+ *  `matches` carries each individual hit's column span (for highlighting), one per rg
+ *  submatch — possibly several per row. */
 export interface FileMatches {
   path: string;
   rows: number[];
+  matches?: MatchRange[];
 }
 
 /**
@@ -45,7 +49,11 @@ export function matchesToExcerptInputs(
       if (prev && startRow <= prev.endRow + 1) prev.endRow = Math.max(prev.endRow, endRow);
       else regions.push({ startRow, endRow });
     }
-    if (regions.length > 0) out.push({ path: file.path, regions });
+    if (regions.length > 0) {
+      const input: ExcerptInput = { path: file.path, regions };
+      if (file.matches?.length) input.matches = file.matches; // carry match spans through to highlight
+      out.push(input);
+    }
   }
   return out;
 }
@@ -99,9 +107,16 @@ export function runProjectSearch(
   });
 }
 
-/** Parse `rg --json` stdout (one JSON object per line) into per-file 0-based match rows. */
+/** Codepoint column at UTF-8 byte offset `byteOffset` within `text` — rg reports submatch
+ *  offsets in BYTES, but the editor's columns are codepoints (a GtkTextIter line offset). */
+export function byteToColumn(text: string, byteOffset: number): number {
+  return [...Buffer.from(text, 'utf8').subarray(0, byteOffset).toString('utf8')].length;
+}
+
+/** Parse `rg --json` stdout (one JSON object per line) into per-file 0-based match rows plus
+ *  per-hit column spans (`submatches`, byte→codepoint converted). */
 function parseGrouped(stdout: string, cwd: string): FileMatches[] {
-  const byPath = new Map<string, number[]>();
+  const byPath = new Map<string, { rows: number[]; matches: MatchRange[] }>();
   const order: string[] = [];
   let count = 0;
   for (const line of stdout.split('\n')) {
@@ -118,10 +133,23 @@ function parseGrouped(stdout: string, cwd: string): FileMatches[] {
     const lineNumber: number | undefined = msg.data.line_number;
     if (relPath === undefined || lineNumber === undefined) continue; // non-UTF-8: skip
     const file = Path.join(cwd, relPath);
-    let rows = byPath.get(file);
-    if (!rows) { rows = []; byPath.set(file, rows); order.push(file); }
-    rows.push(lineNumber - 1); // rg is 1-based
+    let entry = byPath.get(file);
+    if (!entry) { entry = { rows: [], matches: [] }; byPath.set(file, entry); order.push(file); }
+    const row = lineNumber - 1; // rg is 1-based
+    entry.rows.push(row);
+    // Column spans (highlighting). `lines.text` is the matched line; absent on non-UTF-8
+    // matches (rg emits `bytes` instead) — then we keep the row but skip its column spans.
+    const lineText: string | undefined = msg.data.lines?.text;
+    if (lineText !== undefined && Array.isArray(msg.data.submatches)) {
+      for (const sub of msg.data.submatches) {
+        if (typeof sub.start !== 'number' || typeof sub.end !== 'number') continue;
+        entry.matches.push({ row, startCol: byteToColumn(lineText, sub.start), endCol: byteToColumn(lineText, sub.end) });
+      }
+    }
     count++;
   }
-  return order.map((path) => ({ path, rows: byPath.get(path)! }));
+  return order.map((path) => {
+    const entry = byPath.get(path)!;
+    return { path, rows: entry.rows, matches: entry.matches };
+  });
 }

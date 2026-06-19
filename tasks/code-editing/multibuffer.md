@@ -344,8 +344,60 @@ Stack N sources on the proven substrate.
   rebuild → Phase 3b). Tests in `ProjectionView.test.ts` (route+undo on the right source;
   multi-file transaction undone as one step; in-place reverse-sync). *Remaining to ship: wire
   the PV as the multibuffer editor's undo target (TextEditor) once it's editable.*
-- **3d** **Editable project search → replace-all** (G6): edit results in place (write-through);
-  replace-all across files as one undo transaction; powers multi-file refactors.
+- **3d — editable project search ✅ DONE (surface shipped).** `MultiBufferView({ editable: true })`
+  backs each source with a LIVE `Document` from the registry (model buffer as the
+  `ProjectionView` source, the Document's own parse for highlighting — no double parse), so an
+  edit writes through to the file's model (updating any open tab live + saved by `save()`), and
+  undo routes through the PV (`undoTarget`, coordinating touched files as one step). Block
+  (header/gap) rows reject edits (read-only tag for interactive input + `setEditableCheck` via
+  `isViewRangeEditable` for vim ops — which also rejects phantom/cross-source ranges, the
+  bulletproof gate the diff surface needed). **Incremental re-segmentation now exists**
+  (`ProjectionView.resegment` / `adjustItems`): a row-count-changing write-through that stays
+  within one editable segment grows/shrinks that segment's window + shifts later same-source
+  segments, then rebuilds the coordinate map WITHOUT re-materializing (GTK applies the same edit
+  to the view → no flash, no cursor jump); in-place edits stay O(1). **Reverse-sync (undo /
+  another view / external) now ALSO mirrors incrementally** (2026-06-19 fix): a row-count change
+  whose endpoints fall in a shown segment is mirrored into the view at the translated position +
+  the coordinate map is remapped WITHOUT re-materializing — so undoing a multi-line edit no
+  longer `setText`s the whole buffer (which flashed/cleared all syntax highlighting and reset the
+  cursor). Only an edit that can't be mirrored cleanly (an endpoint outside a shown segment /
+  crossing a region boundary) falls back to a full re-materialize. Wired in `AppWindow`
+  (`space *` is now editable; `file:save` routes to
+  the active multibuffer's `save()`). Tests: `ProjectionView.test.ts` (resegment + 300-edit
+  consistency fuzz), `MultiBufferEditable.test.ts` (write-through, header rejection, undo,
+  re-segment, save, shared Document, two-region-one-file shift). NORMAL-mode Enter still jumps
+  to the file; INSERT-mode Enter is a newline.
+  **Replace-all across files = one undo step ✅** — it already flows through the existing
+  machinery: `SearchController.replaceAll` → `EditorModel.scan` applies all replacements in one
+  `transact`, and the multibuffer's `undoTarget` is the PV, so every cross-file write-through
+  coalesces into one PV transaction (`MultiBufferEditable.test.ts`). This needed one substrate
+  fix: `transact` is NOT re-entrant and `replaceAll` nests it (outer scan + inner per-edit), so
+  `ProjectionView.begin/endUserAction` was made RE-ENTRANT (a depth counter, like GtkSource's
+  native user actions) — without it one undo reverted only the last file.
+  *Remaining:* a close-confirmation / unsaved-snapshot for multibuffer-only edits (a file edited
+  ONLY here, not open in a tab, discards unsaved edits on close — G11); jump-to-source polish.
+  **This unblocks the editable DIFF surface (3b/G5):** the re-segmentation + `isViewRangeEditable`
+  gate are exactly the two walls that reverted it. The diff's extra problem is RE-diffing on
+  edit (segment STRUCTURE changes — phantom rows appear/disappear — not just window sizes),
+  which is still its own follow-up (task #12).
+- **3d UI polish ✅ (2026-06-19).** Three project-search refinements on top of the shipped surface:
+  - **Per-excerpt line numbers** — `MultiBufferGutter` (a `GtkSource.GutterRendererText` in the
+    left gutter) renders each row's SOURCE line number via the live `ViewProjection`
+    (`sourceRowAtViewRow`), blank on synthesized rows. Pure label fn unit-tested
+    (`MultiBufferGutter.test.ts`).
+  - **Search-match highlighting** — `projectSearch` now captures rg `submatches` column spans
+    (byte→codepoint converted, `byteToColumn`), threads them through `ExcerptInput.matches`
+    (`MatchRange`), and `MultiBufferView.highlightMatches` paints them via the shared `search`
+    decoration layer (source→view mapped through the projection).
+  - **Filename headers are WIDGETS, not buffer text** (user: "we dont want real navigatable
+    text"). `excerptsToItems(…, { headers: 'widget' })` emits NO header/blank block rows; the
+    surface anchors a `MultiBufferHeader` widget (file icon + dim dir + bold name, click = jump)
+    above each excerpt's first row via `BlockDecorations` (the production-proven imagePreview
+    path — reserved band, zero buffer footprint, anchor mark tracks edits). ⚠️ GUI-UNVERIFIED:
+    widget vertical placement (esp. the first header at the very top, placement:'above' on row 0)
+    and reposition-as-edits-shift-rows need real-display checking. Substrate is unit-tested
+    (model widget-mode layout; "filename never appears as a buffer row"); the GtkSource gutter
+    renderer + the header widget rendering are display-only.
 
 ### Phase 4 — Surfaces, interaction, polish (remaining goals)
 

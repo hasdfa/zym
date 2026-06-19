@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { matchesToExcerptInputs } from './projectSearch.ts';
+import { matchesToExcerptInputs, byteToColumn } from './projectSearch.ts';
 
 // Pure region-merge math — no rg, no GTK.
 
@@ -50,4 +50,21 @@ test('multiple files keep their first-seen order', () => {
     { context: 0 },
   );
   assert.deepEqual(out.map((e) => e.path), ['b.ts', 'a.ts']);
+});
+
+test('match column spans are carried onto the excerpt input (for highlighting)', () => {
+  const out = matchesToExcerptInputs(
+    [{ path: 'a.ts', rows: [10], matches: [{ row: 10, startCol: 4, endCol: 7 }] }],
+    { context: 2 },
+  );
+  assert.deepEqual(out, [
+    { path: 'a.ts', regions: [{ startRow: 8, endRow: 12 }], matches: [{ row: 10, startCol: 4, endCol: 7 }] },
+  ]);
+});
+
+test('byteToColumn converts rg byte offsets to codepoint columns (multibyte safe)', () => {
+  assert.equal(byteToColumn('foo bar', 0), 0);
+  assert.equal(byteToColumn('foo bar', 4), 4, 'ASCII: byte == column');
+  // 'café ' is 6 bytes (é = 2), 5 codepoints — so byte 6 ("f" of foo) is column 5.
+  assert.equal(byteToColumn('café foo', 6), 5, 'multibyte: byte offset > column');
 });

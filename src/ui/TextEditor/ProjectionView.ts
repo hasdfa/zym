@@ -17,9 +17,12 @@
  *
  * Editable real segments are the only rows a view edit may touch; block (header/gap/blank)
  * and phantom (diff-removed) rows carry a non-editable TextTag so the user can't type there
- * (the same trick the fold placeholder + mb:header tags already use). Multi-source *editable*
- * write-through (row-count-changing edits re-segmenting the projection) is Phase 3a; here a
- * multi-source projection is read-only, so the only live write-through is the identity path.
+ * (the same trick the fold placeholder + mb:header tags already use). A multi-source editable
+ * surface (the editable project search, G6) writes through to the targeted source; an in-place
+ * edit needs no remap (the row-direct map is stable), and a row-count-changing edit that stays
+ * within one segment re-segments analytically (`resegment`) — growing/shrinking that segment's
+ * window and shifting later same-source segments, then rebuilding the coordinate map WITHOUT
+ * re-materializing (GTK applies the same edit to the view, so no flash / cursor jump).
  */
 import { Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { Point } from '../../text/Point.ts';
@@ -33,6 +36,13 @@ const iterAtOffset = (buf: any, off: number): any => asIter(buf.getIterAtOffset(
 function cpLength(s: string): number {
   let n = 0;
   for (const _ of s) n++;
+  return n;
+}
+
+/** Number of newlines in `text` (rows a multi-line insert adds to its source). */
+function newlineCount(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) if (s[i] === '\n') n++;
   return n;
 }
 
@@ -78,6 +88,7 @@ export class ProjectionView {
   private readonly redoStack: string[][] = [];
   private currentTxn: Set<string> | null = null;
   private readonly openActions = new Set<string>();
+  private actionDepth = 0; // re-entrancy depth for begin/endUserAction (nested transacts)
 
   /**
    * Build the view buffer from `items` over `sources` (keyed by `Segment.sourceKey`). The
@@ -176,9 +187,9 @@ export class ProjectionView {
     }
     // MULTI-SOURCE: route the edit to the segment's source. The readonly tag blocks edits on
     // block / phantom rows, so a view edit only reaches here on an editable real segment;
-    // we still gate, since a headless caller can edit any row. In-place edits need no remap
-    // (the row-direct map is stable); row-count-changing multi-source edits need
-    // re-segmentation (Phase 3b) and aren't routed yet.
+    // we still gate, since a headless caller can edit any row. An in-place insert needs no
+    // remap (the row-direct map is stable); a multi-line insert grows the segment window and
+    // re-segments below.
     const row = iter.getLine();
     const col = iter.getLineOffset();
     const target = this.projection.viewToSource(row, col);
@@ -189,6 +200,8 @@ export class ProjectionView {
     this.suppressing(target.sourceKey, () =>
       (src as any).insert(asIter((src as any).getIterAtLineOffset(target.row, target.column)), text, -1),
     );
+    const added = newlineCount(text);
+    if (added > 0) this.resegment(target.sourceKey, target.row, added);
   }
 
   private writeThroughDelete(startIter: any, endIter: any): void {
@@ -217,6 +230,42 @@ export class ProjectionView {
         asIter((src as any).getIterAtLineOffset(b.row, b.column)),
       ),
     );
+    const removed = b.row - a.row; // rows merged away by a multi-line delete (0 = in-place)
+    if (removed > 0) this.resegment(a.sourceKey, a.row, -removed);
+  }
+
+  /** Source `key` gained/lost `rowDelta` rows at source row `editRow`. Shift the segment
+   *  windows to track it: a segment wholly below the edit moves by `rowDelta`; the segment
+   *  spanning `editRow` grows (insert) or shrinks (delete); one above is untouched. Pure index
+   *  arithmetic (reads no source text), so it's valid in a before-handler too — the universal
+   *  rule for BOTH write-through (the edit just happened on the source) and reverse-sync (the
+   *  edit is about to happen). The map rebuild — which DOES read source text — is the caller's
+   *  job, at the right moment. */
+  private adjustItems(key: string, editRow: number, rowDelta: number): void {
+    if (rowDelta === 0) return;
+    for (const item of this.items) {
+      if (item.type !== 'segment') continue;
+      const seg = item.segment;
+      if (seg.sourceKey !== key) continue;
+      if (editRow < seg.startRow) {
+        seg.startRow += rowDelta;
+        seg.endRow += rowDelta;
+      } else if (editRow <= seg.endRow) {
+        seg.endRow += rowDelta;
+      }
+    }
+  }
+
+  /** A view edit changed source `key`'s row count by `rowDelta` at source row `editRow` — a
+   *  multi-line insert/delete that stayed WITHIN one editable segment (the write-through gates
+   *  guarantee that). Adjust the windows, then rebuild the coordinate map from the now-edited
+   *  source WITHOUT re-materializing: GTK is applying the same edit to the view buffer, so the
+   *  rebuilt map matches the post-edit view (no flash, no cursor jump). This is the multibuffer
+   *  counterpart of folds' analytic mark gravity — excerpt windows that track edits.
+   *  Single-source edits use the offset path and never reach here. */
+  private resegment(key: string, editRow: number, rowDelta: number): void {
+    this.adjustItems(key, editRow, rowDelta);
+    this.projection = ViewProjection.build(this.items, (seg) => this.sourceLines(seg));
   }
 
   // --- reverse-sync (source → view) ------------------------------------------
@@ -225,9 +274,11 @@ export class ProjectionView {
   // The signal fires BEFORE the source mutates, so the projection still reflects the pre-edit
   // source: translate + mirror with the CURRENT map/fold spans. SINGLE-SOURCE is offset-based
   // (proj == source) and fold-aware: an edit a fold absorbs doesn't touch the view (the
-  // placeholder stays; the fold just grows). MULTI-SOURCE mirrors an in-place edit at the
-  // translated row (cursor preserved — what undo + external edits need); a row-count-changing
-  // edit re-segments (Phase 3b), so it coarse-rebuilds once the source settles.
+  // placeholder stays; the fold just grows). MULTI-SOURCE mirrors the edit at the translated
+  // row(s) — in-place OR row-count-changing — and then remaps the coordinate map WITHOUT
+  // re-materializing (so an undo of a multi-line edit doesn't flash/clear the whole buffer or
+  // reset the cursor); only an edit that can't be mirrored cleanly (an endpoint outside a shown
+  // segment / crossing a region boundary) falls back to a full re-materialize.
 
   private wireSource(key: string, buf: SourceBuffer): void {
     this.connect(buf, 'insert-text', (iter: any, text: string) => this.onSourceInsert(key, iter, text));
@@ -237,8 +288,21 @@ export class ProjectionView {
   private onSourceInsert(key: string, iter: any, text: string): void {
     if (!this.projection.isSingleSource) {
       if (this.sourceSuppress.has(key)) return;
-      if (text.includes('\n')) return this.scheduleRebuild(); // row-count change → re-segment (3b)
-      const pos = this.projection.sourceToView(key, iter.getLine(), iter.getLineOffset());
+      const sr = iter.getLine();
+      const pos = this.projection.sourceToView(key, sr, iter.getLineOffset());
+      if (text.includes('\n')) {
+        // A row-count change (undo / another view / external). When the insert point is in a
+        // shown segment, MIRROR the exact text into the view + grow the windows, then remap the
+        // coordinate map only (no re-materialize → no whole-buffer flash, cursor preserved) —
+        // the same analytic move write-through makes. If the point isn't shown (an edit beyond
+        // the excerpt), fall back to a full rebuild so the regenerated view reflects the clamp.
+        this.adjustItems(key, sr, newlineCount(text));
+        if (pos) {
+          this.applyToView((b) => b.insert(asIter((b as any).getIterAtLineOffset(pos.row, pos.column)), text, -1));
+          return this.scheduleRemap();
+        }
+        return this.scheduleRebuild();
+      }
       if (pos) this.applyToView((b) => b.insert(asIter((b as any).getIterAtLineOffset(pos.row, pos.column)), text, -1));
       return;
     }
@@ -253,9 +317,20 @@ export class ProjectionView {
   private onSourceDelete(key: string, startIter: any, endIter: any): void {
     if (!this.projection.isSingleSource) {
       if (this.sourceSuppress.has(key)) return;
-      if (startIter.getLine() !== endIter.getLine()) return this.scheduleRebuild(); // row-count change → 3b
       const a = this.projection.sourceToView(key, startIter.getLine(), startIter.getLineOffset());
       const b = this.projection.sourceToView(key, endIter.getLine(), endIter.getLineOffset());
+      if (startIter.getLine() !== endIter.getLine()) {
+        const removed = endIter.getLine() - startIter.getLine();
+        this.adjustItems(key, startIter.getLine(), -removed);
+        // MIRROR + remap (no flash) when both endpoints map into the SAME shown run — i.e. the
+        // view span equals the source span, so there's no block (gap) row in between. Otherwise
+        // (endpoint off-screen, or the delete crosses a region boundary) fall back to a rebuild.
+        if (a && b && b.row - a.row === removed) {
+          this.applyToView((buf) => buf.delete(asIter((buf as any).getIterAtLineOffset(a.row, a.column)), asIter((buf as any).getIterAtLineOffset(b.row, b.column))));
+          return this.scheduleRemap();
+        }
+        return this.scheduleRebuild();
+      }
       if (a && b) this.applyToView((buf) => buf.delete(asIter((buf as any).getIterAtLineOffset(a.row, a.column)), asIter((buf as any).getIterAtLineOffset(b.row, b.column))));
       return;
     }
@@ -395,17 +470,23 @@ export class ProjectionView {
 
   // --- cross-source undo (the UndoTarget the multibuffer's EditorModel drives) ------------
 
-  /** Open a transaction: writes-through during it coalesce into one undo step per source. */
+  /** Open a transaction: writes-through during it coalesce into one undo step per source.
+   *  RE-ENTRANT (a depth counter, like GtkSource's native user actions): only the OUTERMOST
+   *  begin/end pair bounds the transaction. This matters because `EditorModel.transact` is not
+   *  itself re-entrant — `replaceAll` nests an outer `transact` (the whole scan) around each
+   *  `setTextInBufferRange`'s inner one, and without depth-tracking each inner close would flush
+   *  its file as a separate step (so one undo would revert only the last file, not all). */
   beginUserAction(): void {
-    this.currentTxn = new Set();
+    if (this.actionDepth++ === 0) this.currentTxn = new Set();
   }
 
-  /** Close the transaction: end each touched source's native undo group + push the step. */
+  /** Close the transaction: at the outermost level, end each touched source's native undo group
+   *  + push the (multi-file) step. Inner closes just decrement the depth. */
   endUserAction(): void {
-    if (!this.currentTxn) return;
+    if (this.actionDepth === 0 || --this.actionDepth > 0) return;
     for (const key of this.openActions) (this.sources.get(key) as any)?.endUserAction();
     this.openActions.clear();
-    if (this.currentTxn.size) {
+    if (this.currentTxn && this.currentTxn.size) {
       this.undoStack.push([...this.currentTxn]);
       this.redoStack.length = 0; // a fresh edit invalidates the redo timeline
     }
@@ -459,16 +540,31 @@ export class ProjectionView {
     }
   }
 
-  // A non-identity source change settled: the source buffers have mutated, so rebuild the
-  // projection from their current rows and re-materialize. Deferred to a microtask so the
-  // source's own signal handlers all run first (the source mutates AFTER its 'insert-text').
-  private rebuildScheduled = false;
-  private scheduleRebuild(): void {
-    if (this.rebuildScheduled || this.disposed) return;
-    this.rebuildScheduled = true;
+  // A non-identity source change settled: catch the projection up to the mutated sources. Two
+  // strengths, both deferred to a microtask so the source's own signal handlers all run first
+  // (the source mutates AFTER its 'insert-text' / 'delete-range'):
+  //   - REMAP (no re-materialize): the view was already mutated incrementally to match (the
+  //     reverse-sync handler mirrored the exact edit), so only the coordinate map must catch up
+  //     with the now-settled source rows. No setText → no whole-buffer flash, no cursor reset.
+  //   - REBUILD (re-materialize): the view text itself must be regenerated because the edit
+  //     can't be mirrored cleanly (an external edit crossing a shown region boundary). Rare.
+  // A rebuild requested in the same tick wins (it subsumes a remap).
+  private syncScheduled = false;
+  private needsMaterialize = false;
+  private scheduleRemap(): void { this.scheduleSync(false); }
+  private scheduleRebuild(): void { this.scheduleSync(true); }
+  private scheduleSync(materialize: boolean): void {
+    if (this.disposed) return;
+    if (materialize) this.needsMaterialize = true;
+    if (this.syncScheduled) return;
+    this.syncScheduled = true;
     queueMicrotask(() => {
-      this.rebuildScheduled = false;
-      if (!this.disposed) this.rebuild();
+      this.syncScheduled = false;
+      const rebuild = this.needsMaterialize;
+      this.needsMaterialize = false;
+      if (this.disposed) return;
+      if (rebuild) this.rebuild();
+      else this.projection = ViewProjection.build(this.items, (seg) => this.sourceLines(seg));
     });
   }
 

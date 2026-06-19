@@ -221,6 +221,148 @@ test('cross-source undo: a multi-file transaction undoes both sources as one ste
   assert.equal(pv.canUndo(), false, 'the multi-file edit was a single undo step');
 });
 
+// --- multi-source re-segmentation (row-count-changing write-through, 3d/G6) ---------------
+// A multi-line insert/delete WITHIN one editable segment must grow/shrink that segment's
+// window, shift later same-source segments, and rebuild the coordinate map — WITHOUT
+// re-materializing the view (GTK applies the same edit). Two excerpts of the SAME file pin
+// the shift; the row-direct map staying valid after the rebuild pins map↔buffer consistency.
+
+const lineTextOf = (buf: any, row: number): string => {
+  const s = asIter(buf.getIterAtLine(row));
+  const e = s.copy();
+  if (!e.endsLine()) e.forwardToLineEnd();
+  return buf.getText(s, e, true);
+};
+
+// One file, two excerpts (rows 1..3 and 6..8) separated by a header + blank.
+function twoExcerptsOfOneFile() {
+  const f = srcBuffer('l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n'); // rows 0..9 (row 9 empty)
+  (f as any).setEnableUndo(true);
+  const items: Item[] = [
+    { type: 'block', block: { kind: 'header', text: 'F' } },
+    { type: 'segment', segment: { sourceKey: 'f', startRow: 1, endRow: 3, editable: true, kind: 'real' } },
+    { type: 'block', block: { kind: 'blank', text: '' } },
+    { type: 'segment', segment: { sourceKey: 'f', startRow: 6, endRow: 8, editable: true, kind: 'real' } },
+  ];
+  const pv = new ProjectionView(items, new Map([['f', f]]));
+  // view rows: 0:F 1:l1 2:l2 3:l3 4:<blank> 5:l6 6:l7 7:l8
+  return { f, pv };
+}
+
+test('re-segment: a multi-line insert grows its segment and shifts the later same-source one', () => {
+  const { f, pv } = twoExcerptsOfOneFile();
+  const row2 = asIter((pv.buffer as any).getIterAtLine(2)).getOffset(); // view row 2 = source f row 2 ("l2")
+  insertAt(pv.buffer as any, row2, 'NEW\n'); // splits f row 2 into "NEW" + "l2"
+  assert.equal(textOf(f), 'l0\nl1\nNEW\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n', 'wrote through, growing the source');
+  assert.equal(
+    textOf(pv.buffer),
+    'F\nl1\nNEW\nl2\nl3\n\nl6\nl7\nl8',
+    'first excerpt grew (l1,NEW,l2,l3); the second still shows l6,l7,l8',
+  );
+  // The map rebuilt: an in-place edit on a row BELOW the insert now routes to the right source row.
+  const lastBody = asIter((pv.buffer as any).getIterAtLine(8)).getOffset(); // view row 8 = "l8"
+  insertAt(pv.buffer as any, lastBody, 'Z');
+  assert.equal(lineTextOf(f, 9), 'Zl8', 'in-place edit after a re-segment routed to the correct (shifted) source row');
+});
+
+test('re-segment: a multi-line delete shrinks its segment and shifts the later one up', () => {
+  const { f, pv } = twoExcerptsOfOneFile();
+  const from = asIter((pv.buffer as any).getIterAtLine(2)).getOffset(); // view row 2 = "l2"
+  const to = asIter((pv.buffer as any).getIterAtLine(3)).getOffset(); // view row 3 = "l3"
+  deleteRange(pv.buffer as any, from, to); // remove the whole "l2\n" line
+  assert.equal(textOf(f), 'l0\nl1\nl3\nl4\nl5\nl6\nl7\nl8\n', 'the line was removed from the source');
+  assert.equal(
+    textOf(pv.buffer),
+    'F\nl1\nl3\n\nl6\nl7\nl8',
+    'first excerpt shrank (l1,l3); the second still shows l6,l7,l8',
+  );
+});
+
+test('re-segment: a multi-line edit is one cross-source undo step (view + source restored)', async () => {
+  const { f, pv } = twoExcerptsOfOneFile();
+  const row1 = asIter((pv.buffer as any).getIterAtLine(1)).getOffset(); // view row 1 = "l1"
+  pv.beginUserAction();
+  insertAt(pv.buffer as any, row1, 'A\nB\n'); // two new rows (write-through re-segments, no flash)
+  pv.endUserAction();
+  assert.equal(textOf(pv.buffer), 'F\nA\nB\nl1\nl2\nl3\n\nl6\nl7\nl8');
+  pv.undo(); // replays the source's undo → the row-count reverse-sync mirrors incrementally
+  await Promise.resolve(); // flush the deferred remap
+  assert.equal(textOf(f), 'l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n', 'source fully restored');
+  assert.equal(textOf(pv.buffer), 'F\nl1\nl2\nl3\n\nl6\nl7\nl8', 'view restored to the original projection');
+});
+
+test('re-segment undo mirrors incrementally — no whole-buffer re-materialize (decorations survive)', async () => {
+  const { pv } = twoExcerptsOfOneFile();
+  const buf = pv.buffer as any;
+  // A decoration tag on a stable row above the edit (view row 1 = "l1"). A full re-materialize
+  // (setText) on undo would wipe it; the incremental mirror leaves it in place.
+  const tag = new Gtk.TextTag({ name: 'test:deco' } as any);
+  buf.getTagTable().add(tag);
+  buf.applyTag(tag, asIter(buf.getIterAtLine(1)), asIter(buf.getIterAtLineOffset(1, 2)));
+  const hasDeco = () => asIter(buf.getIterAtLineOffset(1, 1)).hasTag(tag);
+  assert.equal(hasDeco(), true, 'decoration applied');
+
+  const row3 = asIter(buf.getIterAtLine(3)).getOffset(); // view row 3 = "l3" (below the tagged row)
+  pv.beginUserAction();
+  insertAt(buf, row3, 'A\nB\n'); // multi-line write-through (re-segments)
+  pv.endUserAction();
+  assert.equal(hasDeco(), true, 'decoration survives the write-through (no re-materialize)');
+  pv.undo();
+  await Promise.resolve(); // flush the deferred remap
+  assert.equal(textOf(buf), 'F\nl1\nl2\nl3\n\nl6\nl7\nl8', 'view restored');
+  assert.equal(hasDeco(), true, 'decoration SURVIVED the undo — proves no whole-buffer re-materialize');
+});
+
+test('300 row-count-changing edits within editable segments never desync map↔buffer↔source', () => {
+  const { f, pv } = twoExcerptsOfOneFile();
+  const buf = pv.buffer as any;
+  // Consistency: the view buffer's line count matches the map, and every source-mapped view
+  // row shows exactly its source row's text (block rows are left to the materializer).
+  const consistent = (): string => {
+    const n = pv.view.viewRowCount;
+    if (buf.getLineCount() !== n) return `line count ${buf.getLineCount()} != map ${n}`;
+    for (let r = 0; r < n; r++) {
+      const t = pv.view.viewToSource(r, 0);
+      if (t.kind !== 'source') continue;
+      const want = lineTextOf(f as any, t.row);
+      const got = lineTextOf(buf, r);
+      if (want !== got) return `row ${r} → src ${t.row}: "${got}" != "${want}"`;
+    }
+    return '';
+  };
+  // Editable view rows (those mapping to a source row), recomputed each iteration.
+  const editableRows = (): number[] => {
+    const out: number[] = [];
+    for (let r = 0; r < pv.view.viewRowCount; r++) if (pv.view.viewToSource(r, 0).kind === 'source') out.push(r);
+    return out;
+  };
+  let why = '';
+  for (let i = 0; i < 300 && !why; i++) {
+    const rows = editableRows();
+    const r = rows[(i * 7919) % rows.length];
+    const lineLen = lineTextOf(buf, r).length;
+    const op = i % 4;
+    if (op === 0) {
+      insertAt(buf, asIter(buf.getIterAtLineOffset(r, Math.min(i % 3, lineLen))).getOffset(), 'c'); // in-place insert
+    } else if (op === 1) {
+      insertAt(buf, asIter(buf.getIterAtLine(r)).getOffset(), 'P\nQ\n'); // multi-line insert (grows segment)
+    } else if (op === 2 && lineLen > 0) {
+      const at = asIter(buf.getIterAtLine(r)).getOffset();
+      deleteRange(buf, at, at + 1); // in-place delete
+    } else {
+      // Line-merge delete only when row r+1 is in the SAME segment (else the write-through
+      // rejects but GTK would still apply the view delete — not a valid interactive edit).
+      const here = pv.view.viewToSource(r, 0);
+      const next = pv.view.viewToSource(r + 1, 0);
+      if (here.kind === 'source' && next.kind === 'source' && here.segmentIndex === next.segmentIndex) {
+        deleteRange(buf, asIter(buf.getIterAtLine(r)).getOffset(), asIter(buf.getIterAtLine(r + 1)).getOffset());
+      }
+    }
+    why = consistent();
+  }
+  assert.equal(why, '', 'map, view buffer, and source stayed consistent across 300 re-segmenting edits');
+});
+
 test('dispose stops syncing', () => {
   const { pv, src } = identitySetup('abc\n');
   pv.dispose();

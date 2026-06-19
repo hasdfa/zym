@@ -24,19 +24,39 @@ export interface Excerpt {
   segments: Segment[];
 }
 
+/** A matched span within a source line (e.g. a project-search hit), to highlight in the view.
+ *  `row` is a 0-based SOURCE line; `startCol`/`endCol` are codepoint columns within it. */
+export interface MatchRange {
+  row: number;
+  startCol: number;
+  endCol: number;
+}
+
 /** The label shown on a gap row between two non-adjacent segments of one file. */
 export const GAP_LABEL = '⋯';
 
+export interface ExcerptLayoutOptions {
+  /** How the filename header is rendered. `'block'` (default) emits a header text row in the
+   *  buffer (plus a blank separator between excerpts). `'widget'` emits NO header/blank rows —
+   *  the surface draws each header as a real widget anchored above the excerpt's first row
+   *  (so the filename isn't navigable buffer text); only segments + `⋯` gaps reach the buffer. */
+  headers?: 'block' | 'widget';
+}
+
 /**
  * Flatten `excerpts` into the ordered projection items `ViewProjection.build` consumes.
- * Layout per excerpt: a blank separator before all but the first, a header row, then each
- * segment's rows with a `⋯` gap row between non-adjacent segments of the same excerpt.
+ * Block-header layout per excerpt: a blank separator before all but the first, a header row,
+ * then each segment's rows with a `⋯` gap row between non-adjacent segments of the same
+ * excerpt. Widget-header layout drops the blank + header rows (see `ExcerptLayoutOptions`).
  */
-export function excerptsToItems(excerpts: Excerpt[]): Item[] {
+export function excerptsToItems(excerpts: Excerpt[], opts: ExcerptLayoutOptions = {}): Item[] {
+  const widgetHeaders = opts.headers === 'widget';
   const items: Item[] = [];
   excerpts.forEach((excerpt, excerptIndex) => {
-    if (excerptIndex > 0) items.push({ type: 'block', block: { kind: 'blank', text: '' } });
-    items.push({ type: 'block', block: { kind: 'header', text: excerpt.header } });
+    if (!widgetHeaders) {
+      if (excerptIndex > 0) items.push({ type: 'block', block: { kind: 'blank', text: '' } });
+      items.push({ type: 'block', block: { kind: 'header', text: excerpt.header } });
+    }
     excerpt.segments.forEach((segment, segmentIndex) => {
       if (segmentIndex > 0) items.push({ type: 'block', block: { kind: 'gap', text: GAP_LABEL } });
       items.push({ type: 'segment', segment });

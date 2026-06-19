@@ -96,6 +96,24 @@ test('editability reflects the segment flag', () => {
   assert.equal(rw.isViewPositionEditable(1, 0), true, 'an editable real segment row');
 });
 
+test('widget-header mode emits only segments + gaps (no header/blank rows)', () => {
+  const items = excerptsToItems(
+    [
+      { header: 'a.ts', segments: [seg('a.ts', 0, 1), seg('a.ts', 4, 4)] },
+      { header: 'b.ts', segments: [seg('b.ts', 0, 0)] },
+    ],
+    { headers: 'widget' },
+  );
+  // No 'header' or 'blank' blocks — only segments and the within-file gap.
+  assert.deepEqual(
+    items.map((i) => (i.type === 'block' ? `block:${i.block.kind}` : `seg:${i.segment.startRow}`)),
+    ['seg:0', 'block:gap', 'seg:4', 'seg:0'],
+  );
+  const p = ViewProjection.build(items, resolve);
+  assert.equal(p.viewText, `l0\nl1\n${GAP_LABEL}\nl4\nB0`); // l0, l1, ⋯, l4, B0 — no headers/blank
+  assert.deepEqual(p.sourceRowAtViewRow(0), { sourceKey: 'a.ts', sourceRow: 0 }, 'first row is a source row, not a header');
+});
+
 test('empty excerpt list yields empty text', () => {
   assert.deepEqual(excerptsToItems([]), []);
   const p = ViewProjection.build([], resolve);
