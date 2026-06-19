@@ -775,7 +775,11 @@ export class TextEditor implements DocumentHost {
       () => this.document.getText(), // diff against the MODEL (full file), not the collapsed view
       this.gitRepo,
       (line) => this.document.modelLineForViewLine(this.buffer, line),
+      () => this.root.getMapped(), // off-screen editors defer their git-show refresh
     );
+    // When this editor is shown again (tab activated / dock revealed), run any
+    // refresh deferred while it was off-screen so the bars catch up.
+    this.root.on('map', () => this.gitGutter?.notifyVisible());
     // Let the vim layer reach the gutter's hunk ranges (for `]h`/`[h`). Hunk rows are
     // MODEL/file rows; translate to view rows (folded ones collapse onto one line).
     this.editorModel.setHunkProvider(() => [

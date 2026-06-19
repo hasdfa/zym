@@ -91,18 +91,26 @@ export class GitGutter {
   // the gutter (queried per view line) translates back through this.
   private readonly viewToModelLine: (line: number) => number;
 
+  // True iff the editor is currently mapped (rendered). While it's off-screen
+  // (inactive tab / hidden dock) we skip the two `git show` spawns a refresh costs
+  // and remember that a refresh is owed — see `refresh` / `notifyVisible`.
+  private readonly isVisible: () => boolean;
+  private refreshPending = false;
+
   constructor(
     gutter: GutterCellSink,
     getPath: () => string | null,
     getText: () => string,
     gitRepo: GitRepo,
     viewToModelLine?: (line: number) => number,
+    isVisible?: () => boolean,
   ) {
     this.gutter = gutter;
     this.getPath = getPath;
     this.getText = getText;
     this.git = gitRepo;
     this.viewToModelLine = viewToModelLine ?? ((line) => line);
+    this.isVisible = isVisible ?? (() => true);
 
     // Contribute the change-bar column to the editor's single composite gutter.
     this.gutter.setGitCell((viewLine) => this.cellFor(viewLine));
@@ -135,8 +143,14 @@ export class GitGutter {
   }
 
   /** (Re)fetch the file's index + HEAD blobs, then re-diff. Call on load / save /
-   *  HEAD change. */
+   *  HEAD change. Off-screen editors defer (the two `git show` spawns are the bulk
+   *  of the git-poll fan-out cost); the owed refresh runs on the next `notifyVisible`. */
   refresh(): void {
+    if (!this.isVisible()) {
+      this.refreshPending = true;
+      return;
+    }
+    this.refreshPending = false;
     const path = this.getPath();
     const root = path ? this.rootFor(path) : null;
     this.root = root;
@@ -164,6 +178,13 @@ export class GitGutter {
       if (generation === this.baseGeneration) this.headLines = ok ? splitLines(stdout) : [];
       settle();
     });
+  }
+
+  /** The editor was just mapped (tab activated / dock shown). Run the refresh that
+   *  was deferred while it was off-screen, if any, so its bars catch up to any HEAD/
+   *  index/staging change that landed in the meantime. */
+  notifyVisible(): void {
+    if (this.refreshPending) this.refresh();
   }
 
   /** Debounced re-diff of the live buffer against the cached bases (on edits). */

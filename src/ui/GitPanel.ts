@@ -26,7 +26,7 @@ import {
   type GitFileState,
   type GitDone,
   repoRoot,
-  getChanges,
+  getChangesAsync,
   stage,
   unstage,
   stageAll,
@@ -105,6 +105,9 @@ export class GitPanel {
   private readonly iconAttrs: InstanceType<typeof Pango.AttrList>;
   // The selectable file rows, in display order (headers excluded), for cursor nav.
   private fileRows: RowInfo[] = [];
+  // Bumped per refresh so a slow async `git status` that resolves after a newer
+  // refresh has started is dropped instead of clobbering the list.
+  private refreshGeneration = 0;
 
   constructor(options: GitPanelOptions) {
     this.git = options.git;
@@ -237,12 +240,25 @@ export class GitPanel {
   // --- Change list -----------------------------------------------------------
 
   private refresh(): void {
-    // Rebuilding tears down the focused/selected subtree and resets the scroll
-    // offset; remember the cursor, focus, and scroll so the poll-driven refresh
-    // leaves the view put. Focus is only restored when it was inside this panel
-    // (never stealing it from the editor); the list — not the row — is focused so
-    // selection doesn't force a scroll-into-view, and the offset is reapplied
-    // after layout.
+    // `git status` runs off the UI thread (via the broker); rebuild once it lands.
+    // A generation guard drops a result superseded by a newer refresh.
+    const generation = ++this.refreshGeneration;
+    if (!this.repo) {
+      this.applyChanges(null, generation);
+      return;
+    }
+    getChangesAsync(this.repo, (changes) => this.applyChanges(changes, generation));
+  }
+
+  /** Rebuild the change list from `changes` (null = not a repo). Tearing the list
+   *  down resets focus/selection/scroll, so remember the cursor, focus, and scroll
+   *  and reapply them — a poll-driven refresh must leave the view put. Focus is
+   *  only restored when it was inside this panel (never stealing it from the
+   *  editor); the list — not the row — is focused so selection doesn't force a
+   *  scroll-into-view, and the offset is reapplied after layout. */
+  private applyChanges(changes: GitChange[] | null, generation: number): void {
+    if (generation !== this.refreshGeneration) return; // a newer refresh is in flight
+
     const prevKey = this.selectedKey();
     const keepFocus = this.hasFocusWithin();
     const scrollValue = this.scrolled.getVadjustment().getValue();
@@ -255,12 +271,11 @@ export class GitPanel {
     }
     this.fileRows = [];
 
-    if (!this.repo) {
+    if (!changes) {
       this.list.append(this.messageRow('Not a git repository'));
       return;
     }
 
-    const changes = getChanges(this.repo);
     const staged = changes.filter((c) => c.staged);
     const unstaged = changes.filter((c) => c.unstaged && c.state !== 'untracked');
     const untracked = changes.filter((c) => c.state === 'untracked');

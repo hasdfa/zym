@@ -9,8 +9,8 @@
  * `execFile` callbacks work; only promise/microtask resolution is starved, so we
  * use the callback form and avoid promise wrappers.
  */
-import { execFile, execFileSync } from 'node:child_process';
 import * as Path from 'node:path';
+import { brokerGit, brokerGitSync } from './broker.ts';
 
 export type GitFileState =
   | 'new'
@@ -33,18 +33,20 @@ export interface GitChange {
 
 export type GitDone = (ok: boolean, stdout: string, stderr: string) => void;
 
-const MAX_BUFFER = 64 * 1024 * 1024;
-
-/** Run git synchronously and return stdout. Throws on non-zero exit. */
+/**
+ * Run git synchronously and return stdout. Throws on non-zero exit (so existing
+ * `try`/`catch` callers keep working). Spawned via the broker process so the big
+ * node-gtk parent never forks — see `git/broker.ts`.
+ */
 export function gitSync(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER });
+  const res = brokerGitSync(cwd, args);
+  if (!res.ok) throw new Error(res.stderr || `git ${args.join(' ')} failed`);
+  return res.stdout;
 }
 
 /** Run git asynchronously (callback form — promises are starved under the loop). */
 export function git(cwd: string, args: string[], onDone: GitDone): void {
-  execFile('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER }, (err, stdout, stderr) => {
-    onDone(!err, stdout ?? '', stderr ?? '');
-  });
+  brokerGit(cwd, args, onDone);
 }
 
 // repoRoot(cwd) is invariant for a fixed directory over the life of its checkout,
@@ -152,15 +154,25 @@ export function commitMsgPath(root: string): string {
   return Path.isAbsolute(p) ? p : Path.join(root, p);
 }
 
-/** Parse `git status --porcelain=v2 -z` into a flat list of changes. */
+const STATUS_PORCELAIN_ARGS = ['status', '--porcelain=v2', '-z'];
+
+/** `git status --porcelain=v2 -z` → a flat list of changes (synchronous). */
 export function getChanges(root: string): GitChange[] {
-  let out: string;
   try {
-    out = gitSync(root, ['status', '--porcelain=v2', '-z']);
+    return parseChanges(root, gitSync(root, STATUS_PORCELAIN_ARGS));
   } catch {
     return [];
   }
+}
 
+/** Async form of `getChanges` — for callers on the UI thread (the Source Control
+ *  panel refresh) that must not block on the spawn. Empties on error. */
+export function getChangesAsync(root: string, onDone: (changes: GitChange[]) => void): void {
+  git(root, STATUS_PORCELAIN_ARGS, (ok, stdout) => onDone(ok ? parseChanges(root, stdout) : []));
+}
+
+/** Parse `git status --porcelain=v2 -z` output into a flat list of changes. */
+function parseChanges(root: string, out: string): GitChange[] {
   const changes: GitChange[] = [];
   const tokens = out.split('\0');
   for (let i = 0; i < tokens.length; i++) {
@@ -211,10 +223,7 @@ export function applyPatch(
   if (opts.cached) args.push('--cached');
   if (opts.reverse) args.push('--reverse');
   args.push('-');
-  const child = execFile('git', args, { cwd: root, encoding: 'utf8', maxBuffer: MAX_BUFFER }, (err, stdout, stderr) => {
-    onDone(!err, stdout ?? '', stderr ?? '');
-  });
-  child.stdin?.end(patch);
+  brokerGit(root, args, onDone, patch); // `patch` is fed to git's stdin by the broker
 }
 
 export function unstage(root: string, relPath: string, onDone: GitDone): void {

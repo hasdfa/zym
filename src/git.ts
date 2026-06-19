@@ -13,15 +13,16 @@
  * the status widgets read them on the render path and cannot await. We satisfy
  * that with an async background poll that updates cached state and fires
  * `onChange`; the getters then return those cached fields with no I/O. The cache
- * is seeded once synchronously at construction so the first read is correct.
+ * is warmed up asynchronously at construction (empty until the first status
+ * lands), so construction never blocks the UI thread.
  *
  * `onChange` fires when the branch / ahead-behind / working-tree signature moves.
- * A branch switch is caught instantly via a Gio file monitor on `HEAD`; everything
+ * A branch switch is caught instantly via a chokidar watch on `HEAD`; everything
  * else is the low-priority poll.
  */
 import * as Path from 'node:path';
 import * as Fs from 'node:fs';
-import { Gio } from './gi.ts';
+import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import * as cli from './git/cli.ts';
 import { checkoutPullRequest as ghCheckoutPullRequest } from './github.ts';
 import { parseStatus, parseNumstat, parseLsFiles, type LineDelta, type ParsedStatus } from './git/status.ts';
@@ -34,12 +35,6 @@ export * from './git/cli.ts';
 
 /** Result callback for a coordinated mutation: success flag + git/gh stderr. */
 export type GitOpDone = (ok: boolean, stderr: string) => void;
-
-type FileMonitor = InstanceType<typeof Gio.FileMonitor>;
-
-// node-gtk quirk: Gio.File instance methods are undefined on the concrete
-// wrapper, so we reach them through the interface prototype. Same as FileTree.
-const FileProto = (Gio.File as any).prototype;
 
 const POLL_INTERVAL_MS = 1500;
 
@@ -225,19 +220,17 @@ class CliGitRepo implements GitRepo {
   private lastSignature = '';
 
   private readonly listeners = new Set<() => void>();
-  private monitor: FileMonitor | null = null;
+  private watcher: FSWatcher | null = null;
   private pollId: NodeJS.Timeout | null = null;
   private watching = false;
   private reading = false; // a poll's git calls are in flight — don't overlap
   private busyCount = 0;
+  private disposed = false; // drop async warm-up/poll callbacks that land post-dispose
 
   constructor(cwd: string) {
     this.cwd = cwd;
     this.root = cli.repoRoot(cwd);
-    if (this.root) {
-      this.gitDir = this.trySync(['rev-parse', '--absolute-git-dir'])?.trim() || null;
-      this.seed();
-    }
+    if (this.root) this.warmUp();
   }
 
   // --- synchronous reads (served from cache) ---------------------------------
@@ -326,9 +319,10 @@ class CliGitRepo implements GitRepo {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.listeners.clear();
-    this.monitor?.cancel();
-    this.monitor = null;
+    void this.watcher?.close();
+    this.watcher = null;
     if (this.pollId) {
       clearInterval(this.pollId);
       this.pollId = null;
@@ -337,45 +331,44 @@ class CliGitRepo implements GitRepo {
 
   // --- internals -------------------------------------------------------------
 
-  private trySync(args: string[]): string | null {
-    try {
-      return cli.gitSync(this.root!, args);
-    } catch {
-      return null;
-    }
-  }
-
-  /** One-time synchronous read so the getters are correct before the first poll. */
-  private seed(): void {
-    const statusOut = this.trySync(STATUS_ARGS);
-    if (statusOut == null) return; // leave the empty state
-    const parsed = parseStatus(statusOut);
-    const numstat = parseNumstat(this.trySync(NUMSTAT_ARGS) ?? '');
-    const tracked = parseLsFiles(this.trySync(LSFILES_ARGS) ?? '');
-    const untrackedAdded = this.untrackedInsertions(parsed);
-    this.state = this.buildState(parsed, numstat, tracked, untrackedAdded);
-    this.lastSignature = signature(parsed, numstat, untrackedAdded);
+  /** Async warm-up: resolve the git dir (for the HEAD monitor) and prime the
+   *  cached state, both off the UI thread, so constructing a repo never blocks.
+   *  Until they land the getters return the empty state; the warm-up poll's
+   *  notify fills the UI in (subscribers are added on the same tick as the
+   *  acquire, so they're registered before the async status returns). */
+  private warmUp(): void {
+    cli.git(this.root!, ['rev-parse', '--absolute-git-dir'], (ok, out) => {
+      if (!ok || this.disposed) return;
+      this.gitDir = out.trim() || null;
+      if (this.watching) this.startHeadWatch(); // subscribed before the git dir landed
+    });
+    this.pollOnce(); // initial status/numstat/ls-files → populates state + notifies
   }
 
   private ensureWatching(): void {
     if (this.watching || !this.root) return;
     this.watching = true;
-
-    // Branch switches / commits rewrite HEAD — watch it for instant updates.
-    if (this.gitDir) {
-      const head = Gio.File.newForPath(Path.join(this.gitDir, 'HEAD'));
-      this.monitor = FileProto.monitorFile.call(head, Gio.FileMonitorFlags.WATCH_MOVES, null);
-      this.monitor!.on('changed', () => {
-        this.lastSignature = ''; // HEAD moved — branch/ahead-behind may differ
-        this.pollOnce();
-      });
-    }
+    this.startHeadWatch(); // no-op until the async warm-up resolves the git dir
 
     // Working-tree edits have no single file to watch; poll and diff the
     // signature so listeners only fire when the visible numbers actually move.
     this.pollId = setInterval(() => {
       this.pollOnce();
     }, POLL_INTERVAL_MS);
+  }
+
+  // Branch switches / commits rewrite HEAD — watch it (via chokidar, which handles
+  // the atomic rename git does) for an instant refresh rather than waiting on the
+  // poll. The git dir is resolved asynchronously by the warm-up, so this is safe to
+  // call before then (no-op) — the warm-up calls it once the dir lands.
+  private startHeadWatch(): void {
+    if (this.disposed || this.watcher || !this.gitDir) return;
+    this.watcher = chokidarWatch(Path.join(this.gitDir, 'HEAD'), { ignoreInitial: true });
+    this.watcher.on('all', () => {
+      this.lastSignature = ''; // HEAD moved — branch/ahead-behind may differ
+      this.pollOnce();
+    });
+    this.watcher.on('error', () => {}); // transient FS error — fall back to the poll
   }
 
   /** Async refresh: status + numstat; on a signature change, also refresh the
