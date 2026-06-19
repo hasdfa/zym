@@ -33,22 +33,22 @@ import type { GitRepo } from '../git.ts';
 // CI status glyph + colour (bundled icon font): check / dot / times, drawn in
 // the theme's success / warning / error.
 const CI_STYLE: Record<CiStatus, { glyph: string; color: string }> = {
-  success: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.success }, // check
-  warning: { glyph: String.fromCodePoint(0xf444), color: theme.ui.warning }, // dot-fill (smaller)
-  error: { glyph: String.fromCodePoint(0xf467), color: theme.ui.error }, // oct-x (smaller)
+  success: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.status.success }, // check
+  warning: { glyph: String.fromCodePoint(0xf444), color: theme.ui.status.warning }, // dot-fill (smaller)
+  error: { glyph: String.fromCodePoint(0xf467), color: theme.ui.status.error }, // oct-x (smaller)
 };
 
 // Markup for the PR segment: the state glyph (coloured) then "#1234" in the
 // theme foreground.
 function prMarkup(state: PrState, number: number): string {
-  return `${stateGlyphMarkup(state)}<span foreground="${theme.ui.fg}">#${number}</span>`;
+  return `${stateGlyphMarkup(state)}<span foreground="${theme.ui.editor.foreground}">#${number}</span>`;
 }
 
 // Markup for the PR segment when there's no PR yet on a non-default branch: the
 // PR glyph in the theme foreground — clicking opens the create-PR web page.
 const CREATE_PR_GLYPH = String.fromCodePoint(0xf407); // git-pull-request
 function createPrMarkup(): string {
-  return `<span face="${ICON_FONT_FAMILY}" foreground="${theme.ui.fg}">${escapeMarkup(CREATE_PR_GLYPH)}</span>`;
+  return `<span face="${ICON_FONT_FAMILY}" foreground="${theme.ui.editor.foreground}">${escapeMarkup(CREATE_PR_GLYPH)}</span>`;
 }
 
 // Markup for the CI segment: a single status glyph in the icon font.

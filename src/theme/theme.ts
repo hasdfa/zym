@@ -1,17 +1,17 @@
 /*
  * Theme — loads a theme authored in *our own* format (a format we own; see
- * theme.schema.json) and normalizes it into the small internal shape the editor
- * consumes (UI chrome colors + a flat syntax capture → color map). Themes live as
- * JSON next to this module (e.g. quilx.json), are loaded through `loadTheme`, and
- * the active theme is exported as `theme`. See tasks/theming.md.
+ * theme.schema.json) and normalizes it into the shape the editor consumes (nested
+ * UI chrome colors + a flat syntax capture → color map). Themes live as JSON next
+ * to this module (e.g. quilx.json), are loaded through `loadTheme`, and the active
+ * theme is exported as `theme`. See tasks/theming.md.
  *
- * On disk a theme is one file: `{ name, appearance, ui, syntax }`. `ui` is a flat
- * map of CONCERN-first dotted keys (`status.error`, `search.match`,
- * `diff.added.word`) → color, resolved by longest-prefix fallback (the same
- * `resolveByCaptureName` the syntax map uses) so a key falls back within its
- * concern; `syntax` maps a tree-sitter capture name → a color + optional font
- * style. `loadTheme` resolves each `UiColors` field (filling gaps from
- * `DEFAULT_UI`), derives the diff tints, and splits the syntax tokens.
+ * On disk a theme is one file: `{ name, appearance, ui, syntax }`, and the
+ * consumed `Theme.ui` mirrors the file's `ui` shape 1:1 — concern-grouped nested
+ * objects, so a theme JSON's `ui.editor.background` is read in code as exactly
+ * `theme.ui.editor.background`. `syntax` maps a tree-sitter capture name → a color
+ * + optional font style. `loadTheme` deep-merges the file's `ui` over `DEFAULT_UI`
+ * (the built-in fallback theme), derives the diff tints, and splits the syntax
+ * tokens into the color + style maps.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -19,61 +19,81 @@ import { alpha as withAlpha, darken, formatHEXA, lighten, parse } from 'color-bi
 
 // --- Internal (consumed) shape ---------------------------------------------
 
-/** UI / editor chrome colors. */
+/**
+ * UI / editor chrome colors, grouped by concern to mirror the theme JSON's `ui`
+ * object 1:1 (read in code as `theme.ui.editor.background`, `theme.ui.status.error`,
+ * `theme.ui.diff.addedWord`, …). Every field is filled at load from the theme file
+ * over `DEFAULT_UI`, so consumers never see `undefined` — except `editor.background`.
+ */
 export interface UiColors {
-  /** Default editor text foreground. */
-  fg: string;
-  /**
-   * Editor background. When set, the theme owns the full GtkSourceView style
-   * scheme (background + line numbers, which GtkSourceView reads only from the
-   * scheme); when omitted, the editor follows the system light/dark Adwaita
-   * scheme. See createSourceScheme / TextEditor.followSystemColorScheme.
-   */
-  bg?: string;
-  /** Line-number gutter foreground. */
-  lineNumber: string;
+  editor: {
+    /** Default editor text foreground. */
+    foreground: string;
+    /**
+     * Editor background. When set, the theme owns the full GtkSourceView style
+     * scheme (background + line numbers, which GtkSourceView reads only from the
+     * scheme); when omitted, the editor follows the system light/dark Adwaita
+     * scheme. See createSourceScheme / TextEditor.followSystemColorScheme.
+     */
+    background?: string;
+    /** Line-number gutter foreground. */
+    lineNumber: string;
+  };
+  text: {
+    /** De-emphasized text (secondary labels, subtitles). */
+    muted: string;
+    /** Accent foreground for emphasized text — the matched-character highlight in pickers. */
+    accent: string;
+  };
   /** Separator/border color for chrome (e.g. the header bar's bottom edge). */
   border: string;
-  /** Background of elevated surfaces: pickers, popovers, autocomplete, menus. */
-  popoverBg: string;
-  /** Background of a selected entry (file tree row, picker result, list item). */
-  selectedBg: string;
-  /** De-emphasized text (secondary labels, subtitles). */
-  textMuted: string;
-  /**
-   * Accent foreground for emphasized text — used for the matched-character
-   * highlight in pickers (theme key `text.accent`).
-   */
-  textAccent: string;
-  /**
-   * Background tint for editor search matches: every match (`searchMatch`) and
-   * the current one (`searchMatchCurrent`). `#rrggbbaa` so it composes over the
-   * syntax-colored text — kept dim on purpose so the text stays readable. Theme
-   * keys `search.match` and `search.match.current` (current falls back to match).
-   */
-  searchMatch: string;
-  searchMatchCurrent: string;
-  /** Semantic text colors for status/feedback (theme `status.*` keys). */
-  success: string;
-  warning: string;
-  error: string;
-  info: string;
-  hint: string;
   /** Drop-shadow color for floating surfaces (popovers, toasts, cards). */
   shadow: string;
+  surface: {
+    /** Background of elevated surfaces: pickers, popovers, autocomplete, menus. */
+    popover: string;
+    /** Background of a selected entry (file tree row, picker result, list item). */
+    selected: string;
+  };
+  /** Semantic text colors for status/feedback. */
+  status: {
+    success: string;
+    warning: string;
+    error: string;
+    info: string;
+    hint: string;
+  };
+  /**
+   * Background tint for editor search matches: every match (`match`) and the
+   * current one (`matchCurrent`, which falls back to `match`). `#rrggbbaa` so it
+   * composes over the syntax-colored text — kept dim so the text stays readable.
+   */
+  search: {
+    match: string;
+    matchCurrent: string;
+  };
+  /**
+   * Diff line/word background tints (`#rrggbbaa`, compose over syntax colors). The
+   * `added`/`removed` (line) + `addedWord`/`removedWord` tints are derived from
+   * `status.success`/`status.error` per appearance unless the theme sets them; the
+   * word tints fall back to their line tint. `filler`/`fold` are neutral.
+   */
+  diff: {
+    added: string;
+    addedWord: string;
+    removed: string;
+    removedWord: string;
+    filler: string;
+    fold: string;
+  };
   /** Brief flash tint over an operated/yanked range (vim). `#rrggbbaa`. */
   flash: string;
-  /** Diff line/word background tints (`#rrggbbaa`, compose over syntax colors). */
-  diffAddedBg: string;
-  diffRemovedBg: string;
-  diffAddedWordBg: string;
-  diffRemovedWordBg: string;
-  diffFillerBg: string;
-  diffFoldBg: string;
-  /** GitHub pull-request state colors (open / merged / closed). */
-  prOpen: string;
-  prMerged: string;
-  prClosed: string;
+  /** GitHub pull-request state colors. */
+  pr: {
+    open: string;
+    merged: string;
+    closed: string;
+  };
 }
 
 /*
@@ -143,52 +163,54 @@ interface ThemeSyntaxToken {
 }
 
 /**
- * The on-disk theme — a format we own (see theme.schema.json). `ui` is a flat map
- * of concern-first dotted keys → color, resolved by longest-prefix fallback so an
- * unset key falls back within its concern (`search.match.current` → `search.match`,
- * `diff.added.word` → `diff.added`) and finally to `DEFAULT_UI` — never across to a
- * wrong primitive. `syntax` key order drives tag priority (see SyntaxColors).
+ * The on-disk theme — a format we own (see theme.schema.json). `ui` is the nested,
+ * concern-grouped color object that `UiColors` consumes, but every field is
+ * optional: the loader deep-merges it over `DEFAULT_UI`. `syntax` key order drives
+ * tag priority (see SyntaxColors).
  */
 interface ThemeFile {
   name: string;
   appearance: 'light' | 'dark';
-  ui?: Record<string, string>;
+  ui?: ThemeFileUi;
   syntax?: Record<string, ThemeSyntaxToken>;
 }
 
+/** A theme file's `ui`: the same concern groups as `UiColors`, each field optional. */
+interface ThemeFileUi {
+  editor?: Partial<UiColors['editor']>;
+  text?: Partial<UiColors['text']>;
+  border?: string;
+  shadow?: string;
+  surface?: Partial<UiColors['surface']>;
+  status?: Partial<UiColors['status']>;
+  search?: Partial<UiColors['search']>;
+  diff?: Partial<UiColors['diff']>;
+  flash?: string;
+  pr?: Partial<UiColors['pr']>;
+}
+
 /*
- * Resolved fallbacks for every UI color, applied at load time so the rest of the
- * app never needs an inline color literal — the theme module is the single source
- * of color. A theme's own values always win; these fill only what it omits. `fg`
- * defaults to white. (`bg` has no default: its absence is the
- * signal to follow the system light/dark scheme — see UiColors.bg.)
+ * The built-in fallback theme — a complete dark `UiColors`, structured exactly like
+ * a theme file's `ui` so the rest of the app never needs an inline color literal
+ * (the theme module is the single source of color). The loader deep-merges a theme
+ * file's `ui` over this; a theme's own values always win. `editor.background` is the
+ * one field with no default — its absence is the signal to follow the system
+ * light/dark scheme (see UiColors.editor.background). The `diff.added`/`removed`
+ * (line + word) tints are DERIVED from `status` per appearance (see diffTones); here
+ * they're the dark derivation of the default status colors.
  */
-const DEFAULT_UI = {
-  fg: '#ffffff',
-  lineNumber: '#888888',
+const DEFAULT_UI: UiColors = {
+  editor: { foreground: '#ffffff', lineNumber: '#888888' },
+  text: { muted: '#9a9996', accent: '#c678dd' },
   border: 'rgba(0, 0, 0, 0.3)',
-  popoverBg: '#1e1e1e',
-  selectedBg: 'rgba(127, 127, 127, 0.25)',
-  textMuted: '#9a9996',
-  textAccent: '#c678dd',
-  searchMatch: '#e5a50a26',
-  searchMatchCurrent: '#e5a50a59',
-  success: '#2ec27e',
-  warning: '#e5a50a',
-  error: '#e01b24',
-  info: '#3584e4',
-  hint: '#33d17a',
   shadow: 'rgba(0, 0, 0, 0.3)',
+  surface: { popover: '#1e1e1e', selected: 'rgba(127, 127, 127, 0.25)' },
+  status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
+  search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
+  diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
   flash: '#f5c21188',
-  // diffAdded/Removed (line + word) backgrounds are not listed here: they're
-  // DERIVED from success/error per appearance at load time (see diffTones). Only
-  // the neutral (hue-less) diff tints have fixed fallbacks.
-  diffFillerBg: '#88888820',
-  diffFoldBg: '#8888882e',
-  prOpen: '#3fb950',
-  prMerged: '#a371f7',
-  prClosed: '#f85149',
-} as const;
+  pr: { open: '#3fb950', merged: '#a371f7', closed: '#f85149' },
+};
 
 /** Load the owned theme `<name>.json` from next to this module. */
 export function loadTheme(name: string): Theme {
@@ -208,40 +230,59 @@ function diffTones(
   success: string,
   error: string,
   appearance: 'light' | 'dark',
-): Pick<UiColors, 'diffAddedBg' | 'diffRemovedBg' | 'diffAddedWordBg' | 'diffRemovedWordBg'> {
+): Pick<UiColors['diff'], 'added' | 'addedWord' | 'removed' | 'removedWord'> {
   const mute = appearance === 'dark' ? darken : lighten;
   const line = (c: string): string => formatHEXA(withAlpha(mute(parse(c), 0.25), 0.18));
   const word = (c: string): string => formatHEXA(withAlpha(mute(parse(c), 0.2), 0.3));
   return {
-    diffAddedBg: line(success),
-    diffRemovedBg: line(error),
-    diffAddedWordBg: word(success),
-    diffRemovedWordBg: word(error),
+    added: line(success),
+    addedWord: word(success),
+    removed: line(error),
+    removedWord: word(error),
   };
 }
 
 /**
  * Normalize an on-disk `ThemeFile` into the internal `Theme` the app consumes:
- * resolve every `UiColors` field from the concern-first `ui` map (longest-prefix
- * fallback, then `DEFAULT_UI`), derive the diff tints, and split each `syntax`
- * token into the color + style maps. Exported for tests.
+ * deep-merge the file's `ui` over `DEFAULT_UI` (concern by concern), derive the
+ * diff tints, and split each `syntax` token into the color + style maps. Exported
+ * for tests.
  */
 export function adaptTheme(file: ThemeFile): Theme {
   if (file.appearance !== 'light' && file.appearance !== 'dark') {
     throw new Error(`theme "${file.name ?? '?'}": appearance must be "light" or "dark"`);
   }
 
-  // Resolve a concern-first UI key by longest-prefix fallback within its concern
-  // (e.g. `search.match.current` → `search.match` → `search`). Undefined when even
-  // the concern root is unset, so the caller falls back to DEFAULT_UI.
-  const uiMap = file.ui ?? {};
-  const get = (key: string): string | undefined => resolveByCaptureName(key, (k) => uiMap[k]);
+  const f = file.ui ?? {};
 
-  // success/error drive the diff tints, so resolve them (with their fallbacks)
-  // before building `ui`; the diff.* keys still win where a theme sets them.
-  const success = get('status.success') ?? DEFAULT_UI.success;
-  const error = get('status.error') ?? DEFAULT_UI.error;
-  const diff = diffTones(success, error, file.appearance);
+  // status drives the diff tints, so resolve it first; the diff.* keys still win
+  // where the theme sets them, and the word tints fall back to their line tint.
+  const status = { ...DEFAULT_UI.status, ...f.status };
+  const derived = diffTones(status.success, status.error, file.appearance);
+  const diff: UiColors['diff'] = {
+    added: f.diff?.added ?? derived.added,
+    addedWord: f.diff?.addedWord ?? f.diff?.added ?? derived.addedWord,
+    removed: f.diff?.removed ?? derived.removed,
+    removedWord: f.diff?.removedWord ?? f.diff?.removed ?? derived.removedWord,
+    filler: f.diff?.filler ?? DEFAULT_UI.diff.filler,
+    fold: f.diff?.fold ?? DEFAULT_UI.diff.fold,
+  };
+
+  const ui: UiColors = {
+    editor: { ...DEFAULT_UI.editor, ...f.editor }, // editor.background absent ⇒ follow system scheme
+    text: { ...DEFAULT_UI.text, ...f.text },
+    border: f.border ?? DEFAULT_UI.border,
+    shadow: f.shadow ?? DEFAULT_UI.shadow,
+    surface: { ...DEFAULT_UI.surface, ...f.surface },
+    status,
+    search: {
+      match: f.search?.match ?? DEFAULT_UI.search.match,
+      matchCurrent: f.search?.matchCurrent ?? f.search?.match ?? DEFAULT_UI.search.matchCurrent,
+    },
+    diff,
+    flash: f.flash ?? DEFAULT_UI.flash,
+    pr: { ...DEFAULT_UI.pr, ...f.pr },
+  };
 
   // Preserve `syntax` key order — it drives tag priority (see SyntaxColors).
   const syntax: SyntaxColors = {};
@@ -259,35 +300,6 @@ export function adaptTheme(file: ThemeFile): Theme {
     if (Object.keys(s).length > 0) syntaxStyle[capture] = s;
   }
 
-  const ui: UiColors = {
-    fg: get('editor.foreground') ?? DEFAULT_UI.fg,
-    bg: get('editor.background'), // optional: absent ⇒ follow system scheme
-    lineNumber: get('editor.lineNumber') ?? DEFAULT_UI.lineNumber,
-    border: get('border') ?? DEFAULT_UI.border,
-    popoverBg: get('surface.popover') ?? DEFAULT_UI.popoverBg,
-    selectedBg: get('surface.selected') ?? DEFAULT_UI.selectedBg,
-    textMuted: get('text.muted') ?? DEFAULT_UI.textMuted,
-    textAccent: get('text.accent') ?? DEFAULT_UI.textAccent,
-    searchMatch: get('search.match') ?? DEFAULT_UI.searchMatch,
-    searchMatchCurrent: get('search.match.current') ?? DEFAULT_UI.searchMatchCurrent,
-    success,
-    warning: get('status.warning') ?? DEFAULT_UI.warning,
-    error,
-    info: get('status.info') ?? DEFAULT_UI.info,
-    hint: get('status.hint') ?? DEFAULT_UI.hint,
-    shadow: get('shadow') ?? DEFAULT_UI.shadow,
-    flash: get('flash') ?? DEFAULT_UI.flash,
-    diffAddedBg: get('diff.added') ?? diff.diffAddedBg,
-    diffRemovedBg: get('diff.removed') ?? diff.diffRemovedBg,
-    diffAddedWordBg: get('diff.added.word') ?? diff.diffAddedWordBg,
-    diffRemovedWordBg: get('diff.removed.word') ?? diff.diffRemovedWordBg,
-    diffFillerBg: get('diff.filler') ?? DEFAULT_UI.diffFillerBg,
-    diffFoldBg: get('diff.fold') ?? DEFAULT_UI.diffFoldBg,
-    prOpen: get('pr.open') ?? DEFAULT_UI.prOpen,
-    prMerged: get('pr.merged') ?? DEFAULT_UI.prMerged,
-    prClosed: get('pr.closed') ?? DEFAULT_UI.prClosed,
-  };
-
   applyMarkupDefaults(syntax, syntaxStyle, ui);
   return { name: file.name, appearance: file.appearance, ui, syntax, syntaxStyle };
 }
@@ -299,13 +311,14 @@ export function adaptTheme(file: ThemeFile): Theme {
  * entries always win (we only set what's missing).
  */
 function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui: UiColors): void {
+  const fg = ui.editor.foreground;
   const colorDefaults: SyntaxColors = {
-    'markup.heading': syntax.function ?? syntax.keyword ?? ui.fg,
-    'markup.link': syntax.function ?? ui.textAccent ?? ui.fg,
-    'markup.link.url': syntax.string ?? syntax.comment ?? ui.fg,
-    'markup.raw': syntax.string ?? ui.fg,
-    'markup.list': syntax.punctuation ?? syntax.operator ?? ui.fg,
-    'markup.quote': syntax.comment ?? ui.textMuted ?? ui.fg,
+    'markup.heading': syntax.function ?? syntax.keyword ?? fg,
+    'markup.link': syntax.function ?? ui.text.accent ?? fg,
+    'markup.link.url': syntax.string ?? syntax.comment ?? fg,
+    'markup.raw': syntax.string ?? fg,
+    'markup.list': syntax.punctuation ?? syntax.operator ?? fg,
+    'markup.quote': syntax.comment ?? ui.text.muted ?? fg,
   };
   for (const [cap, color] of Object.entries(colorDefaults)) {
     if (color && syntax[cap] === undefined) syntax[cap] = color;
@@ -330,9 +343,9 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
     'markup.link': { underline: true },
     'markup.quote': { italic: true },
     // Inline code → text-only background; block code (fences) → full-line background.
-    ...(ui.popoverBg ? {
-      'markup.raw': { background: ui.popoverBg },
-      'markup.raw.block': { lineBackground: ui.popoverBg },
+    ...(ui.surface.popover ? {
+      'markup.raw': { background: ui.surface.popover },
+      'markup.raw.block': { lineBackground: ui.surface.popover },
     } : {}),
   };
   for (const [cap, style] of Object.entries(styleDefaults)) {

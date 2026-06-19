@@ -259,8 +259,8 @@ export class EditorModel {
     // background color so it stays legible on the solid block.
     const tag = new Gtk.TextTag({
       name: 'vim-block-cursor',
-      background: theme.ui.fg,
-      foreground: theme.ui.bg ?? theme.ui.popoverBg,
+      background: theme.ui.editor.foreground,
+      foreground: theme.ui.editor.background ?? theme.ui.surface.popover,
     });
     this.buffer.getTagTable().add(tag);
     return tag;
@@ -636,7 +636,7 @@ export class EditorModel {
     if (!this.extraSelectionTag) {
       this.extraSelectionTag = new Gtk.TextTag({
         name: 'vim-extra-selection',
-        background: theme.ui.selectedBg ?? theme.ui.fg,
+        background: theme.ui.surface.selected ?? theme.ui.editor.foreground,
       });
       this.buffer.getTagTable().add(this.extraSelectionTag);
     }
@@ -644,8 +644,8 @@ export class EditorModel {
       // Same reverse-video styling as the primary block caret.
       this.extraCursorTag = new Gtk.TextTag({
         name: 'vim-extra-cursor',
-        background: theme.ui.fg,
-        foreground: theme.ui.bg ?? theme.ui.popoverBg,
+        background: theme.ui.editor.foreground,
+        foreground: theme.ui.editor.background ?? theme.ui.surface.popover,
       });
       this.buffer.getTagTable().add(this.extraCursorTag);
     }

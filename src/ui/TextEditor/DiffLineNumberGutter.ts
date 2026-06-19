@@ -16,7 +16,7 @@
 import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
 
-const COLOR = theme.ui.lineNumber;
+const COLOR = theme.ui.editor.lineNumber;
 
 class DiffLineNumberRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)

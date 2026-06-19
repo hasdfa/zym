@@ -56,19 +56,19 @@ What exists, and whether it reacts to a live change:
   `font-name` and calls `reload()` live; `reload()` is public so a future user
   font setting drives the same path. Terminal, editor signature/hover, completion
   docs, and all pickers update without a restart.
-- **Match-highlight / accent** — `HIGHLIGHT_COLOR = theme.ui.textAccent`
+- **Match-highlight / accent** — `HIGHLIGHT_COLOR = theme.ui.text.accent`
   (`src/ui/Picker.ts`) is a module-load constant baked into row Pango markup.
   ❌ static (follows neither a theme change nor the OS accent).
 - **Color palette is centralized** — ✅ chrome/syntax/picker colors come from
   `theme.ui.*` / `theme.syntax.*`. The loader resolves every `UiColors` field at
-  load (`adaptTheme` in `src/theme/theme.ts` resolves each concern-first `ui` key
-  by longest-prefix fallback, coalescing with `DEFAULT_UI`), so most consumers
-  read bare `theme.ui.X`. `bg` stays optional (its absence is the "follow the
-  system scheme" signal); `fg` defaults to white. Semantic tokens carry what used
-  to be hardcoded: `shadow`, `flash`, the diff tints
-  `diffAddedBg`/`diffRemovedBg`/`diffAddedWordBg`/`diffRemovedWordBg` (derived
-  from `status.success`/`status.error` per appearance) + `diffFillerBg`/
-  `diffFoldBg`, and `prOpen`/`prMerged`/`prClosed`. Regex-input
+  load (`adaptTheme` in `src/theme/theme.ts` deep-merges the file's nested `ui`
+  over `DEFAULT_UI`), so most consumers read `theme.ui.editor.background`-style
+  paths that mirror the theme JSON 1:1. `editor.background` stays optional (its
+  absence is the "follow the system scheme" signal). Semantic tokens carry what used
+  to be hardcoded: `shadow`, `flash`, the diff tints `diff.added`/`diff.removed`/
+  `diff.addedWord`/`diff.removedWord` (derived from `status.success`/`status.error`
+  per appearance) + `diff.filler`/`diff.fold`, and `pr.open`/`pr.merged`/
+  `pr.closed`. Regex-input
   highlighting (`src/ui/TextEditor/regexHighlight.ts`) reuses `theme.syntax`
   captures (keyword/punctuation/type/string.escape/constant) instead of its own
   colors. Static today (baked at module load) — so "restyle on theme change"

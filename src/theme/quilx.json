@@ -3,21 +3,31 @@
   "name": "quilx",
   "appearance": "dark",
   "ui": {
-    "editor.foreground": "#f1f1f1",
-    "editor.background": "#2d2d2d",
-    "editor.lineNumber": "#888888",
-    "text.muted": "#5b6268",
-    "text.accent": "#c678dd",
+    "editor": {
+      "foreground": "#f1f1f1",
+      "background": "#2d2d2d",
+      "lineNumber": "#888888"
+    },
+    "text": {
+      "muted": "#5b6268",
+      "accent": "#c678dd"
+    },
     "border": "#434346",
-    "surface.popover": "#383838",
-    "surface.selected": "#3f4b5b",
-    "status.success": "#98be65",
-    "status.warning": "#ecbe7b",
-    "status.error": "#ff6c6b",
-    "status.info": "#51afef",
-    "status.hint": "#4db5bd",
-    "search.match": "#e5a50a26",
-    "search.match.current": "#e5a50a59"
+    "surface": {
+      "popover": "#383838",
+      "selected": "#3f4b5b"
+    },
+    "status": {
+      "success": "#98be65",
+      "warning": "#ecbe7b",
+      "error": "#ff6c6b",
+      "info": "#51afef",
+      "hint": "#4db5bd"
+    },
+    "search": {
+      "match": "#e5a50a26",
+      "matchCurrent": "#e5a50a59"
+    }
   },
   "syntax": {
     "comment": { "color": "#80878c" },

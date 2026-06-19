@@ -20,61 +20,67 @@ One theme per file, `src/theme/<name>.json`, loaded by name
   "$schema": "./theme.schema.json",
   "name": "quilx",
   "appearance": "dark",          // light | dark
-  "ui":     { /* concern-first dotted color keys → color */ },
+  "ui": {                        // concern-grouped nested colors (mirrors UiColors 1:1)
+    "editor": { "foreground": "#f1f1f1", "background": "#2d2d2d", "lineNumber": "#888888" },
+    "text":   { "muted": "#5b6268", "accent": "#c678dd" },
+    "border": "#434346",
+    "surface":{ "popover": "#383838", "selected": "#3f4b5b" },
+    "status": { "success": "#98be65", "warning": "#ecbe7b", "error": "#ff6c6b", "info": "#51afef", "hint": "#4db5bd" },
+    "search": { "match": "#e5a50a26", "matchCurrent": "#e5a50a59" },
+    "diff":   { "added": "…", "addedWord": "…", "removed": "…", "removedWord": "…", "filler": "…", "fold": "…" },
+    "flash":  "…",
+    "pr":     { "open": "…", "merged": "…", "closed": "…" }
+  },
   "syntax": { /* capture name → { color, bold?, italic?, scale?, … } */ }
 }
 ```
+
+The defining property: **`ui` mirrors the consumed `UiColors` shape 1:1**, so a
+theme JSON's `ui.editor.background` is read in code as exactly
+`theme.ui.editor.background`. The model is the JSON.
 
 - **`appearance`** drives two things: the diff-tint derivation (dark *darkens* the
   status accents into recessed bands, light *lightens* them into pale ones — see
   `diffTones`) and, for a theme that omits `editor.background`, which system scheme
   the editor follows.
-- **`ui`** — a flat map of **concern-first** dotted keys (`status.error`,
-  `search.match`, `diff.added.word`). Values are CSS colors
+- **`ui`** — concern-grouped nested objects. Every field is optional and
+  deep-merged over `DEFAULT_UI`. Values are CSS colors
   (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` or `rgb()/rgba()`); `#rrggbbaa` for tints
-  that compose over text (search/diff/flash).
+  that compose over text (search/diff/flash). The dual cases use a camelCase
+  sibling rather than a node that's both a leaf and a branch: `search.matchCurrent`
+  (not `match.current`), `diff.addedWord` / `diff.removedWord`.
 - **`syntax`** — tree-sitter capture name → a `color` plus optional per-capture
   font style (`bold`/`italic`/`underline`/`strikethrough`/`scale`/`background`/
   `lineBackground`). The loader splits each token into the internal `SyntaxColors`
   (color) and `SyntaxStyles` (style) maps.
 
-The JSON Schema gives editors autocomplete + validation; it enumerates the known
-`ui` keys with descriptions and allows additional dotted keys for forward-compat.
+The JSON Schema gives editors autocomplete + validation; it enumerates the `ui`
+concern groups with descriptions and the syntax-token shape.
 
-## Why concern-first (and how fallback works)
+## How defaults work (`DEFAULT_UI` + deep-merge)
 
-`ui` keys resolve by **longest-prefix fallback**, reusing the exact
-`resolveByCaptureName` the syntax map uses: `resolveUi('search.match.current')`
-tries `search.match.current` → `search.match` → `search`, then the loader falls
-back to a built-in default (`DEFAULT_UI`).
+`DEFAULT_UI` (in `theme.ts`) is a **complete dark `UiColors`** structured exactly
+like a theme file's `ui` — the built-in fallback theme. The loader deep-merges a
+theme file's `ui` over it, concern by concern, so a theme only states what it
+overrides (a sibling left out keeps its default). `editor.background` is the one
+field with no default — its absence is the signal to follow the system scheme.
 
-Concern-first (`diff.added`, not `background.diff.added`) is the deliberate choice
-over primitive-first because it makes the fallback chain **semantically sound**:
-
-- `search.match.current` → `search.match` → `search` → `DEFAULT_UI.searchMatchCurrent`
-- `diff.added.word` → `diff.added` → `diff` → derived/`DEFAULT_UI`
-
-The chain never leaves the concern, so an unset key lands on a **designed
-default**, never a wrong primitive. Primitive-first would let
-`background.searchMatch` fall back to `background` (the opaque editor bg → match
-invisible) — concern-first can't. It also keeps the within-concern fallbacks that
-are genuinely useful: set only `search.match` and the current match inherits it;
-set only `diff.added` and the word tint inherits the line.
-
-Tree-sitter capture names are themselves role/concern-first (`keyword.control`,
-`markup.heading.1`), so this also makes `ui` and `syntax` resolve the same way.
+Two within-concern fallbacks are kept explicitly (they're genuinely useful): set
+only `search.match` and `matchCurrent` inherits it; set only `diff.added` and
+`diff.addedWord` inherits the line. (`syntax` captures still resolve by the dotted
+longest-prefix `resolveByCaptureName` — that's unchanged.)
 
 ## Resolution at load (`adaptTheme`)
 
 `loadTheme(name)` → `adaptTheme(file)` does, in order:
 
 1. **Validate** `appearance` ∈ {light, dark} (throws otherwise).
-2. **Resolve each `UiColors` field** from the `ui` map via longest-prefix
-   fallback, coalescing with `DEFAULT_UI`. `editor.background` is the one optional
-   field — absent ⇒ `ui.bg` undefined ⇒ follow the system scheme.
-3. **Derive the diff tints** from `status.success` / `status.error` per
-   `appearance` (`diffTones`, using `color-bits`). An explicit `diff.*` key wins;
-   `diff.added.word`/`diff.removed.word` fall back to their line key.
+2. **Deep-merge** each `ui` concern over `DEFAULT_UI` (`{ ...DEFAULT_UI.status,
+   ...file.ui.status }`, etc.). `editor.background` absent ⇒ undefined ⇒ follow the
+   system scheme.
+3. **Derive the diff tints** from the resolved `status.success` / `status.error`
+   per `appearance` (`diffTones`, using `color-bits`). An explicit `diff.*` value
+   wins; `diff.addedWord`/`diff.removedWord` fall back to their line value.
 4. **Split syntax tokens** into `syntax` (color, **key order preserved** — it
    drives GtkTextTag priority) and `syntaxStyle` (the style fields).
 5. **`applyMarkupDefaults`** — fill `markup.*` colors/styles (headings bold +
@@ -91,8 +97,8 @@ they're derived so they always track the theme's success/error hue. `diffTones`
 mutes the accent toward the editor (darken for dark themes, lighten for light)
 and applies alpha; the word tint is less muted + more opaque so changed words
 stand out within the line, kept calm enough that diffed comments stay readable.
-Consumed by `TextDecorations` (`theme.ui.diffAddedBg` etc.). A theme can still
-override any `diff.*` key explicitly.
+Consumed by `TextDecorations` (`theme.ui.diff.added` etc.). A theme can still
+override any `diff.*` value explicitly.
 
 ## What's still Zed-derived (out of scope)
 
@@ -106,10 +112,13 @@ owning the theme format.
 ## Status
 
 - [x] **Own the theme format** — replaced the Zed theme-family adapter with a
-  native loader + `theme.schema.json`. Concern-first `ui` keys with
-  longest-prefix fallback (shared `resolveByCaptureName`), per-capture `syntax`
-  tokens (color + style), diff tints derived from `status.*`. Single shipped
-  theme: `quilx.json` (dark). Loader unit-tested (`theme.test.ts`).
+  native loader + `theme.schema.json`. Per-capture `syntax` tokens (color + style),
+  diff tints derived from `status.*`. Single shipped theme: `quilx.json` (dark).
+  Loader unit-tested (`theme.test.ts`).
+- [x] **Model mirrors the JSON** — `UiColors` is concern-grouped nested objects
+  (`theme.ui.editor.background`, `theme.ui.status.error`, `theme.ui.diff.addedWord`)
+  identical to the theme file's `ui`; `DEFAULT_UI` is a complete nested fallback
+  theme the file deep-merges over.
 - [ ] **A light theme** — author `quilx-light.json` (`appearance: "light"`) to
   exercise the lighten path and unblock OS light/dark following (see
   [system-integration.md](system-integration.md) → "Theme follows appearance").

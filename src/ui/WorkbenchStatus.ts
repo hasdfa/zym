@@ -56,8 +56,8 @@ const DIAG_ANIM_MS = 200;
 // Both buttons get the same horizontal padding so the pill and the icon match.
 addStyles(`
   #WorkbenchStatus button { min-width: 0; padding-left: 6px; padding-right: 6px; }
-  #WorkbenchStatus .quilx-lsp-ready { color: ${theme.ui.textMuted}; }
-  #WorkbenchStatus .quilx-lsp-failed { color: ${theme.ui.error}; }
+  #WorkbenchStatus .quilx-lsp-ready { color: ${theme.ui.text.muted}; }
+  #WorkbenchStatus .quilx-lsp-failed { color: ${theme.ui.status.error}; }
   #WorkbenchStatus .quilx-status-count { font-size: var(--font-size-small); }
 `);
 

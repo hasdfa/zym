@@ -24,9 +24,9 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 // Glyph + colour per check state — the same check / dot / times icons (in
 // success / warning / error) the header CI button uses.
 const CHECK_STYLE: Record<CheckState, { glyph: string; color: string }> = {
-  pass: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.success }, // check
-  pending: { glyph: String.fromCodePoint(0xf444), color: theme.ui.warning }, // dot-fill (smaller)
-  fail: { glyph: String.fromCodePoint(0xf467), color: theme.ui.error }, // oct-x (smaller)
+  pass: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.status.success }, // check
+  pending: { glyph: String.fromCodePoint(0xf444), color: theme.ui.status.warning }, // dot-fill (smaller)
+  fail: { glyph: String.fromCodePoint(0xf467), color: theme.ui.status.error }, // oct-x (smaller)
 };
 
 // Sort/weight key: failed first, then pending, then passed.

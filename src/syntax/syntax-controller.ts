@@ -219,22 +219,22 @@ export class SyntaxController {
     // The tag that performs the actual hiding when a range is folded.
     this.invisibleTag = new Gtk.TextTag({ name: FOLD_HIDDEN_TAG_NAME, invisible: true });
     (buffer as any).getTagTable().add(this.invisibleTag);
-    this.foldPlaceholderTag = new Gtk.TextTag({ name: 'ts:fold-placeholder', editable: false, foreground: theme.ui.textMuted } as any);
+    this.foldPlaceholderTag = new Gtk.TextTag({ name: 'ts:fold-placeholder', editable: false, foreground: theme.ui.text.muted } as any);
     (buffer as any).getTagTable().add(this.foldPlaceholderTag);
     // Whole-collapse placeholder: a full-width band (paragraph background) behind the
     // collapsed-run marker, so it reads as its own row (the diff's `⋯ N lines` line).
     this.bandedPlaceholderTag = new Gtk.TextTag({
       name: 'ts:banded-fold-placeholder',
       editable: false,
-      foreground: theme.ui.textMuted,
-      paragraphBackground: theme.ui.diffFoldBg,
+      foreground: theme.ui.text.muted,
+      paragraphBackground: theme.ui.diff.fold,
     } as any);
     (buffer as any).getTagTable().add(this.bandedPlaceholderTag);
 
     // Bracket-match highlight (subtle box-like background + bold).
     this.bracketMatchTag = mk({
       name: 'bracket-match',
-      background: theme.ui.selectedBg ?? theme.ui.popoverBg,
+      background: theme.ui.surface.selected ?? theme.ui.surface.popover,
       weight: Pango.Weight.BOLD,
     });
 

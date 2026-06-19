@@ -35,7 +35,7 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 // Floating "elevated surface": use the theme's popover background so it reads as
 // a panel over the editor, not part of it.
-const POPOVER_BG = theme.ui.popoverBg;
+const POPOVER_BG = theme.ui.surface.popover;
 // Match the editor: the search/replace inputs use the app monospace font (from
 // the central, reactive font store).
 fonts.monospace('#SearchBar entry > text');
@@ -67,7 +67,7 @@ addStyles(`
   /* #SearchBar entry > text font comes from the font store — see fonts.monospace(...). */
   #SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
   /* Bad regex: tint the entry text. */
-  #SearchBar entry.invalid > text { color: ${theme.ui.error}; }
+  #SearchBar entry.invalid > text { color: ${theme.ui.status.error}; }
   #SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
   /* Linked search+replace inputs: square the touching corners and merge the
      shared border so the two entries read as one control. */

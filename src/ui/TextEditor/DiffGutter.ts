@@ -16,7 +16,7 @@ interface KindedLine {
 }
 
 const GLYPH: Record<'added' | 'removed', string> = { added: '+', removed: '−' };
-const COLOR: Record<'added' | 'removed', string> = { added: theme.ui.success, removed: theme.ui.error };
+const COLOR: Record<'added' | 'removed', string> = { added: theme.ui.status.success, removed: theme.ui.status.error };
 
 class DiffGutterRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)

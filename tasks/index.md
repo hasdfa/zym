@@ -34,9 +34,10 @@ See [styling.md](styling.md) for how UI styling works: GTK CSS (`addStyles` /
 rule, `theme.ui` color tokens, Nerd Font icons, and `.linked` button groups.
 
 See [theming.md](theming.md) for the **owned theme format** (no longer Zed's):
-concern-first `ui` keys with longest-prefix fallback, per-capture `syntax`
-tokens, the loader (`src/theme/theme.ts`) + JSON Schema (`theme.schema.json`),
-and diff tints derived from the `status.*` colors.
+concern-grouped nested `ui` colors that mirror the in-app model 1:1 (read as
+`theme.ui.editor.background`), per-capture `syntax` tokens, the loader
+(`src/theme/theme.ts`) + JSON Schema (`theme.schema.json`), the `DEFAULT_UI`
+fallback theme, and diff tints derived from the `status.*` colors.
 
 ### Plugin system
 
@@ -84,8 +85,8 @@ desktop's appearance and fonts, with the rule that **OS font/theme changes are
 followed through at runtime** (no restart).
 
 - [x] Editor scheme follows the OS light/dark preference (`notify::dark`), when the theme defines no background; terminal inherits libadwaita colors.
-- [x] **Color palette centralized** — all colors come from `theme.ui.*` (resolved at load via concern-first keys + `DEFAULT_UI`; no inline literals outside `src/theme/`). Tokens: `shadow`/`flash`/`diff*` (derived from `status.*`)/`pr*`; regex highlighting folds into `theme.syntax`. Prereq for live theme-swap; lint guardrail still TODO.
-- [x] **Own the theme format** — replaced the Zed theme-family adapter with a native loader + `theme.schema.json` (concern-first `ui` keys, per-capture `syntax` tokens). See [theming.md](theming.md).
+- [x] **Color palette centralized** — all colors come from `theme.ui.*` (a concern-grouped nested object deep-merged over `DEFAULT_UI` at load; no inline literals outside `src/theme/`). Tokens: `text.muted`/`shadow`/`flash`/`diff.*` (derived from `status.*`)/`pr.*`; regex highlighting folds into `theme.syntax`. Prereq for live theme-swap; lint guardrail still TODO.
+- [x] **Own the theme format** — replaced the Zed theme-family adapter with a native loader + `theme.schema.json`; the in-app `theme.ui` model mirrors the JSON 1:1 (`theme.ui.editor.background`). See [theming.md](theming.md).
 - [ ] Follow OS **monospace** font changes live (editor, terminal, pickers — currently read once at startup).
 - [ ] Follow OS **UI** font changes live (proportional text — currently read once).
 - [ ] Follow OS **light/dark** through the quilx theme palette (swap between a light/dark theme file pair selected by `appearance`; chrome/syntax/picker colors re-apply), and wire the dead `core.followSystemColorScheme` config.

@@ -22,10 +22,10 @@ const FA_INFO_CIRCLE = String.fromCodePoint(0xf05a);
 const FA_LIGHTBULB = String.fromCodePoint(0xf0eb);
 
 export const SEVERITY_STYLES: Record<number, SeverityStyle> = {
-  [DiagnosticSeverity.Error]: { glyph: COD_WARNING, color: theme.ui.error },
-  [DiagnosticSeverity.Warning]: { glyph: COD_WARNING, color: theme.ui.warning },
-  [DiagnosticSeverity.Information]: { glyph: FA_INFO_CIRCLE, color: theme.ui.info },
-  [DiagnosticSeverity.Hint]: { glyph: FA_LIGHTBULB, color: theme.ui.hint },
+  [DiagnosticSeverity.Error]: { glyph: COD_WARNING, color: theme.ui.status.error },
+  [DiagnosticSeverity.Warning]: { glyph: COD_WARNING, color: theme.ui.status.warning },
+  [DiagnosticSeverity.Information]: { glyph: FA_INFO_CIRCLE, color: theme.ui.status.info },
+  [DiagnosticSeverity.Hint]: { glyph: FA_LIGHTBULB, color: theme.ui.status.hint },
 };
 
 /** Presentation for a severity, defaulting to Error for unknown/undefined. */

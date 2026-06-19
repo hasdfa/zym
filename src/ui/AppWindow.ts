@@ -1464,14 +1464,14 @@ export class AppWindow {
   // switch can re-apply it. Themes without their own background (ui.bg unset)
   // leave the chrome to the system Adwaita styling.
   private applyChromeStyles() {
-    const { bg, popoverBg, selectedBg } = theme.ui;
+    const { editor: { background: bg }, surface: { popover: popoverBg, selected: selectedBg } } = theme.ui;
     if (!bg) {
       styles.remove('theme-chrome');
       return;
     }
     const border = theme.ui.border;
     // De-emphasized text for the empty-panel placeholder.
-    const muted = theme.ui.textMuted;
+    const muted = theme.ui.text.muted;
     const rules = [
       `#Header, #WorkbenchList .workbench-header {
         background: ${bg};
@@ -1512,7 +1512,7 @@ export class AppWindow {
       // color when this is the active panel.
       `#PanelEmptyState { background-color: ${bg}; }`,
       `#PanelEmptyText, #PanelEmptyEmoticon { color: ${muted}; }`,
-      `#PanelEmptyText.is-active, #PanelEmptyEmoticon.is-active { color: ${theme.ui.fg}; }`,
+      `#PanelEmptyText.is-active, #PanelEmptyEmoticon.is-active { color: ${theme.ui.editor.foreground}; }`,
     ];
 
     // Popover surfaces: the picker card, its search entry, and result list.
@@ -1546,7 +1546,7 @@ export class AppWindow {
   // (fatal reuses error); applied independently of the chrome so it works even
   // for themes that leave the chrome to Adwaita.
   private applyNotificationStyles() {
-    const { info, success, warning, error, textMuted, popoverBg, border, shadow } = theme.ui;
+    const { status: { info, success, warning, error }, text: { muted: textMuted }, surface: { popover: popoverBg }, border, shadow } = theme.ui;
     const colors: Record<string, string> = {
       trace: textMuted,
       info,

@@ -25,15 +25,15 @@ const CONFLICT_GLYPH = String.fromCodePoint(0xf071); // nf-fa-exclamation-triang
 // Count colors in the theme palette (fallbacks are Adwaita's): working-tree
 // insertions/deletions in success/error; upstream ahead in info, behind in
 // warning, and both (a diverged branch) in danger/error.
-const COLOR_ADDED = theme.ui.success;
-const COLOR_REMOVED = theme.ui.error;
-const COLOR_INFO = theme.ui.info;
-const COLOR_WARNING = theme.ui.warning;
-const COLOR_DANGER = theme.ui.error;
+const COLOR_ADDED = theme.ui.status.success;
+const COLOR_REMOVED = theme.ui.status.error;
+const COLOR_INFO = theme.ui.status.info;
+const COLOR_WARNING = theme.ui.status.warning;
+const COLOR_DANGER = theme.ui.status.error;
 
 // The conflict icon is error-colored.
 addStyles(`
-  .quilx-conflict { color: ${theme.ui.error}; }
+  .quilx-conflict { color: ${theme.ui.status.error}; }
 `);
 
 // A "+N"/"-M"/"↑N"/"↓M" count, as an inline markup span: a smaller, coloured run

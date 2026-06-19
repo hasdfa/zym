@@ -41,8 +41,8 @@ export interface LocationListOptions {
   onActivate: (item: LocationItem) => void;
 }
 
-const MUTED = theme.ui.textMuted;
-const SELECTION = theme.ui.selectedBg;
+const MUTED = theme.ui.text.muted;
+const SELECTION = theme.ui.surface.selected;
 // Row glyphs render a touch smaller than the text (Pango relative size).
 const ICON_SIZE = '85%';
 addStyles(`
@@ -113,7 +113,7 @@ export class LocationList {
 
     if (item.glyph) {
       const icon = new Gtk.Label({ xalign: 0.5 });
-      icon.setMarkup(`<span face="${ICON_FONT_FAMILY}" size="${ICON_SIZE}" foreground="${item.glyphColor ?? theme.ui.fg}">${item.glyph}</span>`);
+      icon.setMarkup(`<span face="${ICON_FONT_FAMILY}" size="${ICON_SIZE}" foreground="${item.glyphColor ?? theme.ui.editor.foreground}">${item.glyph}</span>`);
       icon.setValign(Gtk.Align.START);
       box.append(icon);
     }
