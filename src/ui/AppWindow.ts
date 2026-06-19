@@ -489,7 +489,7 @@ export class AppWindow {
     this.configWatcher.dispose();
     this.keymapWatcher.dispose();
     this.workbenchList.dispose();
-    this.workbench.gitPanel.dispose();
+    this.workbench.gitPanel?.dispose();
     this.workbench.notificationLog.dispose();
     this.workbench.keymapPanel.dispose();
     this.onQuit();
@@ -1142,7 +1142,7 @@ export class AppWindow {
         if (owner === workbench) this.disposeChild(widget);
       }
       workbench.fileTree.dispose(); // also holds a git subscription
-      workbench.gitPanel.dispose();
+      workbench.gitPanel?.dispose();
       // The bottom-dock panels subscribe to global signals (diagnostics store,
       // notifications, keymap) — dispose them so a closed agent leaves nothing behind.
       workbench.diagnosticsPanel.dispose();
@@ -1231,10 +1231,11 @@ export class AppWindow {
 
   /**
    * Build a person's workbench rooted at `cwd`: acquire the (pooled) GitRepo for
-   * that root, construct its own center, Files/Source-Control, and bottom-dock
-   * widgets, then hand them to a `Workbench` (which docks the center, and
-   * Source-Control for the user). Nothing is shared with other workbenches, so a
-   * switch never reparents. Registers and returns the `Workbench`.
+   * that root, construct its own center, Files tree, and bottom-dock widgets, then
+   * hand them to a `Workbench` (which docks the center, and the Files side dock for
+   * the user). Source Control is created lazily on first reveal (see ensureGitPanel).
+   * Nothing is shared with other workbenches, so a switch never reparents. Registers
+   * and returns the `Workbench`.
    */
   private buildWorkbench(owner: 'user' | AgentTerminal, cwd: string): Workbench<'user' | AgentTerminal> {
     const git = acquireGitRepo(cwd);
@@ -1244,21 +1245,15 @@ export class AppWindow {
       onOpenFile: (path) => this.openFile(path),
       git,
     });
-    // Source Control shares the top section with the file tree, as sibling tabs.
-    const gitPanel = new GitPanel({
-      cwd,
-      git,
-      onOpenFile: (path) => this.openFile(path),
-      onCommit: () => this.startCommit(),
-    });
-    // The file tree and git panel are sibling tabs in one panel (Nerd Font glyphs
-    // embedded in the title — Adw.TabView renders a GIcon, not a font glyph). A dock
-    // panel collapses out of the workbench when its last tab closes (the reveal/focus
-    // path re-attaches it); the closure captures this workbench's own `leftPanel`.
+    // The file tree is the only tab created up front. Source Control (GitPanel) is a
+    // sibling tab created lazily on first reveal (ensureGitPanel / `git-panel:focus`),
+    // so a workbench doesn't construct a git-subscribing panel it may never open. A
+    // dock panel collapses out of the workbench when its last tab closes (the
+    // reveal/focus path re-attaches it); the closure captures this workbench's own
+    // `leftPanel`.
     const leftPanel = new Panel({ onEmpty: () => this.detachDock(leftPanel) });
     const filesTab = leftPanel.add(fileTree.root, { title: `${fileIconGlyph('', true)}  Files` });
-    const gitTab = leftPanel.add(gitPanel.root, { title: `${Icons.git}  Git` });
-    filesTab.select(); // add() selects each tab as added; default to Files, not Git
+    filesTab.select();
 
     // Each bottom dock is a single persistent view: closing its tab hides the dock
     // (its toggle brings it back) rather than destroying the page, so its widget/
@@ -1282,7 +1277,7 @@ export class AppWindow {
     const workbench = new Workbench<'user' | AgentTerminal>(
       owner,
       {
-        cwd, git, center, fileTree, gitPanel, leftPanel, filesTab, gitTab,
+        cwd, git, center, fileTree, leftPanel, filesTab,
         notificationLog, notificationPanel, diagnosticsPanel, diagnosticsDock,
         keymapPanel, keymapDock,
       },
@@ -1363,7 +1358,7 @@ export class AppWindow {
     workbench.cwd = newCwd;
     workbench.git = git;
     workbench.fileTree.setRoot(newCwd, git);
-    workbench.gitPanel.setRoot(newCwd, git);
+    workbench.gitPanel?.setRoot(newCwd, git); // null until lazily created; it'll pick up the new root on creation
     // Re-point the gutters of editors already open in this workbench at the new repo.
     for (const [root, owner] of this.editorOwners) {
       if (owner === workbench) this.editors.get(root)?.setGitRepo(git);
@@ -1896,13 +1891,29 @@ export class AppWindow {
       this.workbench.filesTab.select();
       this.workbench.fileTree.focus();
     } else {
-      if (!present.includes(this.workbench.gitPanel.root)) {
-        if (this.workbench.gitPanel.root.getParent()) this.workbench.gitPanel.root.unparent();
-        this.workbench.gitTab = this.workbench.leftPanel.add(this.workbench.gitPanel.root, { title: `${Icons.git}  Git` });
+      const gitPanel = this.ensureGitPanel(this.workbench);
+      if (!present.includes(gitPanel.root)) {
+        if (gitPanel.root.getParent()) gitPanel.root.unparent();
+        this.workbench.gitTab = this.workbench.leftPanel.add(gitPanel.root, { title: `${Icons.git}  Git` });
       }
-      this.workbench.gitTab.select();
-      this.workbench.gitPanel.focus();
+      this.workbench.gitTab?.select();
+      gitPanel.focus();
     }
+  }
+
+  // Lazily create this workbench's Source Control panel on first reveal — it isn't
+  // built at startup, so a workbench opens no git subscription until the user asks
+  // for it. Idempotent: returns the existing panel once created.
+  private ensureGitPanel(workbench: Workbench<'user' | AgentTerminal>): GitPanel {
+    if (workbench.gitPanel) return workbench.gitPanel;
+    const gitPanel = new GitPanel({
+      cwd: workbench.cwd,
+      git: workbench.git,
+      onOpenFile: (path) => this.openFile(path),
+      onCommit: () => this.startCommit(),
+    });
+    workbench.gitPanel = gitPanel;
+    return gitPanel;
   }
 
   // Apply `lsp.*` config to the language-server manager.
@@ -2154,7 +2165,8 @@ export class AppWindow {
     }
     const child = this.workbench.leftPanel.activeChild;
     if (child && this.restoreTabFocus(child)) return;
-    if (this.workbench.leftPanel.activeChild === this.workbench.gitPanel.root) this.workbench.gitPanel.focus();
+    if (this.workbench.gitPanel && this.workbench.leftPanel.activeChild === this.workbench.gitPanel.root)
+      this.workbench.gitPanel.focus();
     else this.workbench.fileTree.focus();
   }
 

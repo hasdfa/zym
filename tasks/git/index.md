@@ -169,11 +169,14 @@ indicator and refreshes on completion instead of waiting on the HEAD monitor.
 ### Left-dock layout
 
 Source Control is a **sibling tab of the file tree** in the left-dock top panel.
-`buildWorkbench` (`AppWindow`) adds two tabs to one `Panel` — `  Files`
-(`fileIconGlyph`) and ` Git` (`Icons.git`, embedded in the Adw tab title) —
-defaulting to Files. The panel collapses out of the workbench when its last tab
-closes; the reveal/focus path re-attaches it (per-workbench, so each agent
-workbench has its own). `#GitPanel` is the CSS/selector identity.
+`buildWorkbench` (`AppWindow`) adds only the `  Files` tab (`fileIconGlyph`) up
+front; the ` Git` tab (`Icons.git`, embedded in the Adw tab title) is **created
+lazily** the first time it's revealed (`AppWindow.ensureGitPanel`, driven by
+`git-panel:focus`), so a workbench opens no git-subscribing `GitPanel` until the
+user asks for it (`workbench.gitPanel`/`gitTab` are null until then). The panel
+collapses out of the workbench when its last tab closes; the reveal/focus path
+re-attaches it (per-workbench, so each agent workbench has its own). `#GitPanel`
+is the CSS/selector identity.
 
 ### Status viewer — `src/ui/GitPanel.ts`
 
@@ -328,7 +331,8 @@ worktrees/submodules resolve via `cwd`.
 ## Phasing
 
 - [x] Backend: `src/git/cli.ts` helper (`gitSync` / `git`) + porcelain v2 parsing
-- [x] Left-dock: Source Control as a sibling tab of FileTree
+- [x] Left-dock: Source Control as a sibling tab of FileTree (lazily created on
+  first reveal — not built/subscribed at startup)
 - [x] Status viewer: staged/changes/untracked lists with stage/unstage/discard
 - [x] Commit: `.git/COMMIT_EDITMSG` + `git commit -F` (edit in a tab, commit on save+close)
 - [ ] Commit extras: amend, sign-off, amend prefill, length ruler

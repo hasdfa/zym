@@ -62,10 +62,8 @@ export interface WorkbenchContents {
   git: GitRepo;
   center: PanelGroup;
   fileTree: FileTree;
-  gitPanel: GitPanel;
   leftPanel: Panel;
   filesTab: PanelChild;
-  gitTab: PanelChild;
   notificationLog: NotificationLog;
   notificationPanel: Panel;
   diagnosticsPanel: DiagnosticsPanel;
@@ -89,12 +87,16 @@ export class Workbench<TOwner = unknown> {
   // The widgets filling this workbench's slots. `center`/`fileTree`/… are built once;
   // `filesTab`/`gitTab` are reassigned when the left dock is collapsed and re-revealed;
   // `bottomDock` tracks which panel (if any) is docked at the bottom.
+  //
+  // Source Control (`gitPanel`/`gitTab`) is **lazily created**: it stays null until
+  // the user first reveals it (AppWindow.ensureGitPanel), so a workbench doesn't open
+  // a git subscription it may never use.
   center: PanelGroup;
   fileTree: FileTree;
-  gitPanel: GitPanel;
+  gitPanel: GitPanel | null = null;
   leftPanel: Panel;
   filesTab: PanelChild;
-  gitTab: PanelChild;
+  gitTab: PanelChild | null = null;
   notificationLog: NotificationLog;
   notificationPanel: Panel;
   diagnosticsPanel: DiagnosticsPanel;
@@ -126,10 +128,8 @@ export class Workbench<TOwner = unknown> {
     this.git = contents.git;
     this.center = contents.center;
     this.fileTree = contents.fileTree;
-    this.gitPanel = contents.gitPanel;
     this.leftPanel = contents.leftPanel;
     this.filesTab = contents.filesTab;
-    this.gitTab = contents.gitTab;
     this.notificationLog = contents.notificationLog;
     this.notificationPanel = contents.notificationPanel;
     this.diagnosticsPanel = contents.diagnosticsPanel;
