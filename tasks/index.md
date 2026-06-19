@@ -33,6 +33,14 @@ See [styling.md](styling.md) for how UI styling works: GTK CSS (`addStyles` /
 (`--popover-radius`, `--font-size-small`, …), the one-secondary-text-size font
 rule, `theme.ui` color tokens, Nerd Font icons, and `.linked` button groups.
 
+### Lifecycle & disposal
+
+See [lifecycle-and-disposal.md](lifecycle-and-disposal.md): why teardown is
+load-bearing (widgets detach not destroy on close; node-gtk pins GObjects/handlers),
+the `eventKit.ts` primitives, the disposal rules, the `TextEditor.dispose()`
+reference, and the CDP leak-hunting recipe. Read before adding a component that owns a
+GObject, handler, timer, or child.
+
 ### Plugin system
 
 See [plugins.md](plugins.md) for the architecture (Atom-inspired) and

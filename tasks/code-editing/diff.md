@@ -42,7 +42,9 @@ tree-sitter highlighting (via `SyntaxController`) for free.
   kind; a modification is a removed↔added pair. `annotateWordDiffs` /
   `computeIntraLineDiff` (char diff via the `diff` package, `^9`) attach
   `wordRanges` to such pairs for intra-line highlighting (skipped for wholesale
-  replacements).
+  replacements). `refineWordRanges` then tidies each line's spans for display:
+  whitespace-separated spans merge into one, and a lone span covering all of a line's
+  non-whitespace content is dropped (the full-line background carries it).
 - `DiffHunk` points at a `lines` row range (`startRow`/`rowCount`) plus
   added/removed counts and old/new start rows — used for hunk navigation.
 - `splitSides(model)` → `{ left, right }`: line-aligned `SideLine[]` panes, the
@@ -64,14 +66,22 @@ tree-sitter highlighting (via `SyntaxController`) for free.
   scroll is hard-locked (value copy on `value-changed`). Both panes fold from the
   same `foldUnchanged` plan, so the alignment (and scroll-sync) stays valid.
 - `DiffViewer.ts` — the user-facing widget a tab/command embeds: a header (title +
-  `+N −M` stats + prev/next-change + an icon-only unified↔side-by-side toggle) over
-  a `Gtk.Stack` of the two renderers. `header: false` for embedders with their own
-  chrome (the inline staging diff).
+  `+N −M` stats + prev/next-change + an icon-only unified↔side-by-side toggle) over a
+  content box holding the **active** renderer only. One renderer is built at a time;
+  the toggle destroys the live one and builds the other (and the box sizes to the
+  single live pane for free). Renderer `dispose()` tears its `TextEditor`(s) down
+  fully — the switch detaches (not destroys) the old root, so the `destroy` fallback
+  never fires (see [lifecycle-and-disposal.md](lifecycle-and-disposal.md)).
+  `header: false` for embedders with their own chrome (the inline staging diff).
 - `DiffGutter.ts` — a `GtkSource.GutterRendererText` subclass drawing `+`/`−` per
   line, keyed by **model** row (translated through folds).
 - `applyDiffDecorations.ts` — shared helper applying full-line backgrounds
   (`added`/`removed`/`filler`, full-width via `paragraph-background`) and
-  `word-add`/`word-del` char-span decorations onto a decoration layer.
+  `word-add`/`word-del` char-span decorations onto a decoration layer. A
+  `paragraph-background` needs a char/newline on the line to paint, so the buffer is
+  built (`diffBufferText`) with a trailing newline **only** when the last line is
+  empty-and-changed; otherwise the last line's decoration spans its content instead of
+  `[row+1,0)` (which would collapse) — avoiding a spurious trailing blank row.
 
 **Folding** uses the editor's *diff fold method* — the same fold projection +
 chevron gutter as code folding (`SyntaxController.setDiffFolds`, driven by the vim
