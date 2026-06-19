@@ -50,6 +50,7 @@ import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
 import { MultiBufferView } from './multibuffer/MultiBufferView.ts';
+import { DiffMultiBufferView } from './multibuffer/DiffMultiBufferView.ts';
 import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
@@ -160,6 +161,8 @@ export class AppWindow {
   // Tab-hosted multibuffers (project:search-multibuffer), keyed by root widget so the view
   // is disposed (freeing its per-source DocumentSyntax parses) when its tab closes.
   private readonly multibufferViews = new Map<Widget, MultiBufferView>();
+  // Tab-hosted continuous multi-file diff views (git:diff-multibuffer), same lifecycle.
+  private readonly diffMultibufferViews = new Map<Widget, DiffMultiBufferView>();
   // Session modified-status registrations (editors, running agents), keyed by the
   // tab's root widget so the registration is disposed when the tab closes.
   private readonly participants = new Map<Widget, DisposableLike>();
@@ -1215,6 +1218,8 @@ export class AppWindow {
     this.stagingViews.delete(widget);
     this.multibufferViews.get(widget)?.dispose(); // free its per-source parses
     this.multibufferViews.delete(widget);
+    this.diffMultibufferViews.get(widget)?.dispose();
+    this.diffMultibufferViews.delete(widget);
     this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
@@ -2127,6 +2132,10 @@ export class AppWindow {
         description: 'Search the selected text across the project, shown as a multibuffer',
         when: () => this.activeEditor !== null,
       },
+      'git:diff-multibuffer': {
+        didDispatch: () => void this.openDiffMultibuffer(),
+        description: 'Show every changed file as one continuous diff (multibuffer)',
+      },
       'app:quit': () => this.onQuit(),
       'command-palette:toggle': () => openCommandPicker(this.overlay),
     });
@@ -2191,6 +2200,50 @@ export class AppWindow {
       child.select();
       view.focus();
     });
+  }
+
+  /** Show every changed file (working tree vs HEAD) as ONE continuous diff in a tab — the
+   *  multibuffer diff surface (read-only for now; tasks/code-editing/multibuffer.md, G5). */
+  private async openDiffMultibuffer(): Promise<void> {
+    const cwd = this.workbench.cwd;
+    const root = repoRoot(cwd);
+    if (!root) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const paths = [...this.workbench.git.getFileStatuses().keys()].sort();
+    if (paths.length === 0) {
+      this.toast('No changes against HEAD');
+      return;
+    }
+    const showHead = (rel: string): Promise<string> =>
+      new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
+    const files = await Promise.all(
+      paths.map(async (path) => {
+        const oldText = await showHead(Path.relative(root, path));
+        // Prefer a live open document's text (unsaved edits), else read from disk; a deleted
+        // file → empty new side (all removed).
+        let newText = '';
+        try {
+          newText = Fs.readFileSync(path, 'utf8');
+        } catch {
+          /* deleted on disk */
+        }
+        return { path, oldText, newText };
+      }),
+    );
+    const view = new DiffMultiBufferView({
+      files,
+      cwd,
+      onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+    });
+    const child = this.workbench.center.add(view.root, {
+      title: `${Icons.git}  Diff`,
+      requireTabBar: true,
+    });
+    this.diffMultibufferViews.set(view.root, view); // disposeChild tears it down on close
+    child.select();
+    view.focus();
   }
 
   /** Open the tab-hosted staging view (status list + an editable diff pane). */

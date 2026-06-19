@@ -1,0 +1,108 @@
+/*
+ * Regression tests for foldAll / unfoldAll (SyntaxController) over the ProjectionView fold
+ * substrate. Guards two bugs found in GUI testing:
+ *   1. nested `zM` drove folds from stale view-line snapshots → the outer fold ate past its
+ *      footer into the next statement (and was O(folds²) slow);
+ *   2. `zR` (unfoldAll) didn't repaint, so a restored body — spliced between the `{` and `}`
+ *      (both punctuation-tagged) — inherited the punctuation tag and showed in delimiter color.
+ * Needs GTK + a bundled grammar; gated if the grammar isn't vendored.
+ */
+import { test, before } from 'node:test';
+import assert from 'node:assert/strict';
+import { Gtk, GtkSource } from '../gi.ts';
+import { plugins, registerBuiltinPlugins } from '../plugin/index.ts';
+import { preloadGrammars, getGrammar, langIdForPath } from './grammar.ts';
+import { Document } from '../ui/TextEditor/Document.ts';
+import { SyntaxController } from './syntax-controller.ts';
+
+Gtk.init();
+
+let hasJs = false;
+before(async () => {
+  try { registerBuiltinPlugins(); } catch { /* already registered */ }
+  await plugins.activateAll();
+  await preloadGrammars();
+  hasJs = !!getGrammar(langIdForPath('/x.ts') ?? '');
+});
+
+const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
+
+function setup(src: string) {
+  const doc = new Document();
+  doc.setText(src);
+  const buffer: any = doc.createView();
+  const view = new GtkSource.View({ buffer });
+  const syntax = new SyntaxController(view, buffer, { folding: true, folds: doc as any, documentSyntax: (doc as any).syntax });
+  syntax.setLanguageForPath('/x.ts');
+  const text = () => buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true) as string;
+  const tagsAt = (row: number, col: number): string[] =>
+    (asIter(buffer.getIterAtLineOffset(row, col)).getTags() || []).map((t: any) => t.getProperty?.('name') ?? t.name ?? '?');
+  return { doc, buffer, syntax, text, tagsAt };
+}
+
+const NESTED = `export interface Host {
+  a(): void;
+  b(): void;
+}
+
+export class Doc {
+  m1() {
+    return 1;
+  }
+  m2() {
+    return 2;
+  }
+}
+`;
+
+test('foldAll collapses nested folds without eating past the footer', () => {
+  if (!hasJs) return;
+  const { syntax, text, doc } = setup(NESTED);
+  syntax.foldAll();
+  // Each top-level fold stays closed at its own `}` — no joining into the next statement.
+  assert.match(
+    text(),
+    /^export interface Host \{\[\d+\]\}\n\nexport class Doc \{\[\d+\]\}\n?$/,
+    `unexpected folded view:\n${text()}`,
+  );
+  assert.equal(doc.getText(), NESTED, 'model never mutated by folding');
+});
+
+test('unfoldAll restores the text exactly and re-highlights (no delimiter-colored body)', () => {
+  if (!hasJs) return;
+  const { syntax, text, tagsAt, doc } = setup(NESTED);
+  syntax.foldAll();
+  syntax.unfoldAll();
+  assert.equal(text(), NESTED, 'unfoldAll restores the exact text');
+  assert.equal(doc.getText(), NESTED);
+  // The leading whitespace of a body line must NOT carry the `{`/`}` punctuation tag the
+  // splice would otherwise leave behind; the keyword on that line keeps its own tag.
+  assert.deepEqual(tagsAt(1, 1), [], 'body whitespace has no inherited punctuation tag');
+  assert.deepEqual(tagsAt(1, 2), ['ts:property'], '`a` member is re-highlighted normally (not the delimiter color)');
+});
+
+test('foldAll then unfoldAll round-trips on a single function', () => {
+  if (!hasJs) return;
+  const { syntax, text } = setup('function foo() {\n  const x = 1;\n  return x;\n}\n');
+  syntax.foldAll();
+  assert.match(text(), /^function foo\(\) \{\[\d+\]\}\n?$/);
+  syntax.unfoldAll();
+  assert.equal(text(), 'function foo() {\n  const x = 1;\n  return x;\n}\n');
+});
+
+test('editing + undo with folds collapsed writes through and stays consistent', () => {
+  if (!hasJs) return;
+  const src = 'export class Doc {\n  m1() {\n    return 1;\n  }\n}\n';
+  const { syntax, buffer, doc, text } = setup(src);
+  syntax.foldAll();
+  const folded = text();
+  // Insert before the fold (view offset 0) → writes through to the model; view stays folded.
+  buffer.insert(asIter(buffer.getIterAtOffset(0)), 'X', -1);
+  assert.equal(doc.getText(), 'X' + src, 'edit wrote through to the model past the fold');
+  assert.equal(text(), 'X' + folded, 'view kept the fold collapsed, edit applied before it');
+  doc.undo();
+  assert.equal(doc.getText(), src, 'undo reverted the model');
+  assert.equal(text(), folded, 'undo kept the fold collapsed');
+  syntax.unfoldAll();
+  assert.equal(text(), src, 'unfolds back to the original after edit+undo');
+});

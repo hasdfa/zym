@@ -60,6 +60,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g p': 'git:push',
   'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
   'space g o': 'git:open-staging', // "o"pen the staging view (status + diff) in a tab
+  'space g D': 'git:diff-multibuffer', // "D"iff all changed files as one continuous diff
   // Hunk-level staging on the gutter hunk under the cursor (editor only): "s"tage,
   // "u"nstage (a staged/blue hunk), "r"evert (discard the unstaged change).
   'space h s': 'git:stage-hunk',

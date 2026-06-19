@@ -201,6 +201,21 @@ test('a leftward motion into a placeholder snaps to its near edge', () => {
   assert.equal(m.getCursorBufferPosition().column, 2, 'snapped before the placeholder');
 });
 
+test('read-only editor: edits no-op and input stays disabled across vim modes', () => {
+  const buffer = new GtkSource.Buffer();
+  buffer.setText('abc\n', -1);
+  const view = new GtkSource.View({ buffer });
+  const m = new EditorModel(view, buffer);
+  m.setReadOnly(true);
+  // A vim operator (x / dd / p / change) routes through setTextInBufferRange.
+  m.setTextInBufferRange(new Range(new Point(0, 0), new Point(0, 1)), 'XYZ');
+  assert.equal(m.getText(), 'abc\n', 'programmatic (vim) edit rejected in read-only');
+  // Entering insert mode would call setInputEnabled(true); read-only must keep input off.
+  m.setInputEnabled(true);
+  assert.equal((view as any).getEditable(), false, 'native input stays disabled in read-only');
+  assert.equal(m.isReadOnly(), true);
+});
+
 test('editing across a fold reveals it and edits the real (former-folded) text', () => {
   const doc = new Document();
   doc.setText('abXYZcd\n');

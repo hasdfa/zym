@@ -160,22 +160,92 @@ Collapse the two mechanisms (Document fold/sync + excerpt model) into one per-vi
 existing behavior + ~700 tests are the regression invariant — prove the substrate on
 known-good behavior before any multi-source complexity.
 
-- **2a** Define `ViewProjection` + segment model (generalize `MultiBufferModel` + `Document`'s
-  fold/sync). Coordinate map view↔`(segment, sourceOffset)`; **fold composed as a second
-  transform** on top.
-- **2b** Materialize + reverse-sync: build/maintain the view buffer from segments;
-  re-materialize a segment's rows when its source changes.
-- **2c** **Edit write-through**: view edit → `(segment, sourceOffset)` → the source model
-  (which propagates back). Boundary / block-row / read-only-segment edits clamp or reject.
-  *Single full-file segment = identity = today's `Document.forward`.*
-- **2d** Folds as a projection transform (replace `Document.foldViewRange`'s physical-collapse
-  path; merge with excerpt re-keying).
-- **2e** `TextEditor` always builds a projection; normal editor = one full-file editable
-  excerpt; **collapse the painter's single-source path into the one-segment case; delete the
-  buffer-mode duality + the `syntaxProjection` special-casing.**
-- **2f** Retarget gutter / diagnostics / inlay / decorations to the projection map (identity
-  for one source); per-source line-number gutter.
-- **2g** Undo seam (single source first; cross-source in Phase 3).
+- **2a — ✅ DONE.** `src/ui/TextEditor/ViewProjection.ts` — the pure, GTK-free coordinate
+  substrate. Models a view as an ordered `Item[]` (`segment`s over sources + synthesized
+  `block` rows: header/gap/blank) and maps the three spaces **source `(sourceKey,row,col)`
+  ↔ projection ↔ view** with **folds composed as a second transform** (collapsed projection
+  offset ranges → placeholders). A single full-file segment with no folds is `isIdentity`
+  and every translation short-circuits (zero-cost single-file path; hard problem #6). Offsets
+  are codepoint-counted (matches GtkTextBuffer iters). Public API: `build(items, resolveLines)`,
+  `viewText`/`projectionText`/`viewRowCount`, `viewToSource`/`sourceToView`/`sourceRowAtViewRow`/
+  `viewRowForSource`/`projectionRowForSource`, `addFold`/`removeFold`/`clearFolds`/`foldSpans`,
+  `isViewPositionEditable`/`isViewRangeEditable` (gates blocks/phantoms/cross-source/folded —
+  hard problem #1), `blockRows()`. Generalizes `MultiBufferModel` (not yet retired — 2e
+  migrates the multibuffer onto this). Tests: `ViewProjection.test.ts` (identity, multi-source
+  map, fold transform, fold∘multi-source composition, editability, astral codepoint offsets).
+- **2b — ✅ DONE.** `src/ui/TextEditor/ProjectionView.ts` — the per-view materialize +
+  reverse-sync layer over a `ViewProjection`. Owns ONE view `GtkSource.Buffer`, built from
+  `viewText`; **reverse-sync (source → view)** mirrors a source-buffer change into the view at
+  its projected location. Identity (single full-file source): a 1:1 incremental mirror —
+  byte-for-byte today's `Document.propagate` — robust to row-count changes (identity
+  translation is independent of the grown segment). Non-identity (multi-source read): coarse
+  re-materialize on a microtask once the source settles (the precise minimal-splice is a
+  Phase-4 perf/cursor refinement). Tests in `ProjectionView.test.ts`.
+- **2c — ✅ DONE (single-file scope).** **Write-through (view → source)** in the same
+  `ProjectionView`: a view edit → `viewToSource(row,col)` → the right source buffer
+  (suppressed so reverse-sync doesn't echo). Single full-file segment = identity = today's
+  `Document.forward` (proven by a 500-edit both-directions fuzz vs the Document contract).
+  Block / phantom rows carry a non-editable `vp:readonly` TextTag so the user can't type
+  there, and write-through rejects any edit not landing on a single editable real segment
+  (boundary clamp). Multi-source *editable* write-through (row-count-changing edits
+  re-segmenting the projection live) is **Phase 3a**.
+- **2d — ✅ DONE.** Folds as the analytic transform in `ProjectionView` (+ `ViewProjection`).
+  `fold(viewStart, viewEnd, placeholder)` / `unfold(handle)` collapse/restore the view buffer
+  (source untouched, placeholder read-only-tagged, inner folds subsumed). Fold handles are
+  `ViewProjection.Fold` objects whose offsets are **shifted analytically on every source edit**
+  (`shiftFoldsForInsert`/`shiftFoldsForDelete` = left-gravity start / right-gravity end, the
+  marks Document used) so a single-file view stays incrementally synced WITH folds (no
+  re-segment). Edits a fold absorbs don't touch the view. Also added the full **`FoldHost`
+  translation surface** (`modelLineForViewLine`/`viewLineForModelLine`/`modelPointFromView`/
+  `viewPointFromModel`/`modelLineText`/`foldPlaceholderRange`/`foldModelText`/`isFoldAlive`),
+  so `ProjectionView` is a drop-in for what `Document` gives `SyntaxController`. Validated
+  against `Document.test.ts`'s fold contract incl. a **600-edit fold fuzz** (collapsed-view
+  invariant checked every iteration) + nested-fold subsumption + absorbed edits.
+
+> **Substrate complete + proven (standalone, headless).** 2a–2d landed as new modules
+> (`ViewProjection.ts` + 8 tests, `ProjectionView.ts` + 17 tests), the full suite green (745,
+> +25) and typecheck clean — nothing in the live editor touched yet. 2e wires it in (the
+> invasive swap).
+
+- **2e — ✅ DONE (core wiring).** `Document` now creates a **`ProjectionView` per view** over
+  its model (one full-file editable segment) instead of a hand-synced `ViewEntry`: `forward`/
+  `propagate` + the mark-based fold machinery (`toModelOffset`/`toViewOffset`/`foldViewRange`/
+  …) are GONE; the model's signal handler only fires LSP `didChange`; each view's PV self-syncs
+  (write-through + reverse-sync) and owns its folds. `Document` keeps its **public API**
+  (`createView`/`removeView`/`foldViewRange`/`modelPointFromView`/`modelLineForViewLine`/… +
+  undo + `setText`) by **forwarding to the view's PV**, so `SyntaxController` (the `FoldHost`),
+  `TextEditor`, `EditorModel`, and `GitGutter` are untouched. `setText` suspends PV sync, bulk-
+  replaces the model, then `rebuild`s each PV (clearing folds). Validated against the full
+  editor suite (745 green) incl. `Document.test.ts` (cross-view sync + 600-edit fold fuzz) and
+  `EditorModel.test.ts`. **Bug fixed during wiring:** `foldPlaceholderRange` must report a
+  zero-width range for a just-removed fold (the old marks collapsed) — else the cursor-snap in
+  `onCursorMoved`, firing during `unfold`'s splice while the fold-access still reports the
+  placeholder, span-looped forever.
+  **Two fold bugs found in GUI testing + fixed (`foldAll.test.ts` guards them):** (a) `zM`
+  was O(folds²) (10.5s on a 564-line file) and produced wrong nested folds — it drove folds
+  from stale view-line snapshots, so an outer fold ate past its footer once inner folds had
+  collapsed. Rewrote `SyntaxController.foldAll` to drive from MODEL fold ranges (stable),
+  outermost-first, translating each to its CURRENT view lines just before folding + skipping
+  subsumed ranges, and to batch the re-key/repaint to once → **96ms, correct**. (b) `zR`
+  (`unfoldAll`) didn't repaint, so a restored body — spliced between the `{`/`}` punctuation —
+  inherited the punctuation tag and rendered in the delimiter color; `unfoldAll` now re-keys
+  + repaints (single `zo` via `toggleFold` already did).
+  *Deferred (couples to the multibuffer migration, Phase 3a/4, not single-file behavior):*
+  collapsing the painter's single-source path into the one-segment case, and deleting the
+  buffer-mode / `syntaxProjection` duality (MultiBufferView still uses its own path).
+- **2f — ✅ DONE for single-source (via 2e delegation).** Gutter / diagnostics / inlay /
+  decorations already translate through `Document.modelLineForViewLine`/`viewLineForModelLine`/
+  `viewPointFromModel`/`modelPointFromView`, which now delegate to the PV (identity for one
+  source, fold-aware otherwise) — green across the suite. *Per-source line-number gutter is a
+  multi-source concern (Phase 3b: two gutters old|new).* 
+- **2g — ✅ DONE for single-source.** Undo stays model-owned: `Document.undo` → `model.undo` →
+  model signals → every view's PV reverse-syncs (`Document.test.ts` undo/redo-propagate green).
+  *Cross-source / multi-file-transaction undo is Phase 3c.*
+
+> **Phase 2 core milestone reached:** every normal-file `TextEditor` renders a `ViewProjection`
+> (one full-file excerpt) — the single substrate (G1, single-file scope) is live and proven.
+> What remains for *full* G1 is migrating the multibuffer + buffer-only editors onto the same
+> substrate (folds into Phase 3a/4).
 
 **Validation:** the existing single-file editor/vim/fold/diagnostics tests must stay green
 with the editor running on the projection; add `ViewProjection` unit tests (coordinate math,
@@ -185,14 +255,89 @@ identity write-through, fold transform).
 
 Stack N sources on the proven substrate.
 
-- **3a** Multi-source write-through (edits land in the right source); selection/edit spanning
-  excerpts clamps.
-- **3b** **Diff duality**: a segment's source is the live `Document` (new side) or a parsed
-  base blob (old side); **phantom removed rows** = read-only segments over the base blob; diff
-  decorations + `foldUnchanged` via the projection; two line gutters (old|new); **live re-diff
-  on edit-idle** (reuse `lineDiff` / `DiffModel`).
-- **3c** **Cross-source undo** (G7): per-source stacks + a coordinated transaction for
-  multi-file ops.
+- **3a — write-through mechanism ✅ DONE; coordinate unification ✅ DONE; live-source wiring
+  NEXT.**
+  - *Write-through mechanism:* `ProjectionView` routes a multi-source view edit to the edited
+    segment's source (`viewToSource` → that source buffer), and **clamps** — an edit on a block
+    / phantom row, or a delete spanning two segments/sources, is rejected (hard problem #1).
+    `ViewProjection.viewToSource` gained a no-fold **row-direct** fast path (translate by
+    `rowInfo` index, not the edit-stale offset table) so **in-place edits need no remap**.
+    Tests in `ProjectionView.test.ts`.
+  - *Coordinate unification:* `MultiBufferView` + `ExcerptSyntaxProjection` now run on the
+    unified `ViewProjection` (via `excerptsToItems` + `ViewProjection.segmentRunsInViewRange` /
+    `blockRows` / `viewToSource`); the duplicate `MultiBufferProjection` coordinate class is
+    **retired** (`MultiBufferModel.ts` is now just the excerpt→`Item[]` layout).
+  - *ProjectionView-backed (the TextEditor seam):* `MultiBufferView` now backs its editor with
+    a real **`ProjectionView`** over the source buffers — the same substrate the single-file
+    editor uses. `TextEditor` gained a minimal `buffer.externalBuffer` option: a buffer-mode
+    editor uses the supplied PV buffer instead of creating its own, leaving the single-file
+    `Document` path **100% unchanged** (the scratch `Document` is a harmless identity shim).
+    Read-only behavior unchanged; PV path tested in `MultiBuffer.test.ts` (materialize + paint +
+    navigation). Suite 749 green. So the multibuffer's view buffer *is* a `ProjectionView` now.
+    **Highlight-bleed bug fixed (GUI testing):** a multi-row capture (e.g. a block/doc comment)
+    extending beyond an excerpt would, when applied across the stitched view buffer, bleed its
+    tag into *later* excerpts (a code line showing comment-colored). `SyntaxController.sliceIter`
+    now clamps each capture to its slice's `[fromRow, toRow]` span. Guarded by `MultiBuffer.test.ts`.
+    **Read-only enforcement fixed (GUI testing):** the multibuffer (and diff panes / peek) set
+    `readOnly`, but that only did `view.setEditable(false)` — which vim's per-mode
+    `setInputEnabled` re-enables on insert, and which normal-mode operators (`x`/`dd`/`p`) bypass
+    by mutating through `setTextInBufferRange`. So results were editable (and "undo didn't work"
+    because the view buffer's edits had no undo target). `EditorModel.setReadOnly` now gates the
+    edit funnel + keeps input disabled regardless of mode; `TextEditor` calls it for `readOnly`
+    buffer mode + peek. Guarded by `EditorModel.test.ts`.
+  - *Remaining:* (1) source from **live `Document`s** (registry-ref'd) instead of disk
+    snapshots → live re-projection; (2) flip read-only off → editable (the PV write-through
+    already routes to sources); (3) **cross-source undo (3c)** to make editing coherent.
+    Together these finish G1 (delete the buffer-mode / `syntaxProjection` duality).
+    *Row-count-changing multi-source edits (re-segmentation) remain Phase 3b.*
+- **3b — model ✅ DONE; read-only surface ✅ BUILT (GUI-untested).** `src/ui/multibuffer/
+  diffMultiBuffer.ts`: `buildDiffMultiBuffer(files)` assembles N changed files into the
+  `ViewProjection` item list (header + diff segments per file) + a per-projection-row
+  `DiffRowKind[]` + the source line arrays (4 tests). `src/ui/multibuffer/
+  DiffMultiBufferView.ts`: a read-only continuous multi-file diff — `ProjectionView` over the
+  new/old source buffers, painted per-side by `ExcerptSyntaxProjection`, added/removed
+  backgrounds from `rowKinds` via `applyDiffDecorations`, Enter/double-click → jump to file.
+  Wired in `AppWindow` (`git:diff-multibuffer`, `space g D`): async-fetches HEAD blobs
+  (`git(root, ['show', 'HEAD:<rel>'])`) + working text for every `getFileStatuses()` path.
+  Additive — does NOT replace `GitStagingView` yet. **Unchanged context is elided** (windowed
+  like a real diff: changed hunks + `CONTEXT` lines, long unchanged runs → a `⋯ N unchanged
+  lines` gap row) — `diffSegments` was refactored to expose `diffRows` (per-row op + old/new
+  line indices) + `rowsToItems`, and `buildDiffMultiBuffer` windows each file. **Remaining:**
+  GUI verification; expandable elided gaps (currently fixed); and the **editable** GUI wiring
+  (below) — after which it replaces `GitStagingView` (G5).
+  **Editable MECHANISM ✅ PROVEN + seams in** (`diffEditable.test.ts`): with the new side a live
+  `Document`'s model + the old side a base blob, an in-place edit to a context/added row writes
+  through to the Document (→ propagates to its tab + saves), a removed (phantom) row rejects
+  edits, and the `ProjectionView` coordinates undo. Seams added: `Document.modelBuffer` getter;
+  `TextEditor` `buffer.undoTarget` (use the PV as the editor's undo target). **Remaining GUI
+  wiring (design-laden):** `DiffMultiBufferView` sources the new side from registry-acquired
+  live `Document`s + flips editable + passes the PV as `undoTarget`; `AppWindow` acquires /
+  releases them; a **save** path (save the touched Documents); and **live re-diff on edit-idle**
+  (a row-count edit re-segments — reuse `lineDiff`), without which the diff display goes stale
+  as you add/remove lines. These are the rest of 3b/3d. **old|new line-number gutters DONE:** `buildDiffMultiBuffer` emits
+  per-row `oldNums`/`newNums` (from `diffRows`), and `DiffMultiBufferView` wires two
+  `DiffLineNumberGutter`s (old | new), blank on the side a row doesn't exist (added has no
+  old, removed no new).
+- **3b — segment model ✅ DONE.** `src/ui/multibuffer/diffSegments.ts`: `diffSegments(old,
+  new, newKey, oldKey)` line-diffs (reusing `lineDiff`) and emits `ViewProjection` items —
+  `eq`/`ins` → editable `real` rows over the NEW source (context + added), `del` → read-only
+  `phantom` rows over the OLD blob (removed) — plus the per-row `ops` for decorations /
+  fold-unchanged. So editing a diff = normal editing of the new document (write-through);
+  removed lines are real non-editable view rows over the base, not EOL virtual text. Tested
+  (`diffSegments.test.ts`) incl. composed with `ViewProjection` (interleave + editability
+  gating). *Remaining 3b (surface, GUI-coupled):* live re-diff on edit-idle, diff
+  decorations (added/removed backgrounds), `foldUnchanged` (fold the `eq` segments — just the
+  fold transform), two line gutters (old|new), over a live `Document` new-side + base blob.
+- **3c — mechanism ✅ DONE.** `ProjectionView` is now an `UndoTarget` coordinating its sources:
+  each user action is a **transaction** recording which source keys it touched (opening each
+  source's native undo group on first touch); `undo`/`redo` replay those sources' own undo in
+  reverse **as one step**, so a multi-file edit (replace-all) is a single Ctrl-Z (G7). Paired
+  with **multi-source in-place reverse-sync** (3a): an external / undo edit to a source now
+  mirrors into the multibuffer view at its translated row (cursor preserved) via the no-fold
+  row-direct `sourceToView`, rather than a coarse rebuild (row-count-changing edits still
+  rebuild → Phase 3b). Tests in `ProjectionView.test.ts` (route+undo on the right source;
+  multi-file transaction undone as one step; in-place reverse-sync). *Remaining to ship: wire
+  the PV as the multibuffer editor's undo target (TextEditor) once it's editable.*
 - **3d** **Editable project search → replace-all** (G6): edit results in place (write-through);
   replace-all across files as one undo transaction; powers multi-file refactors.
 

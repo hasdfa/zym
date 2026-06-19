@@ -470,6 +470,11 @@ export class EditorModel {
   private foldAccess: FoldAccess | null = null;
   private lastCursorOffset = 0;
   private snappingCursor = false;
+  // A true read-only viewer (a multibuffer results surface / diff pane): edits are no-ops and
+  // input is never enabled — `view.setEditable(false)` alone doesn't suffice, since vim's
+  // mode handling re-enables it on insert and normal-mode operators (x/dd/p) mutate the
+  // buffer programmatically through `setTextInBufferRange`, bypassing the native editable flag.
+  private readOnly = false;
 
   /** Wire the fold projection (the editor passes its SyntaxController's view). */
   setFoldAccess(access: FoldAccess): void {
@@ -742,6 +747,9 @@ export class EditorModel {
    */
   setTextInBufferRange(range: RangeLike, text: string): Range {
     const r = Range.fromObject(range);
+    // A read-only viewer rejects every edit — this is the single funnel all vim operators
+    // (and programmatic edits) route through, so gating it here blocks them all.
+    if (this.readOnly) return new Range(r.start, r.start);
     // An edit spanning a fold placeholder reveals those folds first, then acts on the
     // real (former-folded) text — so deleting/changing a selection that includes a
     // folded region works. Marks keep the edit range across the expansion.
@@ -1387,13 +1395,26 @@ export class EditorModel {
     else this.view.removeCssClass(name);
   }
 
-  /** Enable or disable user text input (normal/visual disable it; insert enables). */
+  /** Enable or disable user text input (normal/visual disable it; insert enables). A
+   *  read-only viewer never enables input, whatever the vim mode. */
   setInputEnabled(enabled: boolean): void {
-    this.view.setEditable(enabled);
+    const allow = enabled && !this.readOnly;
+    this.view.setEditable(allow);
     // Mark the view as taking text input while editable, so the keymap releases
     // `space` (the leader prefix) in insert mode but keeps it as a leader in
     // normal/visual mode. See the `.has-text-input` rule in the default keymap.
-    this.toggleCssClass('has-text-input', enabled);
+    this.toggleCssClass('has-text-input', allow);
+  }
+
+  /** Make this a read-only viewer: edits no-op and input stays disabled regardless of mode. */
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
+    if (readOnly) this.setInputEnabled(false);
+  }
+
+  /** Whether this editor rejects edits (a results/diff viewer). */
+  isReadOnly(): boolean {
+    return this.readOnly;
   }
 
   /** Set the cursor shape from a `CursorType` value (vim switches per mode). */

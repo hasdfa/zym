@@ -18,7 +18,9 @@ import * as Path from 'node:path';
 import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { TextEditor } from '../TextEditor/TextEditor.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
-import { MultiBufferProjection, type Excerpt, type Segment } from './MultiBufferModel.ts';
+import { ViewProjection } from '../TextEditor/ViewProjection.ts';
+import { ProjectionView } from '../TextEditor/ProjectionView.ts';
+import { excerptsToItems, type Excerpt, type Segment } from './MultiBufferModel.ts';
 import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
 
 /** One file's contribution: the regions (source model row spans) to show. */
@@ -49,22 +51,28 @@ export class MultiBufferView {
   readonly root: InstanceType<typeof Gtk.Widget>;
   readonly editor: TextEditor;
   private readonly sources = new Map<string, SourceEntry>();
-  private readonly projection: MultiBufferProjection;
+  private readonly projectionView: ProjectionView;
+  private readonly projection: ViewProjection;
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private disposed = false;
 
   constructor(options: MultiBufferOptions) {
     this.onActivate = options.onActivate;
 
-    // Resolve each unique source once (read from disk, parse with its grammar), build the
-    // projection text + coordinate map, and hand the painter a projection over the sources.
+    // Resolve each unique source once (read from disk, parse with its grammar), then back the
+    // editor with a ProjectionView over those source buffers — the SAME substrate the
+    // single-file editor uses. The PV materializes + would reverse-sync the view buffer; the
+    // editor renders it (read-only) and the painter highlights each excerpt from its source's
+    // own parse via the ExcerptSyntaxProjection over the PV's coordinate map.
     const excerpts = this.buildExcerpts(options.excerpts, options.cwd);
-    this.projection = MultiBufferProjection.build(excerpts, (seg) => this.resolveLines(seg));
-    const sources = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
-    const syntaxProjection = new ExcerptSyntaxProjection(this.projection, sources);
+    const sourceBuffers = new Map([...this.sources].map(([key, entry]) => [key, entry.buffer] as const));
+    this.projectionView = new ProjectionView(excerptsToItems(excerpts), sourceBuffers);
+    this.projection = this.projectionView.view;
+    const syntaxMap = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
+    const syntaxProjection = new ExcerptSyntaxProjection(this.projection, syntaxMap);
 
     this.editor = new TextEditor({
-      buffer: { readOnly: true, initialText: this.projection.text, folding: false, syntaxProjection },
+      buffer: { readOnly: true, folding: false, syntaxProjection, externalBuffer: this.projectionView.buffer },
     });
     this.root = this.editor.root;
     this.installNavigation();
@@ -114,12 +122,6 @@ export class MultiBufferView {
     return entry;
   }
 
-  private resolveLines(segment: Segment): string[] {
-    const entry = this.sources.get(segment.sourceKey);
-    if (!entry) return [];
-    return entry.lines.slice(segment.startRow, segment.endRow + 1);
-  }
-
   /** Enter (on the focused view) + double-click activate the row under the cursor/pointer.
    *  Capture phase so Enter jumps before the vim layer treats it as a motion (this is a
    *  read-only results surface — Enter-opens is the expected quickfix UX). */
@@ -153,8 +155,8 @@ export class MultiBufferView {
   }
 
   private activateRow(viewRow: number): void {
-    const loc = this.projection.sourceAt(viewRow);
-    if (loc) this.onActivate?.({ path: loc.sourceKey, row: loc.sourceRow });
+    const target = this.projection.viewToSource(viewRow, 0);
+    if (target.kind === 'source') this.onActivate?.({ path: target.sourceKey, row: target.row });
   }
 
   focus(): void {
@@ -164,6 +166,7 @@ export class MultiBufferView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.projectionView.dispose(); // detach the PV's source-buffer signal handlers
     for (const entry of this.sources.values()) entry.syntax.dispose();
     this.sources.clear();
     this.editor.dispose();

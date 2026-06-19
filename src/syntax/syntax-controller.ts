@@ -518,8 +518,17 @@ export class SyntaxController {
 
   /** A VIEW-buffer iter for a source `(row, col)` capture inside a projection `slice` (a
    *  linear excerpt mapping). Astral columns convert against the view line, which is a
-   *  verbatim copy of the source row. */
+   *  verbatim copy of the source row.
+   *
+   *  CLAMPED to the slice's `[fromRow, toRow]` span: a capture can extend beyond the excerpt
+   *  (e.g. a block/doc comment that spans rows the excerpt only shows part of), and since the
+   *  view buffer stitches non-adjacent excerpts contiguously, applying such a tag from its
+   *  raw mapped start to end would BLEED across the buffer into other excerpts (the
+   *  comment-colored constructor bug). Clamping a position before the slice to its first row
+   *  (col 0) and one after to its last row's end keeps every tag inside its own excerpt. */
   private sliceIter(slice: SyntaxSlice, sourceRow: number, sourceCol: number): any {
+    if (sourceRow < slice.fromRow) return asIter((this.buffer as any).getIterAtLineOffset(slice.viewStart, 0));
+    if (sourceRow > slice.toRow) return this.lineEndIter(slice.viewStart + (slice.toRow - slice.sourceStart));
     const viewRow = slice.viewStart + (sourceRow - slice.sourceStart);
     const col = slice.syntax.hasAstral ? this.toCodepointColumn(viewRow, sourceCol) : sourceCol;
     return asIter((this.buffer as any).getIterAtLineOffset(viewRow, col));
@@ -881,6 +890,9 @@ export class SyntaxController {
     // fully next (an incremental reparse from the fold's big delete+insert drifts node
     // positions). foldAll's many toggles then still cost a single full parse, not one each.
     if (!this.translate) this.docSyntax.requestFullReparse();
+    // foldAll batches many toggles: it does the (expensive) re-key + repaint + emit ONCE at
+    // the end instead of per fold — so skip them here while batching.
+    if (this.foldBatch) return revealed;
     // Re-key the fold map to the shifted view lines now, and (provided folds) mirror the
     // toggle to the lockstep sibling pane.
     if (this.providedFolds) {
@@ -900,6 +912,10 @@ export class SyntaxController {
     this.emitFoldsChanged();
     return revealed;
   }
+
+  // True while foldAll collapses many regions: toggleFold then skips its per-fold re-key /
+  // repaint / emit, which foldAll does once at the end (O(folds) instead of O(folds²)).
+  private foldBatch = false;
 
   // --- provided folds (external fold ranges) ---------------------------------
 
@@ -1175,15 +1191,66 @@ export class SyntaxController {
   }
 
   foldAll(): void {
-    // Bottom-up so collapsing one region doesn't shift the line numbers of those above.
-    const regions = [...this.foldsByHeaderLine.values()].filter((r) => !r.folded).sort((a, b) => b.startLine - a.startLine);
-    for (const region of regions) this.toggleFold(region);
+    if (this.providedFolds) {
+      // Provided folds (diff panes): their line coords recompute analytically, so the old
+      // bottom-up snapshot loop is fine.
+      const regions = this.providedFolds.filter((r) => !r.folded).sort((a, b) => b.startLine - a.startLine);
+      this.foldBatch = true;
+      try { for (const region of regions) this.toggleFold(region); } finally { this.foldBatch = false; }
+      this.rebuildProvidedFoldMap();
+      (this.view as any).queueDraw();
+      this.emitFoldsChanged();
+      return;
+    }
+    // Drive from MODEL fold ranges (stable as folds collapse, unlike view-line snapshots).
+    // Outermost-first; skip a range nested in an already-folded one (it's subsumed); and
+    // translate each range to its CURRENT view lines right before folding — so an earlier
+    // sibling / inner fold that shifted the view is accounted for (fixing the stale-line bug
+    // where the outer fold ate past its footer). Batch the re-key/repaint to once.
+    const ranges = this.docSyntax
+      .foldRanges()
+      .slice()
+      .sort((a, b) => a.startRow - b.startRow || b.endRow - a.endRow);
+    const collapsed: Array<{ s: number; e: number }> = [];
+    this.foldBatch = true;
+    try {
+      for (const r of ranges) {
+        if (collapsed.some((c) => r.startRow >= c.s && r.endRow <= c.e)) continue; // nested → subsumed
+        const region: FoldRegion = {
+          startLine: this.viewRow(r.startRow),
+          endLine: this.viewRow(r.endRow),
+          folded: false,
+          joinFooter: r.joinFooter,
+        };
+        if (region.endLine <= region.startLine) continue;
+        this.toggleFold(region);
+        collapsed.push({ s: r.startRow, e: r.endRow });
+      }
+    } finally {
+      this.foldBatch = false;
+    }
+    this.rebuildFoldMap();
+    if (this.translate) this.repaint();
+    (this.view as any).queueDraw();
+    this.emitFoldsChanged();
   }
 
   unfoldAll(): void {
+    if (this.activeFolds.length === 0 && !this.providedFolds?.some((r) => r.folded)) return;
     for (const handle of [...this.activeFolds]) this.foldHost?.unfoldView(this.buffer, handle);
     this.activeFolds.length = 0;
     for (const region of this.foldsByHeaderLine.values()) { region.folded = false; region.handle = undefined; }
+    // Re-key to the now-expanded view lines, and REPAINT: restoring a fold's body splices it
+    // back between the header `{` and footer `}` (both punctuation-tagged), so GtkTextBuffer's
+    // insert makes the body inherit that tag — a single unfold's repaint clears it, but
+    // unfoldAll must do the same or the restored text shows in the delimiter color.
+    if (this.providedFolds) {
+      for (const region of this.providedFolds) { region.folded = false; region.handle = undefined; }
+      this.rebuildProvidedFoldMap();
+    } else {
+      this.rebuildFoldMap();
+    }
+    if (this.translate) this.repaint();
     (this.view as any).queueDraw();
     this.emitFoldsChanged();
   }

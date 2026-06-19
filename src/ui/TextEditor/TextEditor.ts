@@ -19,7 +19,7 @@ import type { TagName } from '../../syntax/tags.ts';
 import { theme } from '../../theme/theme.ts';
 import { createSourceScheme } from '../../theme/createSourceScheme.ts';
 import { addStyles } from '../../styles.ts';
-import { EditorModel } from './EditorModel.ts';
+import { EditorModel, type UndoTarget } from './EditorModel.ts';
 import { Document, type DocumentHost } from './Document.ts';
 import { InlayHintController } from './InlayHintController.ts';
 import { attachVim } from './vim/index.ts';
@@ -234,6 +234,17 @@ export interface BufferEditorOptions {
    *  each excerpt's captures from its source's parse rather than parsing the buffer as one
    *  language. Mutually exclusive with `languagePath`. */
   syntaxProjection?: SyntaxProjection;
+  /** Back this editor with an externally-owned view buffer (the multibuffer's
+   *  `ProjectionView` buffer, materialized + synced over many sources) instead of a private
+   *  one. The owner keeps the buffer materialized + disposes its `ProjectionView`; the
+   *  editor's own scratch `Document` is then just an unused shim (its translation methods
+   *  return identity for a buffer it doesn't own — fine, since folding/LSP/gutter are off in
+   *  buffer mode). Pass NO `initialText` with this (the buffer is already materialized). */
+  externalBuffer?: SourceBuffer;
+  /** Undo target for an editable multi-source surface (the editable diff/search multibuffer):
+   *  its `ProjectionView`, which coordinates the touched sources' undo. Defaults to the
+   *  editor's own scratch document (single-source). */
+  undoTarget?: UndoTarget;
 }
 
 // Syntax-highlight a signature fragment (falling back to plain escaped text when
@@ -420,7 +431,11 @@ export class TextEditor implements DocumentHost {
     // OWN buffer from the document, kept in sync with the model and the other views.
     this.document = options.document ?? new Document();
     this.releaseDocument = options.document ? (options.onReleaseDocument ?? null) : null;
-    this.buffer = this.document.createView();
+    // A multibuffer supplies its own multi-source ProjectionView buffer; otherwise this view
+    // gets a private buffer from the document. With an external buffer, the scratch document
+    // owns no view (its translation methods fall back to identity for it — folding/LSP/gutter
+    // are off in buffer mode, so nothing depends on them).
+    this.buffer = this.bufferMode?.externalBuffer ?? this.document.createView();
     this.lspDocument = this.document.lspDocument;
     this.view = this.createView(this.buffer);
     // Tree-sitter highlighting + folding for this view/buffer. A buffer-only or peek
@@ -439,8 +454,9 @@ export class TextEditor implements DocumentHost {
     });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
-    // Undo/redo run on the document model (this view's buffer has native undo off).
-    this.editorModel.setUndoTarget(this.document);
+    // Undo/redo run on the document model (this view's buffer has native undo off) — or, for
+    // an editable multi-source surface, on the supplied ProjectionView (coordinates sources).
+    this.editorModel.setUndoTarget(this.bufferMode?.undoTarget ?? this.document);
     // The [...] placeholder is atomic + non-editable, and search runs over the whole
     // document — give the model access to the syntax controller's folds.
     this.editorModel.setFoldAccess({
@@ -498,7 +514,7 @@ export class TextEditor implements DocumentHost {
     if (this.peekMode) {
       // Read-only viewer onto the shared buffer; start unfocused so it shows no caret
       // until the user clicks into it.
-      this.view.setEditable(false);
+      this.editorModel.setReadOnly(true);
       this.editorModel.setFocused(false);
     }
     // Fallback teardown: the tab-close path disposes us explicitly, but also tear
@@ -539,7 +555,7 @@ export class TextEditor implements DocumentHost {
     // unfocused so a freshly-shown pane has no caret until it's actually focused
     // (otherwise both side-by-side panes would show one at creation).
     if (mode.readOnly) {
-      this.view.setEditable(false);
+      this.editorModel.setReadOnly(true); // reject vim edits too, not just native input
       this.editorModel.setFocused(false);
     }
 

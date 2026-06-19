@@ -28,8 +28,12 @@ import { quilx } from '../../quilx.ts';
 import { Point } from '../../text/Point.ts';
 import type { LspDocument, DocumentEdit } from '../../lsp/LspManager.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
+import { ProjectionView } from './ProjectionView.ts';
+import type { Item } from './ViewProjection.ts';
 
-type EditKind = 'insert' | 'delete';
+// The stable source key for this document's model in each view's ProjectionView. A normal
+// file is single-source, so the key is arbitrary but must match the projection's segment.
+const SOURCE_KEY = 'model';
 
 // node-gtk quirk: Gio.File instance methods are undefined on the concrete instance,
 // so reach them through the prototype (see config/load.ts).
@@ -37,28 +41,6 @@ const GioFileProto = (Gio.File as any).prototype;
 // node-gtk returns out-param iters directly or as [ok, iter]; normalize.
 const asIter = (res: any): any => (Array.isArray(res) ? res[res.length - 1] : res);
 const iterAtOffset = (buf: any, off: number): any => asIter(buf.getIterAtOffset(off));
-
-/**
- * A collapsed region in ONE view: the view buffer's text for the model range
- * [mStart, mEnd) is physically replaced by a short placeholder ([pStart, pEnd) in
- * the view) — so the view renders the fold on a single line (GtkTextView can't join
- * lines across an invisible newline). Marks track both ranges across edits. Folds
- * are per-view (one view can fold what another shows expanded), and make the view's
- * offsets/lines diverge from the model's — every view↔model translation walks them.
- */
-interface Fold {
-  pStart: any; // view mark — placeholder start
-  pEnd: any; // view mark — placeholder end
-  mStart: any; // model mark — collapsed range start
-  mEnd: any; // model mark — collapsed range end
-}
-
-/** A view's buffer + the guard that keeps a model-applied edit from forwarding back. */
-interface ViewEntry {
-  buffer: SourceBuffer;
-  suppress: boolean;
-  folds: Fold[];
-}
 
 /** The view-side reactions a Document routes to the active (focused) view: cursor
  *  restore + focus on load, modal dialogs, banners, and the cursor for LSP requests. */
@@ -88,8 +70,11 @@ export interface DocumentHost {
 export class Document {
   // The headless authority: text + the single undo stack. Never attached to a view.
   private readonly model: SourceBuffer;
-  private readonly views = new Set<ViewEntry>();
-  private origin: ViewEntry | null = null;
+  // Each open view onto this document, keyed by its view buffer. A ProjectionView owns the
+  // view buffer + its sync (write-through view→model, reverse-sync model→view) + folds, over
+  // a single full-file editable segment of the model (the identity case). The Document is
+  // just the shared source.
+  private readonly pvs = new Map<SourceBuffer, ProjectionView>();
   private syncing = false;
 
   // The shared tree-sitter parse for this document (model coords), created lazily on
@@ -99,6 +84,13 @@ export class Document {
   private _syntax: DocumentSyntax | null = null;
   get syntax(): DocumentSyntax {
     return this._syntax ??= new DocumentSyntax(this.model);
+  }
+
+  /** The headless model buffer (text + undo authority). Exposed so a multi-source surface
+   *  (the editable diff multibuffer) can use it as a live source: an edit written through to
+   *  it propagates to this document's own views + LSP, and saves via this document. */
+  get modelBuffer(): SourceBuffer {
+    return this.model;
   }
 
   /** The LSP document identity for this file — one per Document. Text/line read the
@@ -134,20 +126,16 @@ export class Document {
     (this.model as any).on('modified-changed', () => {
       for (const callback of this.modifiedHandlers) callback();
     });
-    // A model change (a forwarded view edit, or undo/redo) → mirror to every view
-    // except its origin, and tell the LSP (document-level: one didChange off the
-    // model, vs a shared-buffer design where every view's model would fire it).
-    // Signals fire pre-mutation, so the offset / deleted text describe the pre-edit
-    // state (what the delta needs).
+    // A model change (a view's write-through, or undo/redo) → tell the LSP (document-level:
+    // one didChange off the model). Each view's ProjectionView mirrors the change into its
+    // own view buffer itself (reverse-sync), so there's no manual propagate here. Signals
+    // fire pre-mutation, so the offset / deleted text describe the pre-edit state.
     (this.model as any).on('insert-text', (iter: any, text: string) => {
-      this.propagate('insert', iter.getOffset(), text, 0);
       this.lspDidChange([{ start: this.pointAt(iter.getOffset()), oldText: '', newText: text }]);
     });
     (this.model as any).on('delete-range', (start: any, end: any) => {
       const so = start.getOffset();
-      const eo = end.getOffset();
       const oldText = (this.model as any).getText(start, end, true);
-      this.propagate('delete', so, '', eo);
       this.lspDidChange([{ start: this.pointAt(so), oldText, newText: '' }]);
     });
   }
@@ -173,17 +161,20 @@ export class Document {
     return new Point(iter.getLine(), iter.getLineOffset());
   }
 
-  /** Replace the whole document (a file load/reload). Re-syncs every view directly
-   *  and clears the modified flag. */
+  /** Replace the whole document (a file load/reload). Re-materializes every view (dropping
+   *  its folds) and clears the modified flag. */
   setText(text: string): void {
     this.syncing = true;
     try {
+      // Drive the bulk replace explicitly: suspend each view's reverse-sync so the
+      // whole-buffer delete+insert isn't mirrored edit-by-edit, replace the model, then
+      // rebuild each view from the new model (which clears folds + re-materializes).
+      for (const pv of this.pvs.values()) pv.suspend();
       this.model.setText(text, -1);
-      for (const view of this.views) {
-        view.suppress = true;
-        view.buffer.setText(text, -1); // whole-buffer replace drops all folds
-        view.folds.length = 0;
-        view.suppress = false;
+      const items = [this.fullFileItem()];
+      for (const pv of this.pvs.values()) {
+        pv.resume();
+        pv.rebuild(items);
       }
     } finally {
       this.syncing = false;
@@ -216,41 +207,26 @@ export class Document {
 
   // --- Views -----------------------------------------------------------------
 
-  /** Open a new view onto this document: a per-view buffer seeded with the current
-   *  text and kept in sync. Detach with `removeView` on the view's teardown. */
+  /** Open a new view onto this document: a ProjectionView over the model (one full-file
+   *  editable segment), materialized + kept in sync. Returns its view buffer. Detach with
+   *  `removeView` on the view's teardown. */
   createView(): SourceBuffer {
-    const buffer = new GtkSource.Buffer();
-    buffer.setEnableUndo(false); // the model owns undo
-    buffer.setHighlightSyntax(true);
-    const entry: ViewEntry = { buffer, suppress: false, folds: [] };
-
-    (buffer as any).on('insert-text', (iter: any, text: string) => {
-      if (!entry.suppress) this.forward(entry, 'insert', iter.getOffset(), text);
-    });
-    (buffer as any).on('delete-range', (start: any, end: any) => {
-      if (!entry.suppress) this.forward(entry, 'delete', start.getOffset(), end.getOffset());
-    });
-
-    entry.suppress = true;
-    buffer.setText(this.getText(), -1);
-    buffer.setModified(false);
-    entry.suppress = false;
-
-    this.views.add(entry);
-    return buffer;
+    const pv = new ProjectionView([this.fullFileItem()], new Map([[SOURCE_KEY, this.model]]));
+    pv.buffer.setHighlightSyntax(true); // the painter turns this off once it owns highlighting
+    this.pvs.set(pv.buffer, pv);
+    return pv.buffer;
   }
 
   removeView(buffer: SourceBuffer): void {
-    for (const entry of this.views) {
-      if (entry.buffer === buffer) {
-        this.views.delete(entry);
-        return;
-      }
+    const pv = this.pvs.get(buffer);
+    if (pv) {
+      pv.dispose();
+      this.pvs.delete(buffer);
     }
   }
 
   get viewCount(): number {
-    return this.views.size;
+    return this.pvs.size;
   }
 
   // --- Hosts (the active view's reactions) -----------------------------------
@@ -303,226 +279,67 @@ export class Document {
     this.model.endUserAction();
   }
 
-  // --- Sync internals --------------------------------------------------------
+  // --- View sync + folds (delegated to each view's ProjectionView) -----------
+  // Each view is a ProjectionView over the model (one full-file editable segment — the
+  // identity case): it owns write-through (view→model), reverse-sync (model→view), and its
+  // folds. The Document forwards the FoldHost + translation surface SyntaxController /
+  // TextEditor use to the PV for the given view buffer (identity when the view has no folds).
 
-  private forward(view: ViewEntry, kind: EditKind, offset: number, textOrEnd: string | number): void {
-    // The signal carries VIEW offsets (which count this view's anchors); the model
-    // is anchor-free, so translate before applying.
-    this.origin = view;
-    try {
-      if (kind === 'insert') {
-        this.model.insert(iterAtOffset(this.model, this.toModelOffset(view, offset)), textOrEnd as string, -1);
-      } else {
-        this.model.delete(
-          iterAtOffset(this.model, this.toModelOffset(view, offset)),
-          iterAtOffset(this.model, this.toModelOffset(view, textOrEnd as number)),
-        );
-      }
-    } finally {
-      this.origin = null;
-    }
+  private pvFor(buffer: SourceBuffer): ProjectionView | null {
+    return this.pvs.get(buffer) ?? null;
   }
 
-  private propagate(kind: EditKind, offset: number, text: string, end: number): void {
-    if (this.syncing) return;
-    // `offset`/`end` are MODEL offsets; translate into each view's fold-shifted space.
-    for (const view of this.views) {
-      if (view === this.origin) continue;
-      // An edit inside one of this view's collapsed ranges is absorbed by the fold
-      // (its model marks track it); applying it would corrupt the placeholder.
-      if (this.editInsideFold(view, kind, offset, end)) continue;
-      view.suppress = true;
-      try {
-        if (kind === 'insert') {
-          view.buffer.insert(iterAtOffset(view.buffer, this.toViewOffset(view, offset)), text, -1);
-        } else {
-          view.buffer.delete(
-            iterAtOffset(view.buffer, this.toViewOffset(view, offset)),
-            iterAtOffset(view.buffer, this.toViewOffset(view, end)),
-          );
-        }
-      } finally {
-        view.suppress = false;
-      }
-    }
+  /** One full-file editable segment over the model — the normal-editor projection. `endRow`
+   *  tracks the model's current last line (a fresh item is built on each (re)materialize). */
+  private fullFileItem(): Item {
+    return {
+      type: 'segment',
+      segment: {
+        sourceKey: SOURCE_KEY,
+        startRow: 0,
+        endRow: Math.max(0, this.model.getLineCount() - 1),
+        editable: true,
+        kind: 'real',
+      },
+    };
   }
 
-  // --- Folds (view-side projection of collapsed model ranges) -----------------
-
-  private entryFor(buffer: SourceBuffer): ViewEntry | null {
-    for (const entry of this.views) if (entry.buffer === buffer) return entry;
-    return null;
+  /** Collapse a view range to `placeholder`; returns the fold handle (opaque to callers). */
+  foldViewRange(buffer: SourceBuffer, viewStart: number, viewEnd: number, placeholder: string): any {
+    return this.pvFor(buffer)?.fold(viewStart, viewEnd, placeholder) ?? null;
   }
 
-  private markOff(buffer: any, mark: any): number {
-    return asIter(buffer.getIterAtMark(mark)).getOffset();
-  }
-
-  /** Whether a model edit falls within one of this view's collapsed ranges (so the
-   *  fold absorbs it instead of the view rendering it). Insert: at/inside [mStart,mEnd];
-   *  delete: fully inside. */
-  private editInsideFold(view: ViewEntry, kind: EditKind, offset: number, end: number): boolean {
-    for (const f of view.folds) {
-      const ms = this.markOff(this.model, f.mStart);
-      const me = this.markOff(this.model, f.mEnd);
-      if (kind === 'insert') {
-        if (offset >= ms && offset <= me) return true;
-      } else if (offset >= ms && end <= me) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** Whether a fold handle is still live (not subsumed by an enclosing fold / deleted). */
-  isFoldAlive(fold: Fold): boolean {
-    return !!fold && !!fold.pStart && !fold.pStart.getDeleted();
-  }
-
-  /** Forget a fold and free its four marks (used when an enclosing fold subsumes it). */
-  private dropFold(view: ViewEntry, fold: Fold): void {
-    const i = view.folds.indexOf(fold);
-    if (i >= 0) view.folds.splice(i, 1);
-    for (const m of [fold.pStart, fold.pEnd]) if (m && !m.getDeleted()) (view.buffer as any).deleteMark(m);
-    for (const m of [fold.mStart, fold.mEnd]) if (m && !m.getDeleted()) (this.model as any).deleteMark(m);
-  }
-
-  /** This view's folds resolved to live offsets, ascending by view position. */
-  private foldSpans(view: ViewEntry): Array<{ ps: number; pe: number; ms: number; me: number }> {
-    return view.folds
-      .filter((f) => !f.pStart.getDeleted()) // defensive: skip any subsumed/dead fold
-      .map((f) => ({
-        ps: this.markOff(view.buffer, f.pStart),
-        pe: this.markOff(view.buffer, f.pEnd),
-        ms: this.markOff(this.model, f.mStart),
-        me: this.markOff(this.model, f.mEnd),
-      }))
-      .sort((a, b) => a.ps - b.ps);
-  }
-
-  /** VIEW buffer offset → MODEL offset. Each fold before the offset stands in `pLen`
-   *  view chars for `mLen` model chars; an offset inside a placeholder collapses to
-   *  the fold's model start. */
-  private toModelOffset(view: ViewEntry, viewOffset: number): number {
-    if (view.folds.length === 0) return viewOffset;
-    let delta = 0;
-    for (const f of this.foldSpans(view)) {
-      if (f.pe <= viewOffset) delta += (f.me - f.ms) - (f.pe - f.ps);
-      else if (f.ps < viewOffset) return f.ms; // inside the placeholder
-      else break;
-    }
-    return viewOffset + delta;
-  }
-
-  /** MODEL offset → VIEW buffer offset. Inverse of toModelOffset; a model offset
-   *  inside a collapsed range maps to the placeholder start. */
-  private toViewOffset(view: ViewEntry, modelOffset: number): number {
-    if (view.folds.length === 0) return modelOffset;
-    let delta = 0;
-    for (const f of this.foldSpans(view).sort((a, b) => a.ms - b.ms)) {
-      if (f.me <= modelOffset) delta += (f.pe - f.ps) - (f.me - f.ms);
-      else if (f.ms < modelOffset) return f.ps; // inside the collapsed range
-      else break;
-    }
-    return modelOffset + delta;
-  }
-
-  /**
-   * Collapse the VIEW text spanning view offsets [viewStart, viewEnd) to `placeholder`
-   * (e.g. `[...]`), recording the model range it stands for. The model is untouched;
-   * the view renders the fold on one line. Returns an opaque handle for `unfoldView`.
-   */
-  foldViewRange(buffer: SourceBuffer, viewStart: number, viewEnd: number, placeholder: string): Fold | null {
-    const view = this.entryFor(buffer);
-    if (!view || viewEnd <= viewStart) return null;
-    const buf = buffer as any;
-    // Resolve the model range this view span maps to BEFORE collapsing.
-    const ms = this.toModelOffset(view, viewStart);
-    const me = this.toModelOffset(view, viewEnd);
-    const mStart = (this.model as any).createMark(null, iterAtOffset(this.model, ms), true);
-    const mEnd = (this.model as any).createMark(null, iterAtOffset(this.model, me), false);
-    // Subsume any folds whose placeholder lies inside the range being collapsed (this
-    // fold now represents their model content too). Their placeholder is about to be
-    // deleted by the collapse; drop them so they don't double-count in translation. The
-    // model range above already accounted for them, so `[ms, me)` spans their bodies.
-    for (const inner of [...view.folds]) {
-      const ps = this.markOff(buf, inner.pStart);
-      if (ps >= viewStart && this.markOff(buf, inner.pEnd) <= viewEnd) {
-        this.dropFold(view, inner);
-      }
-    }
-    // Replace the view text with the placeholder (suppressed → never forwarded).
-    view.suppress = true;
-    try {
-      buf.delete(iterAtOffset(buf, viewStart), iterAtOffset(buf, viewEnd));
-      buf.insert(iterAtOffset(buf, viewStart), placeholder, -1);
-    } finally {
-      view.suppress = false;
-    }
-    const pStart = buf.createMark(null, iterAtOffset(buf, viewStart), false);
-    const pEnd = buf.createMark(null, iterAtOffset(buf, viewStart + placeholder.length), true);
-    const fold: Fold = { pStart, pEnd, mStart, mEnd };
-    view.folds.push(fold);
-    return fold;
-  }
-
-  /** Expand a fold: replace its placeholder with the current model text of its range. */
-  unfoldView(buffer: SourceBuffer, fold: Fold): void {
-    const view = this.entryFor(buffer);
-    if (!view) return;
-    const idx = view.folds.indexOf(fold);
-    if (idx < 0) return;
-    view.folds.splice(idx, 1);
-    const buf = buffer as any;
-    const ms = this.markOff(this.model, fold.mStart);
-    const me = this.markOff(this.model, fold.mEnd);
-    const body = (this.model as any).getText(iterAtOffset(this.model, ms), iterAtOffset(this.model, me), true);
-    const ps = this.markOff(buf, fold.pStart);
-    const pe = this.markOff(buf, fold.pEnd);
-    view.suppress = true;
-    try {
-      buf.delete(iterAtOffset(buf, ps), iterAtOffset(buf, pe));
-      buf.insert(iterAtOffset(buf, ps), body, -1);
-    } finally {
-      view.suppress = false;
-    }
-    (this.model as any).deleteMark(fold.mStart);
-    (this.model as any).deleteMark(fold.mEnd);
-    buf.deleteMark(fold.pStart);
-    buf.deleteMark(fold.pEnd);
+  /** Expand a fold (restore its collapsed text). */
+  unfoldView(buffer: SourceBuffer, fold: any): void {
+    this.pvFor(buffer)?.unfold(fold);
   }
 
   /** The live [start, end) placeholder offsets of `fold` in its view buffer. */
-  foldPlaceholderRange(buffer: SourceBuffer, fold: Fold): [number, number] {
-    return [this.markOff(buffer as any, fold.pStart), this.markOff(buffer as any, fold.pEnd)];
+  foldPlaceholderRange(buffer: SourceBuffer, fold: any): [number, number] {
+    return this.pvFor(buffer)?.foldPlaceholderRange(fold) ?? [0, 0];
   }
 
-  /** The model text a fold currently stands in for (its `[mStart, mEnd)` range). */
-  foldModelText(_buffer: SourceBuffer, fold: Fold): string {
-    const ms = this.markOff(this.model, fold.mStart);
-    const me = this.markOff(this.model, fold.mEnd);
-    return (this.model as any).getText(iterAtOffset(this.model, ms), iterAtOffset(this.model, me), true);
+  /** The model text a fold currently stands in for (for search-reveal matching). */
+  foldModelText(buffer: SourceBuffer, fold: any): string {
+    return this.pvFor(buffer)?.foldModelText(fold) ?? '';
   }
 
-  /** Translate a VIEW caret position to MODEL space (folds shift lines + columns).
-   *  Used for LSP requests so positions match the file. */
+  /** Whether a fold handle is still live (not subsumed by an enclosing fold). */
+  isFoldAlive(fold: any): boolean {
+    if (!fold) return false;
+    for (const pv of this.pvs.values()) if (pv.isFoldAlive(fold)) return true;
+    return false;
+  }
+
+  /** Translate a VIEW caret position to MODEL space (folds shift lines + columns) — for LSP. */
   modelPointFromView(buffer: SourceBuffer, point: Point): Point {
-    const view = this.entryFor(buffer);
-    if (!view || view.folds.length === 0) return point;
-    const viewOffset = asIter((buffer as any).getIterAtLineOffset(point.row, point.column)).getOffset();
-    const iter = iterAtOffset(this.model, this.toModelOffset(view, viewOffset));
-    return new Point(iter.getLine(), iter.getLineOffset());
+    return this.pvFor(buffer)?.modelPointFromView(point) ?? point;
   }
 
-  /** Translate a MODEL caret position to VIEW space (folds collapse lines/cols). A
-   *  position inside a folded range maps to its placeholder. For rendering LSP results
-   *  (diagnostics, inlay hints) on the collapsed view. */
+  /** Translate a MODEL caret position to VIEW space (a position inside a fold → its
+   *  placeholder). For rendering LSP results (diagnostics, inlay hints) on the collapsed view. */
   viewPointFromModel(buffer: SourceBuffer, point: Point): Point {
-    const view = this.entryFor(buffer);
-    if (!view || view.folds.length === 0) return point;
-    const modelOffset = asIter((this.model as any).getIterAtLineOffset(point.row, point.column)).getOffset();
-    const iter = iterAtOffset(buffer, this.toViewOffset(view, modelOffset));
-    return new Point(iter.getLine(), iter.getLineOffset());
+    return this.pvFor(buffer)?.viewPointFromModel(point) ?? point;
   }
 
   /** Text of MODEL row `row` (no newline) — for LSP column-encoding of model ranges. */
@@ -532,18 +349,12 @@ export class Document {
 
   /** Model line (0-based) shown at VIEW line `viewLine` — for the line-number gutter. */
   modelLineForViewLine(buffer: SourceBuffer, viewLine: number): number {
-    const view = this.entryFor(buffer);
-    if (!view || view.folds.length === 0) return viewLine;
-    const viewOffset = asIter((buffer as any).getIterAtLine(viewLine)).getOffset();
-    return iterAtOffset(this.model, this.toModelOffset(view, viewOffset)).getLine();
+    return this.pvFor(buffer)?.modelLineForViewLine(viewLine) ?? viewLine;
   }
 
   /** VIEW line showing model line `modelLine` (its start) — for diagnostics/decorations. */
   viewLineForModelLine(buffer: SourceBuffer, modelLine: number): number {
-    const view = this.entryFor(buffer);
-    if (!view || view.folds.length === 0) return modelLine;
-    const modelOffset = asIter((this.model as any).getIterAtLine(modelLine)).getOffset();
-    return iterAtOffset(buffer, this.toViewOffset(view, modelOffset)).getLine();
+    return this.pvFor(buffer)?.viewLineForModelLine(modelLine) ?? modelLine;
   }
 
   // --- Identity --------------------------------------------------------------
@@ -571,6 +382,8 @@ export class Document {
     this.fileMonitor = null;
     if (this.deletionCheckTimer) clearTimeout(this.deletionCheckTimer);
     this.deletionCheckTimer = null;
+    for (const pv of this.pvs.values()) pv.dispose(); // detach any view still attached
+    this.pvs.clear();
     this._syntax?.dispose(); // frees the tree + injection parsers; detaches model signals
     this._syntax = null;
     // Only close an LSP doc we actually opened — a lazily-assigned, never-shown document
