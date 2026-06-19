@@ -31,7 +31,7 @@ import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
-import { computeDiff, foldUnchanged, type DiffModel } from '../util/DiffModel.ts';
+import { computeDiff, foldUnchanged, needsTrailingNewline, type DiffModel } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import type { GitRepo } from '../git.ts';
 import {
@@ -300,11 +300,14 @@ export class GitStagingView {
 
   // A snug height for the inline diff, capped (the editor scrolls past the cap). Use
   // the exact number of *displayed* rows: total lines minus the folded bodies, plus
-  // one marker line per fold (the unchanged runs start collapsed).
+  // one marker line per fold (the unchanged runs start collapsed), plus the trailing
+  // newline row the buffer adds only when the last changed line is empty (see
+  // `diffBufferText`) — otherwise the view is ~a line short and scrolls.
   private diffHeight(model: DiffModel): number {
     const folds = foldUnchanged(model.lines);
     const hidden = folds.reduce((sum, f) => sum + f.count, 0);
-    const displayed = Math.max(1, model.lines.length - hidden + folds.length);
+    let displayed = Math.max(1, model.lines.length - hidden + folds.length);
+    if (needsTrailingNewline(model.lines)) displayed += 1;
     return Math.min(DIFF_MAX_PX, DIFF_HEADER_PX + displayed * DIFF_LINE_PX);
   }
 

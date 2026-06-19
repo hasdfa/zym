@@ -1,7 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeDiff, computeIntraLineDiff, foldUnchanged, splitLines, splitSides } from './DiffModel.ts';
+import {
+  computeDiff,
+  computeIntraLineDiff,
+  diffBufferText,
+  foldUnchanged,
+  needsTrailingNewline,
+  refineWordRanges,
+  splitLines,
+  splitSides,
+} from './DiffModel.ts';
 
 // Build a context/change line list from a compact spec: '.' is context, 'x' a
 // change. Each char becomes one line (text = its 0-based index) of that kind.
@@ -82,6 +91,37 @@ describe('computeIntraLineDiff', () => {
   });
 });
 
+describe('refineWordRanges', () => {
+  it('keeps a localized span untouched', () => {
+    assert.deepEqual(refineWordRanges('foo = 2', [[6, 7]]), [[6, 7]]);
+  });
+
+  it('merges spans separated only by whitespace into one (covering the gap)', () => {
+    // 'aa x y z': 'x','y','z' changed with single-space gaps → one span [3,8); the
+    // unchanged 'aa ' prefix keeps it from being promoted to a line background.
+    assert.deepEqual(refineWordRanges('aa x y z', [[3, 4], [5, 6], [7, 8]]), [[3, 8]]);
+  });
+
+  it('does not merge across a span of non-whitespace common text', () => {
+    // 'x bar z': the ' bar ' between the changed ends is not blank → stays split.
+    assert.deepEqual(refineWordRanges('x bar z', [[0, 1], [6, 7]]), [[0, 1], [6, 7]]);
+  });
+
+  it('promotes a lone full-coverage span to the line background (empty result)', () => {
+    assert.deepEqual(refineWordRanges('bar', [[0, 3]]), []);
+    assert.deepEqual(refineWordRanges('  bar', [[2, 5]]), []); // flanked by indentation
+  });
+
+  it('promotes a whole-line change after merging', () => {
+    // every word changed, blank gaps → merge to one span → promote to line bg.
+    assert.deepEqual(refineWordRanges('FOO BAR', [[0, 3], [4, 7]]), []);
+  });
+
+  it('returns empty for no ranges', () => {
+    assert.deepEqual(refineWordRanges('foo', []), []);
+  });
+});
+
 describe('computeDiff word ranges', () => {
   it('annotates a modified line pair and skips wholesale replacements', () => {
     const model = computeDiff('foo = 1\nxxxx', 'foo = 2\nyyyy');
@@ -93,10 +133,51 @@ describe('computeDiff word ranges', () => {
     assert.equal(model.lines.find((l) => l.text === 'xxxx')!.wordRanges, undefined);
   });
 
+  it('drops a full-line word change to just the line background', () => {
+    // 'aaa bbb' shares the ' ' with 'xxx yyy' → annotated, but every word changed,
+    // so the merged span covers the whole line → no word ranges (line bg only).
+    const model = computeDiff('aaa bbb', 'xxx yyy');
+    assert.equal(model.lines.find((l) => l.kind === 'removed')!.wordRanges, undefined);
+    assert.equal(model.lines.find((l) => l.kind === 'added')!.wordRanges, undefined);
+  });
+
   it('carries word ranges through to side-by-side rows', () => {
     const { left, right } = splitSides(computeDiff('foo = 1', 'foo = 2'));
     assert.deepEqual(left.find((l) => l.kind === 'removed')!.wordRanges, [[6, 7]]);
     assert.deepEqual(right.find((l) => l.kind === 'added')!.wordRanges, [[6, 7]]);
+  });
+});
+
+describe('diffBufferText / needsTrailingNewline', () => {
+  const L = (kind: string, text: string) => ({ kind, text });
+
+  it('does not terminate when the last line is non-empty', () => {
+    const lines = [L('context', 'a'), L('added', 'b')];
+    assert.equal(needsTrailingNewline(lines), false);
+    assert.equal(diffBufferText(lines), 'a\nb'); // no spurious trailing blank row
+  });
+
+  it('terminates an empty *changed* last line (so it can carry its background)', () => {
+    const lines = [L('context', 'a'), L('added', '')];
+    assert.equal(needsTrailingNewline(lines), true);
+    assert.equal(diffBufferText(lines), 'a\n\n');
+  });
+
+  it('does not terminate an empty *context* last line (no background to carry)', () => {
+    const lines = [L('added', 'a'), L('context', '')];
+    assert.equal(needsTrailingNewline(lines), false);
+    assert.equal(diffBufferText(lines), 'a\n');
+  });
+
+  it('honours a forced terminator (side-by-side lockstep)', () => {
+    const lines = [L('removed', 'a')];
+    assert.equal(diffBufferText(lines, true), 'a\n');
+    assert.equal(diffBufferText(lines, false), 'a');
+  });
+
+  it('handles an empty line list', () => {
+    assert.equal(needsTrailingNewline([]), false);
+    assert.equal(diffBufferText([]), '');
   });
 });
 

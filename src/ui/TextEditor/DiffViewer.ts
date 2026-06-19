@@ -1,8 +1,13 @@
 /*
  * DiffViewer — the user-facing diff widget: a header (title + `+N −M` stats +
- * prev/next-change + a unified↔side-by-side toggle) over a stack holding the two
- * renderers (`DiffView`, `SideBySideDiffView`). This is the piece a tab/command
- * embeds; the renderers stay focused on rendering.
+ * prev/next-change + a unified↔side-by-side toggle) over a content box holding the
+ * *active* renderer (`DiffView` or `SideBySideDiffView`). This is the piece a
+ * tab/command embeds; the renderers stay focused on rendering.
+ *
+ * Only the active renderer is built — each one synthesizes read-only buffers and
+ * installs gutter vfuncs, so building both up front (and keeping the hidden one
+ * alive) is wasted work. The toggle destroys the current renderer and builds the
+ * other; the embedder's height tracks the single live pane for free.
  */
 import { Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
@@ -44,30 +49,59 @@ interface DiffViewerOptions {
   header?: boolean;
 }
 
+type DiffMode = 'unified' | 'sbs';
+
+/** Both renderers expose the same surface to the viewer chrome. */
+interface DiffRenderer {
+  readonly root: InstanceType<typeof Gtk.Widget>;
+  focus(): void;
+  nextHunk(): void;
+  prevHunk(): void;
+  dispose(): void;
+}
+
 export class DiffViewer {
   readonly root: InstanceType<typeof Gtk.Box>;
-  private readonly unified: DiffView;
-  private readonly sideBySide: SideBySideDiffView;
-  private readonly stack: InstanceType<typeof Gtk.Stack>;
+  private readonly model: DiffModel;
+  private readonly options: DiffViewerOptions;
+  // The content box holds exactly one (the active) renderer; switching mode swaps it.
+  private readonly content: InstanceType<typeof Gtk.Box>;
+  private mode: DiffMode = 'unified';
+  private current: DiffRenderer;
 
   constructor(model: DiffModel, options: DiffViewerOptions = {}) {
-    this.unified = new DiffView(model, { languagePath: options.languagePath });
-    this.sideBySide = new SideBySideDiffView(model, { languagePath: options.languagePath });
+    this.model = model;
+    this.options = options;
 
-    this.stack = new Gtk.Stack();
-    this.stack.setVexpand(true);
-    this.stack.setHexpand(true);
-    // Size to the *visible* pane, not the largest — otherwise the (taller, filler-
-    // padded) side-by-side pane inflates the height even while unified is shown,
-    // which an inline (height-bounded) embedder gets wrong per file.
-    this.stack.setVhomogeneous(false);
-    this.stack.setHhomogeneous(false);
-    this.stack.addTitled(this.unified.root, 'unified', 'Unified');
-    this.stack.addTitled(this.sideBySide.root, 'sbs', 'Side by side');
+    this.content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    this.content.setVexpand(true);
+    this.content.setHexpand(true);
+    // Build only the active renderer; the box sizes to it, so an inline (height-
+    // bounded) embedder never pays for the taller side-by-side pane while unified shows.
+    this.current = this.buildRenderer(this.mode);
+    this.content.append(this.current.root);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     if (options.header !== false) this.root.append(this.buildHeader(model, options));
-    this.root.append(this.stack);
+    this.root.append(this.content);
+  }
+
+  /** Construct the renderer for `mode` (each is built lazily, on first show). */
+  private buildRenderer(mode: DiffMode): DiffRenderer {
+    return mode === 'sbs'
+      ? new SideBySideDiffView(this.model, { languagePath: this.options.languagePath })
+      : new DiffView(this.model, { languagePath: this.options.languagePath });
+  }
+
+  /** Switch presentation: destroy the live renderer and build the other. */
+  private setMode(mode: DiffMode): void {
+    if (mode === this.mode) return;
+    this.content.remove(this.current.root);
+    this.current.dispose();
+    this.mode = mode;
+    this.current = this.buildRenderer(mode);
+    this.content.append(this.current.root);
+    this.current.focus(); // the old pane (which may have held focus) is gone
   }
 
   private buildHeader(model: DiffModel, options: DiffViewerOptions): InstanceType<typeof Gtk.Box> {
@@ -89,8 +123,8 @@ export class DiffViewer {
     spacer.setHexpand(true);
     header.append(spacer);
 
-    header.append(this.iconButton(ICON_PREV, 'Previous change', () => this.active().prevHunk()));
-    header.append(this.iconButton(ICON_NEXT, 'Next change', () => this.active().nextHunk()));
+    header.append(this.iconButton(ICON_PREV, 'Previous change', () => this.current.prevHunk()));
+    header.append(this.iconButton(ICON_NEXT, 'Next change', () => this.current.nextHunk()));
 
     header.append(this.buildModeToggle());
     return header;
@@ -122,10 +156,10 @@ export class DiffViewer {
     sideBySide.setGroup(unified); // mutually exclusive
 
     unified.on('toggled', () => {
-      if (unified.getActive()) this.stack.setVisibleChildName('unified');
+      if (unified.getActive()) this.setMode('unified');
     });
     sideBySide.on('toggled', () => {
-      if (sideBySide.getActive()) this.stack.setVisibleChildName('sbs');
+      if (sideBySide.getActive()) this.setMode('sbs');
     });
 
     box.append(unified);
@@ -135,16 +169,10 @@ export class DiffViewer {
 
   /** Focus the visible diff pane (so vim nav + fold keys act on it). */
   focus(): void {
-    this.active().focus();
-  }
-
-  /** The renderer currently shown (drives prev/next-change + focus). */
-  private active(): { nextHunk(): void; prevHunk(): void; focus(): void } {
-    return this.stack.getVisibleChildName() === 'sbs' ? this.sideBySide : this.unified;
+    this.current.focus();
   }
 
   dispose(): void {
-    this.unified.dispose();
-    this.sideBySide.dispose();
+    this.current.dispose();
   }
 }
