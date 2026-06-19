@@ -179,6 +179,12 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
       '"error", "warning", "info", "hint". Counts always display in severity order; ' +
       'severities left out here still appear in the Diagnostics panel.',
   },
+  'scriptRunner.detectPackageManager': {
+    type: 'boolean',
+    default: false,
+    description:
+      'Auto-detect the package manager from the lockfile (pnpm-lock.yaml → pnpm, yarn.lock → yarn, bun.lock → bun, else npm). When false, always use npm.',
+  },
 };
 
 class Quilx {

@@ -666,7 +666,8 @@ export class AppWindow {
   // closing the moment the script exits.
   private runScript(name: string): void {
     const cwd = this.workbench.cwd;
-    const pm = detectPackageManager(cwd);
+    const detect = quilx.config.get('scriptRunner.detectPackageManager');
+    const pm = detect ? detectPackageManager(cwd) : 'npm';
     const shell = process.env.SHELL || '/bin/bash';
     const run = `${pm} run ${name}`;
     const built = this.createTerminalTab(cwd, {
