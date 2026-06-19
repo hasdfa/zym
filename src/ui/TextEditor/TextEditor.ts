@@ -675,6 +675,15 @@ export class TextEditor implements DocumentHost {
     else this.document.dispose();
     this.diagnostics?.dispose(); // undefined for a buffer-only editor (installLsp skipped)
     this.inlayHints?.dispose();
+    // The gutter holds a git.onChange subscription living in GitRepo.listeners.
+    // Its disposal is also wired to the root's `destroy` signal, but tab-close
+    // DETACHES the root (never destroys it — see the `disposed` note above), so
+    // that signal doesn't fire. Dispose it here too, else the subscription pins
+    // the gutter → view → buffer → this editor forever (a native-memory leak that
+    // also keeps closed editors in the git notify fan-out). Null it so the
+    // `destroy` fallback no-ops instead of double-disposing.
+    this.gitGutter?.dispose();
+    this.gitGutter = null;
   }
 
   // Request signature help when typing inside a call. Triggered when a trigger

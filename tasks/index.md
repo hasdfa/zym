@@ -123,6 +123,22 @@ See [git/index.md](git/index.md) for the architecture and per-feature status.
   (`gitSync`/`git`, porcelain-v2 status parsing); `src/git.ts` exposes the
   `GitRepo` interface backed by `CliGitRepo`, with `acquireGitRepo`/`releaseGitRepo`
   pooling one polling repo per root.
+- [ ] **PERF — gate `GitGutter.refresh()` (notify-storm fix).** `GitGutter`
+  subscribes `git.onChange(() => this.refresh())` and `refresh()` fires **2 `git
+  show` spawns** (`:rel` + `HEAD:rel`) *unconditionally on every notify*
+  (`GitGutter.ts:177-184`). With many open editors/worktrees there are ~90
+  `onChange` listeners across the pooled repos, so one working-tree change →
+  `notify()` (`git.ts:510`) → dozens of gutters each re-`git show` → ~100 spawns.
+  Each `fork()` costs ~80ms under the bloated long-lived process (RSS-scaled, per
+  the `cli.ts` header), so a single notify stalls the GLib main thread for
+  seconds — measured as the dominant cost (CPU profile: 56% in `spawn`, 38% under
+  `notify`). **Fix:** only re-fetch a file's index/HEAD base blobs when *that
+  file's* index/HEAD entry actually changed (carry per-path index/HEAD blob OIDs
+  in the change signature), not on every notify; consider coalescing all gutters
+  into one `git diff` and/or moving git spawns off the main thread (persistent
+  git helper) so fork cost stops scaling with RSS. Root disease is the separate
+  native-memory leak (RSS ~3GB, glibc `[heap]`) that makes every fork expensive —
+  see [lifecycle-and-disposal.md](lifecycle-and-disposal.md).
 
 ## Code editing
 
