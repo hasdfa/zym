@@ -1,8 +1,34 @@
 // Vendored from xedel/vim-mode-plus's lib/register-manager.js — ESM conversion.
 // `atom.clipboard` is replaced by quilx's GTK-backed `clipboard` (see
 // ./clipboard.ts); register logic is otherwise unchanged.
-import { normalizeIndent } from './utils.js'
+import { normalizeIndent } from './utils.ts'
 import clipboard, { primaryClipboard } from './clipboard.ts'
+import type { Clipboard } from './clipboard.ts'
+import type VimState from './vim-state.ts'
+import type { EditorModel } from '../EditorModel.ts'
+import type { Selection } from '../Selection.ts'
+import type { Disposable } from '../../../util/eventKit.ts'
+
+/** The wise of a register's text. */
+type RegisterType = 'linewise' | 'characterwise'
+
+/** A stored register value. */
+interface RegisterValue {
+  text: string
+  type?: RegisterType
+}
+
+/** A register value that additionally carries the originating selection (for `set`). */
+interface RegisterValueWithSelection extends RegisterValue {
+  selection?: Selection
+}
+
+/** An entry in the sequential-paste clipboard history. */
+interface HistoryEntry {
+  text: string
+  type?: RegisterType
+  value?: unknown
+}
 
 const REGISTERS_REGEX = /[-0-9a-zA-Z*+%_".]/
 const READ_ONLY_REGISTERS_REGEX = /[%_]/
@@ -21,7 +47,15 @@ const READ_ONLY_REGISTERS_REGEX = /[%_]/
 //  [ ] 10. Last search pattern register "/
 
 export default class RegisterManager {
-  constructor (vimState) {
+  vimState: VimState
+  editorElement: EditorModel
+  data: Record<string, RegisterValue>
+  subscriptionBySelection: Map<Selection, Disposable>
+  clipboardBySelection: Map<Selection, string>
+  historyIndex: number
+  name: string | null = null
+
+  constructor (vimState: VimState) {
     this.vimState = vimState
     this.editorElement = vimState.editorElement
 
@@ -33,12 +67,12 @@ export default class RegisterManager {
     this.vimState.onDidDestroy(() => this.destroy())
   }
 
-  get history () {
+  get history (): HistoryEntry[] {
     return this.vimState.globalState.get('clipboardHistory')
   }
 
-  set history (value) {
-    return this.vimState.globalState.set('clipboardHistory', value)
+  set history (value: HistoryEntry[]) {
+    this.vimState.globalState.set('clipboardHistory', value)
   }
 
   reset () {
@@ -52,30 +86,30 @@ export default class RegisterManager {
     this.clipboardBySelection.clear()
   }
 
-  isValidName (name) {
+  isValidName (name: string): boolean {
     return REGISTERS_REGEX.test(name)
   }
 
-  getText (name, selection) {
+  getText (name: string | null, selection?: Selection): string {
     const value = this.get(name, selection)
     return value && value.text != null ? value.text : ''
   }
 
   // `*` targets the PRIMARY selection; `+` (and the clipboard-as-default unnamed
   // register) targets the regular CLIPBOARD.
-  clipboardForName (name) {
+  clipboardForName (name: string | null): Clipboard {
     return name === '*' ? primaryClipboard : clipboard
   }
 
-  readClipboard (selection, name) {
+  readClipboard (selection: Selection | undefined, name: string | null): string {
     if (selection && selection.editor.hasMultipleCursors() && this.clipboardBySelection.has(selection)) {
-      return this.clipboardBySelection.get(selection)
+      return this.clipboardBySelection.get(selection)!
     } else {
       return this.clipboardForName(name).read()
     }
   }
 
-  writeClipboard (selection, text, name) {
+  writeClipboard (selection: Selection | undefined, text: string, name: string | null) {
     if (selection && selection.editor.hasMultipleCursors() && !this.clipboardBySelection.has(selection)) {
       this.subscriptionBySelection.set(
         selection,
@@ -95,16 +129,16 @@ export default class RegisterManager {
     }
   }
 
-  getNextHistory () {
+  getNextHistory (): HistoryEntry {
     this.historyIndex = (this.historyIndex + 1) % this.history.length
     return this.history[this.historyIndex]
   }
 
-  saveHistory (value) {
+  saveHistory (value: HistoryEntry) {
     this.history.unshift(value)
 
     // Uniq
-    this.history = this.history.reduce((total, current) => {
+    this.history = this.history.reduce((total: HistoryEntry[], current) => {
       return total.some(member => member.value === current.value && member.text === current.text)
         ? total
         : total.concat(current)
@@ -113,18 +147,18 @@ export default class RegisterManager {
     this.history.splice(this.vimState.getConfig('sequentialPasteMaxHistory'))
   }
 
-  normalizeValue ({text, type} = {}) {
+  normalizeValue ({text, type}: {text?: string; type?: RegisterType} = {}): RegisterValue {
     if (!type) {
       type = text && (text.endsWith('\n') || text.endsWith('\r')) ? 'linewise' : 'characterwise'
     }
-    return {text, type}
+    return {text: text as string, type}
   }
 
-  shouldUseClipBoard (name) {
+  shouldUseClipBoard (name: string | null): boolean {
     return name === '*' || name === '+' || (name === '"' && this.vimState.getConfig('useClipboardAsDefaultRegister'))
   }
 
-  get (name, selection, sequentialPaste) {
+  get (name: string | null, selection?: Selection, sequentialPaste?: boolean): RegisterValue | null {
     if (name != null && !this.isValidName(name)) return null
     name = name || this.name || '"'
 
@@ -137,7 +171,7 @@ export default class RegisterManager {
 
         const {text, type} = this.getNextHistory()
         return {
-          text: normalizeIndent(text, selection.editor, selection.getBufferRange()),
+          text: normalizeIndent(text, selection!.editor, selection!.getBufferRange()),
           type: type
         }
       } else {
@@ -149,7 +183,8 @@ export default class RegisterManager {
     if (this.shouldUseClipBoard(name)) {
       return this.normalizeValue({text: this.readClipboard(selection, name)})
     } else if (name === '%') {
-      return this.normalizeValue({text: this.vimState.editor.getURI()})
+      // TODO(vim-ts): tighten — EditorModel has no getURI() yet.
+      return this.normalizeValue({text: (this.vimState.editor as any).getURI()})
     } else if (name === '_') {
       return this.normalizeValue({text: ''}) // Blackhole always returns nothing
     } else {
@@ -165,8 +200,8 @@ export default class RegisterManager {
   //  type: (optional) if ommited automatically set from text.
   //
   // Returns nothing.
-  set (name, value) {
-    if (READ_ONLY_REGISTERS_REGEX.test(name)) return
+  set (name: string | null, value: RegisterValueWithSelection): void {
+    if (READ_ONLY_REGISTERS_REGEX.test(name as string)) return
 
     if (name != null && !this.isValidName(name)) return
     name = name || this.name || '"'
@@ -203,7 +238,7 @@ export default class RegisterManager {
     }
   }
 
-  appendValue (oldValue, newValue) {
+  appendValue (oldValue: RegisterValue, newValue: RegisterValue): RegisterValue {
     const finalValue = Object.assign({}, oldValue) // Copy
 
     if (oldValue.type === 'linewise' || newValue.type === 'linewise') {
@@ -220,11 +255,11 @@ export default class RegisterManager {
     return finalValue
   }
 
-  isUnnamed () {
+  isUnnamed (): boolean {
     return this.name == null || this.name === '"'
   }
 
-  setName (name) {
+  setName (name?: string | null): void {
     if (name != null) {
       this.name = name
       this.editorElement.toggleCssClass('with-register', true)

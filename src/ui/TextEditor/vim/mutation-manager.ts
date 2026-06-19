@@ -2,9 +2,35 @@
 // Tracks cursor/selection positions across an operator's mutation so cursors can
 // be restored to the right place afterwards. Logic unchanged.
 import { Point } from '../../../text/Point.ts'
+import type VimState from './vim-state.ts'
+import type { EditorModel } from '../EditorModel.ts'
+import type { Selection } from '../Selection.ts'
+import type { Range } from '../../../text/Range.ts'
+import type { MarkerLayer } from '../MarkerLayer.ts'
+import type { Marker } from '../Marker.ts'
+import type swrap from './selection-wrapper.ts'
+
+/** A mutation checkpoint tag (e.g. 'will-select', 'did-select', 'did-select-occurrence'). */
+type Checkpoint = string
+
+/** Options passed to the `Mutation` constructor. */
+interface MutationOptions {
+  selection: Selection
+  initialPoint: Point
+  initialPointMarker: Marker | undefined
+  checkpoint: Checkpoint
+  swrap: typeof swrap
+}
 
 export default class MutationManager {
-  constructor (vimState) {
+  vimState: VimState
+  editor: EditorModel
+  swrap: typeof swrap
+  markerLayer: MarkerLayer
+  mutationsBySelection: Map<Selection, Mutation>
+  stayByMarker?: boolean
+
+  constructor (vimState: VimState) {
     this.vimState = vimState
     this.editor = vimState.editor
     this.swrap = this.vimState.swrap
@@ -19,7 +45,7 @@ export default class MutationManager {
     this.mutationsBySelection.clear()
   }
 
-  init ({stayByMarker}) {
+  init ({stayByMarker}: {stayByMarker: boolean}) {
     this.stayByMarker = stayByMarker
     this.reset()
   }
@@ -29,13 +55,13 @@ export default class MutationManager {
     this.mutationsBySelection.clear()
   }
 
-  setCheckpoint (checkpoint) {
+  setCheckpoint (checkpoint: Checkpoint) {
     for (let selection of this.editor.getSelections()) {
       this.setCheckpointForSelection(selection, checkpoint)
     }
   }
 
-  setCheckpointForSelection (selection, checkpoint) {
+  setCheckpointForSelection (selection: Selection, checkpoint: Checkpoint) {
     let resetMarker = false
 
     if (this.mutationsBySelection.has(selection)) {
@@ -45,35 +71,35 @@ export default class MutationManager {
     } else {
       resetMarker = true
 
-      let initialPointMarker
-      const initialPoint = this.swrap(selection).getBufferPositionFor('head', {from: ['property', 'selection']})
+      let initialPointMarker: Marker | undefined
+      const initialPoint = this.swrap(selection).getBufferPositionFor('head', {from: ['property', 'selection'] as any})!
       if (this.stayByMarker) {
-        initialPointMarker = this.markerLayer.markBufferPosition(initialPoint, {invalidate: 'never'})
+        initialPointMarker = (this.markerLayer.markBufferPosition as any)(initialPoint, {invalidate: 'never'})
       }
-      const options = {selection, initialPoint, initialPointMarker, checkpoint, swrap: this.swrap}
+      const options: MutationOptions = {selection, initialPoint, initialPointMarker, checkpoint, swrap: this.swrap}
       this.mutationsBySelection.set(selection, new Mutation(options))
     }
 
     const marker = resetMarker
-      ? this.markerLayer.markBufferRange(selection.getBufferRange(), {invalidate: 'never'})
+      ? (this.markerLayer.markBufferRange as any)(selection.getBufferRange(), {invalidate: 'never'})
       : undefined
-    this.mutationsBySelection.get(selection).update(checkpoint, marker, this.vimState.mode)
+    this.mutationsBySelection.get(selection)!.update(checkpoint, marker, this.vimState.mode)
   }
 
-  migrateMutation (oldSelection, newSelection) {
-    const mutation = this.mutationsBySelection.get(oldSelection)
+  migrateMutation (oldSelection: Selection, newSelection: Selection) {
+    const mutation = this.mutationsBySelection.get(oldSelection)!
     this.mutationsBySelection.delete(oldSelection)
     mutation.selection = newSelection
     this.mutationsBySelection.set(newSelection, mutation)
   }
 
-  getMutatedBufferRangeForSelection (selection) {
+  getMutatedBufferRangeForSelection (selection: Selection): Range | undefined {
     if (this.mutationsBySelection.has(selection)) {
-      return this.mutationsBySelection.get(selection).marker.getBufferRange()
+      return this.mutationsBySelection.get(selection)!.marker!.getBufferRange()
     }
   }
 
-  getSelectedBufferRangesForCheckpoint (checkpoint) {
+  getSelectedBufferRangesForCheckpoint (checkpoint: Checkpoint): Range[] {
     return [...this.mutationsBySelection.values()]
       .map(mutation => mutation.bufferRangeByCheckpoint[checkpoint])
       .filter(range => range)
@@ -86,14 +112,14 @@ export default class MutationManager {
     }
   }
 
-  getInitialPointForSelection (selection) {
+  getInitialPointForSelection (selection: Selection): Point | undefined {
     const mutation = this.mutationsBySelection.get(selection)
     if (mutation && mutation.createdAt === 'will-select') {
       return mutation.initialPoint
     }
   }
 
-  restoreCursorPositions ({stay, wise, setToFirstCharacterOnLinewise}) {
+  restoreCursorPositions ({stay, wise, setToFirstCharacterOnLinewise}: {stay: boolean; wise: string; setToFirstCharacterOnLinewise?: boolean}) {
     if (wise === 'blockwise') {
       for (const blockwiseSelection of this.vimState.getBlockwiseSelections()) {
         const {head, tail} = blockwiseSelection.getProperties()
@@ -118,17 +144,17 @@ export default class MutationManager {
         if (stay) {
           point = this.clipPoint(mutation.getStayPosition(wise))
         } else {
-          point = this.clipPoint(mutation.startPositionOnDidSelect)
+          point = this.clipPoint(mutation.startPositionOnDidSelect!)
           if (setToFirstCharacterOnLinewise && wise === 'linewise') {
             point = this.vimState.utils.getFirstCharacterPositionForBufferRow(this.editor, point.row)
           }
         }
-        selection.cursor.setBufferPosition(point)
+        selection.cursor.setBufferPosition(point!)
       }
     }
   }
 
-  clipPoint (point) {
+  clipPoint (point: Point): Point {
     point.row = Math.min(this.vimState.utils.getVimLastBufferRow(this.editor), point.row)
     return this.editor.clipBufferPosition(point)
   }
@@ -138,7 +164,16 @@ export default class MutationManager {
 // So that we can filter selection by when it was created.
 //  e.g. Some selection is created at 'will-select' checkpoint, others at 'did-select' or 'did-select-occurrence'
 class Mutation {
-  constructor (options) {
+  selection: Selection
+  initialPoint: Point
+  initialPointMarker: Marker | undefined
+  swrap: typeof swrap
+  createdAt: Checkpoint
+  bufferRangeByCheckpoint: Record<Checkpoint, Range>
+  marker: Marker | null
+  startPositionOnDidSelect: Point | null
+
+  constructor (options: MutationOptions) {
     this.selection = options.selection
     this.initialPoint = options.initialPoint
     this.initialPointMarker = options.initialPointMarker
@@ -150,31 +185,31 @@ class Mutation {
     this.startPositionOnDidSelect = null
   }
 
-  update (checkpoint, marker, mode) {
+  update (checkpoint: Checkpoint, marker: Marker | undefined, mode: string) {
     if (marker) {
       if (this.marker) this.marker.destroy()
       this.marker = marker
     }
-    this.bufferRangeByCheckpoint[checkpoint] = this.marker.getBufferRange()
+    this.bufferRangeByCheckpoint[checkpoint] = this.marker!.getBufferRange()
     // NOTE: stupidly respect pure-Vim's behavior which is inconsistent.
     // Maybe I'll remove this blindly-following-to-pure-Vim code.
     //  - `V k y`: don't move cursor
     //  - `V j y`: move curor to start of selected line.(Inconsistent!)
     if (checkpoint === 'did-select') {
       const from = mode === 'visual' && !this.selection.isReversed() ? ['selection'] : ['property', 'selection']
-      this.startPositionOnDidSelect = this.swrap(this.selection).getBufferPositionFor('start', {from})
+      this.startPositionOnDidSelect = this.swrap(this.selection).getBufferPositionFor('start', {from: from as any}) ?? null
     }
   }
 
-  getStayPosition (wise) {
+  getStayPosition (wise: string): Point {
     const point = (this.initialPointMarker && this.initialPointMarker.getHeadBufferPosition()) || this.initialPoint
     const selectedRange =
       this.bufferRangeByCheckpoint['did-select-occurrence'] || this.bufferRangeByCheckpoint['did-select']
     // Check if need Clip
-    if (selectedRange.isEqual(this.marker.getBufferRange())) {
+    if (selectedRange.isEqual(this.marker!.getBufferRange())) {
       return point
     } else {
-      let {start, end} = this.marker.getBufferRange()
+      let {start, end} = this.marker!.getBufferRange()
       end = Point.max(start, end.translate([0, -1]))
       if (wise === 'linewise') {
         return new Point(Math.min(end.row, point.row), point.column)

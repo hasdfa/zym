@@ -4,14 +4,14 @@ import { Gtk, GtkSource } from '../../../gi.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
 import { Range } from '../../../text/Range.ts';
-import VimState from './vim-state.js';
+import VimState from './vim-state.ts';
 import { StatusBarManager } from './stubs.ts';
-import './operations/mode.js';
-import './motion.js';
-import './operator.js';
-import './operator-insert.js';
-import './text-object.js';
-import './misc-command.js';
+import './operations/mode.ts';
+import './motion.ts';
+import './operator.ts';
+import './operator-insert.ts';
+import './text-object.ts';
+import './misc-command.ts';
 
 Gtk.init();
 

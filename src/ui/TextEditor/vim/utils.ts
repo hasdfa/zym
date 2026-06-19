@@ -7,7 +7,26 @@
 import { diffChars } from 'diff'
 import settings from './settings.ts'
 import { Range } from '../../../text/Range.ts'
+import type { RangeLike } from '../../../text/Range.ts'
 import { Point } from '../../../text/Point.ts'
+import type { PointLike } from '../../../text/Point.ts'
+import type { EditorModel, ScanMatchResult } from '../EditorModel.ts'
+import type { Cursor } from '../Cursor.ts'
+
+// Scan options shared by scanEditor/findInEditor/findPoint and friends.
+// TODO(vim-ts): tighten — some callers pass extra ad-hoc props.
+interface ScanOptions {
+  from?: PointLike
+  scanRange?: RangeLike
+  contains?: boolean
+  allowNextLine?: boolean
+  skipEmptyRow?: boolean
+  skipWhiteSpaceOnlyRow?: boolean
+  row?: number
+  [key: string]: any
+}
+
+type ScanDirection = 'forward' | 'next' | 'backward' | 'previous'
 
 // Atom's default `editor.nonWordCharacters`, used for word-boundary detection.
 export const DEFAULT_NON_WORD_CHARACTERS = '/\\()"\':,.;<>~!@#$%^&*|+=[]{}`?-…'
@@ -15,24 +34,24 @@ export const DEFAULT_NON_WORD_CHARACTERS = '/\\()"\':,.;<>~!@#$%^&*|+=[]{}`?-…
 const NEWLINE_REG_EXP = /\n/g
 
 // [Borrowed from underscore/underscore-plus
-function escapeRegExp (s) {
+function escapeRegExp (s: string): string {
   return s ? s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') : ''
 }
 
-function getLast (list) {
+function getLast<T> (list: ArrayLike<T> | null | undefined): T | undefined {
   return list ? list[list.length - 1] : undefined
 }
 
-function assertWithException (condition, message) {
+function assertWithException (condition: unknown, message: string): void {
   if (!condition) throw new Error(message)
 }
 
-function getKeyBindingForCommand (command, {packageName} = {}) {
+function getKeyBindingForCommand (command: string, {packageName}: {packageName?: string} = {}): null {
   // Keybinding hints (used by hover/demo UI) are not ported; no hints for now.
   return null
 }
 
-function debug (...messages) {
+function debug (...messages: unknown[]): void {
   if (!settings.get('debug')) return
 
   switch (settings.get('debugOutput')) {
@@ -46,22 +65,23 @@ function debug (...messages) {
 }
 
 // Return function to restore editor's scrollTop and fold state.
-function saveEditorState (editor) {
-  const store = {scrollTop: editor.element.getScrollTop()}
+function saveEditorState (editor: any): (options?: {anchorPosition?: any, skipRow?: number | null}) => void {
+  // TODO(vim-ts): tighten — editor.displayLayer/foldsMarkerLayer not modeled on EditorModel.
+  const store: any = {scrollTop: editor.element.getScrollTop()}
 
-  const foldRowRanges = editor.displayLayer.foldsMarkerLayer.findMarkers({}).map(marker => {
+  const foldRowRanges: [number, number][] = editor.displayLayer.foldsMarkerLayer.findMarkers({}).map((marker: any) => {
     const {start, end} = marker.getRange()
     return [start.row, end.row]
   })
 
-  return function restoreEditorState ({anchorPosition, skipRow = null} = {}) {
+  return function restoreEditorState (this: any, {anchorPosition, skipRow = null}: {anchorPosition?: any, skipRow?: number | null} = {}): void {
     if (anchorPosition) {
       store.anchorScreenRow = this.editor.screenPositionForBufferPosition(anchorPosition).row
       store.anchorFirstVisibileScreenRow = editor.getFirstVisibleScreenRow()
     }
 
     for (const [startRow, endRow] of foldRowRanges.reverse()) {
-      if (skipRow >= startRow && skipRow <= endRow) continue
+      if (skipRow! >= startRow && skipRow! <= endRow) continue
       if (!editor.isFoldedAtBufferRow(startRow)) {
         editor.foldBufferRow(startRow)
       }
@@ -77,16 +97,17 @@ function saveEditorState (editor) {
   }
 }
 
-function isLinewiseRange ({start, end}) {
+function isLinewiseRange ({start, end}: Range): boolean {
   return start.row !== end.row && (start.column === 0 && end.column === 0)
 }
 
-function isEndsWithNewLineForBufferRow (editor, row) {
+function isEndsWithNewLineForBufferRow (editor: EditorModel, row: number): boolean {
   const {start, end} = editor.bufferRangeForBufferRow(row, {includeNewline: true})
   return start.row !== end.row
 }
 
-function sortComparables (comparables) {
+interface Comparable<T> { compare(other: T): number }
+function sortComparables<T extends Comparable<T>> (comparables: T[]): T[] {
   return comparables.sort((a, b) => a.compare(b))
 }
 
@@ -95,7 +116,7 @@ const [sortRanges, sortCursors, sortPoints] = [sortComparables, sortComparables,
 
 // Return adjusted index fit whitin given list's length
 // return -1 if list is empty.
-function getIndex (index, list) {
+function getIndex (index: number, list: ArrayLike<unknown>): number {
   if (!list.length) return -1
   index = index % list.length
   return index >= 0 ? index : list.length + index
@@ -103,7 +124,8 @@ function getIndex (index, list) {
 
 // NOTE: endRow become undefined if @editorElement is not yet attached.
 // e.g. Beging called immediately after open file.
-function getVisibleBufferRange (editor) {
+function getVisibleBufferRange (editor: any): Range | undefined {
+  // TODO(vim-ts): tighten — getVisibleRowRange/bufferRowForScreenRow visibility not on EditorModel.
   let [startRow, endRow] = editor.getVisibleRowRange()
 
   // When editor is not attached or imediately after attached timing,
@@ -114,60 +136,61 @@ function getVisibleBufferRange (editor) {
   }
 }
 
-function getVisibleEditors () {
+function getVisibleEditors (): EditorModel[] {
   // The visible-editors set (workspace panes) is not modeled yet.
   return []
 }
 
-function getEndOfLineForBufferRow (editor, row) {
+function getEndOfLineForBufferRow (editor: EditorModel, row: number): Point {
   return editor.bufferRangeForBufferRow(row).end
 }
 
 // Buffer Point util
 // -------------------------
-function pointIsAtEndOfLine (editor, point) {
+function pointIsAtEndOfLine (editor: EditorModel, point: PointLike): boolean {
   point = Point.fromObject(point)
   return getEndOfLineForBufferRow(editor, point.row).isEqual(point)
 }
 
-function pointIsAtWhiteSpace (editor, point) {
+function pointIsAtWhiteSpace (editor: EditorModel, point: PointLike): boolean {
   const char = getRightCharacterForBufferPosition(editor, point)
   return !/\S/.test(char)
 }
 
-function pointIsAtNonWhiteSpace (editor, point) {
+function pointIsAtNonWhiteSpace (editor: EditorModel, point: PointLike): boolean {
   const char = getRightCharacterForBufferPosition(editor, point)
   return char != null && /\S/.test(char)
 }
 
-function pointIsAtEndOfLineAtNonEmptyRow (editor, point) {
+function pointIsAtEndOfLineAtNonEmptyRow (editor: EditorModel, point: PointLike): boolean {
   point = Point.fromObject(point)
   return point.column > 0 && pointIsAtEndOfLine(editor, point)
 }
 
-function pointIsAtVimEndOfFile (editor, point) {
+function pointIsAtVimEndOfFile (editor: EditorModel, point: PointLike): boolean {
   return getVimEofBufferPosition(editor).isEqual(point)
 }
 
-function isEmptyRow (editor, row) {
+function isEmptyRow (editor: EditorModel, row: number): boolean {
   return editor.bufferRangeForBufferRow(row).isEmpty()
 }
 
-function getRightCharacterForBufferPosition (editor, point, amount = 1) {
+function getRightCharacterForBufferPosition (editor: EditorModel, point: PointLike, amount = 1): string {
   return editor.getTextInBufferRange(Range.fromPointWithDelta(point, 0, amount))
 }
 
-function getLeftCharacterForBufferPosition (editor, point, amount = 1) {
+function getLeftCharacterForBufferPosition (editor: EditorModel, point: PointLike, amount = 1): string {
   return editor.getTextInBufferRange(Range.fromPointWithDelta(point, 0, -amount))
 }
 
-function getTextInScreenRange (editor, screenRange) {
+function getTextInScreenRange (editor: any, screenRange: RangeLike): string {
+  // TODO(vim-ts): tighten — bufferRangeForScreenRange not on EditorModel.
   return editor.getTextInBufferRange(editor.bufferRangeForScreenRange(screenRange))
 }
 
-function getNonWordCharactersForCursor (cursor) {
+function getNonWordCharactersForCursor (cursor: Cursor): string {
   if (settings.get('useLanguageIndependentNonWordCharacters')) {
-    return settings.get('languageIndependentNonWordCharacters')
+    return settings.get('languageIndependentNonWordCharacters') as string
   }
 
   return cursor.getNonWordCharacters != null
@@ -175,7 +198,7 @@ function getNonWordCharactersForCursor (cursor) {
     : DEFAULT_NON_WORD_CHARACTERS
 }
 
-function getRows (editor, bufferOrScreen, {startRow, direction}) {
+function getRows (editor: EditorModel, bufferOrScreen: 'buffer' | 'screen', {startRow, direction}: {startRow: number, direction: 'previous' | 'next'}): number[] | undefined {
   switch (direction) {
     case 'previous':
       return startRow <= 0 ? [] : getList(startRow - 1, 0)
@@ -191,7 +214,7 @@ function getRows (editor, bufferOrScreen, {startRow, direction}) {
 // Because of this, Atom's EOF position is [actualLastRow+1, 0] provided last-non-blank-row
 // ends with newline char.
 // But in Vim, curor can NOT past last newline. EOF is next position of very last character.
-function getVimEofBufferPosition (editor) {
+function getVimEofBufferPosition (editor: EditorModel): Point {
   const eof = editor.getEofBufferPosition()
   // In Vim the cursor can't sit past the last newline, so when the buffer ends
   // with a newline (EOF is column 0 of a trailing empty row) the Vim EOF is the
@@ -199,24 +222,25 @@ function getVimEofBufferPosition (editor) {
   return eof.row === 0 || eof.column > 0 ? eof : getEndOfLineForBufferRow(editor, eof.row - 1)
 }
 
-function getVimEofScreenPosition (editor) {
+function getVimEofScreenPosition (editor: EditorModel): Point {
   return editor.screenPositionForBufferPosition(getVimEofBufferPosition(editor))
 }
 
-function getVimLastBufferRow (editor) {
+function getVimLastBufferRow (editor: EditorModel): number {
   return getVimEofBufferPosition(editor).row
 }
 
-function getVimLastScreenRow (editor) {
+function getVimLastScreenRow (editor: EditorModel): number {
   return getVimEofScreenPosition(editor).row
 }
 
-function getFirstCharacterPositionForBufferRow (editor, row) {
+function getFirstCharacterPositionForBufferRow (editor: EditorModel, row: number): Point | undefined {
   const scanRange = editor.bufferRangeForBufferRow(row)
   return findInEditor(editor, 'forward', /^[ \t]*/, {scanRange}, event => event.range.end)
 }
 
-function getScreenPositionForScreenRow (editor, row, which, {allowOffScreenPosition = false} = {}) {
+function getScreenPositionForScreenRow (editor: any, row: number, which: 'beginning' | 'last-character' | 'first-character', {allowOffScreenPosition = false}: {allowOffScreenPosition?: boolean} = {}): Point | undefined {
+  // TODO(vim-ts): tighten — getFirstVisibleScreenColumn/getEditorWidthInChars/clipScreenPosition/bufferRangeForScreenRange not on EditorModel.
   if (which === 'beginning') {
     const column = allowOffScreenPosition ? 0 : editor.getFirstVisibleScreenColumn()
     return new Point(row, column)
@@ -236,7 +260,7 @@ function getScreenPositionForScreenRow (editor, row, which, {allowOffScreenPosit
   }
 }
 
-function trimBufferRange (editor, range) {
+function trimBufferRange (editor: EditorModel, range: Range): Range {
   // Trim to the first and last non-whitespace: the forward scan's first match is
   // the new start, the backward scan's first match (last in the buffer) the new
   // end. Each must stop after that first hit — without `stop()` every match
@@ -256,7 +280,7 @@ function trimBufferRange (editor, range) {
 // Cursor motion wrapper
 // -------------------------
 // Set bufferRow with keeping column and goalColumn
-function setBufferRow (cursor, row, options) {
+function setBufferRow (cursor: Cursor, row: number, options?: unknown): void {
   const editor = cursor.editor
   if (editor.softTabs) {
     const column = cursor.goalColumn != null ? cursor.goalColumn : cursor.getBufferColumn()
@@ -273,7 +297,7 @@ function setBufferRow (cursor, row, options) {
   }
 }
 
-function translateColumnOnHardTabEditor (editor, row, column, expandTab) {
+function translateColumnOnHardTabEditor (editor: EditorModel, row: number, column: number, expandTab: boolean): number {
   const chars = editor.lineTextForBufferRow(row).slice(0, column)
 
   if (column === 0 || column === Infinity || !chars.includes('\t')) {
@@ -282,7 +306,7 @@ function translateColumnOnHardTabEditor (editor, row, column, expandTab) {
 
   let newColumn = 0
   const tabLength = editor.getTabLength()
-  const charLength = char => (char === '\t' ? tabLength : 1)
+  const charLength = (char: string) => (char === '\t' ? tabLength : 1)
   if (expandTab) {
     for (const char of chars) {
       newColumn += charLength(char)
@@ -301,11 +325,11 @@ function translateColumnOnHardTabEditor (editor, row, column, expandTab) {
   return newColumn
 }
 
-function setBufferColumn (cursor, column) {
+function setBufferColumn (cursor: Cursor, column: number): void {
   return cursor.setBufferPosition([cursor.getBufferRow(), column])
 }
 
-function moveCursor (cursor, keepGoalColumn, fn) {
+function moveCursor (cursor: Cursor, keepGoalColumn: boolean | undefined, fn: (cursor: Cursor) => void): void {
   const goalColumn = keepGoalColumn ? cursor.goalColumn : undefined
   fn(cursor)
   if (goalColumn != null) {
@@ -313,12 +337,13 @@ function moveCursor (cursor, keepGoalColumn, fn) {
   }
 }
 
-function moveCursorLeft (cursor, {allowWrap, preventIncorrectWrap, keepGoalColumn} = {}) {
+interface MoveCursorOptions { allowWrap?: boolean, preventIncorrectWrap?: boolean, keepGoalColumn?: boolean }
+function moveCursorLeft (cursor: Cursor, {allowWrap, preventIncorrectWrap, keepGoalColumn}: MoveCursorOptions = {}): void {
   // See t9md/vim-mode-plus#226
   // On atomicSoftTabs enabled editor, there is situation where
   // (bufferColumn >  0 && screenColumn === 0) become true.
   // So we cannot believe bufferColumn, check screenColumn to prevent wrap.
-  if (preventIncorrectWrap && cursor.getScreenColumn() === 0) {
+  if (preventIncorrectWrap && (cursor as any).getScreenColumn() === 0) {
     return
   }
 
@@ -327,62 +352,64 @@ function moveCursorLeft (cursor, {allowWrap, preventIncorrectWrap, keepGoalColum
   }
 }
 
-function moveCursorRight (cursor, {allowWrap, keepGoalColumn} = {}) {
+function moveCursorRight (cursor: Cursor, {allowWrap, keepGoalColumn}: MoveCursorOptions = {}): void {
   if (!cursor.isAtEndOfLine() || allowWrap) {
-    moveCursor(cursor, keepGoalColumn, cursor => cursor.moveRight())
+    moveCursor(cursor, keepGoalColumn, (cursor: any) => cursor.moveRight())
   }
 }
 
-function moveCursorUpScreen (cursor, {keepGoalColumn} = {}) {
+function moveCursorUpScreen (cursor: Cursor, {keepGoalColumn}: MoveCursorOptions = {}): void {
   if (cursor.getScreenRow() > 0) {
-    moveCursor(cursor, keepGoalColumn, cursor => cursor.moveUp())
+    moveCursor(cursor, keepGoalColumn, (cursor: any) => cursor.moveUp())
   }
 }
 
-function moveCursorDownScreen (cursor, {keepGoalColumn} = {}) {
+function moveCursorDownScreen (cursor: Cursor, {keepGoalColumn}: MoveCursorOptions = {}): void {
   if (cursor.getScreenRow() < getVimLastScreenRow(cursor.editor)) {
-    moveCursor(cursor, keepGoalColumn, cursor => cursor.moveDown())
+    moveCursor(cursor, keepGoalColumn, (cursor: any) => cursor.moveDown())
   }
 }
 
-function moveCursorToFirstCharacterAtRow (cursor, row) {
+function moveCursorToFirstCharacterAtRow (cursor: Cursor, row: number): void {
   cursor.setBufferPosition([row, 0])
   cursor.moveToFirstCharacterOfLine()
 }
 
-function getValidVimBufferRow (editor, row) {
+function getValidVimBufferRow (editor: EditorModel, row: number): number {
   return limitNumber(row, {min: 0, max: getVimLastBufferRow(editor)})
 }
 
-function getValidVimScreenRow (editor, row) {
+function getValidVimScreenRow (editor: EditorModel, row: number): number {
   return limitNumber(row, {min: 0, max: getVimLastScreenRow(editor)})
 }
 
 // By default not include column
-function getLineTextToBufferPosition (editor, {row, column}, {exclusive = true} = {}) {
+function getLineTextToBufferPosition (editor: EditorModel, {row, column}: {row: number, column: number}, {exclusive = true}: {exclusive?: boolean} = {}): string {
   return editor.lineTextForBufferRow(row).slice(0, exclusive ? column : column + 1)
 }
 
-function getCodeFoldRanges (editor) {
+function getCodeFoldRanges (editor: EditorModel): Range[] {
   // quilx: foldable ranges come from the tree-sitter fold model (SyntaxController),
   // surfaced via EditorModel — not Atom's tokenizedBuffer.
   return editor.getFoldableRanges()
 }
 
 // Used in vmp-jasmine-increase-focus
-function getCodeFoldRangesContainesRow (editor, bufferRow) {
+function getCodeFoldRangesContainesRow (editor: EditorModel, bufferRow: number): Range[] {
   return getCodeFoldRanges(editor).filter(range => range.start.row <= bufferRow && bufferRow <= range.end.row)
 }
 
-function getClosestFoldRangeContainsRow (editor, bufferRow) {
+function getClosestFoldRangeContainsRow (editor: EditorModel, bufferRow: number): Range | undefined {
   const ranges = getCodeFoldRanges(editor).filter(range => range.start.row <= bufferRow && bufferRow <= range.end.row)
   return getLast(ranges)
 }
 
-function getFoldInfoByKind (editor) {
-  const foldInfoByKind = {}
+interface RangeAndIndent { range: Range, indent: number }
+interface FoldInfo { listOfRangeAndIndent: RangeAndIndent[], minIndent?: number, maxIndent?: number }
+function getFoldInfoByKind (editor: EditorModel): Record<string, FoldInfo> {
+  const foldInfoByKind: Record<string, FoldInfo> = {}
 
-  function updateFoldInfo (kind, rangeAndIndent) {
+  function updateFoldInfo (kind: string, rangeAndIndent: RangeAndIndent): void {
     if (!foldInfoByKind[kind]) {
       foldInfoByKind[kind] = {listOfRangeAndIndent: []}
     }
@@ -405,24 +432,25 @@ function getFoldInfoByKind (editor) {
   return foldInfoByKind
 }
 
-function getBufferRangeForRowRange (editor, [startRow, endRow]) {
+function getBufferRangeForRowRange (editor: EditorModel, [startRow, endRow]: [number, number]): Range {
   return new Range([startRow, 0], [startRow, 0]).union(editor.bufferRangeForBufferRow(endRow, {includeNewline: true}))
 }
 
-function getTokenizedLineForRow (editor, row) {
+function getTokenizedLineForRow (editor: any, row: number): any {
+  // TODO(vim-ts): tighten — tokenizedBuffer not modeled on EditorModel (scope features inert).
   return editor.tokenizedBuffer.tokenizedLineForRow(row)
 }
 
-function getStartingScopesForTokenizedLine (line) {
+function getStartingScopesForTokenizedLine (line: any): string[] {
   // Positive integers: Represent tokens with that length
   // Negative integers: Indicate open/close tags. Odd = start(number can be conveted to scope name), Even = stop.
   // Filter negative and odd number which indicates start tag.
-  const startTags = line.tags.filter(tag => tag < 0 && tag % 2 === -1)
+  const startTags = line.tags.filter((tag: number) => tag < 0 && tag % 2 === -1)
   // Grammar scope lookup is not ported; scope-based features stay inert.
   return []
 }
 
-function isIncludeFunctionScopeForRow (editor, row) {
+function isIncludeFunctionScopeForRow (editor: EditorModel, row: number): boolean {
   // [FIXME] Bug of upstream?
   // Sometime tokenizedLines length is less than last buffer row.
   // So tokenizedLine is not accessible even if valid row.
@@ -432,8 +460,9 @@ function isIncludeFunctionScopeForRow (editor, row) {
 }
 
 // [FIXME] very rough state, need improvement.
-function isFunctionScope (editor, scope) {
-  const match = (scope, ...scopes) => new RegExp('^' + scopes.map(escapeRegExp).join('|')).test(scope)
+function isFunctionScope (editor: any, scope: string): boolean {
+  // TODO(vim-ts): tighten — editor.getGrammar() not modeled on EditorModel.
+  const match = (scope: string, ...scopes: string[]) => new RegExp('^' + scopes.map(escapeRegExp).join('|')).test(scope)
 
   switch (editor.getGrammar().scopeName) {
     case 'source.go':
@@ -476,14 +505,15 @@ const FunctionTypesByGrammar = {
   'source.cpp': ['function_definition', 'preproc_function_def', 'class_specifier']
 }
 
-function findParentNodeForFunctionType (editor, node, where = () => true) {
-  const types = FunctionTypesByGrammar[editor.getGrammar().scopeName]
+function findParentNodeForFunctionType (editor: any, node: any, where: (node: any) => boolean = () => true): any {
+  // TODO(vim-ts): tighten — editor.getGrammar()/tree-sitter SyntaxNode not modeled.
+  const types = FunctionTypesByGrammar[editor.getGrammar().scopeName as keyof typeof FunctionTypesByGrammar]
   if (types) {
     return findClosestNodeByType(node, types, where)
   }
 }
 
-function findClosestNodeByType (node, types, where) {
+function findClosestNodeByType (node: any, types: string[], where: (node: any) => boolean): any {
   while (node) {
     if (node.isNamed && types.some(type => node.type === type) && where(node)) {
       return node
@@ -497,9 +527,10 @@ function findClosestNodeByType (node, types, where) {
   }
 }
 
-function findFunctionBodyNode (editor, node) {
-  const findChild = childType => node.namedChildren.find(node => node.type === childType)
-  let bodyNode
+function findFunctionBodyNode (editor: any, node: any): any {
+  // TODO(vim-ts): tighten — editor.getGrammar()/tree-sitter SyntaxNode not modeled.
+  const findChild = (childType: string) => node.namedChildren.find((node: any) => node.type === childType)
+  let bodyNode: any
 
   switch (editor.getGrammar().scopeName) {
     case 'source.js':
@@ -531,7 +562,8 @@ function findFunctionBodyNode (editor, node) {
 
 // Scroll to bufferPosition with minimum amount to keep original visible area.
 // If target position won't fit within onePageUp or onePageDown, it center target point.
-function smartScrollToBufferPosition (editor, point) {
+function smartScrollToBufferPosition (editor: any, point: PointLike): void {
+  // TODO(vim-ts): tighten — getRowsPerPage/getScrollBottom/pixelPositionForBufferPosition not on EditorModel.
   const editorElement = editor.element
   const editorAreaHeight = editor.getLineHeightInPixels() * (editor.getRowsPerPage() - 1)
   const onePageUp = editorElement.getScrollTop() - editorAreaHeight // No need to limit to min=0
@@ -542,11 +574,15 @@ function smartScrollToBufferPosition (editor, point) {
   editor.scrollToBufferPosition(point, {center: exceedOnePage})
 }
 
-function matchScopes ({classList}, scopes = []) {
+// NOTE(vim-ts): `hasCssClass` is a free identifier in upstream utils.js (latent
+// seam — matchScopes is only reached for non-empty startInInsertModeScopes).
+// Declared (not defined) to keep runtime behavior identical while typing.
+declare const hasCssClass: (name: string) => boolean
+function matchScopes ({classList}: {classList: any}, scopes: string[] = []): boolean {
   return scopes.some(scope => scope.split('.').every(name => hasCssClass(name)))
 }
 
-function isSingleLineText (text) {
+function isSingleLineText (text: string): boolean {
   return text.split(/\n|\r\n/).length === 1
 }
 
@@ -562,8 +598,15 @@ function isSingleLineText (text) {
 // Valid options
 //  - wordRegex: instance of RegExp
 //  - nonWordCharacters: string
-function getWordBufferRangeAndKindAtBufferPosition (editor, point, options = {}) {
-  let kind
+interface WordOptions {
+  singleNonWordChar?: boolean
+  wordRegex?: RegExp
+  nonWordCharacters?: string
+  cursor?: Cursor
+  boundarizeForWord?: boolean
+}
+function getWordBufferRangeAndKindAtBufferPosition (editor: EditorModel, point: PointLike, options: WordOptions = {}): {kind: string, range: Range} {
+  let kind: string
   let {singleNonWordChar = true, wordRegex, nonWordCharacters, cursor} = options
   if (!wordRegex || !nonWordCharacters) {
     // Complement from cursor
@@ -594,7 +637,7 @@ function getWordBufferRangeAndKindAtBufferPosition (editor, point, options = {})
   return {kind, range}
 }
 
-function getWordPatternAtBufferPosition (editor, point, options = {}) {
+function getWordPatternAtBufferPosition (editor: EditorModel, point: PointLike, options: WordOptions = {}): RegExp {
   const {boundarizeForWord = true} = options
   delete options.boundarizeForWord
   const {range, kind} = getWordBufferRangeAndKindAtBufferPosition(editor, point, options)
@@ -610,7 +653,7 @@ function getWordPatternAtBufferPosition (editor, point, options = {}) {
   return new RegExp(pattern, 'g')
 }
 
-function getSubwordPatternAtBufferPosition (editor, point, options = {}) {
+function getSubwordPatternAtBufferPosition (editor: EditorModel, point: PointLike, options: WordOptions = {}): RegExp {
   return getWordPatternAtBufferPosition(editor, point, {
     wordRegex: editor.getLastCursor().subwordRegExp(),
     boundarizeForWord: false
@@ -618,13 +661,13 @@ function getSubwordPatternAtBufferPosition (editor, point, options = {}) {
 }
 
 // Return options used for getWordBufferRangeAtBufferPosition
-function buildWordPatternByCursor (cursor, wordRegex) {
+function buildWordPatternByCursor (cursor: Cursor, wordRegex: RegExp | undefined): {wordRegex: RegExp, nonWordCharacters: string} {
   const nonWordCharacters = getNonWordCharactersForCursor(cursor)
   if (wordRegex == null) wordRegex = new RegExp(`^[\t ]*$|[^\\s${escapeRegExp(nonWordCharacters)}]+`)
   return {wordRegex, nonWordCharacters}
 }
 
-function getWordBufferRangeAtBufferPosition (editor, from, regex) {
+function getWordBufferRangeAtBufferPosition (editor: EditorModel, from: PointLike, regex: RegExp): Range {
   const options = {from, allowNextLine: false, contains: true}
   const end = findInEditor(editor, 'forward', regex, options, event => event.range.end) || options.from
   options.from = end
@@ -635,28 +678,28 @@ function getWordBufferRangeAtBufferPosition (editor, from, regex) {
 
 // When range is linewise range, range end have column 0 of NEXT row.
 // This function adjust range.end to EOL of selected line.
-function shrinkRangeEndToBeforeNewLine (range) {
+function shrinkRangeEndToBeforeNewLine (range: Range): Range {
   return range.end.column === 0
     ? new Range(range.start, [limitNumber(range.end.row - 1, {min: range.start.row}), Infinity])
     : range
 }
 
-function collectRangeByScan (editor, regex, options) {
-  const result = []
-  const collect = event => result.push(event.range)
+function collectRangeByScan (editor: EditorModel, regex: RegExp, options?: {scanRange?: RangeLike, row?: number}): Range[] {
+  const result: Range[] = []
+  const collect = (event: ScanMatchResult) => result.push(event.range)
 
   if (!options) {
     editor.scan(regex, collect)
   } else {
-    const scanRange = options.scanRange || editor.bufferRangeForBufferRow(options.row)
+    const scanRange = options.scanRange || editor.bufferRangeForBufferRow(options.row as number)
     editor.scanInBufferRange(regex, scanRange, collect)
   }
   return result
 }
 
 // take bufferPosition
-function translatePointAndClip (editor, point, direction) {
-  point = Point.fromObject(point)
+function translatePointAndClip (editor: EditorModel, pointArg: PointLike, direction: 'forward' | 'backward'): Point {
+  let point: Point = Point.fromObject(pointArg)
 
   let dontClip = false
   switch (direction) {
@@ -691,7 +734,7 @@ function translatePointAndClip (editor, point, direction) {
     : editor.bufferPositionForScreenPosition(editor.screenPositionForBufferPosition(point, {clipDirection: direction}))
 }
 
-function getRangeByTranslatePointAndClip (editor, range, which, direction) {
+function getRangeByTranslatePointAndClip (editor: EditorModel, range: Range, which: 'start' | 'end', direction: 'forward' | 'backward'): Range | undefined {
   const newPoint = translatePointAndClip(editor, range[which], direction)
   switch (which) {
     case 'start':
@@ -701,64 +744,65 @@ function getRangeByTranslatePointAndClip (editor, range, which, direction) {
   }
 }
 
-function getPackage (name) {
+function getPackage (name: string): never {
   throw new Error('vim: getPackage not ported (Atom package system)')
 }
 
-function searchByProjectFind (editor, text) {
+function searchByProjectFind (editor: EditorModel, text: string): never {
   throw new Error('vim: searchByProjectFind not ported (project-find)')
 }
 
-function limitNumber (number, {max, min} = {}) {
+function limitNumber (number: number, {max, min}: {max?: number, min?: number} = {}): number {
   if (max != null) number = Math.min(number, max)
   if (min != null) number = Math.max(number, min)
   return number
 }
 
-function findRangeContainsPoint (ranges, point) {
+function findRangeContainsPoint (ranges: Range[], point: PointLike): Range | undefined {
   return ranges.find(range => range.containsPoint(point))
 }
 
-const negateFunction = fn => (...args) => !fn(...args)
+const negateFunction = <A extends any[]>(fn: (...args: A) => unknown) => (...args: A): boolean => !fn(...args)
 
-const isEmpty = target => target.isEmpty()
+const isEmpty = (target: {isEmpty(): boolean}): boolean => target.isEmpty()
 const isNotEmpty = negateFunction(isEmpty)
 
-const isSingleLineRange = range => range.isSingleLine()
+const isSingleLineRange = (range: Range): boolean => range.isSingleLine()
 const isNotSingleLineRange = negateFunction(isSingleLineRange)
 
-const isLeadingWhiteSpaceRange = (editor, range) => {
+const isLeadingWhiteSpaceRange = (editor: EditorModel, range: Range): boolean => {
   return range.start.column === 0 && /^[\t ]*$/.test(editor.getTextInBufferRange(range))
 }
 const isNotLeadingWhiteSpaceRange = negateFunction(isLeadingWhiteSpaceRange)
 
-function isEscapedCharRange (editor, range) {
+function isEscapedCharRange (editor: EditorModel, range: RangeLike): boolean {
   range = Range.fromObject(range)
   const chars = getLeftCharacterForBufferPosition(editor, range.start, 2)
   return chars.endsWith('\\') && !chars.endsWith('\\\\')
 }
 
-function insertTextAtBufferPosition (editor, point, text) {
+function insertTextAtBufferPosition (editor: EditorModel, point: PointLike, text: string): Range {
   return editor.setTextInBufferRange([point, point], text)
 }
 
-function ensureEndsWithNewLineForBufferRow (editor, row) {
+function ensureEndsWithNewLineForBufferRow (editor: EditorModel, row: number): void {
   if (!isEndsWithNewLineForBufferRow(editor, row)) {
     const eol = getEndOfLineForBufferRow(editor, row)
     insertTextAtBufferPosition(editor, eol, '\n')
   }
 }
 
-function toggleCaseForCharacter (char) {
+function toggleCaseForCharacter (char: string): string {
   const charLower = char.toLowerCase()
   return charLower === char ? char.toUpperCase() : charLower
 }
 
-function splitTextByNewLine (text) {
+function splitTextByNewLine (text: string): string[] {
   return text.endsWith('\n') ? text.trimRight().split(/\r?\n/g) : text.split(/\r?\n/g)
 }
 
-function replaceDecorationClassBy (decoration, fn) {
+function replaceDecorationClassBy (decoration: any, fn: (cls: string) => string): void {
+  // TODO(vim-ts): tighten — Decoration model not typed here.
   const props = decoration.getProperties()
   decoration.setProperties(Object.assign(props, {class: fn(props.class)}))
 }
@@ -773,7 +817,7 @@ function replaceDecorationClassBy (decoration, fn) {
 // - when 'c' is NOT atEOL: "\nabc" -> "abc"
 //
 // So always trim initial "\n" part range because flashing trailing line is counterintuitive.
-function humanizeNewLineForBufferRange (editor, range) {
+function humanizeNewLineForBufferRange (editor: EditorModel, range: Range): Range {
   range = range.copy()
   if (isSingleLineRange(range) || isLinewiseRange(range)) return range
 
@@ -787,13 +831,13 @@ function humanizeNewLineForBufferRange (editor, range) {
 // Suppress flash when undo/redoing toggle-comment while flashing undo/redo of occurrence operation.
 // This huristic approach never be perfect.
 // Ultimately cannnot distinguish occurrence operation.
-function isMultipleAndAllRangeHaveSameColumnAndConsecutiveRows (ranges) {
+function isMultipleAndAllRangeHaveSameColumnAndConsecutiveRows (ranges: Range[]): boolean {
   if (ranges.length <= 1) {
     return false
   }
 
   const {start: {column: startColumn}, end: {column: endColumn}} = ranges[0]
-  let previousRow
+  let previousRow: number | undefined
 
   for (const range of ranges) {
     const {start, end} = range
@@ -808,7 +852,7 @@ function isMultipleAndAllRangeHaveSameColumnAndConsecutiveRows (ranges) {
 //  1. Expand to forward direction, if suceed return new range.
 //  2. Expand to backward direction, if succeed return new range.
 //  3. When faild to expand either direction, return original range.
-function expandRangeToWhiteSpaces (editor, range) {
+function expandRangeToWhiteSpaces (editor: EditorModel, range: Range): Range {
   const newEnd = findPoint(editor, 'forward', /\S/, 'start', {from: range.end, allowNextLine: false})
   if (newEnd) return new Range(range.start, newEnd)
 
@@ -821,10 +865,11 @@ function expandRangeToWhiteSpaces (editor, range) {
 // Return list of argument token.
 // Token is object like {text: String, type: String}
 // type should be "separator" or "argument"
-function splitArguments (text, joinSpaceSeparatedToken = true) {
+interface ArgumentToken { text: string, type: string | null }
+function splitArguments (text: string, joinSpaceSeparatedToken = true): ArgumentToken[] {
   const separatorChars = '\t, \r\n'
   const quoteChars = '"\'`'
-  const closeCharToOpenChar = {
+  const closeCharToOpenChar: Record<string, string> = {
     ')': '(',
     '}': '{',
     ']': '['
@@ -836,8 +881,8 @@ function splitArguments (text, joinSpaceSeparatedToken = true) {
   let pendingToken = ''
   let inQuote = false
   let isEscaped = false
-  let allTokens = []
-  let currentSection = null
+  let allTokens: ArgumentToken[] = []
+  let currentSection: string | null = null
 
   // Parse text as list of tokens which is commma separated or white space separated.
   // e.g. 'a, fun1(b, c), d' => ['a', 'fun1(b, c), 'd']
@@ -852,14 +897,14 @@ function splitArguments (text, joinSpaceSeparatedToken = true) {
     }
   }
 
-  function changeSection (newSection) {
+  function changeSection (newSection: string): void {
     if (currentSection !== newSection) {
       if (currentSection) settlePending()
       currentSection = newSection
     }
   }
 
-  const pairStack = []
+  const pairStack: string[] = []
   for (const char of text) {
     if (pairStack.length === 0 && separatorChars.includes(char)) {
       changeSection('separator')
@@ -890,9 +935,9 @@ function splitArguments (text, joinSpaceSeparatedToken = true) {
   if (joinSpaceSeparatedToken && allTokens.some(({type, text}) => type === 'separator' && text.includes(','))) {
     // When some separator contains `,` treat white-space separator as just part of token.
     // So we move white-space only sparator into tokens by joining mis-separatoed tokens.
-    const newAllTokens = []
+    const newAllTokens: ArgumentToken[] = []
     while (allTokens.length) {
-      const token = allTokens.shift()
+      const token = allTokens.shift()!
       switch (token.type) {
         case 'argument':
           newAllTokens.push(token)
@@ -903,8 +948,8 @@ function splitArguments (text, joinSpaceSeparatedToken = true) {
           } else {
             // 1. Concatnate white-space-separator and next-argument
             // 2. Then join into latest argument
-            const lastArg = newAllTokens.length ? newAllTokens.pop() : {text: '', type: 'argument'}
-            lastArg.text += token.text + (allTokens.length ? allTokens.shift().text : '') // concat with next-token
+            const lastArg = newAllTokens.length ? newAllTokens.pop()! : {text: '', type: 'argument'}
+            lastArg.text += token.text + (allTokens.length ? allTokens.shift()!.text : '') // concat with next-token
             newAllTokens.push(lastArg)
           }
           break
@@ -918,12 +963,12 @@ function splitArguments (text, joinSpaceSeparatedToken = true) {
 // Safe translation for point.
 // Unless both point and translation was provided, it return passed point.
 // So when you pass null as point, just return null.
-function safeTranslatePoint (point, translation) {
+function safeTranslatePoint (point: Point | null | undefined, translation: PointLike | null | undefined): Point | null | undefined {
   return point && translation ? point.translate(translation) : point
 }
 
 // Retern copied object without having passed props
-function exceptProps (object, props = []) {
+function exceptProps<T extends Record<string, any>> (object: T, props: string[] = []): T {
   object = Object.assign({}, object) // shallow copy
   for (const prop of props) {
     delete object[prop]
@@ -936,30 +981,30 @@ function exceptProps (object, props = []) {
 //   * allowNextLine: {Boolean} defualt `true`
 //   * skipEmptyRow: {Boolean} skip completely empty row
 //   * skipWhiteSpaceOnlyRow: {Boolean} skip non-empty but white-space contain row
-function scanEditor (editor, direction, regex, options, fn) {
+function scanEditor (editor: EditorModel, direction: ScanDirection, regex: RegExp, options: ScanOptions, fn: (event: ScanMatchResult) => void): void {
   let {from, scanRange} = options
   if (!from && !scanRange) throw new Error("You must 'from' or 'scanRange' options")
   const {contains, allowNextLine = true, skipEmptyRow, skipWhiteSpaceOnlyRow} = options
   if (contains && !from) throw new Error("You must pass 'from' to check 'contains'")
 
   if (from) from = Point.fromObject(from)
-  let scanFunction
+  let scanFunction: 'scanInBufferRange' | 'backwardsScanInBufferRange'
   switch (direction) {
     case 'forward':
     case 'next':
-      if (!scanRange) scanRange = [from, getVimEofBufferPosition(editor)]
+      if (!scanRange) scanRange = [from as PointLike, getVimEofBufferPosition(editor)] as RangeLike
       scanFunction = 'scanInBufferRange'
       break
     case 'backward':
     case 'previous':
-      if (!scanRange) scanRange = [[0, 0], from]
+      if (!scanRange) scanRange = [[0, 0], from as PointLike] as RangeLike
       scanFunction = 'backwardsScanInBufferRange'
       break
   }
 
-  editor[scanFunction](regex, scanRange, event => {
+  editor[scanFunction](regex, scanRange as RangeLike, event => {
     const {range, matchText, stop} = event
-    if (!allowNextLine && range.start.row !== from.row) {
+    if (!allowNextLine && range.start.row !== (from as Point).row) {
       stop()
       return
     }
@@ -969,7 +1014,7 @@ function scanEditor (editor, direction, regex, options, fn) {
 
     if (skipEmptyRow && !matchText) return
     if (skipWhiteSpaceOnlyRow && matchText && !/\S+/.test(matchText)) return
-    if (contains && !range.containsPoint(from)) return
+    if (contains && !range.containsPoint(from as PointLike)) return
 
     fn(event)
   })
@@ -980,8 +1025,8 @@ function scanEditor (editor, direction, regex, options, fn) {
 //  - No need to call stop()
 //  - No need to use temporal variable to extract found var from callback.
 //  - Whatever value you can return(range, point, whatever you returned truthy value)
-function findInEditor (editor, direction, regex, options, fn) {
-  let result
+function findInEditor<T> (editor: EditorModel, direction: ScanDirection, regex: RegExp, options: ScanOptions, fn: (event: ScanMatchResult) => T): T | undefined {
+  let result: T | undefined
   scanEditor(editor, direction, regex, options, event => {
     result = fn(event)
     if (result) {
@@ -1001,21 +1046,21 @@ function findInEditor (editor, direction, regex, options, fn) {
 //  * preTranslate: {Point} translation against from before start search
 //  * postTranslate: {Point} translation against found point.
 //  * Plus scan options supported by scanEditor()
-function findPoint (editor, direction, regex, which, options) {
+function findPoint (editor: EditorModel, direction: ScanDirection, regex: RegExp, which: 'start' | 'end', options: ScanOptions & {preTranslate?: PointLike, postTranslate?: PointLike}): Point | null | undefined {
   const pointCompareMethod = ['next', 'forward'].includes(direction) ? 'isGreaterThan' : 'isLessThan'
   const {preTranslate, postTranslate} = options
-  const from = editor.clipBufferPosition(safeTranslatePoint(options.from, preTranslate))
+  const from = editor.clipBufferPosition(safeTranslatePoint(options.from as Point, preTranslate) as PointLike)
   const scanOptions = exceptProps(options, ['preTranslate', 'postTranslate'])
   scanOptions.from = from
 
   const point = findInEditor(editor, direction, regex, scanOptions, event => {
     const pointToCompare = event.range[which]
-    return pointToCompare[pointCompareMethod](from) && pointToCompare
+    return (pointToCompare[pointCompareMethod](from) && pointToCompare) as Point | false
   })
-  return safeTranslatePoint(point, postTranslate)
+  return safeTranslatePoint(point || undefined, postTranslate)
 }
 
-function adjustIndentWithKeepingLayout (editor, range) {
+function adjustIndentWithKeepingLayout (editor: EditorModel, range: Range): void {
   // Adjust indentLevel with keeping original layout of pasting text.
   // Suggested indent level of range.start.row is correct as long as range.start.row have minimum indent level.
   // But when we paste following already indented three line text, we have to adjust indent level
@@ -1029,8 +1074,8 @@ function adjustIndentWithKeepingLayout (editor, range) {
   // 1. Determine minimum indent level among pasted range(= range ) excluding empty row
   // 2. Then update indentLevel of each rows to final indentLevel of minimum-indented row have suggestedIndentLevel.
   const suggestedLevel = editor.suggestedIndentForBufferRow(range.start.row)
-  const rowAndActualLevels = []
-  let minLevel
+  const rowAndActualLevels: [number, number][] = []
+  let minLevel: number | undefined
 
   for (const row of getList(range.start.row, range.end.row, false)) {
     if (isEmptyRow(editor, row)) continue
@@ -1043,21 +1088,22 @@ function adjustIndentWithKeepingLayout (editor, range) {
   const deltaToSuggestedLevel = suggestedLevel - minLevel
   if (deltaToSuggestedLevel) {
     for (const [row, actualLevel] of rowAndActualLevels) {
-      editor.setIndentationForBufferRow(row, actualLevel + deltaToSuggestedLevel)
+      // TODO(vim-ts): tighten — setIndentationForBufferRow not yet on EditorModel.
+      (editor as any).setIndentationForBufferRow(row, actualLevel + deltaToSuggestedLevel)
     }
   }
 }
 
 // Check point containment with end position exclusive
-function rangeContainsPointWithEndExclusive (range, point) {
+function rangeContainsPointWithEndExclusive (range: Range, point: PointLike): void {
   range.start.isLessThanOrEqual(point) && range.end.isGreaterThan(point)
 }
 
-function traverseTextFromPoint (point, text) {
+function traverseTextFromPoint (point: PointLike, text: string): Point {
   return Point.fromObject(point).traverse(getTraversalForText(text))
 }
 
-function getTraversalForText (text) {
+function getTraversalForText (text: string): Point {
   NEWLINE_REG_EXP.lastIndex = 0
 
   let row = 0
@@ -1069,34 +1115,35 @@ function getTraversalForText (text) {
   return new Point(row, text.length - lastIndex)
 }
 
-function getRowAmongFoldedRowIntersectsBufferRow (editor, bufferRow, which) {
+function getRowAmongFoldedRowIntersectsBufferRow (editor: any, bufferRow: number, which: 'min' | 'max'): number {
+  // TODO(vim-ts): tighten — displayLayer.foldsMarkerLayer not modeled on EditorModel.
   const bufferRange = editor.bufferRangeForBufferRow(bufferRow)
   const markers = editor.displayLayer.foldsMarkerLayer.findMarkers({intersectsRange: bufferRange})
   if (!markers.length) {
     throw new Error('getRowAmongFoldedRowIntersectsBufferRow() called for non-folded bufferRow!')
   }
-  const ranges = markers.map(marker => marker.getRange())
+  const ranges = markers.map((marker: any) => marker.getRange())
   return which === 'min'
-    ? Math.min(...ranges.map(range => range.start.row))
-    : Math.max(...ranges.map(range => range.end.row))
+    ? Math.min(...ranges.map((range: any) => range.start.row))
+    : Math.max(...ranges.map((range: any) => range.end.row))
 }
 
 // Return min row among folds intersecting screenRow of bufferRow if bufferRow was folded.
-function getFoldStartRowForRow (editor, row) {
+function getFoldStartRowForRow (editor: EditorModel, row: number): number {
   return editor.isFoldedAtBufferRow(row) ? getRowAmongFoldedRowIntersectsBufferRow(editor, row, 'min') : row
 }
 
 // Return max row among folds intersecting screenRow of bufferRow if bufferRow was folded.
-function getFoldEndRowForRow (editor, row) {
+function getFoldEndRowForRow (editor: EditorModel, row: number): number {
   return editor.isFoldedAtBufferRow(row) ? getRowAmongFoldedRowIntersectsBufferRow(editor, row, 'max') : row
 }
 
-function doesRangeStartAndEndWithSameIndentLevel (editor, range) {
+function doesRangeStartAndEndWithSameIndentLevel (editor: EditorModel, range: Range): boolean {
   return editor.indentationForBufferRow(range.start.row) === editor.indentationForBufferRow(range.end.row)
 }
 
-function getList (start, end, inclusive = true) {
-  const range = []
+function getList (start: number, end: number, inclusive = true): number[] {
+  const range: number[] = []
   if (start < end) {
     if (inclusive) for (let i = start; i <= end; i++) range.push(i)
     else for (let i = start; i < end; i++) range.push(i)
@@ -1107,11 +1154,11 @@ function getList (start, end, inclusive = true) {
   return range
 }
 
-function unindent (text) {
-  let indentLength
+function unindent (text: string): string {
+  let indentLength: number
   const lines = text.split(/\n/)
   const minIndent = lines.reduce((maxIndentLength, line) => {
-    indentLength = line === '' ? maxIndentLength : line.match(/^ */)[0].length
+    indentLength = line === '' ? maxIndentLength : line.match(/^ */)![0].length
     return Math.min(indentLength, maxIndentLength)
   }, Infinity)
   return lines.map(line => line.slice(minIndent)).join('\n')
@@ -1129,8 +1176,8 @@ function unindent (text) {
 //   })
 // }
 
-function removeIndent (text, removeFirstAndLastLine = true) {
-  let indentLength
+function removeIndent (text: string, removeFirstAndLastLine = true): string {
+  let indentLength: number
   const lines = text.split(/\n/)
   if (removeFirstAndLastLine) {
     lines.shift()
@@ -1138,19 +1185,19 @@ function removeIndent (text, removeFirstAndLastLine = true) {
   }
 
   const minIndent = lines.reduce((maxIndentLength, line) => {
-    indentLength = line === '' ? maxIndentLength : line.match(/^ */)[0].length
+    indentLength = line === '' ? maxIndentLength : line.match(/^ */)![0].length
     return Math.min(indentLength, maxIndentLength)
   }, Infinity)
 
   return lines.map(line => line.slice(minIndent)).join('\n')
 }
 
-function detectMinimumIndentLengthInText (text) {
-  let indentLength
+function detectMinimumIndentLengthInText (text: string): number {
+  let indentLength: number
   const lines = text.split(/\n/)
 
   const minIndent = lines.reduce((maxIndentLength, line) => {
-    indentLength = line === '' ? maxIndentLength : line.match(/^ */)[0].length
+    indentLength = line === '' ? maxIndentLength : line.match(/^ */)![0].length
     return Math.min(indentLength, maxIndentLength)
   }, Infinity)
 
@@ -1158,9 +1205,9 @@ function detectMinimumIndentLengthInText (text) {
 }
 
 // FIXME: really, this is garbage.
-function normalizeIndent (text, editor, targetRange) {
+function normalizeIndent (text: string, editor: EditorModel, targetRange: RangeLike): string {
   // text = convertTabToSpace(text, editor.getTabLength())
-  const mapEachLine = (text, fn) =>
+  const mapEachLine = (text: string, fn: (line: string) => string) =>
     text
       .split(/\n/)
       .map(fn)
@@ -1183,13 +1230,14 @@ function normalizeIndent (text, editor, targetRange) {
   return text
 }
 
-function atomVersionSatisfies (condition) {
+function atomVersionSatisfies (condition: string): boolean {
   // No Atom version gate in quilx; treat all version checks as satisfied.
   return true
 }
 
-function getRowRangeForCommentAtBufferRow (editor, row) {
-  const isRowCommented = row => editor.tokenizedBuffer.isRowCommented(row)
+function getRowRangeForCommentAtBufferRow (editor: any, row: number): [number, number] | undefined {
+  // TODO(vim-ts): tighten — tokenizedBuffer.isRowCommented not modeled on EditorModel.
+  const isRowCommented = (row: number) => editor.tokenizedBuffer.isRowCommented(row)
   if (!isRowCommented(row)) return
 
   let startRow = row
@@ -1201,10 +1249,10 @@ function getRowRangeForCommentAtBufferRow (editor, row) {
   return [startRow, endRow]
 }
 
-function getHunkRangeAtBufferRow (editor, row) {
+function getHunkRangeAtBufferRow (editor: EditorModel, row: number): Range | undefined {
   const hunkChar = editor.lineTextForBufferRow(row)[0]
   if (hunkChar && (hunkChar === '+' || hunkChar === '-')) {
-    const isHunkRow = row => {
+    const isHunkRow = (row: number) => {
       const lineText = editor.lineTextForBufferRow(row)
       return lineText && lineText[0] === hunkChar
     }
@@ -1221,10 +1269,10 @@ function getHunkRangeAtBufferRow (editor, row) {
 // Replace given text by character based diff
 // Purpose: to minimize amount of range to be replaced, which lead cleaner flash highlight
 // On undo/redo highlight
-function replaceTextInRangeViaDiff (editor, range, newText) {
+function replaceTextInRangeViaDiff (editor: EditorModel, range: Range, newText: string): void {
   let row = range.start.row
   let column = range.start.column
-  const point = [0, 0]
+  const point: [number, number] = [0, 0]
 
   const oldText = editor.getTextInBufferRange(range)
   const changes = diffChars(oldText, newText)
@@ -1238,7 +1286,7 @@ function replaceTextInRangeViaDiff (editor, range, newText) {
         row = newPoint.row
         column = newPoint.column
       } else if (change.removed) {
-        editor.setTextInBufferRange([point, [row, column + change.count]], '')
+        editor.setTextInBufferRange([point, [row, column + (change.count as number)]], '')
       } else {
         const newPoint = traverseTextFromPoint(point, change.value)
         row = newPoint.row
@@ -1248,9 +1296,9 @@ function replaceTextInRangeViaDiff (editor, range, newText) {
   })
 }
 
-const sortByFallback = (rowA, rowB) => rowA.localeCompare(rowB, {sensitivity: 'base'})
+const sortByFallback = (rowA: string, rowB: string): number => rowA.localeCompare(rowB, {sensitivity: 'base'} as any)
 
-function changeArrayOrder (array, action, sortBy) {
+function changeArrayOrder<T> (array: T[], action: string, sortBy?: (a: T, b: T) => number): T[] | undefined {
   if (array.length < 2) {
     return array
   }
@@ -1259,7 +1307,7 @@ function changeArrayOrder (array, action, sortBy) {
     case 'reverse':
       return array.slice().reverse()
     case 'sort':
-      return array.slice().sort(sortBy || sortByFallback)
+      return array.slice().sort(sortBy || (sortByFallback as unknown as (a: T, b: T) => number))
     case 'rotate-right':
       return array.slice(1).concat(array[0])
     case 'rotate-left':
@@ -1271,9 +1319,9 @@ function changeArrayOrder (array, action, sortBy) {
 
 // Borrowed from
 // https://stackoverflow.com/questions/2450954/how-to-randomize-shuffle-a-javascript-array
-function shuffleArray (array) {
+function shuffleArray<T> (array: T[]): T[] {
   let currentIndex = array.length
-  let temporaryValue, randomIndex
+  let temporaryValue: T, randomIndex: number
 
   // While there remain elements to shuffle...
   while (currentIndex !== 0) {
@@ -1287,11 +1335,12 @@ function shuffleArray (array) {
   return array
 }
 
-function changeCharOrder (text, action) {
-  return changeArrayOrder(text.split(''), action).join('')
+function changeCharOrder (text: string, action: string): string {
+  return changeArrayOrder(text.split(''), action)!.join('')
 }
 
-function isUsingTreeSitter (editor) {
+function isUsingTreeSitter (editor: any): boolean {
+  // TODO(vim-ts): tighten — languageMode not modeled on EditorModel.
   return !!(editor.languageMode && editor.languageMode.tree)
 }
 

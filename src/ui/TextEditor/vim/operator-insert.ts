@@ -4,7 +4,17 @@
 // handling) is neutralized until that key wiring is ported.
 import { Range } from '../../../text/Range.ts'
 import { CompositeDisposable, Disposable } from '../../../util/eventKit.ts'
-import { Operator } from './operator.js'
+import { Operator } from './operator.ts'
+import type { Point } from '../../../text/Point.ts'
+import type { Selection } from '../Selection.ts'
+import type { Marker } from '../Marker.ts'
+import type { AggregatedChange } from '../EditorModel.ts'
+
+/** Which end of the target an Insert* operator places the cursor at. */
+type WhichPosition = 'start' | 'end' | 'head' | 'tail'
+
+/** The "wise" of an operation (mirrors operator.ts's local `Wise`). */
+type Wise = 'characterwise' | 'linewise' | 'blockwise'
 
 // Operator which start 'insert-mode'
 // -------------------------
@@ -15,6 +25,15 @@ class ActivateInsertModeBase extends Operator {
   flashTarget = false
   supportInsertionCount = true
 
+  // The earliest (topCursor's) change captured since the insert checkpoint, used
+  // to replay text on `.` repeat. Null until insert mode is left with a change.
+  lastChange: AggregatedChange | null = null
+  // topCursor's buffer position when insertion started; used to compute the
+  // deletion offset when replaying a change that deleted text.
+  topCursorPositionAtInsertionStart: Point | null = null
+  // Optional hook implemented by mutating subclasses (Change/InsertAboveWithNewline/...).
+  mutateText? (): void
+
   // When each mutaion's extent is not intersecting, muitiple changes are recorded
   // e.g
   //  - Multicursors edit
@@ -23,7 +42,7 @@ class ActivateInsertModeBase extends Operator {
   // I only take care of one change happened at earliest(topCursor's change) position.
   // Thats' why I save topCursor's position to @topCursorPositionAtInsertionStart to compare traversal to deletionStart
   // Why I use topCursor's change? Just because it's easy to use first change returned by getChangeSinceCheckpoint().
-  getChangeSinceCheckpoint (purpose) {
+  getChangeSinceCheckpoint (purpose: string): AggregatedChange | undefined {
     return this.editor.getChangeSinceCheckpoint(this.getBufferCheckpoint(purpose))
   }
 
@@ -32,12 +51,12 @@ class ActivateInsertModeBase extends Operator {
   // character deleted by `Delete` or by `ctrl-u`.
   // But I can not and don't trying to minic this level of compatibility.
   // So basically deletion-done-in-one is expected to work well.
-  replayLastChange (selection) {
-    let textToInsert
+  replayLastChange (selection: Selection): void {
+    let textToInsert: string
     if (this.lastChange != null) {
       const {start, oldExtent, newText} = this.lastChange
       if (!oldExtent.isZero()) {
-        const traversalToStartOfDelete = start.traversalFrom(this.topCursorPositionAtInsertionStart)
+        const traversalToStartOfDelete = start.traversalFrom(this.topCursorPositionAtInsertionStart!)
         const deletionStart = selection.cursor.getBufferPosition().traverse(traversalToStartOfDelete)
         const deletionEnd = deletionStart.traverse(oldExtent)
         selection.setBufferRange([deletionStart, deletionEnd])
@@ -46,12 +65,14 @@ class ActivateInsertModeBase extends Operator {
     } else {
       textToInsert = ''
     }
-    selection.insertText(textToInsert, {autoIndent: true})
+    // TODO(vim-ts): Selection.insertText models no options arg; the {autoIndent}
+    // hint is honored upstream only. Cast keeps the call's runtime behavior.
+    ;(selection.insertText as any)(textToInsert, {autoIndent: true})
   }
 
   // called when repeated
   // [FIXME] to use replayLastChange in repeatInsert overriding subclasss.
-  repeatInsert (selection, text) {
+  repeatInsert (selection: Selection, text: string): void {
     this.replayLastChange(selection)
   }
 
@@ -62,12 +83,12 @@ class ActivateInsertModeBase extends Operator {
     }
   }
 
-  initialize () {
+  initialize (): void {
     this.disposeReplaceMode()
     super.initialize()
   }
 
-  execute () {
+  execute (): void {
     if (this.repeated) this.flashTarget = this.trackChange = true
 
     this.preSelect()
@@ -157,7 +178,8 @@ class ActivateInsertModeBase extends Operator {
       if (!wasReplicating && textByUserInput && this.editor.getSelections().length > 1) {
         for (const selection of this.editor.getSelections()) {
           if (selection.isPrimary) continue
-          selection.insertText(textByOperator + textByUserInput, {autoIndent: false})
+          // TODO(vim-ts): Selection.insertText models no options arg; cast keeps {autoIndent}.
+          ;(selection.insertText as any)(textByOperator + textByUserInput, {autoIndent: false})
         }
         this.vimState.clearSelections()
       }
@@ -165,7 +187,8 @@ class ActivateInsertModeBase extends Operator {
       while (insertionCount) {
         insertionCount--
         for (const selection of this.editor.getSelections()) {
-          selection.insertText(textByOperator + textByUserInput, {autoIndent: true})
+          // TODO(vim-ts): Selection.insertText models no options arg; cast keeps {autoIndent}.
+          ;(selection.insertText as any)(textByOperator + textByUserInput, {autoIndent: true})
         }
       }
 
@@ -196,18 +219,20 @@ class ActivateReplaceMode extends ActivateInsertMode {
   // overwrite-on-type and backspace-restore against that submode, since quilx
   // routes insert-mode keystrokes through GtkSourceView, not Atom's text events.
 
-  repeatInsert (selection, text) {
+  repeatInsert (selection: Selection, text: string): void {
     for (const char of text) {
       if (char === '\n') continue
       if (selection.cursor.isAtEndOfLine()) break
-      selection.selectRight()
+      // TODO(vim-ts): EditorModel/Selection doesn't model selectRight yet.
+      ;(selection as any).selectRight()
     }
-    selection.insertText(text, {autoIndent: false})
+    // TODO(vim-ts): Selection.insertText models no options arg; cast keeps {autoIndent}.
+    ;(selection.insertText as any)(text, {autoIndent: false})
   }
 }
 
 class InsertAfter extends ActivateInsertMode {
-  execute () {
+  execute (): void {
     for (const cursor of this.editor.getCursors()) {
       this.utils.moveCursorRight(cursor)
     }
@@ -217,9 +242,10 @@ class InsertAfter extends ActivateInsertMode {
 
 // key: 'g I' in all mode
 class InsertAtBeginningOfLine extends ActivateInsertMode {
-  execute () {
+  execute (): void {
     if (this.mode === 'visual' && this.submode !== 'blockwise') {
-      this.editor.splitSelectionsIntoLines()
+      // TODO(vim-ts): EditorModel doesn't model splitSelectionsIntoLines yet.
+      ;(this.editor as any).splitSelectionsIntoLines()
     }
     for (const blockwiseSelection of this.getBlockwiseSelections()) {
       blockwiseSelection.skipNormalization()
@@ -231,7 +257,7 @@ class InsertAtBeginningOfLine extends ActivateInsertMode {
 
 // key: normal 'A'
 class InsertAfterEndOfLine extends ActivateInsertMode {
-  execute () {
+  execute (): void {
     this.editor.moveToEndOfLine()
     super.execute()
   }
@@ -239,7 +265,7 @@ class InsertAfterEndOfLine extends ActivateInsertMode {
 
 // key: normal 'I'
 class InsertAtFirstCharacterOfLine extends ActivateInsertMode {
-  execute () {
+  execute (): void {
     for (const cursor of this.editor.getCursors()) {
       this.utils.moveCursorToFirstCharacterAtRow(cursor, cursor.getBufferRow())
     }
@@ -248,7 +274,7 @@ class InsertAtFirstCharacterOfLine extends ActivateInsertMode {
 }
 
 class InsertAtLastInsert extends ActivateInsertMode {
-  execute () {
+  execute (): void {
     const point = this.vimState.mark.get('^')
     if (point) {
       this.editor.setCursorBufferPosition(point)
@@ -259,14 +285,17 @@ class InsertAtLastInsert extends ActivateInsertMode {
 }
 
 class InsertAboveWithNewline extends ActivateInsertMode {
-  initialize () {
+  // Marks where the user typed `o`/`O`, so undo/redo restores the cursor there.
+  originalCursorPositionMarker: Marker | null = null
+
+  initialize (): void {
     this.originalCursorPositionMarker = this.editor.markBufferPosition(this.editor.getCursorBufferPosition())
     super.initialize()
   }
 
   // This is for `o` and `O` operator.
   // On undo/redo put cursor at original point where user type `o` or `O`.
-  groupChangesSinceBufferCheckpoint (purpose) {
+  groupChangesSinceBufferCheckpoint (purpose: string): void {
     if (this.repeated) {
       super.groupChangesSinceBufferCheckpoint(purpose)
       return
@@ -274,8 +303,8 @@ class InsertAboveWithNewline extends ActivateInsertMode {
 
     const lastCursor = this.editor.getLastCursor()
     const cursorPosition = lastCursor.getBufferPosition()
-    lastCursor.setBufferPosition(this.originalCursorPositionMarker.getHeadBufferPosition())
-    this.originalCursorPositionMarker.destroy()
+    lastCursor.setBufferPosition(this.originalCursorPositionMarker!.getHeadBufferPosition())
+    this.originalCursorPositionMarker!.destroy()
     this.originalCursorPositionMarker = null
 
     if (this.getConfig('groupChangesWhenLeavingInsertMode')) {
@@ -284,25 +313,26 @@ class InsertAboveWithNewline extends ActivateInsertMode {
     lastCursor.setBufferPosition(cursorPosition)
   }
 
-  autoIndentEmptyRows () {
+  autoIndentEmptyRows (): void {
     for (const cursor of this.editor.getCursors()) {
       const row = cursor.getBufferRow()
       if (this.isEmptyRow(row)) this.editor.autoIndentBufferRow(row)
     }
   }
 
-  mutateText () {
+  mutateText (): void {
     this.editor.insertNewlineAbove()
     if (this.editor.autoIndent) this.autoIndentEmptyRows()
   }
 
-  repeatInsert (selection, text) {
-    selection.insertText(text.trimLeft(), {autoIndent: true})
+  repeatInsert (selection: Selection, text: string): void {
+    // TODO(vim-ts): Selection.insertText models no options arg; cast keeps {autoIndent}.
+    ;(selection.insertText as any)(text.trimLeft(), {autoIndent: true})
   }
 }
 
 class InsertBelowWithNewline extends InsertAboveWithNewline {
-  mutateText () {
+  mutateText (): void {
     for (const cursor of this.editor.getCursors()) {
       this.utils.setBufferRow(cursor, this.getFoldEndRowForRow(cursor.getBufferRow()))
     }
@@ -316,9 +346,9 @@ class InsertBelowWithNewline extends InsertAboveWithNewline {
 // -------------------------
 class InsertByTarget extends ActivateInsertModeBase {
   static command = false
-  which = null // one of ['start', 'end', 'head', 'tail']
+  which: WhichPosition | null = null // one of ['start', 'end', 'head', 'tail']
 
-  initialize () {
+  initialize (): void {
     // HACK
     // When g i is mapped to `insert-at-start-of-target`.
     // `g i 3 l` start insert at 3 column right position.
@@ -328,7 +358,7 @@ class InsertByTarget extends ActivateInsertModeBase {
     super.initialize()
   }
 
-  execute () {
+  execute (): void {
     this.onDidSelectTarget(() => {
       // In vC/vL, when occurrence marker was NOT selected,
       // it behave's very specially
@@ -348,7 +378,7 @@ class InsertByTarget extends ActivateInsertModeBase {
       }
 
       for (const $selection of this.swrap.getSelections(this.editor)) {
-        $selection.setBufferPositionTo(this.which)
+        $selection.setBufferPositionTo(this.which!)
       }
     })
     super.execute()
@@ -357,16 +387,16 @@ class InsertByTarget extends ActivateInsertModeBase {
 
 // key: 'I', Used in 'visual-mode.characterwise', visual-mode.blockwise
 class InsertAtStartOfTarget extends InsertByTarget {
-  which = 'start'
+  which: WhichPosition = 'start'
 }
 
 // key: 'A', Used in 'visual-mode.characterwise', 'visual-mode.blockwise'
 class InsertAtEndOfTarget extends InsertByTarget {
-  which = 'end'
+  which: WhichPosition = 'end'
 }
 
 class InsertAtHeadOfTarget extends InsertByTarget {
-  which = 'head'
+  which: WhichPosition = 'head'
 }
 
 class InsertAtStartOfOccurrence extends InsertAtStartOfTarget {
@@ -394,23 +424,23 @@ class InsertAtHeadOfSubwordOccurrence extends InsertAtHeadOfOccurrence {
 }
 
 class InsertAtStartOfSmartWord extends InsertByTarget {
-  which = 'start'
-  target = 'MoveToPreviousSmartWord'
+  which: WhichPosition = 'start'
+  target: any = 'MoveToPreviousSmartWord'
 }
 
 class InsertAtEndOfSmartWord extends InsertByTarget {
-  which = 'end'
-  target = 'MoveToEndOfSmartWord'
+  which: WhichPosition = 'end'
+  target: any = 'MoveToEndOfSmartWord'
 }
 
 class InsertAtPreviousFoldStart extends InsertByTarget {
-  which = 'start'
-  target = 'MoveToPreviousFoldStart'
+  which: WhichPosition = 'start'
+  target: any = 'MoveToPreviousFoldStart'
 }
 
 class InsertAtNextFoldStart extends InsertByTarget {
-  which = 'end'
-  target = 'MoveToNextFoldStart'
+  which: WhichPosition = 'end'
+  target: any = 'MoveToNextFoldStart'
 }
 
 // -------------------------
@@ -418,7 +448,7 @@ class Change extends ActivateInsertModeBase {
   trackChange = true
   supportInsertionCount = false
 
-  mutateText () {
+  mutateText (): void {
     // Allways dynamically determine selection wise wthout consulting target.wise
     // Reason: when `c i {`, wise is 'characterwise', but actually selected range is 'linewise'
     //   {
@@ -436,7 +466,8 @@ class Change extends ActivateInsertModeBase {
         // Replace the line(s) with a single empty line, then step back onto it.
         // The insert leaves the cursor at the start of the *following* line, so
         // the move must wrap across the newline — a plain moveLeft stalls at col 0.
-        selection.insertText('\n', {autoIndent: true})
+        // TODO(vim-ts): Selection.insertText models no options arg; cast keeps {autoIndent}.
+        ;(selection.insertText as any)('\n', {autoIndent: true})
         selection.cursor.moveLeft(1, {allowWrap: true})
         if (indent) {
           const row = selection.cursor.getBufferPosition().row
@@ -444,7 +475,8 @@ class Change extends ActivateInsertModeBase {
           selection.cursor.setBufferPosition([row, indent.length])
         }
       } else {
-        selection.insertText('', {autoIndent: true})
+        // TODO(vim-ts): Selection.insertText models no options arg; cast keeps {autoIndent}.
+        ;(selection.insertText as any)('', {autoIndent: true})
       }
     }
   }
@@ -459,21 +491,21 @@ class ChangeSubwordOccurrence extends ChangeOccurrence {
 }
 
 class Substitute extends Change {
-  target = 'MoveRight'
+  target: any = 'MoveRight'
 }
 
 class SubstituteLine extends Change {
-  wise = 'linewise' // [FIXME] to re-override target.wise in visual-mode
-  target = 'MoveToRelativeLine'
+  wise: Wise = 'linewise' // [FIXME] to re-override target.wise in visual-mode
+  target: any = 'MoveToRelativeLine'
 }
 
 // alias
 class ChangeLine extends SubstituteLine {}
 
 class ChangeToLastCharacterOfLine extends Change {
-  target = 'MoveToLastCharacterOfLine'
+  target: any = 'MoveToLastCharacterOfLine'
 
-  execute () {
+  execute (): void {
     this.onDidSelectTarget(() => {
       if (this.target.wise === 'blockwise') {
         for (const blockwiseSelection of this.getBlockwiseSelections()) {

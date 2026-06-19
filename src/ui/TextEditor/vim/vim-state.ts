@@ -8,17 +8,49 @@
 // The mode/operation logic is otherwise unchanged.
 import { Emitter, Disposable, CompositeDisposable } from '../../../util/eventKit.ts'
 import settings from './settings.ts'
-import OperationStack from './operation-stack.js'
-import MarkManager from './mark-manager.js'
-import RegisterManager from './register-manager.js'
-import MutationManager from './mutation-manager.js'
-import PositionHistory from './position-history.js'
-import swrap from './selection-wrapper.js'
-import globalState from './global-state.js'
+import OperationStack from './operation-stack.ts'
+import MarkManager from './mark-manager.ts'
+import RegisterManager from './register-manager.ts'
+import MutationManager from './mutation-manager.ts'
+import PositionHistory from './position-history.ts'
+import swrap from './selection-wrapper.ts'
+import globalState from './global-state.ts'
 import { CursorStyleManager, HoverManager, FlashManager, OccurrenceManager, SequentialPasteManager, ScrollManager } from './stubs.ts'
-import * as utils from './utils.js'
+import type { StatusBarManager } from './stubs.ts'
+import * as utils from './utils.ts'
 import underscorePlus from './underscorePlus.ts'
 import { quilx } from '../../../quilx.ts'
+import type { EditorModel } from '../EditorModel.ts'
+import type { Selection } from '../Selection.ts'
+import type { Disposable as DisposableType } from '../../../util/eventKit.ts'
+import type { Key } from '../../../keymap/Key.ts'
+
+/** The four mode tags VimState moves between. */
+export type VimMode = 'normal' | 'insert' | 'visual'
+/**
+ * The mode's submode: the visual-mode wise (`characterwise`/`linewise`/
+ * `blockwise`) or insert-mode `replace`; `null` when the mode has no submode.
+ */
+export type VimSubmode = 'characterwise' | 'linewise' | 'blockwise' | 'replace' | null
+
+/** Listener for the single-character input grab (`readChar`). */
+type InputHandler = { onConfirm?: (char: string) => void; onCancel?: () => void }
+/** Options passed to `focusInput`/`readChar`. */
+interface InputOptions {
+  charsMax?: number
+  purpose?: string
+  onConfirm?: (input: string) => void
+  onCancel?: () => void
+  onChange?: (input: string) => void
+  hideCursor?: boolean
+}
+/** A provider wired in by the host to drive multi-char / leap input. The
+ * options shape is purpose-dependent (search confirms a string, leap confirms a
+ * Point), so providers receive a loosely-typed options bag. */
+type InputProvider = (options: any) => void
+
+/** Generic emitter/event-subscription callback (payload shape varies per event). */
+type EventCallback = (value?: any) => void
 
 const MANAGER_REGISTRY = {
   './operation-stack': OperationStack,
@@ -36,67 +68,114 @@ const MANAGER_REGISTRY = {
   './utils': utils,
 }
 
-const __vimStatesByEditor = new Map()
+const __vimStatesByEditor = new Map<EditorModel, VimState>()
 
-const dasherize = s => (s[0].toLowerCase() + s.slice(1)).replace(/[A-Z]/g, m => '-' + m.toLowerCase())
-const classify = s => s[0].toUpperCase() + s.slice(1).replace(/-(\w)/g, m => m[1].toUpperCase())
+const dasherize = (s: string): string => (s[0].toLowerCase() + s.slice(1)).replace(/[A-Z]/g, m => '-' + m.toLowerCase())
+const classify = (s: string): string => s[0].toUpperCase() + s.slice(1).replace(/-(\w)/g, m => m[1].toUpperCase())
 
 export default class VimState {
+  // Instance fields (assigned in the constructor)
+  // ===========================================================================
+  editor: EditorModel
+  editorElement: EditorModel
+  statusBarManager: StatusBarManager
+  emitter: Emitter
+  mode: VimMode
+  submode: VimSubmode
+  replaceModeDisposable: DisposableType | null
+  previousSelection: { properties?: unknown; submode?: VimSubmode }
+  ignoreSelectionChange: boolean
+  subscriptions: CompositeDisposable
+
+  // Set/cleared during mode transitions.
+  modeDeactivator?: DisposableType | null
+
+  // Lazily-populated manager backing fields (see the getters below).
+  __mark?: MarkManager
+  __register?: RegisterManager
+  __hover?: HoverManager
+  __hoverSearchCounter?: HoverManager
+  __searchHistory?: any // TODO(vim-ts): tighten once search-history-manager is ported
+  __highlightSearch?: any // TODO(vim-ts): tighten once highlight-search-manager is ported
+  __highlightFind?: any // TODO(vim-ts): tighten once highlight-find-manager is ported
+  __persistentSelection?: any // TODO(vim-ts): tighten once persistent-selection-manager is ported
+  __occurrenceManager?: OccurrenceManager
+  __mutationManager?: MutationManager
+  __flashManager?: FlashManager
+  // Conflated upstream: `setSearchInput` stores a multi-char input provider here,
+  // while the `searchInput` getter lazy-loads the (unported) search-input manager.
+  __searchInput?: any // TODO(vim-ts): split provider vs manager once search is ported
+  __operationStack?: OperationStack
+  __cursorStyleManager?: CursorStyleManager
+  __sequentialPasteManager?: SequentialPasteManager
+  __scrollManager?: ScrollManager
+  __jumpList?: PositionHistory
+  __changeList?: PositionHistory
+  __swrap?: typeof swrap
+  __utils?: typeof utils
+  __globalState?: typeof globalState
+
+  // Single-character / macro input grab state.
+  __inputHandler?: InputHandler | null
+  __inputGrabListener?: ((key: Key) => boolean) | null
+  __leapInput?: InputProvider
+  __macros?: Record<string, Key[]>
+
   // Proxy propperties and methods
   // ===========================================================================
-  static get (editor) { return __vimStatesByEditor.get(editor) } // prettier-ignore
-  static set (editor, vimState) { return __vimStatesByEditor.set(editor, vimState) } // prettier-ignore
-  static has (editor) { return __vimStatesByEditor.has(editor) } // prettier-ignore
-  static delete (editor) { return __vimStatesByEditor.delete(editor) } // prettier-ignore
-  static forEach (fn) { return __vimStatesByEditor.forEach(fn) } // prettier-ignore
-  static clear () { return __vimStatesByEditor.clear() } // prettier-ignore
+  static get (editor: EditorModel): VimState | undefined { return __vimStatesByEditor.get(editor) } // prettier-ignore
+  static set (editor: EditorModel, vimState: VimState): Map<EditorModel, VimState> { return __vimStatesByEditor.set(editor, vimState) } // prettier-ignore
+  static has (editor: EditorModel): boolean { return __vimStatesByEditor.has(editor) } // prettier-ignore
+  static delete (editor: EditorModel): boolean { return __vimStatesByEditor.delete(editor) } // prettier-ignore
+  static forEach (fn: (vimState: VimState, editor: EditorModel) => void): void { return __vimStatesByEditor.forEach(fn) } // prettier-ignore
+  static clear (): void { return __vimStatesByEditor.clear() } // prettier-ignore
 
-  flash (...args) { this.flashManager.flash(...args) } // prettier-ignore
-  clearFlash () { this.__flashManager && this.flashManager.clearAllMarkers() } // prettier-ignore
-  updateStatusBar () { this.statusBarManager.update(this.mode, this.submode) } // prettier-ignore
-  setOperatorModifier (...args) { this.operationStack.setOperatorModifier(...args) } // prettier-ignore
-  subscribe (...args) { return this.operationStack.subscribe(...args) } // prettier-ignore
-  getCount () { return this.operationStack.getCount() } // prettier-ignore
-  hasCount () { return this.operationStack.hasCount() } // prettier-ignore
-  setCount (...args) { this.operationStack.setCount(...args) } // prettier-ignore
-  addToClassList (...args) { return this.operationStack.addToClassList(...args) } // prettier-ignore
-  requestScroll (...args) { this.scrollManager.requestScroll(...args) } // prettier-ignore
+  flash (...args: Parameters<FlashManager['flash']>): void { this.flashManager.flash(...args) } // prettier-ignore
+  clearFlash (): void { this.__flashManager && this.flashManager.clearAllMarkers() } // prettier-ignore
+  updateStatusBar (): void { this.statusBarManager.update(this.mode, this.submode) } // prettier-ignore
+  setOperatorModifier (...args: any[]): void { this.operationStack.setOperatorModifier(...args) } // prettier-ignore
+  subscribe (handler: any): any { return this.operationStack.subscribe(handler) } // prettier-ignore
+  getCount (): number | null { return this.operationStack.getCount() } // prettier-ignore
+  hasCount (): boolean { return this.operationStack.hasCount() } // prettier-ignore
+  setCount (number: number): void { this.operationStack.setCount(number) } // prettier-ignore
+  addToClassList (className: any): any { return this.operationStack.addToClassList(className) } // prettier-ignore
+  requestScroll (...args: Parameters<ScrollManager['requestScroll']>): void { this.scrollManager.requestScroll(...args) } // prettier-ignore
 
   // Lazy populated properties for fast package startup
   // =====================================================
-  load (file, instantiate = true) {
-    const lib = MANAGER_REGISTRY[file]
+  load (file: keyof typeof MANAGER_REGISTRY | string, instantiate = true): any {
+    const lib = MANAGER_REGISTRY[file as keyof typeof MANAGER_REGISTRY]
     if (!lib) throw new Error(`vim: manager not yet ported: ${file}`)
-    return instantiate ? new lib(this) : lib // eslint-disable-line new-cap
+    return instantiate ? new (lib as any)(this) : lib // eslint-disable-line new-cap
   }
-  get mark () { return this.__mark || (this.__mark = this.load('./mark-manager')) } // prettier-ignore
-  get register () { return this.__register || (this.__register = this.load('./register-manager')) } // prettier-ignore
-  get hover () { return this.__hover || (this.__hover = this.load('./hover-manager')) } // prettier-ignore
-  get hoverSearchCounter () { return this.__hoverSearchCounter || (this.__hoverSearchCounter = this.load('./hover-manager')) } // prettier-ignore
-  get searchHistory () { return this.__searchHistory || (this.__searchHistory = this.load('./search-history-manager')) } // prettier-ignore
-  get highlightSearch () { return this.__highlightSearch || (this.__highlightSearch = this.load('./highlight-search-manager')) } // prettier-ignore
-  get highlightFind () { return this.__highlightFind || (this.__highlightFind = this.load('./highlight-find-manager')) } // prettier-ignore
-  get persistentSelection () { return this.__persistentSelection || (this.__persistentSelection = this.load('./persistent-selection-manager')) } // prettier-ignore
-  get occurrenceManager () { return this.__occurrenceManager || (this.__occurrenceManager = this.load('./occurrence-manager')) } // prettier-ignore
-  get mutationManager () { return this.__mutationManager || (this.__mutationManager = this.load('./mutation-manager')) } // prettier-ignore
-  get flashManager () { return this.__flashManager || (this.__flashManager = this.load('./flash-manager')) } // prettier-ignore
-  get searchInput () { return this.__searchInput || (this.__searchInput = this.load('./search-input')) } // prettier-ignore
-  get operationStack () { return this.__operationStack || (this.__operationStack = this.load('./operation-stack')) } // prettier-ignore
-  get cursorStyleManager () { return this.__cursorStyleManager || (this.__cursorStyleManager = this.load('./cursor-style-manager')) } // prettier-ignore
-  get sequentialPasteManager () { return this.__sequentialPasteManager || (this.__sequentialPasteManager = this.load('./sequential-paste-manager')) } // prettier-ignore
-  get scrollManager () { return this.__scrollManager || (this.__scrollManager = this.load('./scroll-manager')) } // prettier-ignore
-  get jumpList () { return this.__jumpList || (this.__jumpList = new PositionHistory(this)) } // prettier-ignore
-  get changeList () { return this.__changeList || (this.__changeList = new PositionHistory(this)) } // prettier-ignore
-  get swrap () { return this.__swrap || (this.__swrap = this.load('./selection-wrapper', false)) } // prettier-ignore
-  get utils () { return this.__utils || (this.__utils = this.load('./utils', false)) } // prettier-ignore
-  get globalState () { return this.__globalState || (this.__globalState = this.load('./global-state', false)) } // prettier-ignore
-  get _ () { return this.constructor._ } // prettier-ignore
-  static get _ () { return underscorePlus } // prettier-ignore
+  get mark (): MarkManager { return this.__mark || (this.__mark = this.load('./mark-manager')) } // prettier-ignore
+  get register (): RegisterManager { return this.__register || (this.__register = this.load('./register-manager')) } // prettier-ignore
+  get hover (): HoverManager { return this.__hover || (this.__hover = this.load('./hover-manager')) } // prettier-ignore
+  get hoverSearchCounter (): HoverManager { return this.__hoverSearchCounter || (this.__hoverSearchCounter = this.load('./hover-manager')) } // prettier-ignore
+  get searchHistory (): any { return this.__searchHistory || (this.__searchHistory = this.load('./search-history-manager')) } // prettier-ignore
+  get highlightSearch (): any { return this.__highlightSearch || (this.__highlightSearch = this.load('./highlight-search-manager')) } // prettier-ignore
+  get highlightFind (): any { return this.__highlightFind || (this.__highlightFind = this.load('./highlight-find-manager')) } // prettier-ignore
+  get persistentSelection (): any { return this.__persistentSelection || (this.__persistentSelection = this.load('./persistent-selection-manager')) } // prettier-ignore
+  get occurrenceManager (): OccurrenceManager { return this.__occurrenceManager || (this.__occurrenceManager = this.load('./occurrence-manager')) } // prettier-ignore
+  get mutationManager (): MutationManager { return this.__mutationManager || (this.__mutationManager = this.load('./mutation-manager')) } // prettier-ignore
+  get flashManager (): FlashManager { return this.__flashManager || (this.__flashManager = this.load('./flash-manager')) } // prettier-ignore
+  get searchInput (): any { return this.__searchInput || (this.__searchInput = this.load('./search-input')) } // prettier-ignore
+  get operationStack (): OperationStack { return this.__operationStack || (this.__operationStack = this.load('./operation-stack')) } // prettier-ignore
+  get cursorStyleManager (): CursorStyleManager { return this.__cursorStyleManager || (this.__cursorStyleManager = this.load('./cursor-style-manager')) } // prettier-ignore
+  get sequentialPasteManager (): SequentialPasteManager { return this.__sequentialPasteManager || (this.__sequentialPasteManager = this.load('./sequential-paste-manager')) } // prettier-ignore
+  get scrollManager (): ScrollManager { return this.__scrollManager || (this.__scrollManager = this.load('./scroll-manager')) } // prettier-ignore
+  get jumpList (): PositionHistory { return this.__jumpList || (this.__jumpList = new PositionHistory(this)) } // prettier-ignore
+  get changeList (): PositionHistory { return this.__changeList || (this.__changeList = new PositionHistory(this)) } // prettier-ignore
+  get swrap (): typeof swrap { return this.__swrap || (this.__swrap = this.load('./selection-wrapper', false)) } // prettier-ignore
+  get utils (): typeof utils { return this.__utils || (this.__utils = this.load('./utils', false)) } // prettier-ignore
+  get globalState (): typeof globalState { return this.__globalState || (this.__globalState = this.load('./global-state', false)) } // prettier-ignore
+  get _ (): typeof underscorePlus { return (this.constructor as typeof VimState)._ } // prettier-ignore
+  static get _ (): typeof underscorePlus { return underscorePlus } // prettier-ignore
 
   // Atom command-registration statics removed: quilx registers vim commands and
   // keymaps through `quilx.commands`/`quilx.keymaps` (see the vim wiring module).
 
-  constructor (editor, statusBarManager) {
+  constructor (editor: EditorModel, statusBarManager: StatusBarManager) {
     this.editor = editor
     this.editorElement = editor.element
     this.statusBarManager = statusBarManager
@@ -131,88 +210,90 @@ export default class VimState {
     }
 
     editor.onDidDestroy(() => this.destroy())
-    this.constructor.set(editor, this)
+    ;(this.constructor as typeof VimState).set(editor, this)
   }
 
-  getConfig (param) {
+  getConfig (param: string): any {
     return settings.get(param)
   }
 
-  matchScopes (scopes) {
+  matchScopes (scopes: string[]): number | boolean {
     // HACK: length guard to avoid utils prop populated unnecessarily
-    return scopes.length && this.utils.matchScopes(this.editorElement, scopes)
+    // TODO(vim-ts): utils.matchScopes types its element as `{classList}`; EditorModel
+    // is the real arg in quilx (no classList) — cast until utils is ported.
+    return scopes.length && this.utils.matchScopes(this.editorElement as any, scopes)
   }
 
   // BlockwiseSelections
   // -------------------------
-  getBlockwiseSelections () {
+  getBlockwiseSelections (): any[] {
     return this.swrap.getBlockwiseSelections(this.editor)
   }
 
-  getLastBlockwiseSelection () {
+  getLastBlockwiseSelection (): any {
     return this.swrap.getLastBlockwiseSelections(this.editor)
   }
 
-  getBlockwiseSelectionsOrderedByBufferPosition () {
+  getBlockwiseSelectionsOrderedByBufferPosition (): any[] {
     return this.swrap.getBlockwiseSelectionsOrderedByBufferPosition(this.editor)
   }
 
-  clearBlockwiseSelections () {
+  clearBlockwiseSelections (): void {
     if (this.__swrap) this.swrap.clearBlockwiseSelections(this.editor)
   }
 
   // All subscriptions here is cleared on each operation finished.
   // -------------------------
-  onDidChangeSearch (fn) { return this.subscribe(this.searchInput.onDidChange(fn)) } // prettier-ignore
-  onDidConfirmSearch (fn) { return this.subscribe(this.searchInput.onDidConfirm(fn)) } // prettier-ignore
-  onDidCancelSearch (fn) { return this.subscribe(this.searchInput.onDidCancel(fn)) } // prettier-ignore
-  onDidCommandSearch (fn) { return this.subscribe(this.searchInput.onDidCommand(fn)) } // prettier-ignore
+  onDidChangeSearch (fn: EventCallback): DisposableType { return this.subscribe(this.searchInput.onDidChange(fn)) } // prettier-ignore
+  onDidConfirmSearch (fn: EventCallback): DisposableType { return this.subscribe(this.searchInput.onDidConfirm(fn)) } // prettier-ignore
+  onDidCancelSearch (fn: EventCallback): DisposableType { return this.subscribe(this.searchInput.onDidCancel(fn)) } // prettier-ignore
+  onDidCommandSearch (fn: EventCallback): DisposableType { return this.subscribe(this.searchInput.onDidCommand(fn)) } // prettier-ignore
 
-  onDidSetTarget (fn) { return this.subscribe(this.emitter.on('did-set-target', fn)) } // prettier-ignore
-  emitDidSetTarget (operator) { this.emitter.emit('did-set-target', operator) } // prettier-ignore
+  onDidSetTarget (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-set-target', fn)) } // prettier-ignore
+  emitDidSetTarget (operator: unknown): void { this.emitter.emit('did-set-target', operator) } // prettier-ignore
 
-  onWillSelectTarget (fn) { return this.subscribe(this.emitter.on('will-select-target', fn)) } // prettier-ignore
-  emitWillSelectTarget () { this.emitter.emit('will-select-target') } // prettier-ignore
+  onWillSelectTarget (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('will-select-target', fn)) } // prettier-ignore
+  emitWillSelectTarget (): void { this.emitter.emit('will-select-target') } // prettier-ignore
 
-  onDidSelectTarget (fn) { return this.subscribe(this.emitter.on('did-select-target', fn)) } // prettier-ignore
-  emitDidSelectTarget () { this.emitter.emit('did-select-target') } // prettier-ignore
+  onDidSelectTarget (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-select-target', fn)) } // prettier-ignore
+  emitDidSelectTarget (): void { this.emitter.emit('did-select-target') } // prettier-ignore
 
-  onDidFailSelectTarget (fn) { return this.subscribe(this.emitter.on('did-fail-select-target', fn)) } // prettier-ignore
-  emitDidFailSelectTarget () { this.emitter.emit('did-fail-select-target') } // prettier-ignore
+  onDidFailSelectTarget (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-fail-select-target', fn)) } // prettier-ignore
+  emitDidFailSelectTarget (): void { this.emitter.emit('did-fail-select-target') } // prettier-ignore
 
-  onWillFinishMutation (fn) { return this.subscribe(this.emitter.on('on-will-finish-mutation', fn)) } // prettier-ignore
-  emitWillFinishMutation () { this.emitter.emit('on-will-finish-mutation') } // prettier-ignore
+  onWillFinishMutation (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('on-will-finish-mutation', fn)) } // prettier-ignore
+  emitWillFinishMutation (): void { this.emitter.emit('on-will-finish-mutation') } // prettier-ignore
 
-  onDidFinishMutation (fn) { return this.subscribe(this.emitter.on('on-did-finish-mutation', fn)) } // prettier-ignore
-  emitDidFinishMutation () { this.emitter.emit('on-did-finish-mutation') } // prettier-ignore
+  onDidFinishMutation (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('on-did-finish-mutation', fn)) } // prettier-ignore
+  emitDidFinishMutation (): void { this.emitter.emit('on-did-finish-mutation') } // prettier-ignore
 
-  onDidFinishOperation (fn) { return this.subscribe(this.emitter.on('did-finish-operation', fn)) } // prettier-ignore
-  emitDidFinishOperation () { this.emitter.emit('did-finish-operation') } // prettier-ignore
+  onDidFinishOperation (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-finish-operation', fn)) } // prettier-ignore
+  emitDidFinishOperation (): void { this.emitter.emit('did-finish-operation') } // prettier-ignore
 
-  onDidResetOperationStack (fn) { return this.subscribe(this.emitter.on('did-reset-operation-stack', fn)) } // prettier-ignore
-  emitDidResetOperationStack () { this.emitter.emit('did-reset-operation-stack') } // prettier-ignore
+  onDidResetOperationStack (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-reset-operation-stack', fn)) } // prettier-ignore
+  emitDidResetOperationStack (): void { this.emitter.emit('did-reset-operation-stack') } // prettier-ignore
 
   // Search highlights are owned by the host editor's SearchController (the vmp
   // highlight-search manager is not ported), so reset-normal-mode signals the
   // host to clear them rather than touching globalState.
-  onDidRequestClearSearchHighlight (fn) { return this.subscribe(this.emitter.on('did-request-clear-search-highlight', fn)) } // prettier-ignore
-  emitDidRequestClearSearchHighlight () { this.emitter.emit('did-request-clear-search-highlight') } // prettier-ignore
+  onDidRequestClearSearchHighlight (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-request-clear-search-highlight', fn)) } // prettier-ignore
+  emitDidRequestClearSearchHighlight (): void { this.emitter.emit('did-request-clear-search-highlight') } // prettier-ignore
 
   // Events
   // -------------------------
-  onWillActivateMode (fn) { return this.emitter.on('will-activate-mode', fn) } // prettier-ignore
-  onDidActivateMode (fn) { return this.emitter.on('did-activate-mode', fn) } // prettier-ignore
-  onWillDeactivateMode (fn) { return this.emitter.on('will-deactivate-mode', fn) } // prettier-ignore
-  preemptWillDeactivateMode (fn) { return this.emitter.preempt('will-deactivate-mode', fn) } // prettier-ignore
-  onDidDeactivateMode (fn) { return this.emitter.on('did-deactivate-mode', fn) } // prettier-ignore
+  onWillActivateMode (fn: EventCallback): DisposableType { return this.emitter.on('will-activate-mode', fn) } // prettier-ignore
+  onDidActivateMode (fn: EventCallback): DisposableType { return this.emitter.on('did-activate-mode', fn) } // prettier-ignore
+  onWillDeactivateMode (fn: EventCallback): DisposableType { return this.emitter.on('will-deactivate-mode', fn) } // prettier-ignore
+  preemptWillDeactivateMode (fn: EventCallback): DisposableType { return this.emitter.preempt('will-deactivate-mode', fn) } // prettier-ignore
+  onDidDeactivateMode (fn: EventCallback): DisposableType { return this.emitter.on('did-deactivate-mode', fn) } // prettier-ignore
 
   // (Removed the deprecated `modeManager` grim shim — use vimState.onDid* directly.)
 
-  onDidFailToPushToOperationStack (fn) { return this.emitter.on('did-fail-to-push-to-operation-stack', fn) } // prettier-ignore
-  emitDidFailToPushToOperationStack () { this.emitter.emit('did-fail-to-push-to-operation-stack') } // prettier-ignore
-  onDidDestroy (fn) { return this.emitter.on('did-destroy', fn) } // prettier-ignore
-  onDidSetInputChar (fn) { return this.emitter.on('did-set-input-char', fn) } // prettier-ignore
-  emitDidSetInputChar (char) { this.emitter.emit('did-set-input-char', char) } // prettier-ignore
+  onDidFailToPushToOperationStack (fn: EventCallback): DisposableType { return this.emitter.on('did-fail-to-push-to-operation-stack', fn) } // prettier-ignore
+  emitDidFailToPushToOperationStack (): void { this.emitter.emit('did-fail-to-push-to-operation-stack') } // prettier-ignore
+  onDidDestroy (fn: EventCallback): DisposableType { return this.emitter.on('did-destroy', fn) } // prettier-ignore
+  onDidSetInputChar (fn: EventCallback): DisposableType { return this.emitter.on('did-set-input-char', fn) } // prettier-ignore
+  emitDidSetInputChar (char: string): void { this.emitter.emit('did-set-input-char', char) } // prettier-ignore
 
   // * `fn` {Function} to be called when mark was set.
   //   * `name` Name of mark such as 'a'.
@@ -222,18 +303,18 @@ export default class VimState {
   //
   //  Usage:
   //   onDidSetMark ({name, bufferPosition}) -> do something..
-  onDidSetMark (fn) {
+  onDidSetMark (fn: EventCallback): DisposableType {
     return this.emitter.on('did-set-mark', fn)
   }
 
-  isAlive () {
-    return this.constructor.has(this.editor)
+  isAlive (): boolean {
+    return (this.constructor as typeof VimState).has(this.editor)
   }
 
-  destroy () {
+  destroy (): void {
     if (!this.isAlive()) return
 
-    this.constructor.delete(this.editor)
+    (this.constructor as typeof VimState).delete(this.editor)
     this.subscriptions.dispose()
 
     if (this.editor.isAlive()) {
@@ -245,12 +326,14 @@ export default class VimState {
       // if (this.editor.component.getHiddenInput().readOnly) {
       //   this.editor.component.getHiddenInput().readOnly = false
       // }
-      this.editorElement.removeCssClass('vim-mode-plus', 'normal-mode')
+      // TODO(vim-ts): EditorModel.removeCssClass takes a single class; upstream
+      // passes two. Preserve runtime behavior, cast to satisfy the signature.
+      ;(this.editorElement.removeCssClass as (...classes: string[]) => void)('vim-mode-plus', 'normal-mode')
     }
     this.emitter.emit('did-destroy')
   }
 
-  haveSomeNonEmptySelection () {
+  haveSomeNonEmptySelection (): boolean {
     return this.editor.getSelections().some(selection => !selection.isEmpty())
   }
 
@@ -263,14 +346,14 @@ export default class VimState {
   // - This is NOT elegant solution, but there is no other better way.
   // - We cannot determine selection is eventually cleared or not within `editor.onDidChangeSelectionRange` event.
   // - Delaying, debouncing to minimize useless mode-shift is bad for UX, user see slight delay for cursor updated.
-  reconcileVisualModeWithActualSelection (shiftToNormalIfNoSelection = true) {
+  reconcileVisualModeWithActualSelection (shiftToNormalIfNoSelection = true): void {
     // This guard is somewhat verbose and duplicate, but I prefer duplication than increase chance of infinite loop.
     if (this.shouldIgnoreChangeSelection()) return
 
     this.ignoreSelectionChange = true
 
     const refreshCursorStyle = () => {
-      this.swrap.getSelections(this.editor).forEach($s => $s.saveProperties())
+      this.swrap.getSelections(this.editor).forEach(($s: any) => $s.saveProperties())
       this.cursorStyleManager.refresh()
     }
 
@@ -287,14 +370,14 @@ export default class VimState {
     this.ignoreSelectionChange = false
   }
 
-  shouldIgnoreChangeSelection () {
+  shouldIgnoreChangeSelection (): boolean | undefined {
     return (
       this.ignoreSelectionChange || this.mode === 'insert' || (this.__operationStack && this.operationStack.isRunning())
     )
   }
 
-  observeMouse () {
-    const nextMouseEventTable = {
+  observeMouse (): DisposableType {
+    const nextMouseEventTable: Record<string, string> = {
       'mousedown-capture': 'mousedown-bubble',
       'mousedown-bubble': 'mouseup',
       mouseup: 'mousedown-capture'
@@ -302,7 +385,7 @@ export default class VimState {
 
     // Why explicitly assure mouse-event lifecycle? see #830 for detail.
     let waitingMouseEvent = 'mousedown-capture'
-    const isWaiting = mouseEvent => {
+    const isWaiting = (mouseEvent: string): boolean => {
       const isValid = waitingMouseEvent === mouseEvent && !this.shouldIgnoreChangeSelection()
       if (isValid) waitingMouseEvent = nextMouseEventTable[mouseEvent]
       return isValid
@@ -313,7 +396,7 @@ export default class VimState {
     const onMouseDownCapture = () => {
       if (isWaiting('mousedown-capture')) {
         for (const selection of this.editor.getSelections()) {
-          selection.initialScreenRange = this.swrap(selection).getTailScreenRange()
+          ;(selection as any).initialScreenRange = this.swrap(selection).getTailScreenRange()
         }
       }
     }
@@ -324,7 +407,7 @@ export default class VimState {
           this.getBlockwiseSelections().forEach(bs => bs.skipNormalization())
         }
         for (const selection of this.editor.getSelections().filter(s => s.isEmpty())) {
-          selection.initialScreenRange = this.swrap(selection).getTailScreenRange()
+          ;(selection as any).initialScreenRange = this.swrap(selection).getTailScreenRange()
         }
         // For shilft+click which not involve mousemove event.
         this.reconcileVisualModeWithActualSelection(false) // Prevent auto-shift-to-normal-mode by passing `false`
@@ -352,15 +435,16 @@ export default class VimState {
   // What's this?
   // clear all selections and final cursor position becomes head of last selection.
   // editor.clearSelections() does not respect last selection's head, since it merge all selections before clearing.
-  clearSelections () {
+  clearSelections (): void {
     this.editor.setCursorBufferPosition(this.editor.getCursorBufferPosition())
   }
 
-  resetNormalMode (options = {}) {
+  resetNormalMode (options: { userInvocation?: boolean } = {}): void {
     this.clearBlockwiseSelections()
 
     if (options.userInvocation) {
-      this.operationStack.lastCommandName = null
+      // TODO(vim-ts): OperationStack.lastCommandName isn't a declared field yet.
+      ;(this.operationStack as any).lastCommandName = null
 
       if (this.editor.hasMultipleCursors()) {
         this.clearSelections()
@@ -378,7 +462,7 @@ export default class VimState {
     this.activate('normal')
   }
 
-  reset () {
+  reset (): void {
     // Reset each props only if it's already populated.
     this.__register && this.register.reset()
     this.__searchHistory && this.searchHistory.reset()
@@ -387,13 +471,13 @@ export default class VimState {
     this.__operationStack && this.operationStack.reset()
   }
 
-  isVisible () {
+  isVisible (): boolean {
     return this.utils.getVisibleEditors().includes(this.editor)
   }
 
   // FIXME: naming, updateLastSelectedInfo ?
-  updatePreviousSelection () {
-    let properties
+  updatePreviousSelection (): void {
+    let properties: any
 
     if (this.isMode('visual', 'blockwise')) {
       const blockwiseSelection = this.getLastBlockwiseSelection()
@@ -420,26 +504,26 @@ export default class VimState {
 
   // Persistent selection
   // -------------------------
-  hasPersistentSelections () {
+  hasPersistentSelections (): boolean {
     return this.__persistentSelection ? this.persistentSelection.hasMarkers() : false
   }
 
-  getPersistentSelectionBufferRanges () {
+  getPersistentSelectionBufferRanges (): any[] {
     return this.__persistentSelection ? this.persistentSelection.getMarkerBufferRanges() : []
   }
 
-  clearPersistentSelections () {
+  clearPersistentSelections (): void {
     if (this.__persistentSelection) this.persistentSelection.clearMarkers()
   }
 
   // Mode Managerment
   // =========================
-  isMode (mode, submode) {
+  isMode (mode: VimMode, submode?: VimSubmode): boolean {
     return mode === this.mode && (submode ? submode === this.submode : true)
   }
 
   // Use this method to change mode, DONT use other direct method.
-  activate (newMode, newSubmode = null) {
+  activate (newMode: VimMode, newSubmode: VimSubmode = null): void {
     if (newMode === 'visual' && !newSubmode) {
       throw new Error('vimState.activate("visual", null) is not allowed, specify submode as 2nd arg')
     }
@@ -495,10 +579,11 @@ export default class VimState {
       if (this.__swrap) this.swrap.clearProperties(this.editor)
     }
 
+    const CursorType = (this.editorElement.constructor as typeof EditorModel).CursorType
     this.editorElement.setCursorType(
       this.mode === 'insert' ?
-        this.editorElement.constructor.CursorType.BEAM :
-        this.editorElement.constructor.CursorType.BLOCK)
+        CursorType.BEAM :
+        CursorType.BLOCK)
 
     this.editorElement.addCssClass(`${this.mode}-mode`)
     if (this.submode) this.editorElement.addCssClass(this.submode)
@@ -512,7 +597,7 @@ export default class VimState {
     this.ignoreSelectionChange = false
   }
 
-  activateNormalMode () {
+  activateNormalMode (): void {
     this.reset()
     // Component is not necessary avaiable see #98.
     if (this.editorElement) {
@@ -532,7 +617,7 @@ export default class VimState {
     }
   }
 
-  activateInsertMode () {
+  activateInsertMode (): void {
     this.editorElement.setInputEnabled(true)
   }
 
@@ -551,13 +636,13 @@ export default class VimState {
   // - normalized selection: One column left selcted at selection end position
   // - When selectRight at end position of normalized-selection, it become un-normalized selection
   //   which is the range in visual-mode.
-  activateVisualMode (submode) {
+  activateVisualMode (submode: VimSubmode): DisposableType {
     const swrap = this.swrap
     swrap.saveProperties(this.editor)
     swrap.normalize(this.editor)
 
     for (const $selection of swrap.getSelections(this.editor)) {
-      $selection.applyWise(submode)
+      $selection.applyWise(submode as 'characterwise' | 'linewise' | 'blockwise')
     }
     if (submode === 'blockwise') this.getLastBlockwiseSelection().autoscroll()
 
@@ -565,21 +650,22 @@ export default class VimState {
       swrap.normalize(this.editor)
       if (this.submode === 'blockwise') swrap.setReversedState(this.editor, true)
       for (const selection of this.editor.getSelections()) {
-        selection.clear({autoscroll: false})
+        // TODO(vim-ts): Selection.clear() ignores the autoscroll option upstream passes.
+        ;(selection.clear as (options?: { autoscroll?: boolean }) => void)({autoscroll: false})
       }
     })
   }
 
   // Narrowed selection
   // -------------------------
-  updateNarrowedState () {
+  updateNarrowedState (): void {
     const isSingleRowSelection = this.isMode('visual', 'blockwise')
       ? this.getLastBlockwiseSelection().isSingleRow()
       : this.swrap(this.editor.getLastSelection()).isSingleRow()
     this.editorElement.toggleCssClass('is-narrowed', !isSingleRowSelection)
   }
 
-  isNarrowed () {
+  isNarrowed (): boolean {
     return this.editorElement.hasCssClass('is-narrowed')
   }
 
@@ -595,7 +681,7 @@ export default class VimState {
   // Only single-char input is supported — enough for f/t. Multi-char input
   // (search's `/`) lands with the custom search box.
 
-  focusInput (options = {}) {
+  focusInput (options: InputOptions = {}): void {
     const { charsMax = 1, purpose, onConfirm, onCancel } = options
     // Leap (`g s`) is fully host-driven: it reads its own chars, labels matches,
     // and hands back a target Point. Route it to the host's Leap.
@@ -616,31 +702,31 @@ export default class VimState {
   }
 
   /** Wire the multi-char (search) input provider — the SearchBar, in practice. */
-  setSearchInput (provider) {
+  setSearchInput (provider: InputProvider): void {
     this.__searchInput = provider
   }
 
   /** Wire the leap input provider — the host's Leap, in practice. */
-  setLeapInput (provider) {
+  setLeapInput (provider: InputProvider): void {
     this.__leapInput = provider
   }
 
   // Macros (q/@). Recorded keystrokes are stored per register letter; replay
   // re-dispatches them through the KeymapManager, except insert-mode printable
   // characters which are inserted directly (no real GTK event is synthesized).
-  saveMacro (register, keys) {
+  saveMacro (register: string, keys: Key[]): void {
     if (!this.__macros) this.__macros = {}
     this.__macros[register] = keys
   }
 
-  getMacro (register) {
+  getMacro (register: string): Key[] | undefined {
     return this.__macros && this.__macros[register]
   }
 
-  replayMacro (keys) {
+  replayMacro (keys: Key[]): void {
     for (const key of keys) {
       if (this.mode === 'insert' && this.isPrintableKey(key)) {
-        this.editor.insertText(key.string)
+        this.editor.insertText(key.string!)
       } else if (this.mode === 'insert' && (key.name === 'return' || key.name === 'KP_Enter')) {
         this.editor.insertText('\n')
       } else {
@@ -649,7 +735,7 @@ export default class VimState {
     }
   }
 
-  isPrintableKey (key) {
+  isPrintableKey (key: Key): boolean {
     return (
       !key.ctrl &&
       !key.alt &&
@@ -660,11 +746,11 @@ export default class VimState {
     )
   }
 
-  readChar ({ onConfirm, onCancel } = {}) {
+  readChar ({ onConfirm, onCancel }: InputHandler = {}): void {
     this.__inputHandler = { onConfirm, onCancel }
     this.editorElement.addCssClass('input-char-waiting')
 
-    const listener = key => {
+    const listener = (key: Key): boolean => {
       // Modifiers alone don't resolve the input — keep waiting (and let them
       // fall through; KeymapManager ignores modifier-only keys anyway).
       if (key.isModifier()) return false
@@ -679,17 +765,17 @@ export default class VimState {
 
   // Resolve a pending readChar/focusInput. Called by the key grab, or directly
   // (e.g. from tests) to inject input without a real keystroke.
-  setInputChar (char) {
+  setInputChar (char: string): void {
     const handler = this.__clearInput()
-    if (handler) handler.onConfirm(char)
+    if (handler) handler.onConfirm!(char)
   }
 
-  cancelInput () {
+  cancelInput (): void {
     const handler = this.__clearInput()
-    if (handler) handler.onCancel()
+    if (handler) handler.onCancel!()
   }
 
-  __clearInput () {
+  __clearInput (): InputHandler | null | undefined {
     if (this.__inputGrabListener) {
       quilx.keymaps.removeListener(this.__inputGrabListener)
       this.__inputGrabListener = null

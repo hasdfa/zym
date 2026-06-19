@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Base } from './base.js';
+import { Base } from './base.ts';
 
 // A throwaway operation subclass to exercise the registration + instance machinery.
 class SampleMotion extends Base {
@@ -22,7 +22,7 @@ test('getClass throws for an unregistered name', () => {
 
 test('getInstance constructs, assigns properties, and calls initialize', () => {
   SampleMotion.register();
-  const vimState = {};
+  const vimState = {} as any;
   const instance = Base.getInstance(vimState, 'SampleMotion', { count: 3 });
   assert.ok(instance instanceof SampleMotion);
   assert.equal(instance.vimState, vimState);
@@ -31,7 +31,7 @@ test('getInstance constructs, assigns properties, and calls initialize', () => {
 });
 
 test('operation-kind predicates and command-name derivation', () => {
-  const instance = new SampleMotion({});
+  const instance = new SampleMotion({} as any);
   assert.ok(instance.isMotion());
   assert.ok(!instance.isOperator());
   assert.ok(!instance.isTextObject());
@@ -41,9 +41,9 @@ test('operation-kind predicates and command-name derivation', () => {
 
 test('count machinery reads through the vimState proxy', () => {
   // defaultCount when vimState has no count
-  const a = new SampleMotion({ hasCount: () => false });
+  const a = new SampleMotion({ hasCount: () => false } as any);
   assert.equal(a.getCount(), 1);
   // vimState-provided count when present
-  const b = new SampleMotion({ hasCount: () => true, getCount: () => 5 });
+  const b = new SampleMotion({ hasCount: () => true, getCount: () => 5 } as any);
   assert.equal(b.getCount(), 5);
 });

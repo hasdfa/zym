@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../../gi.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { Range } from '../../../text/Range.ts';
-import { replaceTextInRangeViaDiff } from './utils.js';
+import { replaceTextInRangeViaDiff } from './utils.ts';
 
 Gtk.init();
 

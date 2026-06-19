@@ -8,6 +8,10 @@
  * selections backed by their own marks, painted as decorations). The operators
  * then iterate `editor.getSelections()` and mutate each row, unchanged.
  */
+import { Point } from '../../../text/Point.ts'
+import type { Range, RangeLike } from '../../../text/Range.ts'
+import type { Selection } from '../Selection.ts'
+import type { EditorModel } from '../EditorModel.ts'
 import {
   sortRanges,
   assertWithException,
@@ -15,42 +19,51 @@ import {
   getList,
   getLast,
   translateColumnOnHardTabEditor,
-} from './utils.js'
+} from './utils.ts'
 import settings from './settings.ts'
-import swrap from './selection-wrapper.js'
+import swrap from './selection-wrapper.ts'
+import type { SelectionProperties } from './selection-wrapper.ts'
 
-const blockwiseSelectionsByEditor = new Map()
+const blockwiseSelectionsByEditor = new Map<EditorModel, BlockwiseSelection[]>()
 
 export default class BlockwiseSelection {
-  static clearSelections (editor) {
+  needSkipNormalization: boolean
+  properties: Record<string, unknown>
+  selections: Selection[]
+  editor: EditorModel
+  goalColumn: number | null
+  reversed: boolean
+
+  static clearSelections (editor: EditorModel) {
     blockwiseSelectionsByEditor.delete(editor)
   }
 
-  static has (editor) {
+  static has (editor: EditorModel) {
     return blockwiseSelectionsByEditor.has(editor)
   }
 
-  static getSelections (editor) {
+  static getSelections (editor: EditorModel): BlockwiseSelection[] {
     return blockwiseSelectionsByEditor.get(editor) || []
   }
 
-  static getSelectionsOrderedByBufferPosition (editor) {
-    return this.getSelections(editor).sort((a, b) => a.getStartSelection().compare(b.getStartSelection()))
+  static getSelectionsOrderedByBufferPosition (editor: EditorModel): BlockwiseSelection[] {
+    // TODO(vim-ts): tighten — Selection.compare not yet on Selection model
+    return this.getSelections(editor).sort((a, b) => (a.getStartSelection() as any).compare(b.getStartSelection()))
   }
 
-  static getLastSelection (editor) {
+  static getLastSelection (editor: EditorModel): BlockwiseSelection | undefined {
     return getLast(blockwiseSelectionsByEditor.get(editor))
   }
 
-  static register (blockwiseSelection) {
+  static register (blockwiseSelection: BlockwiseSelection) {
     const {editor} = blockwiseSelection
     if (!this.has(editor)) {
       blockwiseSelectionsByEditor.set(editor, [])
     }
-    blockwiseSelectionsByEditor.get(editor).push(blockwiseSelection)
+    blockwiseSelectionsByEditor.get(editor)!.push(blockwiseSelection)
   }
 
-  constructor (selection) {
+  constructor (selection: Selection) {
     this.needSkipNormalization = false
     this.properties = {}
     this.selections = []
@@ -68,10 +81,10 @@ export default class BlockwiseSelection {
     this.goalColumn = selection.cursor.goalColumn
     this.reversed = selection.isReversed()
 
-    let start, end
-    let startColumn, endColumn, reversed
+    let start: Point, end: Point
+    let startColumn: number, endColumn: number, reversed: boolean
 
-    const {head, tail} = $selection.getProperties()
+    const {head, tail} = $selection.getProperties()!
     const isHardTabEditor = !editor.softTabs
     if (isHardTabEditor) {
       head.column = translateColumnOnHardTabEditor(editor, head.row, head.column, true)
@@ -101,7 +114,7 @@ export default class BlockwiseSelection {
       endColumn = end.column + 1
     }
 
-    const rangesToSelect = getList(start.row, end.row).map(row => {
+    const rangesToSelect: RangeLike[] = getList(start.row, end.row).map((row): RangeLike => {
       if (isHardTabEditor) {
         return [
           [row, translateColumnOnHardTabEditor(editor, row, startColumn, false)],
@@ -128,7 +141,7 @@ export default class BlockwiseSelection {
     }
 
     this.updateGoalColumn()
-    this.constructor.register(this)
+    ;(this.constructor as typeof BlockwiseSelection).register(this)
   }
 
   getSelections () {
@@ -158,10 +171,10 @@ export default class BlockwiseSelection {
     this.reversed = !this.reversed
   }
 
-  getProperties () {
+  getProperties (): SelectionProperties {
     return {
-      head: swrap(this.getHeadSelection()).getProperties().head,
-      tail: swrap(this.getTailSelection()).getProperties().tail
+      head: swrap(this.getHeadSelection()).getProperties()!.head,
+      tail: swrap(this.getTailSelection()).getProperties()!.tail
     }
   }
 
@@ -182,36 +195,36 @@ export default class BlockwiseSelection {
     return endRow - startRow + 1
   }
 
-  getStartSelection () {
+  getStartSelection (): Selection {
     return this.selections[0]
   }
 
-  getEndSelection () {
-    return getLast(this.selections)
+  getEndSelection (): Selection {
+    return getLast(this.selections)!
   }
 
-  getHeadSelection () {
+  getHeadSelection (): Selection {
     return this.isReversed() ? this.getStartSelection() : this.getEndSelection()
   }
 
-  getTailSelection () {
+  getTailSelection (): Selection {
     return this.isReversed() ? this.getEndSelection() : this.getStartSelection()
   }
 
-  getBufferRowRange () {
+  getBufferRowRange (): [number, number] {
     const startRow = this.getStartSelection().getBufferRowRange()[0]
     const endRow = this.getEndSelection().getBufferRowRange()[0]
     return [startRow, endRow]
   }
 
   // [NOTE] Used by plugin package vmp:move-selected-text
-  setSelectedBufferRanges (ranges, {reversed}) {
+  setSelectedBufferRanges (ranges: Range[], {reversed}: {reversed?: boolean}) {
     sortRanges(ranges)
 
     const head = this.getHeadSelection()
     this.removeSelections({except: head})
     const {goalColumn} = head.cursor
-    head.setBufferRange(ranges.shift(), {reversed})
+    head.setBufferRange(ranges.shift()!, {reversed})
     if (goalColumn != null && head.cursor.goalColumn == null) {
       head.cursor.goalColumn = goalColumn
     }
@@ -222,7 +235,7 @@ export default class BlockwiseSelection {
     this.updateGoalColumn()
   }
 
-  removeSelections ({except} = {}) {
+  removeSelections ({except}: {except?: Selection} = {}) {
     for (const selection of this.selections.slice()) {
       if (selection === except) continue
 
@@ -235,7 +248,7 @@ export default class BlockwiseSelection {
     }
   }
 
-  setHeadBufferPosition (point) {
+  setHeadBufferPosition (point: Point) {
     const head = this.getHeadSelection()
     this.removeSelections({except: head})
     head.cursor.setBufferPosition(point)
