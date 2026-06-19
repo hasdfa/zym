@@ -12,7 +12,8 @@ test('returns null when the query is not a subsequence', () => {
 });
 
 test('matching is case-insensitive and records positions in order', () => {
-  const match = fuzzyMatch('PIC', 'Picker.ts');
+  // With smartcase off, an uppercase query matches regardless of case.
+  const match = fuzzyMatch('PIC', 'Picker.ts', { smartcase: false });
   assert.ok(match);
   assert.deepEqual(match.positions, [0, 1, 2]);
 });
@@ -83,4 +84,32 @@ test('a typo match ranks below a clean match of the same query', () => {
   const clean = fuzzyMatch('test', 'test.ts', { maxTypos: 1 })!;
   const typo = fuzzyMatch('tesx', 'test.ts', { maxTypos: 1 })!;
   assert.ok(clean.score > typo.score);
+});
+
+test('smartcase: a lowercase query still matches case-insensitively', () => {
+  const match = fuzzyMatch('pic', 'Picker.ts');
+  assert.ok(match);
+  assert.deepEqual(match.positions, [0, 1, 2]);
+});
+
+test('smartcase: an uppercase letter makes the match case-sensitive', () => {
+  // "Pic" matches "Picker.ts" but not "epicker" (lowercase p).
+  assert.ok(fuzzyMatch('Pic', 'Picker.ts'));
+  assert.equal(fuzzyMatch('Pic', 'epicker.ts'), null);
+});
+
+test('smartcase: an uppercase query matches a same-case subsequence', () => {
+  const match = fuzzyMatch('TE', 'TextEditor')!;
+  assert.deepEqual(match.positions, [0, 4]);
+});
+
+test('smartcase can be disabled to force case-insensitive matching', () => {
+  assert.ok(fuzzyMatch('Pic', 'epicker.ts', { smartcase: false }));
+});
+
+test('smartcase applies under typo tolerance too', () => {
+  // "Twxt" → drop the stray "w" → "Txt", a case-sensitive subsequence of
+  // TextEditor; the lowercase-only "text" target should not match.
+  assert.ok(fuzzyMatch('Twxt', 'TextEditor', { maxTypos: 1 }));
+  assert.equal(fuzzyMatch('Twxt', 'the_next_thing', { maxTypos: 1 }), null);
 });
