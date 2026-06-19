@@ -1077,7 +1077,7 @@ export class TextEditor implements DocumentHost {
     overlay.addOverlay(this.textDecorations.underlineWidget); // squiggles live inside TextDecorations
 
     // The search/replace bar floats at the top-right; it adds itself to `overlay`.
-    this.searchBar = new SearchBar(overlay, this.search, this.view, { onInfo: this.onToast });
+    this.searchBar = new SearchBar(overlay, this.search, this.view);
 
     // Autocompletion: the popup floats in this overlay; sources are registered
     // here (buffer words + LSP — Copilot lands later). It is dismissed whenever

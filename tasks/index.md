@@ -260,3 +260,4 @@ See [agents.md](agents.md) for the architecture plan.
 - [ ] Agent configuration and customization (name, description, model, tools, etc), integration with other tools than claude.
 - [ ] Worktree integration: run agents in worktrees (**N agents per worktree**, not 1:1), group the list by worktree, re-root the editor when viewing one; review at worktree (`git diff`) vs per-agent (baseline) granularity; per-worktree keep/merge/discard when the last agent leaves
 - [ ] Cost/context meter (per-row `$cost · context%` via a `statusLine` hook); multi-agent orchestration (speculative)
+- [ ] **IDE integration (`claude --ide`)** — WebSocket MCP server so agents get live editor context and can call back to open files, show diffs, etc. See [ide-integration.md](ide-integration.md).

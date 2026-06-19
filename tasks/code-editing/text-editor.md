@@ -337,6 +337,52 @@ defer past the first frame or large-file guard; **startup** ~680ms = module load
 `preloadGrammars` (all grammars) ~230ms — lazy per-language load. `UnderlineOverlay` squiggles
 still redraw per frame under diagnostics (marginal).
 
+### Gutter rendering — the next native lever *(researched, not built)*
+
+GtkSourceView's author profiled exactly this; two findings reframe where the native scroll
+floor (above) actually sits:
+
+- **GTK4 caches the text's render nodes** (`GtkTextLineDisplay`), so scrolling *translates*
+  cached per-line nodes rather than re-rendering them — the text itself is cheap. The per-frame
+  native cost therefore concentrates in what *isn't* cached: the **gutter renderers** (a
+  `PangoLayout` per line, per renderer) and our overlay `DrawingArea`s (already optimized).
+  ([GtkSourceView Next](https://blogs.gnome.org/chergert/2020/09/22/gtksourceview-next/))
+- **Line numbers alone cost "double-digit CPU %"** during kinetic scroll, because each line's
+  number went through `PangoLayout` measure+render. The fix — cache digit `0–9` glyphs once,
+  build a `PangoGlyphString`, draw via `gsk_text_node_new()` instead of
+  `gtk_snapshot_render_layout()` — lives in GtkSourceView's **built-in** line-number renderer,
+  which **we bypass** (we use a custom `GtkSourceGutterRendererText` for fold-aware model→view
+  numbering). ([Faster Numbers](https://blogs.gnome.org/chergert/2024/01/20/faster-numbers/))
+
+Our main view stacks **four** `GtkSourceGutterRendererText` subclasses (line number + chevron
+`gutterRenderers.ts`, git bar `GitGutter.ts`, diagnostic glyph `DiagnosticsView.ts`). Per
+visible line, per frame, *each* does a `queryData` vfunc (C→JS) + `setMarkup` (Pango markup
+parse) + a `PangoLayout` build/render. We measured `queryData` at ~2µs (cheap — and overriding
+the vfunc already keeps us off the slow `query_data` GObject *signal*, per
+[Builder GTK4 Porting II](https://blogs.gnome.org/chergert/2022/04/29/builder-gtk-4-porting-continued/));
+the **`PangoLayout` cost is native + unmeasured** and is the part "Faster Numbers" removed.
+
+**Idea — collapse the renderers (combine the gutter models).** A shared per-view gutter
+aggregator (`line → { number, chevron, gitKind, diagSeverity }`) that the existing controllers
+write into, feeding **one** composite renderer that composes a single fixed-width markup string
+per line (monospace makes the column math exact: right-justify the number with leading spaces,
+`<span>` per element for color/font). That cuts `queryData` + markup-parse + `PangoLayout` from
+**4× to 1× per line**. The chevron is the only *interactive* element (its `activate` needs the
+clicked x-region, which the vfunc doesn't hand us), so the low-risk shape is **4→2**: keep the
+chevron its own tiny renderer, merge the three non-interactive ones. The `queryData` FFI saving
+is marginal (already cheap); the real prize is the **layout-count reduction**, still unmeasured.
+
+Orthogonal: the `gsk_text_node` digit-cache (a custom *base* `GtkSourceGutterRenderer` with a
+manual `snapshot`) makes the line-number layout itself nearly free while keeping fold-aware
+numbering — the maximal version, more work (hand-build a `PangoGlyphString` in node-gtk). *Not*
+applicable: the [PCRE2 + JIT](https://blogs.gnome.org/chergert/2020/09/30/gtksourceview-gets-a-jit/)
+work optimizes the `.lang` regex engine we don't use, and nothing in the blog touches the
+open/parse costs (those are our tree-sitter path).
+
+**Gate:** measure the gutter's native cost first (A/B: custom vs built-in `setShowLineNumbers`,
+or renderers disabled — we've only ever A/B'd the overlays). If it's a real chunk of the floor,
+the 4→2 collapse is the next change; pair with `gsk_text_node` only if numbers stay hot.
+
 ## Related friction evidence
 
 [inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),

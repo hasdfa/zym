@@ -90,16 +90,10 @@ const CASE: Record<CaseMode, { glyph: string; label: string }> = {
 };
 const CASE_ORDER: CaseMode[] = ['smart', 'sensitive', 'insensitive'];
 
-export interface SearchBarOptions {
-  /** Surface a one-line message (e.g. "Replaced 7"). */
-  onInfo?: (message: string) => void;
-}
-
 export class SearchBar {
   private readonly host: Overlay;
   private readonly controller: SearchController;
   private readonly view: SourceView;
-  private readonly onInfo: (message: string) => void;
 
   private readonly panel: InstanceType<typeof Gtk.Box>;
   private readonly inputGroup: InstanceType<typeof Gtk.Box>;
@@ -119,11 +113,10 @@ export class SearchBar {
   private historyStash = '';
   private applyingHistory = false;
 
-  constructor(host: Overlay, controller: SearchController, view: SourceView, options: SearchBarOptions = {}) {
+  constructor(host: Overlay, controller: SearchController, view: SourceView) {
     this.host = host;
     this.controller = controller;
     this.view = view;
-    this.onInfo = options.onInfo ?? (() => {});
 
     this.searchEntry = this.makeEntry('Search');
     this.searchEntry.on('changed', () => {
@@ -299,9 +292,10 @@ export class SearchBar {
   }
 
   private replaceAll(): void {
-    const n = this.controller.replaceAll(this.replaceEntry.getText());
+    // FIXME: enable info messaage
+    // const n = this.controller.replaceAll(this.replaceEntry.getText());
     this.render(this.controller.state);
-    this.onInfo(`Replaced ${n} ${n === 1 ? 'match' : 'matches'}`);
+    // this.onInfo(`Replaced ${n} ${n === 1 ? 'match' : 'matches'}`);
   }
 
   // --- behavior --------------------------------------------------------------
