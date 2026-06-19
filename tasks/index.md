@@ -7,6 +7,14 @@ The task documents should be updated as the implementation progresses, with note
 
 ## Architecture
 
+### UI
+
+- Components are built using GTK4 and libadwaita via node-gtk (in dev, linked to `../node-gtk`), and are styled using CSS.
+- Components should be one main component per file, in the `src/ui` directory.
+- Icons: use Nerd Font glyphs (bundled "Symbols Nerd Font Mono"), rendered as
+  text — `iconLabel()` / `Icons` in `src/ui/icons.ts`, or `fileIconGlyph()` for
+  file types. Do NOT use `Gio.ThemedIcon` / `Gtk.Image(iconName)`.
+
 ### Commands & keymaps
 
 See [commands-keymaps.md](commands-keymaps.md). Done: commands with
@@ -129,15 +137,7 @@ See [git/index.md](git/index.md) for the architecture and per-feature status.
   (`GitGutter.ts:177-184`). With many open editors/worktrees there are ~90
   `onChange` listeners across the pooled repos, so one working-tree change →
   `notify()` (`git.ts:510`) → dozens of gutters each re-`git show` → ~100 spawns.
-  Each `fork()` costs ~80ms under the bloated long-lived process (RSS-scaled, per
-  the `cli.ts` header), so a single notify stalls the GLib main thread for
-  seconds — measured as the dominant cost (CPU profile: 56% in `spawn`, 38% under
-  `notify`). **Fix:** only re-fetch a file's index/HEAD base blobs when *that
-  file's* index/HEAD entry actually changed (carry per-path index/HEAD blob OIDs
-  in the change signature), not on every notify; consider coalescing all gutters
-  into one `git diff` and/or moving git spawns off the main thread (persistent
-  git helper) so fork cost stops scaling with RSS. Root disease is the separate
-  native-memory leak (RSS ~3GB, glibc `[heap]`) that makes every fork expensive —
+  Each `fork()` scales with memory that makes every fork expensive —
   see [lifecycle-and-disposal.md](lifecycle-and-disposal.md).
 
 ## Code editing
