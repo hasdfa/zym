@@ -387,4 +387,4 @@ the 4→2 collapse is the next change; pair with `gsk_text_node` only if numbers
 
 [inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),
 [virtual-lines.md](virtual-lines.md), [decorations.md](decorations.md),
-[folding.md](folding.md), [diff.md](diff.md).
+[folding.md](folding.md), [diff.md](diff.md), [multibuffer.md](multibuffer.md).

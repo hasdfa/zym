@@ -101,5 +101,10 @@ Enabling diff folds disables tree-sitter syntax-fold discovery on that view.
 Remaining: more diff sources (staged / arbitrary commit / PR) and surfacing them —
 sequences with the Git workstream.
 
+The next-generation surface for these is a **continuous, multi-file, editable diff**
+(replacing `GitStagingView`'s accordion) — see
+[multibuffer.md](multibuffer.md), which also folds the per-pane syntax parse back
+onto the model.
+
 See [inline-widgets.md](inline-widgets.md) for the inline-block primitive (used by
 the staging chrome / peek, not by the current fold placeholder).
