@@ -223,7 +223,9 @@ export class CompletionController {
     return items
       .map((item) => {
         const text = item.filterText ?? item.label;
-        const match = prefix === '' ? { score: 0, positions: [] } : fuzzyMatch(prefix, text, { maxTypos: 1 });
+        // Completion stays case-insensitive (smartcase is the picker's behavior).
+        const match =
+          prefix === '' ? { score: 0, positions: [] } : fuzzyMatch(prefix, text, { maxTypos: 1, smartcase: false });
         if (!match) return null;
         // Highlight positions must index into the displayed `label`. They already
         // do when matching `label` directly; if a source matched a distinct
@@ -231,7 +233,7 @@ export class CompletionController {
         const positions =
           text === item.label
             ? match.positions
-            : (prefix === '' ? [] : (fuzzyMatch(prefix, item.label)?.positions ?? []));
+            : (prefix === '' ? [] : (fuzzyMatch(prefix, item.label, { smartcase: false })?.positions ?? []));
         return { item, score: match.score, positions };
       })
       .filter((entry): entry is { item: CompletionItem; score: number; positions: number[] } => entry !== null)

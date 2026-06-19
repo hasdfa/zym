@@ -33,6 +33,11 @@ Core pieces:
 - [x] Space leader; `.has-text-input` releases `space` in entries/terminal/insert mode
 - [x] Command palette with descriptions, formatted labels, and a shortcut column (alphabetical order)
 - [x] Palette search matches name **and** description, with name matches ranked first (`boostFrom`)
+- [x] Picker matching (`src/ui/fuzzyMatch.ts`, fzy port) is **smartcase** by
+  default: a lowercase query matches case-insensitively, but any uppercase
+  letter in the query opts into a case-sensitive match. Toggle via the
+  `smartcase` `FuzzyOptions` flag (completion sets it `false` to stay
+  case-insensitive).
 - [x] Command `when` predicate — the palette dims (and no-ops) commands not currently applicable
 - [x] Window always in the active-element chain, so window-level bindings fire even with no focus
 

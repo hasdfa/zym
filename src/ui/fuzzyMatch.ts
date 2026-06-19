@@ -15,6 +15,11 @@
  *     higher, so filename hits outrank directory hits.
  *   - `maxTypos`: allow up to N query characters to go unmatched (a heavily
  *     penalised fallback), so a small typo still finds its target.
+ *
+ * Matching is case-insensitive by default, but `smartcase` (on by default)
+ * makes it case-sensitive as soon as the query contains an uppercase letter —
+ * the familiar editor convention where a lowercase query matches anything but
+ * `Foo` only matches `Foo`.
  */
 
 export interface FuzzyMatch {
@@ -29,6 +34,11 @@ export interface FuzzyOptions {
   boostFrom?: number;
   /** Max query chars allowed to go unmatched for a typo-tolerant fallback. */
   maxTypos?: number;
+  /**
+   * Case-sensitive when the query contains an uppercase letter, otherwise
+   * case-insensitive. Defaults to `true`. Set `false` to always ignore case.
+   */
+  smartcase?: boolean;
 }
 
 // fzy's scoring weights (see jhawthorn/fzy match.h). Scores are small floats; a
@@ -56,21 +66,29 @@ export function fuzzyMatch(query: string, text: string, options: FuzzyOptions = 
   if (query.length === 0) return { score: 0, positions: [] };
   const boostFrom = options.boostFrom ?? Number.POSITIVE_INFINITY;
   const maxTypos = options.maxTypos ?? 0;
+  // Smartcase (on by default): an uppercase letter in the query opts into a
+  // case-sensitive match; an all-lowercase query stays case-insensitive.
+  const caseSensitive = (options.smartcase ?? true) && /[A-Z]/.test(query);
 
-  const exact = fzyMatch(query, text, boostFrom);
+  const exact = fzyMatch(query, text, boostFrom, caseSensitive);
   if (exact) return exact;
   if (maxTypos <= 0) return null;
-  return approxMatch(query, text, boostFrom, maxTypos);
+  return approxMatch(query, text, boostFrom, maxTypos, caseSensitive);
 }
 
 /** Stock fzy: requires `query` to be a strict subsequence of `text`. */
-function fzyMatch(query: string, text: string, boostFrom: number): FuzzyMatch | null {
+function fzyMatch(
+  query: string,
+  text: string,
+  boostFrom: number,
+  caseSensitive: boolean,
+): FuzzyMatch | null {
   const m = query.length;
   const n = text.length;
   if (m > n) return null;
 
-  const needle = query.toLowerCase();
-  const haystack = text.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const haystack = caseSensitive ? text : text.toLowerCase();
 
   // Cheap reject + exact-length shortcut before allocating the DP matrices.
   for (let i = 0, j = 0; i < m; i++) {
@@ -159,15 +177,19 @@ function approxMatch(
   text: string,
   boostFrom: number,
   maxTypos: number,
+  caseSensitive: boolean,
 ): FuzzyMatch | null {
   let best: FuzzyMatch | null = null;
   for (let k = 0; k < query.length; k++) {
     const reduced = query.slice(0, k) + query.slice(k + 1);
     if (reduced.length === 0) continue;
+    // Dropping a query char never changes the smartcase decision the caller
+    // already made, so carry `caseSensitive` through rather than re-deriving it.
     const match =
       maxTypos > 1
-        ? fuzzyMatch(reduced, text, { boostFrom, maxTypos: maxTypos - 1 })
-        : fzyMatch(reduced, text, boostFrom);
+        ? fzyMatch(reduced, text, boostFrom, caseSensitive) ??
+          approxMatch(reduced, text, boostFrom, maxTypos - 1, caseSensitive)
+        : fzyMatch(reduced, text, boostFrom, caseSensitive);
     if (match && (!best || match.score > best.score)) best = match;
   }
   if (!best) return null;
