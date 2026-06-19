@@ -41,6 +41,16 @@ export interface DiffMultiBuffer {
   sources: Map<string, string[]>;
   /** Source key → the path whose grammar highlights it. */
   language: Map<string, string>;
+  /** Widget-header mode only: where each file's header widget anchors (the view row its content
+   *  starts on, since no header/blank rows are emitted into the buffer). */
+  headerAnchors: Array<{ path: string; label: string; viewRow: number }>;
+}
+
+export interface DiffLayoutOptions {
+  /** `'block'` (default) emits a filename header text row + a blank separator per file;
+   *  `'widget'` emits neither (the surface draws a header widget above each file via
+   *  `headerAnchors`), so the filename isn't navigable buffer text. */
+  headers?: 'block' | 'widget';
 }
 
 const newKey = (path: string): string => `new:${path}`;
@@ -54,13 +64,15 @@ const CONTEXT = 3;
 const MIN_ELIDE = 2;
 
 /** Assemble the windowed diff projection for `files`. `cwd` (optional) relativizes labels. */
-export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string): DiffMultiBuffer {
+export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: DiffLayoutOptions = {}): DiffMultiBuffer {
+  const widgetHeaders = opts.headers === 'widget';
   const items: Item[] = [];
   const rowKinds: DiffRowKind[] = [];
   const oldNums: (number | null)[] = [];
   const newNums: (number | null)[] = [];
   const sources = new Map<string, string[]>();
   const language = new Map<string, string>();
+  const headerAnchors: DiffMultiBuffer['headerAnchors'] = [];
   const split = (text: string): string[] => text.split('\n');
   // Emit one row: its kind + the old/new line numbers it carries.
   const block = (kind: DiffRowKind): void => {
@@ -79,13 +91,19 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string): DiffMulti
     language.set(nKey, file.path);
     language.set(oKey, file.path);
 
-    if (fileIndex > 0) {
-      items.push({ type: 'block', block: { kind: 'blank', text: '' } });
-      block('blank');
-    }
     const label = file.label ?? (cwd ? Path.relative(cwd, file.path) : Path.basename(file.path));
-    items.push({ type: 'block', block: { kind: 'header', text: label } });
-    block('header');
+    if (widgetHeaders) {
+      // No header/blank rows in the buffer — the surface anchors a header widget above the row
+      // the file's content starts on (recorded now, before its first row is emitted).
+      headerAnchors.push({ path: file.path, label, viewRow: rowKinds.length });
+    } else {
+      if (fileIndex > 0) {
+        items.push({ type: 'block', block: { kind: 'blank', text: '' } });
+        block('blank');
+      }
+      items.push({ type: 'block', block: { kind: 'header', text: label } });
+      block('header');
+    }
 
     const recs = diffRows(oldLines, newLines);
 
@@ -137,7 +155,7 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string): DiffMulti
     }
   });
 
-  return { items, rowKinds, oldNums, newNums, sources, language };
+  return { items, rowKinds, oldNums, newNums, sources, language, headerAnchors };
 }
 
 function gapLabel(count: number): string {

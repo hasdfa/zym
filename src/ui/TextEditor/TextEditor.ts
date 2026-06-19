@@ -1803,8 +1803,9 @@ export class TextEditor implements DocumentHost {
     this.document.onTitleChange(callback);
   }
 
-  /** Subscribe to modified-state changes (the document's modified flag toggling). */
+  /** Subscribe to modified-state changes (the document's modified flag toggling). Returns a
+   *  disposer. */
   onModifiedChange(callback: () => void) {
-    this.document.onModifiedChange(callback);
+    return this.document.onModifiedChange(callback);
   }
 }

@@ -2251,11 +2251,13 @@ export class AppWindow {
       documents: this.documents,
       onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
     });
+    const title = () => (view.isModified() ? `${Icons.modified} ${Icons.git}  Diff` : `${Icons.git}  Diff`);
     const child = this.workbench.center.add(view.root, {
-      title: `${Icons.git}  Diff`,
+      title: title(),
       requireTabBar: true,
     });
     this.diffMultibufferViews.set(view.root, view); // disposeChild tears it down on close
+    view.onModifiedChange(() => child.setTitle(title())); // show the unsaved marker on edit/save
     child.select();
     view.focus();
   }

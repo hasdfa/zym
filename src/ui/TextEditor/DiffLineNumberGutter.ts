@@ -18,15 +18,32 @@ import { theme } from '../../theme/theme.ts';
 
 const COLOR = theme.ui.editor.lineNumber;
 
+/** Split a `#rrggbb(aa)` color into a Pango `background` color + a `background_alpha` percentage
+ *  (Pango markup's `background` ignores alpha; the alpha rides in `background_alpha`). */
+function pangoBackground(color: string): { rgb: string; alphaPct: number } {
+  const hex = color.replace('#', '');
+  const alpha = hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1;
+  return { rgb: `#${hex.slice(0, 6)}`, alphaPct: Math.max(1, Math.round(alpha * 100)) };
+}
+
 class DiffLineNumberRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw. (line is 0-based.)
   labels!: string[];
   viewToModel!: (line: number) => number;
+  // Per-row cell background (`#rrggbbaa`) or null — added/removed rows tint their side's column.
+  backgrounds: (string | null)[] | null = null;
 
   queryData(_lines: any, line: number) {
     const model = this.viewToModel ? this.viewToModel(line) : line;
     const label = this.labels?.[model] ?? '';
-    this.setMarkup(`<span foreground="${COLOR}">${label || ' '}</span>`, -1);
+    const bg = this.backgrounds?.[model] ?? null;
+    let attrs = `foreground="${COLOR}"`;
+    if (bg) {
+      const { rgb, alphaPct } = pangoBackground(bg);
+      // The space-padded label spans the column width, so the background reads as a full band.
+      attrs = `background="${rgb}" background_alpha="${alphaPct}%" ${attrs}`;
+    }
+    this.setMarkup(`<span ${attrs}>${label || ' '}</span>`, -1);
   }
 }
 registerClass(DiffLineNumberRenderer);
@@ -35,21 +52,30 @@ export class DiffLineNumberGutter {
   private readonly view: SourceView;
   private readonly renderer: DiffLineNumberRenderer;
 
-  /** `position` orders the gutter columns L→R (chevron 0, line numbers, then +/−). */
-  constructor(view: SourceView, labels: string[], viewToModel: ((line: number) => number) | undefined, position: number) {
+  /** `position` orders the gutter columns L→R (chevron 0, line numbers, then +/−). `backgrounds`
+   *  (optional, indexed like `labels`) tints added/removed rows' cells. */
+  constructor(
+    view: SourceView,
+    labels: string[],
+    viewToModel: ((line: number) => number) | undefined,
+    position: number,
+    backgrounds?: (string | null)[],
+  ) {
     this.view = view;
     this.renderer = new DiffLineNumberRenderer();
-    (this.renderer as any).labels = labels;
-    (this.renderer as any).viewToModel = viewToModel ?? ((line: number) => line);
+    this.renderer .labels = labels;
+    this.renderer.viewToModel = viewToModel ?? ((line: number) => line);
+    this.renderer.backgrounds = backgrounds ?? null;
     this.renderer.setXpad(4);
-    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, position);
+    (this.view.getGutter(Gtk.TextWindowType.LEFT) as any).insert(this.renderer, position);
 
     this.primeWidth(labels);
   }
 
-  /** Swap the per-row labels (after a re-diff re-flows the rows) and repaint. */
-  setLabels(labels: string[]): void {
+  /** Swap the per-row labels + cell backgrounds (after a re-diff re-flows the rows) and repaint. */
+  setData(labels: string[], backgrounds?: (string | null)[]): void {
     (this.renderer as any).labels = labels;
+    this.renderer.backgrounds = backgrounds ?? null;
     this.primeWidth(labels);
     (this.renderer as any).queueDraw?.();
   }

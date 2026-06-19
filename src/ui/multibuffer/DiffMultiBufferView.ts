@@ -16,6 +16,7 @@
  *     re-materialize), so phantom rows appear/disappear without a flash or a caret jump.
  */
 import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
+import { theme } from '../../theme/theme.ts';
 import { TextEditor } from '../TextEditor/TextEditor.ts';
 import { Document } from '../TextEditor/Document.ts';
 import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
@@ -26,6 +27,8 @@ import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
 import { applyDiffDecorations } from '../TextEditor/applyDiffDecorations.ts';
 import { DiffLineNumberGutter } from '../TextEditor/DiffLineNumberGutter.ts';
 import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './diffMultiBuffer.ts';
+import { buildHeaderWidget } from './MultiBufferHeader.ts';
+import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
 
 export interface DiffMultiBufferOptions {
   /** Changed files: base (old/HEAD) + current (new/working) content. */
@@ -51,6 +54,15 @@ function lineLabels(nums: readonly (number | null)[]): string[] {
   return nums.map((n) => (n === null ? '' : String(n).padStart(width)));
 }
 
+/** Per-row gutter cell tints: the old column reddens removed rows, the new column greens added
+ *  rows (the stronger `*Word` tint, so the gutter reads a bit deeper than the line background).
+ *  Context rows (both numbers present) stay untinted. */
+function gutterBg(dmb: DiffMultiBuffer, side: 'old' | 'new'): (string | null)[] {
+  const want = side === 'old' ? 'removed' : 'added';
+  const color = side === 'old' ? theme.ui.diff.removedWord : theme.ui.diff.addedWord;
+  return dmb.rowKinds.map((kind) => (kind === want ? color : null));
+}
+
 interface SourceEntry {
   buffer: SourceBuffer;
   syntax: DocumentSyntax;
@@ -66,11 +78,14 @@ export class DiffMultiBufferView {
   private readonly sources = new Map<string, SourceEntry>();
   private readonly projectionView: ProjectionView;
   private readonly lineNumbers: DiffLineNumberGutter[] = [];
+  private readonly headerHandles: BlockDecorationHandle[] = [];
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
   private reDiffTimer: NodeJS.Timeout | null = null;
   private suppressReDiff = false;
+  private readonly modifiedHandlers: Array<() => void> = [];
+  private readonly modifiedUnsubs: Array<() => void> = [];
   private disposed = false;
 
   private get projection(): ViewProjection {
@@ -109,21 +124,29 @@ export class DiffMultiBufferView {
 
     if (this.editable) {
       this.editor.model.setEditableCheck((s, e) => this.projection.isViewRangeEditable(s, e));
+      // A row-count reverse-sync (undo / external) can't be re-flowed by window arithmetic on a
+      // diff (new-side + phantom segments interleave), so re-derive the diff from scratch instead.
+      this.projectionView.setResyncHandler(() => this.reDiff());
     }
 
     this.applyDecorations(dmb);
 
     const view = this.editor.sourceView;
     this.lineNumbers = [
-      new DiffLineNumberGutter(view, lineLabels(dmb.oldNums), undefined, 1),
-      new DiffLineNumberGutter(view, lineLabels(dmb.newNums), undefined, 2),
+      new DiffLineNumberGutter(view, lineLabels(dmb.oldNums), undefined, 1, gutterBg(dmb, 'old')),
+      new DiffLineNumberGutter(view, lineLabels(dmb.newNums), undefined, 2, gutterBg(dmb, 'new')),
     ];
 
+    this.installHeaders(dmb);
     this.installNavigation();
     if (this.editable) {
       // Re-diff after the new side settles: the live Document already has the edit (write-through),
       // so recompute the windowed diff and re-flow the view with a minimal splice.
       this.editor.model.onDidChangeText(() => this.scheduleReDiff());
+      // Surface each new-side file's modified state as one event (for the tab's unsaved marker).
+      for (const entry of this.sources.values()) {
+        if (entry.document) this.modifiedUnsubs.push(entry.document.onModifiedChange(() => this.emitModified()));
+      }
     }
     // Materializing the buffer (setText) leaves the caret at the END; start at the top.
     this.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
@@ -133,7 +156,17 @@ export class DiffMultiBufferView {
    *  Document's text when editable, else the snapshot passed in). */
   private buildDiff(): DiffMultiBuffer {
     const files = this.files.map((f) => ({ ...f, newText: this.currentNewText(f) }));
-    return buildDiffMultiBuffer(files, this.cwd);
+    // Filename headers are widgets (not navigable buffer text), anchored above each file's rows.
+    return buildDiffMultiBuffer(files, this.cwd, { headers: 'widget' });
+  }
+
+  /** Anchor a filename-header widget above each file's first row (the search-view pattern). The
+   *  anchor mark tracks the row across edits; clicking jumps to the file. */
+  private installHeaders(dmb: DiffMultiBuffer): void {
+    for (const h of dmb.headerAnchors) {
+      const widget = buildHeaderWidget(h.label, h.path, () => this.onActivate?.({ path: h.path, row: 0 }));
+      this.headerHandles.push(this.editor.inlineBlocks.add({ line: h.viewRow, widget, placement: 'above' }));
+    }
   }
 
   private currentNewText(file: DiffFile): string {
@@ -181,6 +214,11 @@ export class DiffMultiBufferView {
    *  minimal splice — phantom/removed rows appear/disappear without a whole-buffer flash. */
   private reDiff(): void {
     if (this.disposed) return;
+    // Anchor the caret to its SOURCE position: the reflow re-aligns rows (e.g. a just-typed line
+    // is re-classified as added and moves past the removed block), so a view-row caret would be
+    // left pointing at a different (often phantom) row — and edits would then land there.
+    const caret = this.editor.model.getCursorBufferPosition();
+    const anchor = this.projection.viewToSource(caret.row, caret.column);
     const dmb = this.buildDiff();
     this.suppressReDiff = true; // retarget's view edits must not re-trigger a re-diff
     try {
@@ -189,8 +227,16 @@ export class DiffMultiBufferView {
       this.suppressReDiff = false;
     }
     this.applyDecorations(dmb);
-    this.lineNumbers[0]?.setLabels(lineLabels(dmb.oldNums));
-    this.lineNumbers[1]?.setLabels(lineLabels(dmb.newNums));
+    this.lineNumbers[0]?.setData(lineLabels(dmb.oldNums), gutterBg(dmb, 'old'));
+    this.lineNumbers[1]?.setData(lineLabels(dmb.newNums), gutterBg(dmb, 'new'));
+    // retarget swapped rows but didn't repaint — re-highlight + re-style the gap rows, else
+    // spliced sections lose their syntax colors and the `⋯ unchanged` styling.
+    this.editor.repaintSyntax();
+    // Restore the caret to where its source position now shows (it followed the reflow).
+    if (anchor.kind === 'source') {
+      const pos = this.projection.sourceToView(anchor.sourceKey, anchor.row, anchor.column);
+      if (pos) this.editor.model.setCursorBufferPosition(pos);
+    }
   }
 
   /** Added/removed line backgrounds from the per-row diff kinds (header/blank/gap/context get
@@ -259,6 +305,15 @@ export class DiffMultiBufferView {
     for (const entry of this.sources.values()) if (entry.document?.isModified()) entry.document.save();
   }
 
+  /** Subscribe to changes in this diff's unsaved state (any edited new-side file). For the tab's
+   *  modified marker. */
+  onModifiedChange(callback: () => void): void {
+    this.modifiedHandlers.push(callback);
+  }
+  private emitModified(): void {
+    for (const cb of this.modifiedHandlers) cb();
+  }
+
   focus(): void {
     this.editor.focus();
   }
@@ -268,6 +323,10 @@ export class DiffMultiBufferView {
     this.disposed = true;
     if (this.reDiffTimer) clearTimeout(this.reDiffTimer);
     this.reDiffTimer = null;
+    for (const unsub of this.modifiedUnsubs) unsub(); // detach from the (possibly shared) Documents
+    this.modifiedUnsubs.length = 0;
+    for (const handle of this.headerHandles) handle.remove();
+    this.headerHandles.length = 0;
     for (const gutter of this.lineNumbers) gutter.dispose();
     this.projectionView.dispose();
     for (const entry of this.sources.values()) {

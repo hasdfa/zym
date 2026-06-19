@@ -544,29 +544,43 @@ export class ProjectionView {
   // A non-identity source change settled: catch the projection up to the mutated sources. Two
   // strengths, both deferred to a microtask so the source's own signal handlers all run first
   // (the source mutates AFTER its 'insert-text' / 'delete-range'):
-  //   - REMAP (no re-materialize): the view was already mutated incrementally to match (the
-  //     reverse-sync handler mirrored the exact edit), so only the coordinate map must catch up
-  //     with the now-settled source rows. No setText → no whole-buffer flash, no cursor reset.
-  //   - REBUILD (re-materialize): the view text itself must be regenerated because the edit
-  //     can't be mirrored cleanly (an external edit crossing a shown region boundary). Rare.
-  // A rebuild requested in the same tick wins (it subsumes a remap).
+  //   - REMAP (coord map only): the view was already mutated incrementally to match (the
+  //     reverse-sync handler mirrored the exact edit), so only the coordinate map must catch up.
+  //   - RESYNC (re-flow the view): the edit couldn't be mirrored cleanly — e.g. a new-side
+  //     row-count change with phantom (old-side) rows interleaved in the view, so the deleted
+  //     source rows aren't a contiguous view range (a diff undo). Re-flow via `retarget`: a
+  //     minimal line-diff splice, NOT a whole-buffer `setText` — so no flash, cursor preserved.
+  // A resync requested in the same tick wins (it subsumes a remap).
   private syncScheduled = false;
-  private needsMaterialize = false;
+  private needsResync = false;
   private scheduleRemap(): void { this.scheduleSync(false); }
   private scheduleRebuild(): void { this.scheduleSync(true); }
-  private scheduleSync(materialize: boolean): void {
+  private scheduleSync(resync: boolean): void {
     if (this.disposed) return;
-    if (materialize) this.needsMaterialize = true;
+    if (resync) this.needsResync = true;
     if (this.syncScheduled) return;
     this.syncScheduled = true;
     queueMicrotask(() => {
       this.syncScheduled = false;
-      const rebuild = this.needsMaterialize;
-      this.needsMaterialize = false;
+      const resync = this.needsResync;
+      this.needsResync = false;
       if (this.disposed) return;
-      if (rebuild) this.rebuild();
-      else this.projection = ViewProjection.build(this.items, (seg) => this.sourceLines(seg));
+      // REMAP just swaps the coordinate map (the view was already mirrored). RESYNC re-flows the
+      // view: when the owner is a COMPUTED surface (a diff), `adjustItems` can't maintain its
+      // segment structure through a row-count change that crosses segment boundaries (an undo
+      // over fragmented new-side/phantom segments), so delegate to the owner to re-derive the
+      // items from scratch; otherwise (search) retarget the window-adjusted items.
+      if (!resync) this.projection = ViewProjection.build(this.items, (seg) => this.sourceLines(seg));
+      else if (this.resyncHandler) this.resyncHandler();
+      else this.retarget(this.items);
     });
+  }
+
+  // Optional owner hook: re-derive the item list + re-flow the view (a diff's re-diff). Set by a
+  // surface whose structure is computed (not maintainable by `adjustItems`) — see scheduleSync.
+  private resyncHandler: (() => void) | null = null;
+  setResyncHandler(fn: () => void): void {
+    this.resyncHandler = fn;
   }
 
   /** Rebuild the projection from the current source state + re-materialize. Used when the

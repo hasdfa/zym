@@ -29,6 +29,7 @@ function tmpFile(content: string): string {
   return p;
 }
 
+const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 const linesOf = (mbv: DiffMultiBufferView) => mbv.editor.getText().split('\n');
 const flushReDiff = () => new Promise((r) => setTimeout(r, 200)); // > REDIFF_DEBOUNCE_MS
 
@@ -49,6 +50,32 @@ test('editable diff: opens showing the removed (phantom) + added rows, caret at 
   assert.ok(lines.includes('line2'), 'the removed line shows as a phantom row');
   assert.ok(lines.includes('CHANGED'), 'the added line shows');
   assert.deepEqual(mbv.editor.model.getCursorBufferPosition().toArray(), [0, 0]);
+  mbv.dispose();
+});
+
+test('editable diff: filename headers are widgets — no header text row in the buffer', () => {
+  const { mbv } = setup();
+  assert.ok(!linesOf(mbv).some((l) => l.includes('f.ts')), 'the filename never appears as a buffer row');
+  mbv.dispose();
+});
+
+test('editable diff: a re-diff that re-flows rows keeps the caret on its SOURCE line', async () => {
+  // Insert a blank line before the removed lines; the re-diff re-aligns it past the removed block.
+  // The caret must follow its source row (the blank), not stay at a stale view row (a phantom).
+  const oldText = 'a\nB1\nB2\nc\n';
+  const path = tmpFile('a\nc\n');
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText: 'a\nc\n' }] });
+  const aRow = linesOf(mbv).indexOf('a');
+  // 'o'-like: open a line after `a`, caret on the new blank.
+  mbv.editor.model.setTextInBufferRange(new Range(new Point(aRow, 1), new Point(aRow, 1)), '\n');
+  mbv.editor.model.setCursorBufferPosition({ row: aRow + 1, column: 0 });
+  await flushReDiff();
+  const caret = mbv.editor.model.getCursorBufferPosition();
+  assert.equal(linesOf(mbv)[caret.row], '', 'caret followed the reflow onto the blank line (not a phantom)');
+  // And an edit at the caret lands on the right source row.
+  mbv.editor.model.setTextInBufferRange(new Range(caret, caret), 'Z');
+  assert.equal(registry.find(path)!.getText(), 'a\nZ\nc\n', 'the edit landed on the inserted line, not a shifted row');
   mbv.dispose();
 });
 
@@ -82,6 +109,51 @@ test('editable diff: re-diff re-flows the view — making new == old removes the
   // `line2` removed row and the `CHANGED` added row are both gone.
   assert.ok(!lines.includes('CHANGED'), 'the edited-away change no longer shows');
   assert.ok(lines.some((l) => l.includes('unchanged')), 're-diff re-flowed: the now-unchanged file is elided');
+  mbv.dispose();
+});
+
+test('editable diff: onModifiedChange fires on edit and on save (for the tab marker)', () => {
+  const { mbv } = setup();
+  let modified: boolean | null = null;
+  mbv.onModifiedChange(() => { modified = mbv.isModified(); });
+  assert.equal(mbv.isModified(), false, 'clean on open');
+
+  const changedRow = linesOf(mbv).indexOf('CHANGED');
+  mbv.editor.model.setTextInBufferRange(new Range(new Point(changedRow, 0), new Point(changedRow, 0)), 'Y');
+  assert.equal(modified, true, 'fired with modified=true after the edit');
+
+  mbv.save();
+  assert.equal(modified, false, 'fired with modified=false after save');
+  mbv.dispose();
+});
+
+test('editable diff: undo of an insert before removed lines splices (no whole-buffer flash)', async () => {
+  // Removed lines (B1,B2) interleave the view, so a new-side undo isn't a contiguous view range
+  // → the reverse-sync resync path. It must SPLICE, not setText (which flashed + jumped the caret).
+  const oldText = 'a\nB1\nB2\nc\n';
+  const path = tmpFile('a\nc\n'); // new side: B1,B2 removed
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText: 'a\nc\n' }] });
+  const buf = (mbv.editor.sourceView as any).getBuffer();
+
+  const aRow = linesOf(mbv).indexOf('a');
+  assert.ok(aRow >= 0, 'found the context row before the removed lines');
+  // A decoration on the stable `a` row — survives a minimal splice, wiped by a whole-buffer setText.
+  const tag = new Gtk.TextTag({ name: 'test:deco' } as any);
+  buf.getTagTable().add(tag);
+  buf.applyTag(tag, asIter(buf.getIterAtLine(aRow)), asIter(buf.getIterAtLineOffset(aRow, 1)));
+  const hasDeco = () => asIter(buf.getIterAtLine(aRow)).hasTag(tag); // col 0, inside the [0,1) tag
+  assert.equal(hasDeco(), true);
+
+  // 'o'-like: open a line just after `a` (just before the removed lines).
+  mbv.editor.model.setTextInBufferRange(new Range(new Point(aRow, 1), new Point(aRow, 1)), '\nNEW');
+  await flushReDiff();
+  assert.equal(registry.find(path)!.getText(), 'a\nNEW\nc\n', 'the insert wrote through');
+
+  mbv.editor.model.undo();
+  await flushReDiff();
+  assert.equal(registry.find(path)!.getText(), 'a\nc\n', 'undo reverted the new side');
+  assert.equal(hasDeco(), true, 'decoration survived undo — spliced, NOT re-materialized (no flash)');
   mbv.dispose();
 });
 

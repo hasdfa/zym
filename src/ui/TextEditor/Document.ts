@@ -194,8 +194,14 @@ export class Document {
     return this.model.getModified();
   }
 
-  onModifiedChange(callback: () => void): void {
+  /** Subscribe to modified-state changes; returns a disposer (a shared Document can outlive a
+   *  given observer — e.g. a diff multibuffer — so the observer must be able to detach). */
+  onModifiedChange(callback: () => void): () => void {
     this.modifiedHandlers.push(callback);
+    return () => {
+      const i = this.modifiedHandlers.indexOf(callback);
+      if (i >= 0) this.modifiedHandlers.splice(i, 1);
+    };
   }
 
   /** Sync a model edit to the language server (a bulk setText / load is covered by
