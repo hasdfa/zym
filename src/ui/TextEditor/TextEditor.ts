@@ -23,6 +23,7 @@ import { Document, type DocumentHost } from './Document.ts';
 import { InlayHintController } from './InlayHintController.ts';
 import { attachVim } from './vim/index.ts';
 import { quilx } from '../../quilx.ts';
+import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
 import { DiagnosticsView } from '../../lsp/diagnostics/DiagnosticsView.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
 import { fonts } from '../../fonts.ts';
@@ -296,12 +297,25 @@ export class TextEditor implements DocumentHost {
   // tearing down twice must be a no-op.
   private disposed = false;
 
-  // Disconnects this editor's handler on the *global* Adw.StyleManager. It must
-  // run from dispose() (the tab-close teardown path), not only the widget
-  // `destroy` signal: on close the root is detached, not destroyed, so `destroy`
-  // never fires — and the global singleton would otherwise pin the whole editor
-  // (buffer, tree-sitter tree, widgets) via the captured closure forever.
-  private detachStyleScheme?: () => void;
+  // Every node-gtk GObject signal handler and global-registry subscription
+  // (config/keymaps) this editor installs goes in here. node-gtk roots each
+  // connected signal's JS callback in a Global handle for the GObject's lifetime,
+  // and that closure captures `this` — so a SINGLE un-disconnected handler pins the
+  // whole editor (buffer, tree-sitter tree, widgets) forever, exactly the way the
+  // Adw.StyleManager handler did. The owned widgets are detached (not destroyed) on
+  // tab close, so they never finalize on their own — `dispose()` must cut these by
+  // hand. Disposed as a unit; see tasks/lifecycle-and-disposal.md. Use `connect()`
+  // for signals and `subs.add(...)` for registry Disposables.
+  private readonly subs = new CompositeDisposable();
+
+  /** Connect a node-gtk GObject signal and register its disconnect in `subs`, so
+   *  `dispose()` releases the Global handle that would otherwise pin this editor.
+   *  Use for EVERY signal whose handler reaches back to `this` (see `subs`). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- node-gtk GObjects expose `.on`/`.off` via an EventEmitter shim not in their typings.
+  private connect(obj: any, signal: string, handler: (...args: any[]) => unknown): void {
+    obj.on(signal, handler);
+    this.subs.add(new Disposable(() => obj.off(signal, handler)));
+  }
 
   // The document this editor is a *view* onto (owns the text model + undo + file I/O +
   // LSP). `this.buffer` is this view's own GtkSource.Buffer, kept in sync by the
@@ -492,7 +506,9 @@ export class TextEditor implements DocumentHost {
     }
     // Fallback teardown: the tab-close path disposes us explicitly, but also tear
     // down if the widget is destroyed by any other route (dispose() is idempotent).
-    this.root.on('destroy', () => this.dispose());
+    // Tracked so dispose() disconnects it — left connected it would itself pin the
+    // editor via root's Global handle (the closure captures `this`).
+    this.connect(this.root, 'destroy', () => this.dispose());
   }
 
   // --- Buffer-only mode ------------------------------------------------------
@@ -534,7 +550,7 @@ export class TextEditor implements DocumentHost {
       // view is focused (not the search bar) and before a newline is inserted.
       const keys = new Gtk.EventControllerKey();
       keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
-      keys.on('key-pressed', (keyval: number, _keycode: number, state: number) => {
+      this.connect(keys, 'key-pressed', (keyval: number, _keycode: number, state: number) => {
         const ctrl = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
         if (ctrl && (keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter)) {
           mode.onSubmit!(this.getText());
@@ -630,7 +646,7 @@ export class TextEditor implements DocumentHost {
       () => this.lspDocument ?? null,
       (line) => this.document.viewLineForModelLine(this.buffer, line),
     );
-    quilx.config.observe('editor.inlayHints', () => void this.inlayHints.refresh());
+    this.subs.add(quilx.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
     // A fold open/close shifts the view lines under the model-positioned decorations
     // (diagnostic squiggles + gutter + error lens, inlay hints) — re-place them at the
     // new view positions (cached, no LSP round-trip).
@@ -646,14 +662,16 @@ export class TextEditor implements DocumentHost {
     });
     // The hover popover is anchored to a fixed cursor position; dismiss it once
     // the cursor moves or the view scrolls (both no-ops when nothing is showing).
-    this.buffer.on('notify::cursor-position', () => {
+    this.connect(this.buffer, 'notify::cursor-position', () => {
       this.dismissHover();
       if (this.signatureOverlay.visible) this.scheduleSignatureRequest();
     });
-    this.view.getVadjustment()?.on('value-changed', () => {
-      this.dismissHover();
-      this.dismissSignature();
-    });
+    const hoverVadj = this.view.getVadjustment();
+    if (hoverVadj)
+      this.connect(hoverVadj, 'value-changed', () => {
+        this.dismissHover();
+        this.dismissSignature();
+      });
     // Leaving insert mode (or destroying) closes the signature card.
     this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {
       if (mode !== 'insert') this.dismissSignature();
@@ -666,8 +684,13 @@ export class TextEditor implements DocumentHost {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.detachStyleScheme?.(); // drop the global StyleManager handler (else it pins this editor)
-    this.detachStyleScheme = undefined;
+    // Disconnect every node-gtk GObject signal + global-registry subscription this
+    // editor installed (the StyleManager / config / keymap-listener handlers, the
+    // cursor/focus/key/scroll/banner signals). Each is a Global handle whose closure
+    // captures `this`; left connected, ANY ONE pins the whole editor — and the owned
+    // widgets are detached, not destroyed, on tab close, so they never finalize to
+    // release these on their own. This is the dominant native-memory leak. See `subs`.
+    this.subs.dispose();
     if (this.mapHandler) {
       (this.view as any).off('map', this.mapHandler);
       this.mapHandler = null;
@@ -681,13 +704,10 @@ export class TextEditor implements DocumentHost {
     else this.document.dispose();
     this.diagnostics?.dispose(); // undefined for a buffer-only editor (installLsp skipped)
     this.inlayHints?.dispose();
-    // The gutter holds a git.onChange subscription living in GitRepo.listeners.
-    // Its disposal is also wired to the root's `destroy` signal, but tab-close
-    // DETACHES the root (never destroys it — see the `disposed` note above), so
-    // that signal doesn't fire. Dispose it here too, else the subscription pins
-    // the gutter → view → buffer → this editor forever (a native-memory leak that
-    // also keeps closed editors in the git notify fan-out). Null it so the
-    // `destroy` fallback no-ops instead of double-disposing.
+    // The gutter holds a git.onChange subscription living in GitRepo.listeners; tab-close
+    // DETACHES the root (never destroys it), so a `destroy` handler wouldn't fire. Dispose
+    // it explicitly, else the subscription pins the gutter → view → buffer → this editor
+    // forever (and keeps closed editors in the git notify fan-out).
     this.gitGutter?.dispose();
     this.gitGutter = null;
   }
@@ -785,7 +805,7 @@ export class TextEditor implements DocumentHost {
     );
     // When this editor is shown again (tab activated / dock revealed), run any
     // refresh deferred while it was off-screen so the bars catch up.
-    this.root.on('map', () => this.gitGutter?.notifyVisible());
+    this.connect(this.root, 'map', () => this.gitGutter?.notifyVisible());
     // Let the vim layer reach the gutter's hunk ranges (for `]h`/`[h`). Hunk rows are
     // MODEL/file rows; translate to view rows (folded ones collapse onto one line).
     this.editorModel.setHunkProvider(() => [
@@ -793,7 +813,8 @@ export class TextEditor implements DocumentHost {
     ]);
     // Live updates: re-diff the buffer (debounced) on every edit.
     this.editorModel.onDidChangeText(() => this.gitGutter?.scheduleUpdate());
-    this.root.on('destroy', () => this.gitGutter?.dispose());
+    // dispose() disposes the gutter explicitly (and nulls it); no `destroy` handler
+    // here — `destroy` never fires on tab-close detach, and it would itself pin us.
 
     // Hunk-level staging on the hunk under the cursor (gutter bars). Bound to the
     // `space h …` leader; the gutter does the index `git apply`, revert is an
@@ -948,7 +969,7 @@ export class TextEditor implements DocumentHost {
       }
       return ++frames < 120; // keep trying ~2s then give up
     };
-    (this.view as any).on('map', () => (this.view as any).addTickCallback(tick));
+    this.connect(this.view, 'map', () => (this.view as any).addTickCallback(tick));
   }
 
   /** Whether an inline peek is currently open. */
@@ -1022,11 +1043,12 @@ export class TextEditor implements DocumentHost {
       let wrapEnabled = quilx.config.get('editor.softWrap') !== false;
       this.applyWrap = () =>
         view.setWrapMode(this.longLineMode || !wrapEnabled ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
-      const wrapSub = quilx.config.observe('editor.softWrap', (v) => {
-        wrapEnabled = v !== false;
-        this.applyWrap();
-      });
-      view.on('destroy', () => wrapSub.dispose());
+      this.subs.add(
+        quilx.config.observe('editor.softWrap', (v) => {
+          wrapEnabled = v !== false;
+          this.applyWrap();
+        }),
+      );
     }
     return view;
   }
@@ -1068,15 +1090,18 @@ export class TextEditor implements DocumentHost {
           applyPastEnd();
         }, 0);
       };
-      vadj.on('changed', scheduleApply);
-      this.view.on('destroy', () => {
-        if (pendingId) clearTimeout(pendingId);
-      });
-      const pastEndSub = quilx.config.observe('editor.scrollPastEnd', (v) => {
-        pastEndEnabled = v !== false;
-        applyPastEnd();
-      });
-      this.view.on('destroy', () => pastEndSub.dispose());
+      this.connect(vadj, 'changed', scheduleApply);
+      this.subs.add(
+        new Disposable(() => {
+          if (pendingId) clearTimeout(pendingId);
+        }),
+      );
+      this.subs.add(
+        quilx.config.observe('editor.scrollPastEnd', (v) => {
+          pastEndEnabled = v !== false;
+          applyPastEnd();
+        }),
+      );
     }
 
     // Overlay the scrolled view with the editor-local widgets: the diagnostic
@@ -1173,7 +1198,7 @@ export class TextEditor implements DocumentHost {
       this.placeholderLabel.setMarginTop(6);
       this.placeholderLabel.setCanTarget(false);
       overlay.addOverlay(this.placeholderLabel);
-      this.buffer.on('changed', () =>
+      this.connect(this.buffer, 'changed', () =>
         this.placeholderLabel!.setVisible(this.buffer.getCharCount() === 0),
       );
     }
@@ -1186,17 +1211,16 @@ export class TextEditor implements DocumentHost {
       const minimap = new GtkSource.Map();
       minimap.setView(this.view);
       box.append(minimap);
-      const sub = quilx.config.observe('editor.minimap', (v) => minimap.setVisible(v === true));
-      box.on('destroy', () => sub.dispose());
+      this.subs.add(quilx.config.observe('editor.minimap', (v) => minimap.setVisible(v === true)));
     }
 
     // Unified info banner: disk-change warnings, load errors, and save errors all use
     // this single Revealer. `showBanner` sets the color class, message, and optional
     // action button; `hideBanner` collapses it. A custom Revealer+Box rather than
     // Adw.Banner so we control the layout (full-width tint, centered content).
-    this.bannerButton.on('clicked', () => this.bannerAction?.());
+    this.connect(this.bannerButton, 'clicked', () => this.bannerAction?.());
     const bannerDismiss = new Gtk.Button({ label: 'Dismiss' });
-    bannerDismiss.on('clicked', () => this.banner.setRevealChild(false));
+    this.connect(bannerDismiss, 'clicked', () => this.banner.setRevealChild(false));
     const bannerContent = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 16 });
     bannerContent.setHexpand(true);
     bannerContent.setHalign(Gtk.Align.CENTER);
@@ -1225,13 +1249,13 @@ export class TextEditor implements DocumentHost {
     this.editorModel.onExtraCursors = (carets) => this.renderExtraCarets(carets);
 
     const focus = new Gtk.EventControllerFocus();
-    focus.on('enter', () => {
+    this.connect(focus, 'enter', () => {
       this.editorModel.setFocused(true);
       // This view is now the active one of its (possibly shared) document, so the LSP
       // cursor / dialogs / load-save reactions route here.
       this.document.setActiveHost(this);
     });
-    focus.on('leave', () => {
+    this.connect(focus, 'leave', () => {
       // The search bar is part of the editor: while it holds focus, keep the
       // active caret rather than switching to the unfocused (inactive) one.
       if (this.searchBar.isOpen) return;
@@ -1311,18 +1335,19 @@ export class TextEditor implements DocumentHost {
     // The listener is global (it sees every key in every widget), so it must be
     // removed when this view goes away — otherwise each opened editor leaks a
     // listener that runs on every keystroke for the life of the process.
-    const sub = quilx.keymaps.addListener((key) => {
-      if (!(this.view as any).hasFocus() || this.vimState.mode === 'insert') return false;
-      if (!key.isModifier() && key.string && key.string.charCodeAt(0) >= 0x20) {
-        this.setShowcmd(this.showcmd + key.string);
-      }
-      // Recompute after dispatch: if nothing is pending, the command resolved.
-      queueMicrotask(() => {
-        if (this.isVimIdle()) this.setShowcmd('');
-      });
-      return false; // never consume; this is display-only
-    });
-    this.root.on('destroy', () => sub.dispose());
+    this.subs.add(
+      quilx.keymaps.addListener((key) => {
+        if (!(this.view as any).hasFocus() || this.vimState.mode === 'insert') return false;
+        if (!key.isModifier() && key.string && key.string.charCodeAt(0) >= 0x20) {
+          this.setShowcmd(this.showcmd + key.string);
+        }
+        // Recompute after dispatch: if nothing is pending, the command resolved.
+        queueMicrotask(() => {
+          if (this.isVimIdle()) this.setShowcmd('');
+        });
+        return false; // never consume; this is display-only
+      }),
+    );
   }
 
   private isVimIdle(): boolean {
@@ -1361,7 +1386,7 @@ export class TextEditor implements DocumentHost {
     // Keep the cursor visible: if a move (w, /, G, a click, …) lands it inside a
     // folded body, open the fold (Vim's `foldopen`). Closing a fold moves the
     // cursor to the still-visible header, so this never fights `fold:close`.
-    this.buffer.on('notify::cursor-position', () => {
+    this.connect(this.buffer, 'notify::cursor-position', () => {
       this.syntax.revealLine(this.editorModel.getCursorBufferPosition().row);
     });
   }
@@ -1404,7 +1429,7 @@ export class TextEditor implements DocumentHost {
     // unbound keys to fall through here.
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
-    keys.on('key-pressed', (keyval: number, _keycode: number, state: number) => {
+    this.connect(keys, 'key-pressed', (keyval: number, _keycode: number, state: number) => {
       if (this.vimState.mode !== 'insert') return false;
       if ((state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)) !== 0) return false;
       // Replace (R) submode: overwrite the character under the cursor on type, and
@@ -1468,12 +1493,11 @@ export class TextEditor implements DocumentHost {
     apply();
     // styleManager is the global Adw.StyleManager singleton; without disconnecting
     // on teardown it would keep this editor (its buffer, tree-sitter tree, widgets)
-    // alive forever, leaking one whole editor per file ever opened. Disconnect from
-    // dispose() (the reliable teardown — the root is detached, not destroyed, on tab
-    // close, so the `destroy` fallback never fires); idempotent, so both are safe.
-    styleManager.on('notify::dark', apply);
-    this.detachStyleScheme = () => styleManager.off('notify::dark', apply);
-    this.root.on('destroy', () => this.detachStyleScheme?.());
+    // alive forever, leaking one whole editor per file ever opened. `connect` routes
+    // the disconnect through `subs`, torn down in dispose() (the reliable teardown —
+    // the root is detached, not destroyed, on tab close, so a `destroy` handler never
+    // fires).
+    this.connect(styleManager, 'notify::dark', apply);
   }
 
   // --- File operations -------------------------------------------------------
