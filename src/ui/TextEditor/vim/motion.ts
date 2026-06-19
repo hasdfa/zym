@@ -4,47 +4,59 @@
 // Motion logic is unchanged.
 import { Point } from '../../../text/Point.ts'
 import { Range } from '../../../text/Range.ts'
-import { Base } from './base.js'
+import { Base } from './base.ts'
+import type { Cursor } from '../Cursor.ts'
+import type { Selection } from '../Selection.ts'
+
+/** A buffer wise — how a motion/selection spans the buffer. */
+type Wise = 'characterwise' | 'linewise' | 'blockwise'
+/** Direction discriminant used across the motion subclasses. */
+type Direction = 'next' | 'previous' | 'up' | 'down' | null
 
 class Motion extends Base {
   static operationKind = 'motion'
   static command = false
 
-  operator = null
+  // `operator` is dynamically dispatched (`.instanceof`, `.name`); Base types it
+  // `Operator | undefined`, motions also assign `null`, so keep it loose.
+  operator: any = null // TODO(vim-ts): tighten
   inclusive = false
-  wise = 'characterwise'
+  wise: Wise = 'characterwise'
   jump = false
   verticalMotion = false
-  moveSucceeded = null
+  moveSucceeded: boolean | null = null
   moveSuccessOnLinewise = false
   selectSucceeded = false
   requireInput = false
-  caseSensitivityKind = null
+  caseSensitivityKind: string | null = null
 
-  isReady () {
+  // moveCursor is the per-cursor primitive every concrete motion overrides.
+  moveCursor (_cursor: Cursor): void {}
+
+  isReady (): boolean {
     return !this.requireInput || this.input != null
   }
 
-  isLinewise () {
+  isLinewise (): boolean {
     return this.wise === 'linewise'
   }
 
-  isBlockwise () {
+  isBlockwise (): boolean {
     return this.wise === 'blockwise'
   }
 
-  forceWise (wise) {
+  forceWise (wise: Wise): void {
     if (wise === 'characterwise') {
       this.inclusive = this.wise === 'linewise' ? false : !this.inclusive
     }
     this.wise = wise
   }
 
-  resetState () {
+  resetState (): void {
     this.selectSucceeded = false
   }
 
-  moveWithSaveJump (cursor) {
+  moveWithSaveJump (cursor: Cursor): void {
     const originalPosition = this.jump && cursor.isLastCursor() ? cursor.getBufferPosition() : undefined
 
     this.moveCursor(cursor)
@@ -58,7 +70,7 @@ class Motion extends Base {
     }
   }
 
-  execute () {
+  execute (): void {
     if (this.operator) {
       this.select()
     } else {
@@ -71,7 +83,7 @@ class Motion extends Base {
   }
 
   // NOTE: selection is already "normalized" before this function is called.
-  select () {
+  select (): void {
     // need to care was visual for `.` repeated.
     const isOrWasVisual = this.operator.instanceof('SelectBase') || this.name === 'CurrentSelection'
 
@@ -96,9 +108,9 @@ class Motion extends Base {
     }
   }
 
-  setCursorBufferRow (cursor, row, options) {
+  setCursorBufferRow (cursor: Cursor, row: number, options?: any): void {
     if (this.verticalMotion && !this.getConfig('stayOnVerticalMotion')) {
-      cursor.setBufferPosition(this.getFirstCharacterPositionForBufferRow(row), options)
+      cursor.setBufferPosition(this.getFirstCharacterPositionForBufferRow(row)!, options)
     } else {
       this.utils.setBufferRow(cursor, row, options)
     }
@@ -106,7 +118,7 @@ class Motion extends Base {
 
   // Call callback count times.
   // But break iteration when cursor position did not change before/after callback.
-  moveCursorCountTimes (cursor, fn) {
+  moveCursorCountTimes (cursor: Cursor, fn: (state: {count: number, isFinal: boolean, stop: () => void}) => void): void {
     let oldPosition = cursor.getBufferPosition()
     this.countTimes(this.getCount(), state => {
       fn(state)
@@ -116,7 +128,7 @@ class Motion extends Base {
     })
   }
 
-  isCaseSensitive (term) {
+  isCaseSensitive (term: string): boolean {
     if (this.getConfig(`useSmartcaseFor${this.caseSensitivityKind}`)) {
       return term.search(/[A-Z]/) !== -1
     } else {
@@ -124,7 +136,7 @@ class Motion extends Base {
     }
   }
 
-  getLastResortPoint (direction) {
+  getLastResortPoint (direction: Direction): Point {
     if (direction === 'next') {
       return this.getVimEofBufferPosition()
     } else {
@@ -136,12 +148,12 @@ class Motion extends Base {
 // Used as operator's target in visual-mode.
 class CurrentSelection extends Motion {
   static command = false
-  selectionExtent = null
-  blockwiseSelectionExtent = null
+  selectionExtent: any = null // TODO(vim-ts): tighten (PointLike extent)
+  blockwiseSelectionExtent: any = null // TODO(vim-ts): tighten
   inclusive = true
-  pointInfoByCursor = new Map()
+  pointInfoByCursor = new Map<Cursor, {cursorPosition: Point, startOfSelection: Point}>()
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     if (this.mode === 'visual') {
       this.selectionExtent = this.isBlockwise()
         ? this.swrap(cursor.selection).getBlockwiseSelectionExtent()
@@ -152,7 +164,7 @@ class CurrentSelection extends Motion {
     }
   }
 
-  select () {
+  select (): void {
     if (this.mode === 'visual') {
       super.select()
     } else {
@@ -185,7 +197,7 @@ class CurrentSelection extends Motion {
 }
 
 class MoveLeft extends Motion {
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const allowWrap = this.getConfig('wrapLeftRightMotion')
     this.moveCursorCountTimes(cursor, () => {
       this.utils.moveCursorLeft(cursor, {allowWrap})
@@ -194,7 +206,7 @@ class MoveLeft extends Motion {
 }
 
 class MoveRight extends Motion {
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const allowWrap = this.getConfig('wrapLeftRightMotion')
 
     this.moveCursorCountTimes(cursor, () => {
@@ -217,17 +229,17 @@ class MoveRight extends Motion {
 
 class MoveRightBufferColumn extends Motion {
   static command = false
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.utils.setBufferColumn(cursor, cursor.getBufferColumn() + this.getCount())
   }
 }
 
 class MoveUp extends Motion {
-  wise = 'linewise'
+  wise: Wise = 'linewise'
   wrap = false
-  direction = 'up'
+  direction: Direction = 'up'
 
-  getBufferRow (row) {
+  getBufferRow (row: number): number {
     const min = 0
     const max = this.getVimLastBufferRow()
 
@@ -241,7 +253,7 @@ class MoveUp extends Motion {
     return this.getFoldStartRowForRow(row)
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const row = this.getBufferRow(cursor.getBufferRow())
       this.utils.setBufferRow(cursor, row)
@@ -254,7 +266,7 @@ class MoveUpWrap extends MoveUp {
 }
 
 class MoveDown extends MoveUp {
-  direction = 'down'
+  direction: Direction = 'down'
 }
 
 class MoveDownWrap extends MoveDown {
@@ -262,9 +274,9 @@ class MoveDownWrap extends MoveDown {
 }
 
 class MoveUpScreen extends Motion {
-  wise = 'linewise'
-  direction = 'up'
-  moveCursor (cursor) {
+  wise: Wise = 'linewise'
+  direction: Direction = 'up'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       this.utils.moveCursorUpScreen(cursor)
     })
@@ -272,9 +284,9 @@ class MoveUpScreen extends Motion {
 }
 
 class MoveDownScreen extends MoveUpScreen {
-  wise = 'linewise'
-  direction = 'down'
-  moveCursor (cursor) {
+  wise: Wise = 'linewise'
+  direction: Direction = 'down'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       this.utils.moveCursorDownScreen(cursor)
     })
@@ -286,31 +298,32 @@ class MoveDownScreen extends MoveUpScreen {
 // `dgj` deletes to the same column one display line down. The geometry lives in
 // EditorModel.displayLineMove; headless it falls back to a buffer-line step.
 class MoveUpDisplayLine extends Motion {
-  direction = 'up'
-  moveCursor (cursor) {
+  direction: Direction = 'up'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => cursor.moveDisplayUp())
   }
 }
 
 class MoveDownDisplayLine extends MoveUpDisplayLine {
-  direction = 'down'
-  moveCursor (cursor) {
+  direction: Direction = 'down'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => cursor.moveDisplayDown())
   }
 }
 
 class MoveUpToEdge extends Motion {
-  wise = 'linewise'
+  wise: Wise = 'linewise'
   jump = true
-  direction = 'previous'
-  moveCursor (cursor) {
+  direction: Direction = 'previous'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const point = this.getPoint(cursor.getScreenPosition())
-      if (point) cursor.setScreenPosition(point)
+      // TODO(vim-ts): setScreenPosition not yet on Cursor
+      if (point) (cursor as any).setScreenPosition(point)
     })
   }
 
-  getPoint (fromPoint) {
+  getPoint (fromPoint: Point): Point | undefined {
     const {column, row: startRow} = fromPoint
     for (const row of this.getScreenRows({startRow, direction: this.direction})) {
       const point = new Point(row, column)
@@ -318,7 +331,7 @@ class MoveUpToEdge extends Motion {
     }
   }
 
-  isEdge (point) {
+  isEdge (point: Point): boolean {
     // If point is stoppable and above or below point is not stoppable, it's Edge!
     return (
       this.isStoppable(point) &&
@@ -326,7 +339,7 @@ class MoveUpToEdge extends Motion {
     )
   }
 
-  isStoppable (point) {
+  isStoppable (point: Point): boolean {
     return (
       this.isNonWhiteSpace(point) ||
       this.isFirstRowOrLastRowAndStoppable(point) ||
@@ -335,12 +348,12 @@ class MoveUpToEdge extends Motion {
     )
   }
 
-  isNonWhiteSpace (point) {
+  isNonWhiteSpace (point: Point): boolean {
     const char = this.utils.getTextInScreenRange(this.editor, Range.fromPointWithDelta(point, 0, 1))
     return char != null && /\S/.test(char)
   }
 
-  isFirstRowOrLastRowAndStoppable (point) {
+  isFirstRowOrLastRowAndStoppable (point: Point): boolean {
     // In notmal-mode, cursor is NOT stoppable to EOL of non-blank row.
     // So explicitly guard to not answer it stoppable.
     if (this.mode === 'normal' && this.utils.pointIsAtEndOfLineAtNonEmptyRow(this.editor, point)) {
@@ -349,12 +362,13 @@ class MoveUpToEdge extends Motion {
 
     // If clipped, it means that original ponit was non stoppable(e.g. point.colum > EOL).
     const {row} = point
-    return (row === 0 || row === this.getVimLastScreenRow()) && point.isEqual(this.editor.clipScreenPosition(point))
+    // TODO(vim-ts): clipScreenPosition not yet on EditorModel
+    return (row === 0 || row === this.getVimLastScreenRow()) && point.isEqual((this.editor as any).clipScreenPosition(point))
   }
 }
 
 class MoveDownToEdge extends MoveUpToEdge {
-  direction = 'next'
+  direction: Direction = 'next'
 }
 
 // Word Motion family
@@ -369,17 +383,20 @@ class MoveDownToEdge extends MoveUpToEdge {
 
 class MotionByWord extends Motion {
   static command = false
-  wordRegex = null
+  wordRegex: RegExp | null = null
+  direction: Direction = null
+  which: 'start' | 'end' | null = null
   skipBlankRow = false
+  skipEmptyRow = false
   skipWhiteSpaceOnlyRow = false
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, countState => {
       cursor.setBufferPosition(this.getPoint(cursor, countState))
     })
   }
 
-  getPoint (cursor, countState) {
+  getPoint (cursor: Cursor, countState: {count: number, isFinal: boolean, stop: () => void}): Point | [number, number] {
     const {direction} = this
     let {which} = this
     const regex = this.getWordRegexForCursor(cursor)
@@ -403,7 +420,7 @@ class MotionByWord extends Motion {
     }
   }
 
-  buildOptions (from) {
+  buildOptions (from: Point): any {
     return {
       from: from,
       skipEmptyRow: this.skipEmptyRow,
@@ -413,7 +430,7 @@ class MotionByWord extends Motion {
     }
   }
 
-  getWordRegexForCursor (cursor) {
+  getWordRegexForCursor (cursor: Cursor): RegExp {
     if (this.name.endsWith('Subword')) {
       return cursor.subwordRegExp()
     }
@@ -433,8 +450,8 @@ class MotionByWord extends Motion {
 
 // w
 class MoveToNextWord extends MotionByWord {
-  direction = 'next'
-  which = 'start'
+  direction: Direction = 'next'
+  which: 'start' | 'end' | null = 'start'
 }
 
 // W
@@ -457,8 +474,8 @@ class MoveToNextAlphanumericWord extends MoveToNextWord {
 
 // b
 class MoveToPreviousWord extends MotionByWord {
-  direction = 'previous'
-  which = 'start'
+  direction: Direction = 'previous'
+  which: 'start' | 'end' | null = 'start'
   skipWhiteSpaceOnlyRow = true
 }
 
@@ -483,8 +500,8 @@ class MoveToPreviousAlphanumericWord extends MoveToPreviousWord {
 // e
 class MoveToEndOfWord extends MotionByWord {
   inclusive = true
-  direction = 'next'
-  which = 'end'
+  direction: Direction = 'next'
+  which: 'start' | 'end' | null = 'end'
   skipEmptyRow = true
   skipWhiteSpaceOnlyRow = true
 }
@@ -510,8 +527,8 @@ class MoveToEndOfAlphanumericWord extends MoveToEndOfWord {
 // ge
 class MoveToPreviousEndOfWord extends MotionByWord {
   inclusive = true
-  direction = 'previous'
-  which = 'end'
+  direction: Direction = 'previous'
+  which: 'start' | 'end' | null = 'end'
   skipWhiteSpaceOnlyRow = true
 }
 
@@ -535,9 +552,10 @@ class MoveToPreviousEndOfSubword extends MoveToPreviousEndOfWord {}
 class MoveToNextSentence extends Motion {
   jump = true
   sentenceRegex = new RegExp(`(?:[\\.!\\?][\\)\\]"']*\\s+)|(\\n|\\r\\n)`, 'g')
-  direction = 'next'
+  direction: Direction = 'next'
+  skipBlankRow = false
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const point =
         this.direction === 'next'
@@ -547,12 +565,12 @@ class MoveToNextSentence extends Motion {
     })
   }
 
-  isBlankRow (row) {
+  isBlankRow (row: number): boolean {
     return this.editor.isBufferRowBlank(row)
   }
 
-  getNextStartOfSentence (from) {
-    return this.findInEditor('forward', this.sentenceRegex, {from}, ({range, match}) => {
+  getNextStartOfSentence (from: Point): Point | undefined {
+    return this.findInEditor('forward', this.sentenceRegex, {from}, ({range, match}: {range: Range, match: RegExpMatchArray}) => {
       if (match[1] != null) {
         const [startRow, endRow] = [range.start.row, range.end.row]
         if (this.skipBlankRow && this.isBlankRow(endRow)) return
@@ -565,13 +583,13 @@ class MoveToNextSentence extends Motion {
     })
   }
 
-  getPreviousStartOfSentence (from) {
-    return this.findInEditor('backward', this.sentenceRegex, {from}, ({range, match}) => {
+  getPreviousStartOfSentence (from: Point): Point | undefined {
+    return this.findInEditor('backward', this.sentenceRegex, {from}, ({range, match}: {range: Range, match: RegExpMatchArray}) => {
       if (match[1] != null) {
         const [startRow, endRow] = [range.start.row, range.end.row]
         if (!this.isBlankRow(endRow) && this.isBlankRow(startRow)) {
           const point = this.getFirstCharacterPositionForBufferRow(endRow)
-          if (point.isLessThan(from)) return point
+          if (point!.isLessThan(from)) return point
           else if (!this.skipBlankRow) return this.getFirstCharacterPositionForBufferRow(startRow)
         }
       } else if (range.end.isLessThan(from)) {
@@ -582,7 +600,7 @@ class MoveToNextSentence extends Motion {
 }
 
 class MoveToPreviousSentence extends MoveToNextSentence {
-  direction = 'previous'
+  direction: Direction = 'previous'
 }
 
 class MoveToNextSentenceSkipBlankRow extends MoveToNextSentence {
@@ -597,16 +615,16 @@ class MoveToPreviousSentenceSkipBlankRow extends MoveToPreviousSentence {
 // -------------------------
 class MoveToNextParagraph extends Motion {
   jump = true
-  direction = 'next'
+  direction: Direction = 'next'
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const point = this.getPoint(cursor.getBufferPosition())
       cursor.setBufferPosition(point || this.getLastResortPoint(this.direction))
     })
   }
 
-  getPoint (from) {
+  getPoint (from: Point): [number, number] | undefined {
     let wasBlankRow = this.editor.isBufferRowBlank(from.row)
     const rows = this.getBufferRows({startRow: from.row, direction: this.direction})
     for (const row of rows) {
@@ -620,33 +638,33 @@ class MoveToNextParagraph extends Motion {
 }
 
 class MoveToPreviousParagraph extends MoveToNextParagraph {
-  direction = 'previous'
+  direction: Direction = 'previous'
 }
 
 class MoveToNextDiffHunk extends Motion {
   jump = true
-  direction = 'next'
+  direction: Direction = 'next'
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const point = this.getPoint(cursor.getBufferPosition())
       if (point) cursor.setBufferPosition(point)
     })
   }
 
-  getPoint (from) {
-    const getHunkRange = row => this.utils.getHunkRangeAtBufferRow(this.editor, row)
+  getPoint (from: Point): Point | undefined {
+    const getHunkRange = (row: number) => this.utils.getHunkRangeAtBufferRow(this.editor, row)
     let hunkRange = getHunkRange(from.row)
-    return this.findInEditor(this.direction, /^[+-]/g, {from}, ({range}) => {
+    return this.findInEditor(this.direction, /^[+-]/g, {from}, ({range}: {range: Range}) => {
       if (hunkRange && hunkRange.containsPoint(range.start)) return
 
-      return getHunkRange(range.start.row).start
+      return getHunkRange(range.start.row)!.start
     })
   }
 }
 
 class MoveToPreviousDiffHunk extends MoveToNextDiffHunk {
-  direction = 'previous'
+  direction: Direction = 'previous'
 }
 
 // `]h` / `[h` — jump to the next/previous git hunk in a live-edited file (the
@@ -656,21 +674,21 @@ class MoveToPreviousDiffHunk extends MoveToNextDiffHunk {
 class MotionByHunk extends Motion {
   static command = false
   jump = true
-  direction = null
+  direction: Direction = null
 
-  getRows () {
+  getRows (): number[] {
     const rows = this.editor.getHunkStartRows()
     return this.direction === 'previous' ? rows.slice().reverse() : rows
   }
 
-  findRow (cursor) {
+  findRow (cursor: Cursor): number | undefined {
     const cursorRow = cursor.getBufferRow()
     return this.getRows().find(row =>
       this.direction === 'previous' ? row < cursorRow : row > cursorRow
     )
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const row = this.findRow(cursor)
       if (row != null) this.utils.moveCursorToFirstCharacterAtRow(cursor, row)
@@ -679,29 +697,29 @@ class MotionByHunk extends Motion {
 }
 
 class MoveToNextHunk extends MotionByHunk {
-  direction = 'next'
+  direction: Direction = 'next'
 }
 
 class MoveToPreviousHunk extends MotionByHunk {
-  direction = 'previous'
+  direction: Direction = 'previous'
 }
 
 // -------------------------
 // keymap: 0
 class MoveToBeginningOfLine extends Motion {
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.utils.setBufferColumn(cursor, 0)
   }
 }
 
 class MoveToColumn extends Motion {
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.utils.setBufferColumn(cursor, this.getCount() - 1)
   }
 }
 
 class MoveToLastCharacterOfLine extends Motion {
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const row = this.getValidVimBufferRow(cursor.getBufferRow() + this.getCount() - 1)
     cursor.setBufferPosition([row, Infinity])
     cursor.goalColumn = Infinity
@@ -711,10 +729,10 @@ class MoveToLastCharacterOfLine extends Motion {
 class MoveToLastNonblankCharacterOfLineAndDown extends Motion {
   inclusive = true
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const row = this.limitNumber(cursor.getBufferRow() + this.getCount() - 1, {max: this.getVimLastBufferRow()})
     const options = {from: [row, Infinity], allowNextLine: false}
-    const point = this.findInEditor('backward', /\S|^/, options, event => event.range.start)
+    const point = this.findInEditor('backward', /\S|^/, options, (event: {range: Range}) => event.range.start)
     cursor.setBufferPosition(point)
   }
 }
@@ -723,14 +741,14 @@ class MoveToLastNonblankCharacterOfLineAndDown extends Motion {
 // ------------------------------------
 // ^
 class MoveToFirstCharacterOfLine extends Motion {
-  moveCursor (cursor) {
-    cursor.setBufferPosition(this.getFirstCharacterPositionForBufferRow(cursor.getBufferRow()))
+  moveCursor (cursor: Cursor): void {
+    cursor.setBufferPosition(this.getFirstCharacterPositionForBufferRow(cursor.getBufferRow())!)
   }
 }
 
 class MoveToFirstCharacterOfLineUp extends MoveToFirstCharacterOfLine {
-  wise = 'linewise'
-  moveCursor (cursor) {
+  wise: Wise = 'linewise'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const row = this.getValidVimBufferRow(cursor.getBufferRow() - 1)
       cursor.setBufferPosition([row, 0])
@@ -740,8 +758,8 @@ class MoveToFirstCharacterOfLineUp extends MoveToFirstCharacterOfLine {
 }
 
 class MoveToFirstCharacterOfLineDown extends MoveToFirstCharacterOfLine {
-  wise = 'linewise'
-  moveCursor (cursor) {
+  wise: Wise = 'linewise'
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const point = cursor.getBufferPosition()
       if (point.row < this.getVimLastBufferRow()) {
@@ -760,42 +778,44 @@ class MoveToFirstCharacterOfLineAndDown extends MoveToFirstCharacterOfLineDown {
 
 class MoveToScreenColumn extends Motion {
   static command = false
-  moveCursor (cursor) {
+  which: 'beginning' | 'last-character' | 'first-character' = 'beginning'
+  moveCursor (cursor: Cursor): void {
     const point = this.utils.getScreenPositionForScreenRow(this.editor, cursor.getScreenRow(), this.which, {
       allowOffScreenPosition: this.getConfig('allowMoveToOffScreenColumnOnScreenLineMotion')
     })
-    if (point) cursor.setScreenPosition(point)
+    // TODO(vim-ts): setScreenPosition not yet on Cursor
+    if (point) (cursor as any).setScreenPosition(point)
   }
 }
 
 // keymap: g 0
 class MoveToBeginningOfScreenLine extends MoveToScreenColumn {
-  which = 'beginning'
+  which: 'beginning' | 'last-character' | 'first-character' = 'beginning'
 }
 
 // g ^: `move-to-first-character-of-screen-line`
 class MoveToFirstCharacterOfScreenLine extends MoveToScreenColumn {
-  which = 'first-character'
+  which: 'beginning' | 'last-character' | 'first-character' = 'first-character'
 }
 
 // keymap: g $
 class MoveToLastCharacterOfScreenLine extends MoveToScreenColumn {
-  which = 'last-character'
+  which: 'beginning' | 'last-character' | 'first-character' = 'last-character'
 }
 
 // keymap: g g
 class MoveToFirstLine extends Motion {
-  wise = 'linewise'
+  wise: Wise = 'linewise'
   jump = true
   verticalMotion = true
   moveSuccessOnLinewise = true
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.setCursorBufferRow(cursor, this.getValidVimBufferRow(this.getRow()))
     cursor.autoscroll({center: true})
   }
 
-  getRow () {
+  getRow (): number {
     return this.getCount() - 1
   }
 }
@@ -807,7 +827,7 @@ class MoveToLastLine extends MoveToFirstLine {
 
 // keymap: N% e.g. 10%
 class MoveToLineByPercent extends MoveToFirstLine {
-  getRow () {
+  getRow (): number {
     const percent = this.limitNumber(this.getCount(), {max: 100})
     return Math.floor(this.getVimLastBufferRow() * (percent / 100))
   }
@@ -815,11 +835,11 @@ class MoveToLineByPercent extends MoveToFirstLine {
 
 class MoveToRelativeLine extends Motion {
   static command = false
-  wise = 'linewise'
+  wise: Wise = 'linewise'
   moveSuccessOnLinewise = true
 
-  moveCursor (cursor) {
-    let row
+  moveCursor (cursor: Cursor): void {
+    let row: any // TODO(vim-ts): fold-row helpers return any
     let count = this.getCount()
     if (count < 0) {
       // Support negative count
@@ -842,7 +862,7 @@ class MoveToRelativeLine extends Motion {
 
 class MoveToRelativeLineMinimumTwo extends MoveToRelativeLine {
   static command = false
-  getCount () {
+  getCount (): number {
     return this.limitNumber(super.getCount(), {min: 2})
   }
 }
@@ -851,17 +871,18 @@ class MoveToRelativeLineMinimumTwo extends MoveToRelativeLine {
 // -------------------------
 // keymap: H
 class MoveToTopOfScreen extends Motion {
-  wise = 'linewise'
+  wise: Wise = 'linewise'
   jump = true
   defaultCount = 0
   verticalMotion = true
 
-  moveCursor (cursor) {
-    const bufferRow = this.editor.bufferRowForScreenRow(this.getScreenRow())
+  moveCursor (cursor: Cursor): void {
+    const bufferRow = this.editor.bufferRowForScreenRow(this.getScreenRow() as number)
     this.setCursorBufferRow(cursor, bufferRow)
   }
 
-  getScreenRow () {
+  // Returns one of three branches keyed on `this.name`; TS can't see exhaustiveness.
+  getScreenRow (): number | undefined {
     const firstVisibleRow = this.editor.getFirstVisibleScreenRow()
     const lastVisibleRow = this.limitNumber(this.editor.getLastVisibleScreenRow(), {max: this.getVimLastScreenRow()})
 
@@ -890,8 +911,8 @@ class MoveToBottomOfScreen extends MoveToTopOfScreen {} // keymap: L
 // [FIXME] count behave differently from original Vim.
 class Scroll extends Motion {
   static command = false
-  static scrollTask = null
-  static amountOfPageByName = {
+  static scrollTask: any = null
+  static amountOfPageByName: Record<string, number> = {
     ScrollFullScreenDown: 1,
     ScrollFullScreenUp: -1,
     ScrollHalfScreenDown: 0.5,
@@ -900,21 +921,23 @@ class Scroll extends Motion {
     ScrollQuarterScreenUp: -0.25
   }
   verticalMotion = true
+  amountOfPixels = 0
 
-  execute () {
-    const amountOfPage = this.constructor.amountOfPageByName[this.name]
+  execute (): void {
+    const amountOfPage = (this.constructor as typeof Scroll).amountOfPageByName[this.name]
     const amountOfScreenRows = Math.trunc(amountOfPage * this.editor.getRowsPerPage() * this.getCount())
     this.amountOfPixels = amountOfScreenRows * this.editor.getLineHeightInPixels()
 
     super.execute()
 
+    // TODO(vim-ts): ScrollManager.requestScroll stub lacks the `duration` option.
     this.vimState.requestScroll({
       amountOfPixels: this.amountOfPixels,
       duration: this.getSmoothScrollDuation((Math.abs(amountOfPage) === 1 ? 'Full' : 'Half') + 'ScrollMotion')
-    })
+    } as any)
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const cursorPixel = this.editorElement.pixelPositionForScreenPosition(cursor.getScreenPosition())
     cursorPixel.top += this.amountOfPixels
     const screenPosition = this.editorElement.screenPositionForPixelPosition(cursorPixel)
@@ -938,19 +961,21 @@ class Find extends Motion {
   inclusive = true
   offset = 0
   requireInput = true
-  caseSensitivityKind = 'Find'
+  caseSensitivityKind: string | null = 'Find'
+  _restoreEditorState: (() => void) | null = null
+  preConfirmedChars?: string
 
-  restoreEditorState () {
+  restoreEditorState (): void {
     if (this._restoreEditorState) this._restoreEditorState()
     this._restoreEditorState = null
   }
 
-  cancelOperation () {
+  cancelOperation (): void {
     this.restoreEditorState()
     super.cancelOperation()
   }
 
-  initialize () {
+  initialize (): void {
     if (this.getConfig('reuseFindForRepeatFind')) this.repeatIfNecessary()
 
     if (!this.repeated) {
@@ -963,12 +988,12 @@ class Find extends Motion {
         this._restoreEditorState = this.utils.saveEditorState(this.editor)
         const options = {
           autoConfirmTimeout: this.getConfig('findConfirmByTimeout'),
-          onConfirm: input => {
+          onConfirm: (input: string) => {
             this.input = input
             if (input) this.processOperation()
             else this.cancelOperation()
           },
-          onChange: preConfirmedChars => {
+          onChange: (preConfirmedChars: string) => {
             this.preConfirmedChars = preConfirmedChars
             this.highlightTextInCursorRows(this.preConfirmedChars, 'pre-confirm', this.isBackwards())
           },
@@ -987,7 +1012,7 @@ class Find extends Motion {
     super.initialize()
   }
 
-  findPreConfirmed (delta) {
+  findPreConfirmed (delta: number): void {
     if (this.preConfirmedChars && this.getConfig('highlightFindChar')) {
       const index = this.highlightTextInCursorRows(
         this.preConfirmedChars,
@@ -996,24 +1021,24 @@ class Find extends Motion {
         this.getCount() - 1 + delta,
         true
       )
-      this.count = index + 1
+      this.count = index! + 1
     }
   }
 
-  repeatIfNecessary () {
+  repeatIfNecessary (): void {
     const findCommandNames = ['Find', 'FindBackwards', 'Till', 'TillBackwards']
     const currentFind = this.globalState.get('currentFind')
-    if (currentFind && findCommandNames.includes(this.vimState.operationStack.getLastCommandName())) {
+    if (currentFind && findCommandNames.includes(this.vimState.operationStack.getLastCommandName() as string)) {
       this.input = currentFind.input
       this.repeated = true
     }
   }
 
-  isBackwards () {
+  isBackwards (): boolean {
     return this.backwards
   }
 
-  execute () {
+  execute (): void {
     super.execute()
     let decorationType = 'post-confirm'
     if (this.operator && !this.operator.instanceof('SelectBase')) {
@@ -1030,10 +1055,10 @@ class Find extends Motion {
     })
   }
 
-  getPoint (fromPoint) {
+  getPoint (fromPoint: Point): Point | undefined {
     const scanRange = this.editor.bufferRangeForBufferRow(fromPoint.row)
-    const points = []
-    const regex = this.getRegex(this.input)
+    const points: Point[] = []
+    const regex = this.getRegex(this.input as string)
     const indexWantAccess = this.getCount() - 1
 
     const translation = new Point(0, this.isBackwards() ? this.offset : -this.offset)
@@ -1066,11 +1091,11 @@ class Find extends Motion {
   }
 
   // FIXME: bad naming, this function must return index
-  highlightTextInCursorRows (text, decorationType, backwards, index = this.getCount() - 1, adjustIndex = false) {
+  highlightTextInCursorRows (text: string | undefined, decorationType: string, backwards: boolean, index: number = this.getCount() - 1, adjustIndex: boolean = false): number | undefined {
     if (!this.getConfig('highlightFindChar')) return
 
     return this.vimState.highlightFind.highlightCursorRows(
-      this.getRegex(text),
+      this.getRegex(text as string),
       decorationType,
       backwards,
       this.offset,
@@ -1079,7 +1104,7 @@ class Find extends Motion {
     )
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const point = this.getPoint(cursor.getBufferPosition())
     if (point) cursor.setBufferPosition(point)
     else this.restoreEditorState()
@@ -1087,7 +1112,7 @@ class Find extends Motion {
     if (!this.repeated) this.globalState.set('currentFind', this)
   }
 
-  getRegex (term) {
+  getRegex (term: string): RegExp {
     const modifiers = this.isCaseSensitive(term) ? 'g' : 'gi'
     return new RegExp(this._.escapeRegExp(term), modifiers)
   }
@@ -1102,7 +1127,7 @@ class FindBackwards extends Find {
 // keymap: t
 class Till extends Find {
   offset = 1
-  getPoint (...args) {
+  getPoint (...args: [Point]): Point | undefined {
     const point = super.getPoint(...args)
     this.moveSucceeded = point != null
     return point
@@ -1121,21 +1146,23 @@ class TillBackwards extends Till {
 class MoveToMark extends Motion {
   jump = true
   requireInput = true
-  input = null
+  // `input` holds the mark char here; keep the runtime `= null` init. Base types
+  // it `string | undefined`, so widen to `any` to allow the null initializer.
+  input: any = null // TODO(vim-ts): tighten
   moveToFirstCharacterOfLine = false
 
-  initialize () {
+  initialize (): void {
     this.readChar()
     super.initialize()
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     let point = this.vimState.mark.get(this.input)
     if (point) {
       if (this.moveToFirstCharacterOfLine) {
         point = this.getFirstCharacterPositionForBufferRow(point.row)
       }
-      cursor.setBufferPosition(point)
+      cursor.setBufferPosition(point!)
       cursor.autoscroll({center: true})
     }
   }
@@ -1143,7 +1170,7 @@ class MoveToMark extends Motion {
 
 // keymap: '
 class MoveToMarkLine extends MoveToMark {
-  wise = 'linewise'
+  wise: Wise = 'linewise'
   moveToFirstCharacterOfLine = true
 }
 
@@ -1151,17 +1178,18 @@ class MoveToMarkLine extends MoveToMark {
 // -------------------------
 class MotionByFold extends Motion {
   static command = false
-  wise = 'characterwise'
-  which = null
-  direction = null
+  wise: Wise = 'characterwise'
+  which: 'start' | 'end' | null = null
+  direction: Direction = null
+  foldRanges: any[] = [] // TODO(vim-ts): tighten (fold range pairs)
 
-  execute () {
+  execute (): void {
     this.foldRanges = this.utils.getCodeFoldRanges(this.editor)
     super.execute()
   }
 
-  getRows () {
-    const rows = this.foldRanges.map(foldRange => foldRange[this.which].row).sort((a, b) => a - b)
+  getRows (): number[] {
+    const rows = this.foldRanges.map(foldRange => foldRange[this.which!].row).sort((a: number, b: number) => a - b)
     if (this.direction === 'previous') {
       return rows.reverse()
     } else {
@@ -1169,7 +1197,7 @@ class MotionByFold extends Motion {
     }
   }
 
-  findRowBy (cursor, fn) {
+  findRowBy (cursor: Cursor, fn: (row: number) => boolean): number | undefined {
     const cursorRow = cursor.getBufferRow()
     return this.getRows().find(row => {
       if (this.direction === 'previous') {
@@ -1180,11 +1208,11 @@ class MotionByFold extends Motion {
     })
   }
 
-  findRow (cursor) {
+  findRow (cursor: Cursor): number | undefined {
     return this.findRowBy(cursor, () => true)
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     this.moveCursorCountTimes(cursor, () => {
       const row = this.findRow(cursor)
       if (row != null) this.utils.moveCursorToFirstCharacterAtRow(cursor, row)
@@ -1193,63 +1221,63 @@ class MotionByFold extends Motion {
 }
 
 class MoveToPreviousFoldStart extends MotionByFold {
-  which = 'start'
-  direction = 'previous'
+  which: 'start' | 'end' | null = 'start'
+  direction: Direction = 'previous'
 }
 
 class MoveToNextFoldStart extends MotionByFold {
-  which = 'start'
-  direction = 'next'
+  which: 'start' | 'end' | null = 'start'
+  direction: Direction = 'next'
 }
 
 class MoveToPreviousFoldEnd extends MotionByFold {
-  which = 'end'
-  direction = 'previous'
+  which: 'start' | 'end' | null = 'end'
+  direction: Direction = 'previous'
 }
 
 class MoveToNextFoldEnd extends MotionByFold {
-  which = 'end'
-  direction = 'next'
+  which: 'start' | 'end' | null = 'end'
+  direction: Direction = 'next'
 }
 
 // -------------------------
 class MoveToPreviousFunction extends MotionByFold {
-  which = 'start'
-  direction = 'previous'
-  findRow (cursor) {
+  which: 'start' | 'end' | null = 'start'
+  direction: Direction = 'previous'
+  findRow (cursor: Cursor): number | undefined {
     return this.findRowBy(cursor, row => this.utils.isIncludeFunctionScopeForRow(this.editor, row))
   }
 }
 
 class MoveToNextFunction extends MoveToPreviousFunction {
-  direction = 'next'
+  direction: Direction = 'next'
 }
 
 class MoveToPreviousFunctionAndRedrawCursorLineAtUpperMiddle extends MoveToPreviousFunction {
-  execute () {
+  execute (): void {
     super.execute()
-    this.getInstance('RedrawCursorLineAtUpperMiddle').execute()
+    ;(this.getInstance('RedrawCursorLineAtUpperMiddle') as any).execute()
   }
 }
 
 class MoveToNextFunctionAndRedrawCursorLineAtUpperMiddle extends MoveToPreviousFunctionAndRedrawCursorLineAtUpperMiddle {
-  direction = 'next'
+  direction: Direction = 'next'
 }
 
 // -------------------------
 class MotionByFoldWithSameIndent extends MotionByFold {
   static command = false
 
-  findRow (cursor) {
+  findRow (cursor: Cursor): number | undefined {
     const closestFoldRange = this.utils.getClosestFoldRangeContainsRow(this.editor, cursor.getBufferRow())
-    const indentationForBufferRow = row => this.editor.indentationForBufferRow(row)
+    const indentationForBufferRow = (row: number) => this.editor.indentationForBufferRow(row)
     const baseIndentLevel = closestFoldRange ? indentationForBufferRow(closestFoldRange.start.row) : 0
-    const isEqualIndentLevel = range => indentationForBufferRow(range.start.row) === baseIndentLevel
+    const isEqualIndentLevel = (range: any) => indentationForBufferRow(range.start.row) === baseIndentLevel
 
     const cursorRow = cursor.getBufferRow()
     const foldRanges = this.direction === 'previous' ? this.foldRanges.slice().reverse() : this.foldRanges
     const foldRange = foldRanges.find(foldRange => {
-      const row = foldRange[this.which].row
+      const row = foldRange[this.which!].row
       if (this.direction === 'previous') {
         return row < cursorRow && isEqualIndentLevel(foldRange)
       } else {
@@ -1257,43 +1285,44 @@ class MotionByFoldWithSameIndent extends MotionByFold {
       }
     })
     if (foldRange) {
-      return foldRange[this.which].row
+      return foldRange[this.which!].row
     }
   }
 }
 
 class MoveToPreviousFoldStartWithSameIndent extends MotionByFoldWithSameIndent {
-  which = 'start'
-  direction = 'previous'
+  which: 'start' | 'end' | null = 'start'
+  direction: Direction = 'previous'
 }
 
 class MoveToNextFoldStartWithSameIndent extends MotionByFoldWithSameIndent {
-  which = 'start'
-  direction = 'next'
+  which: 'start' | 'end' | null = 'start'
+  direction: Direction = 'next'
 }
 
 class MoveToPreviousFoldEndWithSameIndent extends MotionByFoldWithSameIndent {
-  which = 'end'
-  direction = 'previous'
+  which: 'start' | 'end' | null = 'end'
+  direction: Direction = 'previous'
 }
 
 class MoveToNextFoldEndWithSameIndent extends MotionByFoldWithSameIndent {
-  which = 'end'
-  direction = 'next'
+  which: 'start' | 'end' | null = 'end'
+  direction: Direction = 'next'
 }
 
 class MoveToNextOccurrence extends Motion {
   // Ensure this command is available when only has-occurrence
   static commandScope = 'atom-text-editor.vim-mode-plus.has-occurrence'
   jump = true
-  direction = 'next'
+  direction: Direction = 'next'
+  ranges: Range[] = []
 
-  execute () {
-    this.ranges = this.utils.sortRanges(this.occurrenceManager.getMarkers().map(marker => marker.getBufferRange()))
+  execute (): void {
+    this.ranges = this.utils.sortRanges(this.occurrenceManager.getMarkers().map((marker: any) => marker.getBufferRange()))
     super.execute()
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const range = this.ranges[this.utils.getIndex(this.getIndex(cursor.getBufferPosition()), this.ranges)]
     const point = range.start
     cursor.setBufferPosition(point, {autoscroll: false})
@@ -1308,16 +1337,16 @@ class MoveToNextOccurrence extends Motion {
     }
   }
 
-  getIndex (fromPoint) {
+  getIndex (fromPoint: Point): number {
     const index = this.ranges.findIndex(range => range.start.isGreaterThan(fromPoint))
     return (index >= 0 ? index : 0) + this.getCount() - 1
   }
 }
 
 class MoveToPreviousOccurrence extends MoveToNextOccurrence {
-  direction = 'previous'
+  direction: Direction = 'previous'
 
-  getIndex (fromPoint) {
+  getIndex (fromPoint: Point): number {
     const ranges = this.ranges.slice().reverse()
     const range = ranges.find(range => range.end.isLessThan(fromPoint))
     const index = range ? this.ranges.indexOf(range) : this.ranges.length - 1
@@ -1332,13 +1361,13 @@ class MoveToPair extends Motion {
   jump = true
   member = ['Parenthesis', 'CurlyBracket', 'SquareBracket']
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     const point = this.getPoint(cursor)
     if (point) cursor.setBufferPosition(point)
   }
 
-  getPointForTag (point) {
-    const pairInfo = this.getInstance('ATag').getPairInfo(point)
+  getPointForTag (point: Point): Point | undefined {
+    const pairInfo = (this.getInstance('ATag') as any).getPairInfo(point)
     if (!pairInfo) return
 
     let {openRange, closeRange} = pairInfo
@@ -1352,14 +1381,14 @@ class MoveToPair extends Motion {
     }
   }
 
-  getPoint (cursor) {
+  getPoint (cursor: Cursor): Point | undefined {
     const cursorPosition = cursor.getBufferPosition()
     const cursorRow = cursorPosition.row
     const point = this.getPointForTag(cursorPosition)
     if (point) return point
 
     // AAnyPairAllowForwarding return forwarding range or enclosing range.
-    const range = this.getInstance('AAnyPairAllowForwarding', {member: this.member}).getRange(cursor.selection)
+    const range = (this.getInstance('AAnyPairAllowForwarding', {member: this.member}) as any).getRange(cursor.selection)
     if (!range) return
 
     const {start, end} = range
@@ -1386,25 +1415,28 @@ class SearchBase extends Motion {
   requireInput = true
   backwards = false
   jump = true
+  // `input` carries the confirmed match-start Point (or null); see class doc.
+  input: any = undefined // TODO(vim-ts): tighten (Point | null)
 
-  initialize () {
+  initialize (): void {
     if (!this.repeated) {
+      // TODO(vim-ts): FocusInputOptions on Base lacks `reverse`/non-string onConfirm.
       this.focusInput({
         charsMax: Infinity,
         purpose: 'search',
         reverse: this.backwards,
-        onConfirm: matchStart => {
+        onConfirm: (matchStart: Point | null) => {
           this.input = matchStart // Point (ready) or null (cancel)
           if (matchStart) this.processOperation()
           else this.cancelOperation()
         },
         onCancel: () => this.cancelOperation(),
-      })
+      } as any)
     }
     super.initialize()
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     if (this.input) cursor.setBufferPosition(this.input)
   }
 }
@@ -1428,24 +1460,27 @@ class LeapBase extends Motion {
   requireInput = true
   backwards = false
   jump = true
+  // `input` carries the confirmed target Point (or null); see class doc.
+  input: any = undefined // TODO(vim-ts): tighten (Point | null)
 
-  initialize () {
+  initialize (): void {
     if (!this.repeated) {
+      // TODO(vim-ts): FocusInputOptions on Base lacks `reverse`/non-string onConfirm.
       this.focusInput({
         purpose: 'leap',
         reverse: this.backwards,
-        onConfirm: target => {
+        onConfirm: (target: Point | null) => {
           this.input = target // Point (jump) or null (cancel / no match)
           if (target) this.processOperation()
           else this.cancelOperation()
         },
         onCancel: () => this.cancelOperation(),
-      })
+      } as any)
     }
     super.initialize()
   }
 
-  moveCursor (cursor) {
+  moveCursor (cursor: Cursor): void {
     if (this.input) cursor.setBufferPosition(this.input)
   }
 }

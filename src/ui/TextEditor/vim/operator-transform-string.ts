@@ -13,30 +13,35 @@
 // ESM conversion: `require`→`import`; the trailing `module.exports` map → eager
 // `klass.register()` (matching the other vendored operation modules).
 import changeCase from './changeCase.ts'
-import { Operator } from './operator.js'
+import { Operator } from './operator.ts'
+import type { Selection } from '../Selection.ts'
 
 // TransformString
 // ================================
 class TransformString extends Operator {
   static command = false
-  static stringTransformers = []
+  static stringTransformers: Array<typeof TransformString> = []
   trackChange = true
   stayOptionName = 'stayOnTransformString'
   autoIndent = false
   autoIndentNewline = false
   replaceByDiff = false
 
-  static registerToSelectList () {
+  // Implemented by subclasses; may return undefined to skip the mutation.
+  getNewText? (text: string, selection?: Selection): string | undefined
+
+  static registerToSelectList (): void {
     this.stringTransformers.push(this)
   }
 
-  mutateSelection (selection) {
-    const text = this.getNewText(selection.getText(), selection)
+  mutateSelection (selection: Selection): void {
+    const text = this.getNewText!(selection.getText(), selection)
     if (text) {
       if (this.replaceByDiff) {
         this.replaceTextInRangeViaDiff(selection.getBufferRange(), text)
       } else {
-        selection.insertText(text, {autoIndent: this.autoIndent, autoIndentNewline: this.autoIndentNewline})
+        // TODO(vim-ts): Selection.insertText takes no options arg in EditorModel host.
+        ;(selection.insertText as any)(text, {autoIndent: this.autoIndent, autoIndentNewline: this.autoIndentNewline})
       }
     }
   }
@@ -44,13 +49,14 @@ class TransformString extends Operator {
 
 class ChangeCase extends TransformString {
   static command = false
-  getNewText (text) {
+  functionName?: string
+  getNewText (text: string): string {
     const functionName = this.functionName || changeCase.lowerCaseFirst(this.name)
     // HACK: Pure Vim's `~` is too aggressive(e.g. remove punctuation, remove white spaces...).
     // Here intentionally making changeCase less aggressive by narrowing target charset.
     const charset = '[À-ʯΆ-և\\w]'
     const regex = new RegExp(`${charset}+(:?[-./]?${charset}+)*`, 'g')
-    return text.replace(regex, match => changeCase[functionName](match))
+    return text.replace(regex, (match: string) => (changeCase as Record<string, (text: string) => string>)[functionName](match))
   }
 }
 
@@ -76,7 +82,7 @@ class Replace extends TransformString {
   autoIndentNewline = true
   readInputAfterSelect = true
 
-  getNewText (text) {
+  getNewText (text: string): string | undefined {
     if (this.target.name === 'MoveRightBufferColumn' && text.length !== this.getCount()) {
       return
     }
@@ -95,10 +101,12 @@ class ReplaceCharacter extends Replace {
 
 // Surround
 // -------------------------
+type SurroundAction = 'surround' | 'delete-surround' | 'change-surround' | null
+
 class SurroundBase extends TransformString {
   static command = false
-  surroundAction = null
-  pairsByAlias = {
+  surroundAction: SurroundAction = null
+  pairsByAlias: Record<string, string[]> = {
     '(': ['(', ')'],
     ')': ['(', ')'],
     '{': ['{', '}'],
@@ -113,27 +121,27 @@ class SurroundBase extends TransformString {
     a: ['<', '>']
   }
 
-  initialize () {
+  initialize (): void {
     this.replaceByDiff = this.getConfig('replaceByDiffOnSurround')
     this.stayByMarker = this.replaceByDiff
     super.initialize()
   }
 
-  getPair (char) {
+  getPair (char: string): string[] {
     const userConfig = this.getConfig('customSurroundPairs')
-    const customPairByAlias = JSON.parse(userConfig) || {}
+    const customPairByAlias: Record<string, string[]> = JSON.parse(userConfig) || {}
     return customPairByAlias[char] || this.pairsByAlias[char] || [char, char]
   }
 
-  surround (text, char, {keepLayout = false, selection} = {}) {
+  surround (text: string, char: string, {keepLayout = false, selection}: {keepLayout?: boolean, selection?: Selection} = {}): string {
     let [open, close, addSpace] = this.getPair(char)
     if (!keepLayout && text.endsWith('\n')) {
-      const baseIndentLevel = this.editor.indentationForBufferRow(selection.getBufferRange().start.row)
+      const baseIndentLevel = this.editor.indentationForBufferRow(selection!.getBufferRange().start.row)
       const indentTextStartRow = this.editor.buildIndentString(baseIndentLevel)
       const indentTextOneLevel = this.editor.buildIndentString(1)
 
       open = indentTextStartRow + open + '\n'
-      text = text.replace(/^(.+)$/gm, m => indentTextOneLevel + m)
+      text = text.replace(/^(.+)$/gm, (m: string) => indentTextOneLevel + m)
       close = indentTextStartRow + close + '\n'
     }
 
@@ -145,19 +153,19 @@ class SurroundBase extends TransformString {
     return open + text + close
   }
 
-  getTargetPair () {
+  getTargetPair (): string[] | undefined {
     if (this.target) {
       return this.target.pair
     }
   }
 
-  deleteSurround (text) {
+  deleteSurround (text: string): string {
     const [open, close] = this.getTargetPair() || [text[0], text[text.length - 1]]
     const innerText = text.slice(open.length, text.length - close.length)
     return this.utils.isSingleLineText(text) && open !== close ? innerText.trim() : innerText
   }
 
-  getNewText (text, selection) {
+  getNewText (text: string, selection?: Selection): string | undefined {
     if (this.surroundAction === 'surround') {
       return this.surround(text, this.input, {selection})
     } else if (this.surroundAction === 'delete-surround') {
@@ -169,7 +177,7 @@ class SurroundBase extends TransformString {
 }
 
 class Surround extends SurroundBase {
-  surroundAction = 'surround'
+  surroundAction: SurroundAction = 'surround'
   readInputAfterSelect = true
 }
 
@@ -178,11 +186,11 @@ class SurroundWord extends Surround {
 }
 
 class DeleteSurround extends SurroundBase {
-  surroundAction = 'delete-surround'
-  initialize () {
+  surroundAction: SurroundAction = 'delete-surround'
+  initialize (): void {
     if (!this.target) {
       this.focusInput({
-        onConfirm: char => {
+        onConfirm: (char: string) => {
           this.setTarget(this.getInstance('APair', {pair: this.getPair(char)}))
           this.processOperation()
         }
@@ -197,12 +205,12 @@ class DeleteSurround extends SurroundBase {
 class Indent extends TransformString {
   stayByMarker = true
   setToFirstCharacterOnLinewise = true
-  wise = 'linewise'
+  wise: 'linewise' = 'linewise'
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     // Need count times indentation in visual-mode and its repeat(`.`).
     if (this.target.name === 'CurrentSelection') {
-      let oldText
+      let oldText: string
       // limit to 100 to avoid freezing by accidental big number.
       this.countTimes(this.limitNumber(this.getCount(), {max: 100}), ({stop}) => {
         oldText = selection.getText()
@@ -214,13 +222,13 @@ class Indent extends TransformString {
     }
   }
 
-  indent (selection) {
+  indent (selection: Selection): void {
     selection.indentSelectedRows()
   }
 }
 
 class Outdent extends Indent {
-  indent (selection) {
+  indent (selection: Selection): void {
     selection.outdentSelectedRows()
   }
 }
@@ -230,9 +238,9 @@ class Outdent extends Indent {
 class AutoIndent extends TransformString {
   stayByMarker = true
   setToFirstCharacterOnLinewise = true
-  wise = 'linewise'
+  wise: 'linewise' = 'linewise'
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const range = selection.getBufferRange()
     // A linewise range ending at column 0 of a later row doesn't include that row.
     let lastRow = range.end.row
@@ -249,7 +257,7 @@ class JoinTarget extends TransformString {
   flashTarget = false
   restorePositions = false
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const range = selection.getBufferRange()
 
     // When cursor is at last BUFFER row, it select last-buffer-row, then
@@ -271,14 +279,15 @@ class Join extends JoinTarget {
 }
 
 class ChangeSurround extends DeleteSurround {
-  surroundAction = 'change-surround'
+  surroundAction: SurroundAction = 'change-surround'
   readInputAfterSelect = true
 
   // Override to show changing char on hover
-  async focusInputPromised (...args) {
+  async focusInputPromised (...args: Parameters<Operator['focusInputPromised']>): Promise<string | undefined> {
     const hoverPoint = this.mutationManager.getInitialPointForSelection(this.editor.getLastSelection())
-    const openSurrondText = this.getTargetPair() ? this.getTargetPair()[0] : this.editor.getSelectedText()[0]
-    this.vimState.hover.set(openSurrondText, hoverPoint)
+    const openSurrondText = this.getTargetPair() ? this.getTargetPair()![0] : this.editor.getSelectedText()[0]
+    // TODO(vim-ts): HoverManager.set stub accepts only (value); upstream passes a point too.
+    ;(this.vimState.hover as any).set(openSurrondText, hoverPoint)
     return super.focusInputPromised(...args)
   }
 }

@@ -1,17 +1,58 @@
 // Vendored from xedel/vim-mode-plus's lib/pair-finder.js — ESM conversion;
 // underscore-plus's `partition`/`escapeRegExp` are inlined.
 import { Range } from '../../../text/Range.ts'
-import { isEscapedCharRange, collectRangeByScan, scanEditor, getLineTextToBufferPosition } from './utils.js'
+import { Point } from '../../../text/Point.ts'
+import type { EditorModel, ScanMatchResult } from '../EditorModel.ts'
+import { isEscapedCharRange, collectRangeByScan, scanEditor, getLineTextToBufferPosition } from './utils.ts'
 
-const escapeRegExp = s => (s ? s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') : '')
-const partition = (array, predicate) => {
-  const pass = []
-  const fail = []
+// 'open'/'close' classification of a scanned bracket/quote/tag occurrence.
+type PairSide = 'open' | 'close'
+
+// State tracked for a single scanned pair occurrence.
+interface EventState {
+  state: PairSide | undefined
+  range: Range
+  // TagFinder also records the tag name.
+  name?: string
+}
+
+// Result of a successful pair match.
+interface PairInfo {
+  aRange: Range
+  innerRange: Range
+  openRange: Range
+  closeRange: Range
+}
+
+interface CharacterRangeInformation {
+  total: Range[]
+  left: Range[]
+  right: Range[]
+  balanced: boolean
+}
+
+interface ScopeStateValue {
+  inString: boolean
+  inComment: boolean
+  inDoubleQuotes: boolean
+}
+
+interface PairFinderOptions {
+  allowNextLine?: boolean
+  allowForwarding?: boolean
+  pair?: [string, string]
+  inclusive?: boolean
+}
+
+const escapeRegExp = (s: string): string => (s ? s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') : '')
+const partition = <T>(array: T[], predicate: (element: T) => boolean): [T[], T[]] => {
+  const pass: T[] = []
+  const fail: T[] = []
   for (const element of array) (predicate(element) ? pass : fail).push(element)
   return [pass, fail]
 }
 
-function getCharacterRangeInformation (editor, point, char) {
+function getCharacterRangeInformation (editor: EditorModel, point: Point, char: string): CharacterRangeInformation {
   const regex = new RegExp(escapeRegExp(char), 'g')
   const total = collectRangeByScan(editor, regex, {row: point.row}).filter(range => !isEscapedCharRange(editor, range))
   const [left, right] = partition(total, ({start}) => start.isLessThan(point))
@@ -20,12 +61,15 @@ function getCharacterRangeInformation (editor, point, char) {
 }
 
 class ScopeState {
-  constructor (editor, point) {
+  editor: EditorModel
+  state: ScopeStateValue
+
+  constructor (editor: EditorModel, point: Point) {
     this.editor = editor
     this.state = this.getScopeStateForBufferPosition(point)
   }
 
-  getScopeStateForBufferPosition (point) {
+  getScopeStateForBufferPosition (point: Point): ScopeStateValue {
     const scopes = this.editor.scopeDescriptorForBufferPosition(point).getScopesArray()
     return {
       inString: scopes.some(scope => scope.startsWith('string.')),
@@ -34,12 +78,12 @@ class ScopeState {
     }
   }
 
-  isInDoubleQuotes (point) {
+  isInDoubleQuotes (point: Point): boolean {
     const {total, left, balanced} = getCharacterRangeInformation(this.editor, point, '"')
     return total.length > 0 && balanced && left.length % 2 === 1
   }
 
-  isEqual (other) {
+  isEqual (other: ScopeState): boolean {
     return (
       this.state.inString === other.state.inString &&
       this.state.inComment === other.state.inComment &&
@@ -47,13 +91,21 @@ class ScopeState {
     )
   }
 
-  isInNormalCodeArea () {
+  isInNormalCodeArea (): boolean {
     return !(this.state.inString || this.state.inComment || this.state.inDoubleQuotes)
   }
 }
 
 class PairFinder {
-  constructor (editor, {allowNextLine, allowForwarding, pair, inclusive = true} = {}) {
+  editor: EditorModel
+  allowNextLine: boolean | undefined
+  allowForwarding: boolean | undefined
+  pair: [string, string] | undefined
+  inclusive: boolean
+  pattern!: RegExp
+  closeRange?: Range | null
+
+  constructor (editor: EditorModel, {allowNextLine, allowForwarding, pair, inclusive = true}: PairFinderOptions = {}) {
     this.editor = editor
     this.allowNextLine = allowNextLine
     this.allowForwarding = allowForwarding
@@ -62,17 +114,25 @@ class PairFinder {
     if (this.pair) this.setPatternForPair(this.pair)
   }
 
-  getPattern () {
+  // Overridden by subclasses to build `this.pattern` from the pair.
+  setPatternForPair (_pair: [string, string]): void {}
+
+  // Overridden by subclasses to classify a scan event.
+  getEventState (_event: ScanMatchResult): EventState {
+    return {state: undefined, range: (_event as ScanMatchResult).range}
+  }
+
+  getPattern (): RegExp {
     return this.pattern
   }
 
-  filterEvent () {
+  filterEvent (_event?: ScanMatchResult): boolean {
     return true
   }
 
-  findPair (which, direction, from) {
-    const stack = []
-    let found
+  findPair (which: PairSide, direction: 'forward' | 'backward', from: Point): Range | undefined {
+    const stack: EventState[] = []
+    let found: Range | undefined
 
     // Quote is not nestable. So when we encounter 'open' while finding 'close',
     // it is forwarding pair, so stoppable unless @allowForwarding
@@ -101,11 +161,11 @@ class PairFinder {
     return found
   }
 
-  spliceStack (stack, eventState) {
+  spliceStack (stack: EventState[], _eventState: EventState): EventState | undefined {
     return stack.pop()
   }
 
-  onFound (stack, {eventState, from}) {
+  onFound (stack: EventState[], {eventState, from}: {eventState: EventState, from: Point}): boolean | undefined {
     switch (eventState.state) {
       case 'open':
         this.spliceStack(stack, eventState)
@@ -123,15 +183,15 @@ class PairFinder {
     }
   }
 
-  findCloseForward (from) {
+  findCloseForward (from: Point): Range | undefined {
     return this.findPair('close', 'forward', from)
   }
 
-  findOpenBackward (from) {
+  findOpenBackward (from: Point): Range | undefined {
     return this.findPair('open', 'backward', from)
   }
 
-  find (from) {
+  find (from: Point): PairInfo | undefined {
     const closeRange = (this.closeRange = this.findCloseForward(from))
     const openRange = closeRange ? this.findOpenBackward(closeRange.end) : undefined
 
@@ -147,17 +207,21 @@ class PairFinder {
 }
 
 class BracketFinder extends PairFinder {
-  constructor (...args) {
+  retry: boolean
+  initialScope?: ScopeState
+  closeRangeScope?: ScopeState | null
+
+  constructor (...args: [EditorModel, PairFinderOptions?]) {
     super(...args)
     this.retry = false
   }
 
-  setPatternForPair ([open, close]) {
+  setPatternForPair ([open, close]: [string, string]): void {
     this.pattern = new RegExp(`(${escapeRegExp(open)})|(${escapeRegExp(close)})`, 'g')
   }
 
   // This method can be called recursively
-  find (from) {
+  find (from: Point): PairInfo | undefined {
     if (!this.initialScope) this.initialScope = new ScopeState(this.editor, from)
 
     const found = super.find(from)
@@ -170,14 +234,14 @@ class BracketFinder extends PairFinder {
     }
   }
 
-  filterEvent ({range}) {
+  filterEvent ({range}: ScanMatchResult): boolean {
     const scope = new ScopeState(this.editor, range.start)
     if (!this.closeRange) {
       // Now finding closeRange
       if (!this.retry) {
-        return this.initialScope.isEqual(scope)
+        return this.initialScope!.isEqual(scope)
       } else {
-        return this.initialScope.isInNormalCodeArea() ? !scope.isInNormalCodeArea() : scope.isInNormalCodeArea()
+        return this.initialScope!.isInNormalCodeArea() ? !scope.isInNormalCodeArea() : scope.isInNormalCodeArea()
       }
     } else {
       // Now finding openRange: search from same scope
@@ -188,8 +252,8 @@ class BracketFinder extends PairFinder {
     }
   }
 
-  getEventState ({match, range}) {
-    let state
+  getEventState ({match, range}: ScanMatchResult): EventState {
+    let state: PairSide | undefined
     if (match[1]) state = 'open'
     else if (match[2]) state = 'close'
     return {state, range}
@@ -197,15 +261,18 @@ class BracketFinder extends PairFinder {
 }
 
 class QuoteFinder extends PairFinder {
-  setPatternForPair (pair) {
+  quoteChar!: string
+  pairStates!: (PairSide | undefined)[]
+
+  setPatternForPair (pair: [string, string]): void {
     this.quoteChar = pair[0]
     this.pattern = new RegExp(`(${escapeRegExp(pair[0])})`, 'g')
   }
 
-  find (from) {
+  find (from: Point): PairInfo | undefined {
     // HACK: Cant determine open/close from quote char itself
     // So preset open/close state to get desiable result.
-    let nextQuoteIsOpen
+    let nextQuoteIsOpen: boolean
     {
       const {left, right, balanced} = getCharacterRangeInformation(this.editor, from, this.quoteChar)
       const onQuoteChar = right[0] && right[0].start.isEqual(from)
@@ -221,7 +288,7 @@ class QuoteFinder extends PairFinder {
     return super.find(from)
   }
 
-  getEventState ({range}) {
+  getEventState ({range}: ScanMatchResult): EventState {
     return {state: this.pairStates.shift(), range}
   }
 }
@@ -229,20 +296,20 @@ class QuoteFinder extends PairFinder {
 const TAG_REGEX = /<(\/?)([^\s>]+)[^>]*>/g
 
 class TagFinder extends PairFinder {
-  static get pattern () {
+  static get pattern (): RegExp {
     return TAG_REGEX
   }
 
-  constructor (...args) {
+  constructor (...args: [EditorModel, PairFinderOptions?]) {
     super(...args)
     this.pattern = TAG_REGEX
   }
 
-  lineTextToPointContainsNonWhiteSpace (point) {
+  lineTextToPointContainsNonWhiteSpace (point: Point): boolean {
     return /\S/.test(getLineTextToBufferPosition(this.editor, point))
   }
 
-  find (from) {
+  find (from: Point): PairInfo | undefined {
     const found = super.find(from)
     if (found && this.allowForwarding) {
       const tagStart = found.aRange.start
@@ -256,7 +323,7 @@ class TagFinder extends PairFinder {
     return found
   }
 
-  getEventState (event) {
+  getEventState (event: ScanMatchResult): EventState {
     const backslash = event.match[1]
     return {
       state: backslash === '' ? 'open' : 'close',
@@ -265,7 +332,7 @@ class TagFinder extends PairFinder {
     }
   }
 
-  spliceStack (stack, eventState) {
+  spliceStack (stack: EventState[], eventState: EventState): EventState | undefined {
     const pairEventState = stack
       .slice()
       .reverse()

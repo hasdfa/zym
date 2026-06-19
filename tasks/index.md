@@ -247,6 +247,21 @@ It replaced `GtkSource.VimIMContext` and is now the default (no flag).
 - [x] Occurrence — operator-modifier `o`/`O` (`c o p`, `d o p`, `g U o w`; subword via `O`) and preset occurrence `g o`/`g O`/`g .` (persistent highlighted markers any later operator restricts itself to). Real `OccurrenceManager` over `MarkerLayer` + a `TextDecorations` highlight layer. (`occurrence.test.ts`.)
 - [x] visual-blockwise (`ctrl-v`) and multiple cursors — emulated on `MarkerLayer` mark pairs surfaced through the array-shaped `getCursors()`/`getSelections()`. Entry points: blockwise `ctrl-v` (I/A/c/d/yank/paste), occurrence `c o p`, and persistent `ctrl-alt-↑/↓` (add cursor above/below; `escape` collapses). Extra-caret rendering (reverse-video block tags in normal/visual; host-drawn beam carets in insert); multi-cursor operations undo as one step; insert is incrementally replicated to every cursor live. (`blockwise.test.ts`, `multicursor.test.ts`.) Caret visuals + `ctrl-alt-arrow` keys need in-app verification (headless can't realize the view).
 - [x] Polish: `=`/`==` auto-indent (real tree-sitter indent source — `syntax/indent.ts` + `EditorModel.setIndentSource`), matching-bracket highlight (`syntax/bracketMatch.ts`; ignores strings/comments/regex; enclosing pair when inside), indent guides (`IndentGuides`, `editor.indentGuides`), tree-sitter text objects `ic`/`ac` (class) alongside `if`/`af`/`ia`/`aa`, H/M/L screen motions, ctrl-f/b/d/u/e/y scrolling, flash-on-operate.
+- [x] **TS conversion complete** — the 19 vendored `.js` modules (`base`, `vim-state`,
+  `motion`, `operator`, `text-object`, `operator-insert`, `operator-transform-string`,
+  `misc-command`, `operations/mode`, `utils`, `pair-finder`, `operation-stack`,
+  `register-manager`, `mutation-manager`, `selection-wrapper`, `blockwise-selection`,
+  `position-history`, `mark-manager`, `global-state`) were rewritten as fully strict-typed
+  `.ts` (per the port plan's "convert to typed `.ts` as modules stabilize"). `tsc --noEmit`
+  is clean and all vim tests pass. `vimState.editor` is typed as the real `EditorModel`;
+  `Base.operationKind` is `string | null` (subclasses keep `static operationKind = '…'`);
+  `VimMode`/`VimSubmode` (incl. `'replace'`) are string-literal unions; `swrap` is modeled
+  as a callable-with-statics. **Follow-up:** ~100 `// TODO(vim-ts): tighten` casts remain,
+  each marking an unported host feature (search/highlight/persistent-selection managers) or
+  a method the vendored code calls that isn't on `EditorModel`/`Selection`/`Cursor`/
+  `MarkerLayer` yet (e.g. `splitSelectionsIntoLines`, `clipScreenPosition`, `Selection.compare`,
+  `insertText({autoIndent})`, marker `{invalidate}` opts, fold/scroll helpers, macro
+  record/stop on `KeymapManager`); tighten as those host APIs land.
 
 ## Tasks & runners (idea — not started)
 

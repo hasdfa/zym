@@ -14,15 +14,15 @@
  */
 import { quilx } from '../../../quilx.ts';
 import type { EditorModel } from '../EditorModel.ts';
-import VimState from './vim-state.js';
+import VimState from './vim-state.ts';
 import { StatusBarManager } from './stubs.ts';
-import './operations/mode.js'; // ActivateNormalMode
-import './motion.js'; // self-registers the motion operations
-import './operator.js'; // Delete/Yank and operator base
-import './operator-insert.js'; // ActivateInsertMode/InsertAfter/Change/…
-import './operator-transform-string.js'; // gU/gu/g~, r, surround
-import './text-object.js'; // iw/aw/i(/a"/… (operator + visual targets)
-import './misc-command.js'; // Undo/Redo/Mark/…
+import './operations/mode.ts'; // ActivateNormalMode
+import './motion.ts'; // self-registers the motion operations
+import './operator.ts'; // Delete/Yank and operator base
+import './operator-insert.ts'; // ActivateInsertMode/InsertAfter/Change/…
+import './operator-transform-string.ts'; // gU/gu/g~, r, surround
+import './text-object.ts'; // iw/aw/i(/a"/… (operator + visual targets)
+import './misc-command.ts'; // Undo/Redo/Mark/…
 
 const dasherize = (name: string): string =>
   (name[0].toLowerCase() + name.slice(1)).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
@@ -609,7 +609,7 @@ export function attachVim(editor: EditorModel): VimState {
     // find, but a standalone `;` is a quick leap.
     'vim-mode-plus:repeat-find-or-start-leap': () => {
       const findCommands = ['Find', 'FindBackwards', 'Till', 'TillBackwards'];
-      const lastWasFind = findCommands.includes(vimState.operationStack.getLastCommandName());
+      const lastWasFind = findCommands.includes(vimState.operationStack.getLastCommandName() ?? '');
       if (lastWasFind && vimState.globalState.get('currentFind')) {
         vimState.operationStack.runCurrentFind();
       } else {

@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../../gi.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
-import VimState from './vim-state.js';
+import VimState from './vim-state.ts';
 import { StatusBarManager } from './stubs.ts';
 import clipboard, { primaryClipboard } from './clipboard.ts';
-import './operations/mode.js';
-import './operator.js';
-import './operator-insert.js';
-import './text-object.js';
-import './motion.js';
+import './operations/mode.ts';
+import './operator.ts';
+import './operator-insert.ts';
+import './text-object.ts';
+import './motion.ts';
 
 Gtk.init();
 
@@ -35,7 +35,7 @@ test('"a yanks into the named register a', () => {
   at(0, 0);
   reg('a');
   run('YankLine');
-  assert.equal(vimState.register.get('a').text, 'hello\n');
+  assert.equal(vimState.register.get('a')!.text, 'hello\n');
 });
 
 test('the register name clears after one operation', () => {

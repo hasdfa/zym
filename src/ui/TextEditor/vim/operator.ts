@@ -2,17 +2,48 @@
 // `require`→`import`, and the trailing `module.exports` map becomes eager
 // registration + default export. Operator logic is unchanged.
 import { Range } from '../../../text/Range.ts'
-import { Base } from './base.js'
+import { Base } from './base.ts'
+import type { Selection } from '../Selection.ts'
+import type { Point } from '../../../text/Point.ts'
+import type { VimSubmode } from './vim-state.ts'
+
+/** The "wise" of an operation. */
+type Wise = 'characterwise' | 'linewise' | 'blockwise'
+
+/**
+ * The operator's `target` is a Motion or TextObject (loosely typed — it is
+ * also transiently a string class-name like `'Empty'`/`'MoveRight'` before
+ * `initialize()` resolves it via `getInstance`). Only the members touched in
+ * this file are declared.
+ * TODO(vim-ts): tighten once Motion/TextObject expose a shared interface.
+ */
+interface OperatorTarget {
+  isReady (): boolean
+  isMotion (): boolean
+  isTextObject (): boolean
+  instanceof (name: string): boolean
+  execute (): void
+  forceWise (wise: Wise): void
+  toString (): string
+  wise: Wise
+  operator?: Operator
+  name: string
+  selectSucceeded?: boolean
+}
 
 class Operator extends Base {
-  static operationKind = 'operator'
+  static operationKind: string | null = 'operator'
   static command = false
   recordable = true
 
-  wise = null
-  target = null
+  // target is a Motion/TextObject (or transiently its string class-name).
+  // TODO(vim-ts): tighten to a real Motion|TextObject union once both are typed.
+  target: any = null
+  wise: Wise | null = null
   occurrence = false
   occurrenceType = 'base'
+  occurrenceSelected = false
+  occurrenceWise: Wise | null = null
 
   flashTarget = true
   flashCheckpoint = 'did-finish'
@@ -20,9 +51,9 @@ class Operator extends Base {
   flashTypeForOccurrence = 'operator-occurrence'
   trackChange = false
 
-  patternForOccurrence = null
-  stayAtSamePosition = null
-  stayOptionName = null
+  patternForOccurrence: RegExp | null = null
+  stayAtSamePosition: boolean | null = null
+  stayOptionName: string | null = null
   stayByMarker = false
   restorePositions = true
   setToFirstCharacterOnLinewise = false
@@ -30,20 +61,41 @@ class Operator extends Base {
   acceptPresetOccurrence = true
   acceptPersistentSelection = true
 
-  bufferCheckpointByPurpose = null
-
-  targetSelected = null
-  input = null
+  targetSelected: boolean | null = null
+  // Base declares `input?: string`; the upstream initializer is `null`, so widen
+  // to `any` to stay override-compatible without changing the runtime value.
+  // TODO(vim-ts): align with Base.input once the input flow is fully typed.
+  input: any = null
   readInputAfterSelect = false
-  bufferCheckpointByPurpose = {}
+  bufferCheckpointByPurpose: Record<string, any> = {}
 
-  isReady () {
+  // Accumulator used by setTextToRegister for blockwise yank/delete.
+  blockwiseRegisterRows: string[] | null = null
+
+  // Subclass-only fields declared on Operator so override-compatibility holds.
+  focusInputOptions?: any
+  newRanges?: Range[]
+  regex?: RegExp
+  step?: number
+  baseNumber?: number | null
+  location?: string
+  where?: string
+  cancelled?: boolean
+  sequentialPaste?: boolean
+  blockwisePaste?: boolean
+  linewisePaste?: boolean
+  mutationsBySelection?: Map<Selection, Range>
+
+  // Optional hook implemented by mutating subclasses (Delete/Yank/Put/...).
+  mutateSelection? (selection: Selection): void
+
+  isReady (): boolean {
     return this.target && this.target.isReady()
   }
 
   // Called when operation finished
   // This is essentially to reset state for `.` repeat.
-  resetState () {
+  resetState (): void {
     this.targetSelected = null
     this.occurrenceSelected = false
   }
@@ -51,15 +103,15 @@ class Operator extends Base {
   // Two checkpoint for different purpose
   // - one for undo
   // - one for preserve last inserted text
-  createBufferCheckpoint (purpose) {
+  createBufferCheckpoint (purpose: string): void {
     this.bufferCheckpointByPurpose[purpose] = this.editor.createCheckpoint()
   }
 
-  getBufferCheckpoint (purpose) {
+  getBufferCheckpoint (purpose: string): any {
     return this.bufferCheckpointByPurpose[purpose]
   }
 
-  groupChangesSinceBufferCheckpoint (purpose) {
+  groupChangesSinceBufferCheckpoint (purpose: string): void {
     const checkpoint = this.getBufferCheckpoint(purpose)
     if (checkpoint) {
       this.editor.groupChangesSinceCheckpoint(checkpoint)
@@ -67,12 +119,12 @@ class Operator extends Base {
     }
   }
 
-  setMarkForChange (range) {
+  setMarkForChange (range: Range): void {
     this.vimState.mark.set('[', range.start)
     this.vimState.mark.set(']', range.end)
   }
 
-  needFlash () {
+  needFlash (): boolean {
     return (
       this.flashTarget &&
       this.getConfig('flashOnOperate') &&
@@ -81,13 +133,13 @@ class Operator extends Base {
     )
   }
 
-  flashIfNecessary (ranges) {
+  flashIfNecessary (ranges: Range[]): void {
     if (this.needFlash()) {
       this.vimState.flash(ranges, {type: this.getFlashType()})
     }
   }
 
-  flashChangeIfNecessary () {
+  flashChangeIfNecessary (): void {
     if (this.needFlash()) {
       this.onDidFinishOperation(() => {
         const ranges = this.mutationManager.getSelectedBufferRangesForCheckpoint(this.flashCheckpoint)
@@ -96,11 +148,11 @@ class Operator extends Base {
     }
   }
 
-  getFlashType () {
+  getFlashType (): string {
     return this.occurrenceSelected ? this.flashTypeForOccurrence : this.flashType
   }
 
-  trackChangeIfNecessary () {
+  trackChangeIfNecessary (): void {
     if (!this.trackChange) return
     this.onDidFinishOperation(() => {
       const range = this.mutationManager.getMutatedBufferRangeForSelection(this.editor.getLastSelection())
@@ -108,7 +160,7 @@ class Operator extends Base {
     })
   }
 
-  initialize () {
+  initialize (): void {
     this.subscribeResetOccurrencePatternIfNeeded()
 
     // When preset-occurrence was exists, operate on occurrence-wise
@@ -143,7 +195,7 @@ class Operator extends Base {
     super.initialize()
   }
 
-  subscribeResetOccurrencePatternIfNeeded () {
+  subscribeResetOccurrencePatternIfNeeded (): void {
     // [CAUTION]
     // This method has to be called in PROPER timing.
     // If occurrence is true but no preset-occurrence
@@ -153,7 +205,7 @@ class Operator extends Base {
     }
   }
 
-  setModifier ({wise, occurrence, occurrenceType}) {
+  setModifier ({wise, occurrence, occurrenceType}: {wise?: Wise, occurrence?: boolean, occurrenceType: string}): void {
     if (wise) {
       this.wise = wise
     } else if (occurrence) {
@@ -168,7 +220,7 @@ class Operator extends Base {
   }
 
   // return true/false to indicate success
-  selectPersistentSelectionIfNecessary () {
+  selectPersistentSelectionIfNecessary (): boolean {
     const canSelect =
       this.acceptPersistentSelection &&
       this.getConfig('autoSelectPersistentSelectionOnOperate') &&
@@ -184,7 +236,7 @@ class Operator extends Base {
     }
   }
 
-  getPatternForOccurrenceType (occurrenceType) {
+  getPatternForOccurrenceType (occurrenceType: string): RegExp | undefined {
     if (occurrenceType === 'base') {
       return this.utils.getWordPatternAtBufferPosition(this.editor, this.getCursorBufferPosition())
     } else if (occurrenceType === 'subword') {
@@ -193,13 +245,13 @@ class Operator extends Base {
   }
 
   // target is TextObject or Motion to operate on.
-  setTarget (target) {
+  setTarget (target: any): void {
     this.target = target
     this.target.operator = this
     this.emitDidSetTarget(this)
   }
 
-  setTextToRegister (text, selection) {
+  setTextToRegister (text: string, selection: Selection): void {
     if (this.vimState.register.isUnnamed() && this.isBlackholeRegisteredOperator()) {
       return
     }
@@ -218,7 +270,9 @@ class Operator extends Base {
       if (!selection.isLastSelection()) return
       const blockText = this.blockwiseRegisterRows.join('\n')
       this.blockwiseRegisterRows = null
-      const value = () => ({text: blockText, type: 'blockwise', selection})
+      // TODO(vim-ts): RegisterType has no 'blockwise'; type loosely until the
+      // register models blockwise values.
+      const value = (): any => ({text: blockText, type: 'blockwise', selection})
       this.vimState.register.set(null, value())
       if (this.vimState.register.isUnnamed()) {
         if (this.instanceof('Yank')) this.vimState.register.set('0', value())
@@ -228,11 +282,13 @@ class Operator extends Base {
       // only plain text (wise is otherwise inferred from a trailing newline).
       // Remember this exact text as blockwise so paste can still column-restore
       // it; cleared by the next non-blockwise yank/delete below.
-      this.vimState.register.lastBlockwiseText = blockText
+      // TODO(vim-ts): add `lastBlockwiseText` to RegisterManager's type.
+      ;(this.vimState.register as any).lastBlockwiseText = blockText
       return
     }
 
-    this.vimState.register.lastBlockwiseText = null
+    // TODO(vim-ts): add `lastBlockwiseText` to RegisterManager's type.
+    ;(this.vimState.register as any).lastBlockwiseText = null
 
     if (wise === 'linewise' && !text.endsWith('\n')) {
       text += '\n'
@@ -255,17 +311,17 @@ class Operator extends Base {
     }
   }
 
-  isBlackholeRegisteredOperator () {
-    const operators = this.getConfig('blackholeRegisteredOperators')
-    const wildCardOperators = operators.filter(name => name.endsWith('*'))
+  isBlackholeRegisteredOperator (): boolean {
+    const operators: string[] = this.getConfig('blackholeRegisteredOperators')
+    const wildCardOperators = operators.filter((name: string) => name.endsWith('*'))
     const commandName = this.getCommandNameWithoutPrefix()
     return (
-      wildCardOperators.some(name => new RegExp('^' + name.replace('*', '.*')).test(commandName)) ||
+      wildCardOperators.some((name: string) => new RegExp('^' + name.replace('*', '.*')).test(commandName)) ||
       operators.includes(commandName)
     )
   }
 
-  needSaveToNumberedRegister (target) {
+  needSaveToNumberedRegister (target: any): boolean {
     // Used to determine what register to use on change and delete operation.
     // Following motion should save to 1-9 register regerdless of content is small or big.
     const goesToNumberedRegisterMotionNames = [
@@ -277,31 +333,31 @@ class Operator extends Base {
     return goesToNumberedRegisterMotionNames.some(name => target.instanceof(name))
   }
 
-  normalizeSelectionsIfNecessary () {
+  normalizeSelectionsIfNecessary (): void {
     if (this.mode === 'visual' && this.target && this.target.isMotion()) {
       this.swrap.normalize(this.editor)
     }
   }
 
-  mutateSelections () {
+  mutateSelections (): void {
     // Coalesce every selection's mutation into ONE undo step, so a multi-cursor
     // operation (blockwise / occurrence / multiple cursors) undoes as a whole.
     // Inner per-edit `transact`s nest into this outer user action.
     this.editor.transact(() => {
       for (const selection of this.editor.getSelectionsOrderedByBufferPosition()) {
-        this.mutateSelection(selection)
+        this.mutateSelection!(selection)
       }
     })
     this.mutationManager.setCheckpoint('did-finish')
     this.restoreCursorPositionsIfNecessary()
   }
 
-  preSelect () {
+  preSelect (): void {
     this.normalizeSelectionsIfNecessary()
     this.createBufferCheckpoint('undo')
   }
 
-  postMutate () {
+  postMutate (): void {
     this.groupChangesSinceBufferCheckpoint('undo')
     this.emitDidFinishMutation()
 
@@ -311,7 +367,7 @@ class Operator extends Base {
   }
 
   // Main
-  execute () {
+  execute (): void | Promise<void> {
     this.preSelect()
 
     if (this.readInputAfterSelect && !this.repeated) {
@@ -322,7 +378,7 @@ class Operator extends Base {
     this.postMutate()
   }
 
-  async executeAsyncToReadInputAfterSelect () {
+  async executeAsyncToReadInputAfterSelect (): Promise<void> {
     if (this.selectTarget()) {
       this.input = await this.focusInputPromised(this.focusInputOptions)
       if (this.input == null) {
@@ -338,7 +394,7 @@ class Operator extends Base {
   }
 
   // Return true unless all selection is empty.
-  selectTarget () {
+  selectTarget (): boolean {
     if (this.targetSelected != null) {
       return this.targetSelected
     }
@@ -386,13 +442,13 @@ class Operator extends Base {
     return this.targetSelected
   }
 
-  restoreCursorPositionsIfNecessary () {
+  restoreCursorPositionsIfNecessary (): void {
     if (!this.restorePositions) return
 
     const stay =
       this.stayAtSamePosition != null
         ? this.stayAtSamePosition
-        : this.getConfig(this.stayOptionName) || (this.occurrenceSelected && this.getConfig('stayOnOccurrence'))
+        : this.getConfig(this.stayOptionName as string) || (this.occurrenceSelected && this.getConfig('stayOnOccurrence'))
     const wise = this.occurrenceSelected ? this.occurrenceWise : this.target.wise
     const {setToFirstCharacterOnLinewise} = this
     this.mutationManager.restoreCursorPositions({stay, wise, setToFirstCharacterOnLinewise})
@@ -404,7 +460,7 @@ class SelectBase extends Operator {
   flashTarget = false
   recordable = false
 
-  execute () {
+  execute (): void {
     this.normalizeSelectionsIfNecessary()
     this.selectTarget()
 
@@ -421,22 +477,22 @@ class SelectBase extends Operator {
 }
 
 class Select extends SelectBase {
-  execute () {
+  execute (): void {
     this.swrap.saveProperties(this.editor)
     super.execute()
   }
 }
 
 class SelectLatestChange extends SelectBase {
-  target = 'ALatestChange'
+  target: any = 'ALatestChange'
 }
 
 class SelectPreviousSelection extends SelectBase {
-  target = 'PreviousSelection'
+  target: any = 'PreviousSelection'
 }
 
 class SelectPersistentSelection extends SelectBase {
-  target = 'APersistentSelection'
+  target: any = 'APersistentSelection'
   acceptPersistentSelection = false
 }
 
@@ -469,13 +525,13 @@ class CreatePersistentSelection extends Operator {
   acceptPresetOccurrence = false
   acceptPersistentSelection = false
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     this.persistentSelection.markBufferRange(selection.getBufferRange())
   }
 }
 
 class TogglePersistentSelection extends CreatePersistentSelection {
-  initialize () {
+  initialize (): void {
     if (this.mode === 'normal') {
       const point = this.editor.getCursorBufferPosition()
       const marker = this.persistentSelection.getMarkerAtPoint(point)
@@ -484,7 +540,7 @@ class TogglePersistentSelection extends CreatePersistentSelection {
     super.initialize()
   }
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const point = this.getCursorPositionForSelection(selection)
     const marker = this.persistentSelection.getMarkerAtPoint(point)
     if (marker) {
@@ -498,13 +554,13 @@ class TogglePersistentSelection extends CreatePersistentSelection {
 // Preset Occurrence
 // =========================
 class TogglePresetOccurrence extends Operator {
-  target = 'Empty'
+  target: any = 'Empty'
   flashTarget = false
   acceptPresetOccurrence = false
   acceptPersistentSelection = false
   occurrenceType = 'base'
 
-  execute () {
+  execute (): void {
     const marker = this.occurrenceManager.getMarkerAtPoint(this.getCursorBufferPosition())
     if (marker) {
       this.occurrenceManager.destroyMarkers([marker])
@@ -533,11 +589,11 @@ class TogglePresetSubwordOccurrence extends TogglePresetOccurrence {
 
 // Want to rename RestoreOccurrenceMarker
 class AddPresetOccurrenceFromLastOccurrencePattern extends TogglePresetOccurrence {
-  execute () {
+  execute (): void {
     this.occurrenceManager.resetPatterns()
     const regex = this.globalState.get('lastOccurrencePattern')
     if (regex) {
-      const occurrenceType = this.globalState.get('lastOccurrenceType')
+      const occurrenceType = this.globalState.get('lastOccurrenceType') as string | undefined
       this.occurrenceManager.addPattern(regex, {occurrenceType})
       this.activateMode('normal')
     }
@@ -553,7 +609,7 @@ class Delete extends Operator {
   stayOptionName = 'stayOnDelete'
   setToFirstCharacterOnLinewise = true
 
-  execute () {
+  execute (): void {
     this.onDidSelectTarget(() => {
       if (this.occurrenceSelected && this.occurrenceWise === 'linewise') {
         this.flashTarget = false
@@ -566,24 +622,24 @@ class Delete extends Operator {
     super.execute()
   }
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     this.setTextToRegister(selection.getText(), selection)
     selection.deleteSelectedText()
   }
 }
 
 class DeleteRight extends Delete {
-  target = 'MoveRight'
+  target: any = 'MoveRight'
 }
 
 class DeleteLeft extends Delete {
-  target = 'MoveLeft'
+  target: any = 'MoveLeft'
 }
 
 class DeleteToLastCharacterOfLine extends Delete {
-  target = 'MoveToLastCharacterOfLine'
+  target: any = 'MoveToLastCharacterOfLine'
 
-  execute () {
+  execute (): void {
     this.onDidSelectTarget(() => {
       if (this.target.wise === 'blockwise') {
         for (const blockwiseSelection of this.getBlockwiseSelections()) {
@@ -596,8 +652,8 @@ class DeleteToLastCharacterOfLine extends Delete {
 }
 
 class DeleteLine extends Delete {
-  wise = 'linewise'
-  target = 'MoveToRelativeLine'
+  wise: Wise = 'linewise'
+  target: any = 'MoveToRelativeLine'
   flashTarget = false
 }
 
@@ -607,24 +663,24 @@ class Yank extends Operator {
   trackChange = true
   stayOptionName = 'stayOnYank'
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     this.setTextToRegister(selection.getText(), selection)
   }
 }
 
 class YankLine extends Yank {
-  wise = 'linewise'
-  target = 'MoveToRelativeLine'
+  wise: Wise = 'linewise'
+  target: any = 'MoveToRelativeLine'
 }
 
 class YankToLastCharacterOfLine extends Yank {
-  target = 'MoveToLastCharacterOfLine'
+  target: any = 'MoveToLastCharacterOfLine'
 }
 
 // Yank diff hunk at cursor by removing leading "+" or "-" from each line
 class YankDiffHunk extends Yank {
-  target = 'InnerDiffHunk'
-  mutateSelection (selection) {
+  target: any = 'InnerDiffHunk'
+  mutateSelection (selection: Selection): void {
     // Remove leading "+" or "-" in diff hunk
     const textToYank = selection.getText().replace(/^./gm, '')
     this.setTextToRegister(textToYank, selection)
@@ -640,7 +696,7 @@ class ReplaceWithRegister extends Operator {
   trackChange = true
   stayOptionName = 'stayOnDelete'
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const value = this.vimState.register.get(null, selection)
     let text = value && value.text != null ? value.text : ''
     const linewise = this.target.wise === 'linewise' || this.isMode('visual', 'linewise')
@@ -656,19 +712,21 @@ class ReplaceWithRegister extends Operator {
 }
 
 class ReplaceLineWithRegister extends ReplaceWithRegister {
-  wise = 'linewise'
-  target = 'MoveToRelativeLine'
+  wise: Wise = 'linewise'
+  target: any = 'MoveToRelativeLine'
 }
 
 // -------------------------
 // [ctrl-a]
 class Increase extends Operator {
-  target = 'Empty' // ctrl-a in normal-mode find target number in current line manually
+  target: any = 'Empty' // ctrl-a in normal-mode find target number in current line manually
   flashTarget = false // do manually
   restorePositions = false // do manually
   step = 1
+  newRanges: Range[] = []
+  regex?: RegExp
 
-  execute () {
+  execute (): void {
     this.newRanges = []
     if (!this.regex) this.regex = new RegExp(`${this.getConfig('numberRegex')}`, 'g')
 
@@ -681,9 +739,9 @@ class Increase extends Operator {
     }
   }
 
-  replaceNumberInBufferRange (scanRange, fn) {
-    const newRanges = []
-    this.scanEditor('forward', this.regex, {scanRange}, event => {
+  replaceNumberInBufferRange (scanRange: Range, fn?: (event: any) => boolean): Range[] {
+    const newRanges: Range[] = []
+    this.scanEditor('forward', this.regex, {scanRange}, (event: any) => {
       if (fn) {
         if (fn(event)) event.stop()
         else return
@@ -694,13 +752,13 @@ class Increase extends Operator {
     return newRanges
   }
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const {cursor} = selection
     if (this.target.name === 'Empty') {
       // ctrl-a, ctrl-x in `normal-mode`
       const cursorPosition = cursor.getBufferPosition()
       const scanRange = this.editor.bufferRangeForBufferRow(cursorPosition.row)
-      const newRanges = this.replaceNumberInBufferRange(scanRange, event =>
+      const newRanges = this.replaceNumberInBufferRange(scanRange, (event: any) =>
         event.range.end.isGreaterThan(cursorPosition)
       )
       const point = (newRanges.length && newRanges[0].end.translate([0, -1])) || cursorPosition
@@ -712,7 +770,7 @@ class Increase extends Operator {
     }
   }
 
-  getNextNumber (numberString) {
+  getNextNumber (numberString: string): number {
     return Number.parseInt(numberString, 10) + this.step * this.getCount()
   }
 }
@@ -725,10 +783,10 @@ class Decrease extends Increase {
 // -------------------------
 // [g ctrl-a]
 class IncrementNumber extends Increase {
-  baseNumber = null
-  target = null
+  baseNumber: number | null = null
+  target: any = null
 
-  getNextNumber (numberString) {
+  getNextNumber (numberString: string): number {
     if (this.baseNumber != null) {
       this.baseNumber += this.step * this.getCount()
     } else {
@@ -750,18 +808,19 @@ class DecrementNumber extends IncrementNumber {
 // - place at start of mutation: non-multiline characterwise text(characterwise, linewise)
 class PutBefore extends Operator {
   location = 'before'
-  target = 'Empty'
+  target: any = 'Empty'
   flashType = 'operator-long'
   restorePositions = false // manage manually
   flashTarget = false // manage manually
   trackChange = false // manage manually
+  mutationsBySelection: Map<Selection, Range> = new Map()
 
-  initialize () {
+  initialize (): void {
     this.vimState.sequentialPasteManager.onInitialize(this)
     super.initialize()
   }
 
-  execute () {
+  execute (): void {
     this.mutationsBySelection = new Map()
     this.sequentialPaste = this.vimState.sequentialPasteManager.onExecute(this)
 
@@ -786,12 +845,12 @@ class PutBefore extends Operator {
     })
   }
 
-  adjustCursorPosition () {
+  adjustCursorPosition (): void {
     for (const selection of this.editor.getSelections()) {
       if (!this.mutationsBySelection.has(selection)) continue
 
       const {cursor} = selection
-      const newRange = this.mutationsBySelection.get(selection)
+      const newRange = this.mutationsBySelection.get(selection)!
       if (this.linewisePaste) {
         this.utils.moveCursorToFirstCharacterAtRow(cursor, newRange.start.row)
       } else {
@@ -804,8 +863,11 @@ class PutBefore extends Operator {
     }
   }
 
-  mutateSelection (selection) {
-    const value = this.vimState.register.get(null, selection, this.sequentialPaste)
+  mutateSelection (selection: Selection): void {
+    // TODO(vim-ts): register.get returns RegisterValue|null and RegisterType has
+    // no 'blockwise'/'lastBlockwiseText' member; cast until RegisterManager models
+    // blockwise (see setTextToRegister).
+    const value: any = this.vimState.register.get(null, selection, this.sequentialPaste)
     if (!value.text) {
       this.cancelled = true
       return
@@ -815,7 +877,7 @@ class PutBefore extends Operator {
     // so also treat text matching the last blockwise yank/delete as blockwise.
     this.blockwisePaste =
       value.type === 'blockwise' ||
-      (this.vimState.register.lastBlockwiseText != null && value.text === this.vimState.register.lastBlockwiseText)
+      ((this.vimState.register as any).lastBlockwiseText != null && value.text === (this.vimState.register as any).lastBlockwiseText)
     const textToPaste = this.blockwisePaste ? value.text : value.text.repeat(this.getCount())
     this.linewisePaste = value.type === 'linewise' || this.isMode('visual', 'linewise')
     const newRange = this.paste(selection, textToPaste, {linewisePaste: this.linewisePaste})
@@ -824,13 +886,14 @@ class PutBefore extends Operator {
   }
 
   // Return pasted range
-  paste (selection, text, {linewisePaste}) {
+  paste (selection: Selection, text: string, {linewisePaste}: {linewisePaste?: boolean}): Range {
     if (this.sequentialPaste) {
       return this.pasteCharacterwise(selection, text)
     } else if (this.blockwisePaste) {
       return this.pasteBlockwise(selection, text)
     } else if (linewisePaste) {
-      return this.pasteLinewise(selection, text)
+      // pasteLinewise only returns undefined on an unreachable location branch.
+      return this.pasteLinewise(selection, text) as Range
     } else {
       return this.pasteCharacterwise(selection, text)
     }
@@ -839,14 +902,14 @@ class PutBefore extends Operator {
   // Paste a blockwise register: each yanked row goes onto a successive buffer
   // row at the cursor's column, padding short rows with spaces and appending new
   // rows past end-of-buffer. (`p` inserts after the cursor column, `P` before.)
-  pasteBlockwise (selection, text) {
+  pasteBlockwise (selection: Selection, text: string): Range {
     const lines = text.split('\n')
     const count = this.getCount()
     const {row, column} = selection.cursor.getBufferPosition()
     const startColumn = this.location === 'after' && !this.isEmptyRow(row) ? column + 1 : column
 
-    let firstStart = null
-    let lastEnd = null
+    let firstStart: Point | null = null
+    let lastEnd: Point | null = null
     for (let i = 0; i < lines.length; i++) {
       const targetRow = row + i
       while (targetRow > this.editor.getLastBufferRow()) {
@@ -860,10 +923,10 @@ class PutBefore extends Operator {
       if (!firstStart) firstStart = range.start
       lastEnd = range.end
     }
-    return new Range(firstStart, lastEnd)
+    return new Range(firstStart as Point, lastEnd as Point)
   }
 
-  pasteCharacterwise (selection, text) {
+  pasteCharacterwise (selection: Selection, text: string): Range {
     const {cursor} = selection
     if (selection.isEmpty() && this.location === 'after' && !this.isEmptyRow(cursor.getBufferRow())) {
       cursor.moveRight()
@@ -872,7 +935,7 @@ class PutBefore extends Operator {
   }
 
   // Return newRange
-  pasteLinewise (selection, text) {
+  pasteLinewise (selection: Selection, text: string): Range | undefined {
     const {cursor} = selection
     const cursorRow = cursor.getBufferRow()
     if (!text.endsWith('\n')) {
@@ -900,9 +963,9 @@ class PutAfter extends PutBefore {
 }
 
 class PutBeforeWithAutoIndent extends PutBefore {
-  pasteLinewise (selection, text) {
+  pasteLinewise (selection: Selection, text: string): Range | undefined {
     const newRange = super.pasteLinewise(selection, text)
-    this.utils.adjustIndentWithKeepingLayout(this.editor, newRange)
+    this.utils.adjustIndentWithKeepingLayout(this.editor, newRange as Range)
     return newRange
   }
 }
@@ -913,12 +976,12 @@ class PutAfterWithAutoIndent extends PutBeforeWithAutoIndent {
 
 class AddBlankLineBelow extends Operator {
   flashTarget = false
-  target = 'Empty'
+  target: any = 'Empty'
   stayAtSamePosition = true
   stayByMarker = true
   where = 'below'
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const point = selection.getHeadBufferPosition()
     if (this.where === 'below') point.row++
     point.column = 0
@@ -931,16 +994,16 @@ class AddBlankLineAbove extends AddBlankLineBelow {
 }
 
 class ResolveGitConflict extends Operator {
-  target = 'Empty'
+  target: any = 'Empty'
   restorePositions = false // do manually
 
-  mutateSelection (selection) {
+  mutateSelection (selection: Selection): void {
     const point = this.getCursorPositionForSelection(selection)
     const rangeInfo = this.getConflictingRangeInfo(point.row)
 
     if (rangeInfo) {
       const {whole, sectionOurs, sectionTheirs, bodyOurs, bodyTheirs} = rangeInfo
-      const resolveConflict = range => {
+      const resolveConflict = (range: Range) => {
         const text = this.editor.getTextInBufferRange(range)
         const dstRange = this.getBufferRangeForRowRange([whole.start.row, whole.end.row])
         const newRange = this.editor.setTextInBufferRange(dstRange, text ? text + '\n' : '')
@@ -955,16 +1018,16 @@ class ResolveGitConflict extends Operator {
     }
   }
 
-  getConflictingRangeInfo (row) {
+  getConflictingRangeInfo (row: number): any {
     const from = [row, Infinity]
-    const conflictStart = this.findInEditor('backward', /^<<<<<<< .+$/, {from}, event => event.range.start)
+    const conflictStart = this.findInEditor('backward', /^<<<<<<< .+$/, {from}, (event: any) => event.range.start)
 
     if (conflictStart) {
       const startRow = conflictStart.row
-      let separatorRow, endRow
+      let separatorRow: number | undefined, endRow: number | undefined
       const from = [startRow + 1, 0]
       const regex = /(^<<<<<<< .+$)|(^=======$)|(^>>>>>>> .+$)/g
-      this.scanEditor('forward', regex, {from}, ({match, range, stop}) => {
+      this.scanEditor('forward', regex, {from}, ({match, range, stop}: any) => {
         if (match[1]) {
           // incomplete conflict hunk, we saw next conflict startRow wihout seeing endRow
           stop()

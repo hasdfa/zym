@@ -6,7 +6,7 @@
  * `misc-command.js` (not vendored yet), so a minimal quilx version is provided
  * here until that file lands; it self-registers on import.
  */
-import { Base } from '../base.js'
+import { Base } from '../base.ts'
 
 class ActivateNormalMode extends Base {
   static operationKind = 'misc-command'

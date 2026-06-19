@@ -7,15 +7,16 @@
  * runs. They are replaced by real implementations as each feature lands
  * (FlashManager and the visual-mode parts of CursorStyleManager are real now).
  */
-import type VimState from './vim-state.js';
+import type VimState from './vim-state.ts';
 import { TextDecorations } from '../TextDecorations.ts';
 import { Range } from '../../../text/Range.ts';
 import { Point } from '../../../text/Point.ts';
 import type { Marker } from '../Marker.ts';
 import type { MarkerLayer } from '../MarkerLayer.ts';
+import type { Selection } from '../Selection.ts';
 import { Emitter } from '../../../util/eventKit.ts';
 // Vendored utils are untyped JS; import the two helpers the occurrence port needs.
-import { collectRangeByScan, shrinkRangeEndToBeforeNewLine } from './utils.js';
+import { collectRangeByScan, shrinkRangeEndToBeforeNewLine } from './utils.ts';
 
 /**
  * Renders cursor decorations by mode in Atom; here the cursor is the native
@@ -228,7 +229,7 @@ export class OccurrenceManager {
 
   saveLastPattern(occurrenceType?: string): void {
     this.vimState.globalState.set('lastOccurrencePattern', this.buildPattern());
-    this.vimState.globalState.set('lastOccurrenceType', occurrenceType);
+    this.vimState.globalState.set('lastOccurrenceType', occurrenceType ?? null);
   }
 
   // Union of every added pattern, as a single global regex. Cached onto the
@@ -281,7 +282,7 @@ export class OccurrenceManager {
   // re-creating selections from them, then migrate per-selection mutation state
   // onto the new selections. Returns whether anything was selected.
   select(wise?: string): boolean {
-    const closestRangeIndexByOriginalSelection = new Map<unknown, number>();
+    const closestRangeIndexByOriginalSelection = new Map<Selection, number>();
     const rangesToSelect: Range[] = [];
     const markersSelected: Marker[] = [];
     const { editor } = this.vimState;
@@ -340,7 +341,7 @@ export class OccurrenceManager {
         const selection = editor
           .getSelections()
           .find((s: { getBufferRange(): Range }) => range && s.getBufferRange().containsRange(range));
-        mutation.selection = selection;
+        mutation.selection = selection as Selection;
         if (selection) mutationsBySelection.set(selection, mutation);
       }
     }
@@ -351,8 +352,8 @@ export class OccurrenceManager {
   // Which occurrence becomes the last selection, in order of preference:
   //  1. under the original cursor  2. forward on the same row
   //  3. first on the same row      4. forward (wrapping to first)
-  private getClosestRangeForSelection(ranges: Range[], selection: unknown): Range {
-    const point: Point = this.vimState.mutationManager.mutationsBySelection.get(selection).initialPoint;
+  private getClosestRangeForSelection(ranges: Range[], selection: Selection): Range {
+    const point: Point = this.vimState.mutationManager.mutationsBySelection.get(selection)!.initialPoint;
 
     const containing = ranges.find((range) => range.containsPoint(point));
     if (containing) return containing;
