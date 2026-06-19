@@ -13,6 +13,22 @@ function project(dmb: ReturnType<typeof buildDiffMultiBuffer>): ViewProjection {
   return ViewProjection.build(dmb.items, (s: Segment) => dmb.sources.get(s.sourceKey)!.slice(s.startRow, s.endRow + 1));
 }
 
+test('widget mode: no header/blank/gap block rows — headers + gaps are anchors, not buffer text', () => {
+  // Two changes far apart so the unchanged middle elides to a `⋯` gap between two windows.
+  const mid = Array.from({ length: 10 }, (_, i) => `u${i}`).join('\n');
+  const oldText = `t0\nXXX\nt2\n${mid}\nb0\nYYY\nb2\n`;
+  const newText = `t0\nAAA\nt2\n${mid}\nb0\nBBB\nb2\n`;
+  const dmb = buildDiffMultiBuffer([{ path: '/a.ts', oldText, newText }], undefined, { headers: 'widget' });
+  assert.ok(!dmb.rowKinds.includes('header') && !dmb.rowKinds.includes('gap') && !dmb.rowKinds.includes('blank'),
+    'no header/gap/blank rows in widget mode');
+  const p = project(dmb);
+  assert.ok(!p.viewText.includes('unchanged'), 'the `⋯ unchanged lines` gap is not buffer text');
+  assert.equal(dmb.headerAnchors.length, 1);
+  assert.equal(dmb.headerAnchors[0].viewRow, 0, 'header anchors above the first content row');
+  assert.equal(dmb.gapAnchors.length, 1, 'one between-window gap, as an anchor band');
+  assert.ok(dmb.gapAnchors[0].label.includes('unchanged'), 'gap carries its `⋯ N unchanged lines` label');
+});
+
 test('single-file diff: header + context/added/removed rows, kinds aligned', () => {
   const dmb = buildDiffMultiBuffer([{ path: '/a.ts', oldText: 'a\nb\nc\n', newText: 'a\nX\nc\n' }]);
   const p = project(dmb);

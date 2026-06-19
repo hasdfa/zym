@@ -41,9 +41,13 @@ export interface DiffMultiBuffer {
   sources: Map<string, string[]>;
   /** Source key → the path whose grammar highlights it. */
   language: Map<string, string>;
-  /** Widget-header mode only: where each file's header widget anchors (the view row its content
-   *  starts on, since no header/blank rows are emitted into the buffer). */
-  headerAnchors: Array<{ path: string; label: string; viewRow: number }>;
+  /** Widget mode only: where each file's header widget anchors (the view row its content starts
+   *  on, since no header/blank rows are emitted). `subtitle` carries a LEADING `⋯` gap (elided
+   *  rows above the first shown row) folded into the header, as it shares the anchor row. */
+  headerAnchors: Array<{ path: string; label: string; viewRow: number; subtitle?: string }>;
+  /** Widget mode only: each between/trailing `⋯` gap, anchored BELOW `viewRow` (the last shown
+   *  row before the elision) — a decoration band, not a navigable buffer row. */
+  gapAnchors: Array<{ viewRow: number; label: string }>;
 }
 
 export interface DiffLayoutOptions {
@@ -73,6 +77,7 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
   const sources = new Map<string, string[]>();
   const language = new Map<string, string>();
   const headerAnchors: DiffMultiBuffer['headerAnchors'] = [];
+  const gapAnchors: DiffMultiBuffer['gapAnchors'] = [];
   const split = (text: string): string[] => text.split('\n');
   // Emit one row: its kind + the old/new line numbers it carries.
   const block = (kind: DiffRowKind): void => {
@@ -92,10 +97,12 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
     language.set(oKey, file.path);
 
     const label = file.label ?? (cwd ? Path.relative(cwd, file.path) : Path.basename(file.path));
+    let header: { path: string; label: string; viewRow: number; subtitle?: string } | null = null;
     if (widgetHeaders) {
       // No header/blank rows in the buffer — the surface anchors a header widget above the row
       // the file's content starts on (recorded now, before its first row is emitted).
-      headerAnchors.push({ path: file.path, label, viewRow: rowKinds.length });
+      header = { path: file.path, label, viewRow: rowKinds.length };
+      headerAnchors.push(header);
     } else {
       if (fileIndex > 0) {
         items.push({ type: 'block', block: { kind: 'blank', text: '' } });
@@ -104,6 +111,20 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
       items.push({ type: 'block', block: { kind: 'header', text: label } });
       block('header');
     }
+
+    // Emit an elided `⋯` gap: a block row (block mode), or — in widget mode — a LEADING gap folds
+    // into the header subtitle (it shares the header's anchor row), any other anchors a band
+    // below the last shown row (`rowKinds.length - 1`). Never a navigable buffer row in widget mode.
+    const emitGap = (count: number, leading: boolean): void => {
+      if (!widgetHeaders) {
+        items.push({ type: 'block', block: { kind: 'gap', text: gapLabel(count) } });
+        block('gap');
+      } else if (leading && header) {
+        header.subtitle = gapLabel(count);
+      } else {
+        gapAnchors.push({ viewRow: rowKinds.length - 1, label: gapLabel(count) });
+      }
+    };
 
     const recs = diffRows(oldLines, newLines);
 
@@ -126,13 +147,11 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
 
     if (!anyChange) {
       // No changes (a changed-file list wouldn't include this, but stay total): elide all.
-      if (recs.length > 0) {
-        items.push({ type: 'block', block: { kind: 'gap', text: gapLabel(recs.length) } });
-        block('gap');
-      }
+      if (recs.length > 0) emitGap(recs.length, /* leading */ true);
       return;
     }
 
+    let firstItem = true; // a gap before the first window is LEADING (no content row above it)
     for (let i = 0; i < recs.length; ) {
       if (visible[i]) {
         let j = i;
@@ -144,18 +163,19 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
           oldNums.push(rec.op === 'ins' ? null : rec.oldRow + 1);
           newNums.push(rec.op === 'del' ? null : rec.newRow + 1);
         }
+        firstItem = false;
         i = j;
       } else {
         let j = i;
         while (j < recs.length && !visible[j]) j++;
-        items.push({ type: 'block', block: { kind: 'gap', text: gapLabel(j - i) } });
-        block('gap');
+        emitGap(j - i, firstItem);
+        firstItem = false;
         i = j;
       }
     }
   });
 
-  return { items, rowKinds, oldNums, newNums, sources, language, headerAnchors };
+  return { items, rowKinds, oldNums, newNums, sources, language, headerAnchors, gapAnchors };
 }
 
 function gapLabel(count: number): string {

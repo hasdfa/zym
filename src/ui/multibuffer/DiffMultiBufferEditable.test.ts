@@ -105,10 +105,11 @@ test('editable diff: re-diff re-flows the view — making new == old removes the
   assert.equal(registry.find(path)!.getText(), 'line1\nline2\nline3\n', 'new side now matches the base');
   await flushReDiff();
   const lines = linesOf(mbv);
-  // With no remaining change, the windowed diff elides the whole file to a gap — the phantom
-  // `line2` removed row and the `CHANGED` added row are both gone.
-  assert.ok(!lines.includes('CHANGED'), 'the edited-away change no longer shows');
-  assert.ok(lines.some((l) => l.includes('unchanged')), 're-diff re-flowed: the now-unchanged file is elided');
+  // With no remaining change, the windowed diff elides the whole file — the phantom `line2`
+  // removed row and the `CHANGED` added row are both gone (the elision is a header-subtitle
+  // widget now, not a buffer row).
+  assert.ok(!lines.includes('CHANGED'), 're-diff re-flowed: the edited-away change no longer shows');
+  assert.ok(!lines.includes('line2'), 'the removed phantom row is gone too');
   mbv.dispose();
 });
 

@@ -27,7 +27,7 @@ import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
 import { applyDiffDecorations } from '../TextEditor/applyDiffDecorations.ts';
 import { DiffLineNumberGutter } from '../TextEditor/DiffLineNumberGutter.ts';
 import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './diffMultiBuffer.ts';
-import { buildHeaderWidget } from './MultiBufferHeader.ts';
+import { buildHeaderWidget, buildGapWidget } from './MultiBufferHeader.ts';
 import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
 
 export interface DiffMultiBufferOptions {
@@ -78,7 +78,9 @@ export class DiffMultiBufferView {
   private readonly sources = new Map<string, SourceEntry>();
   private readonly projectionView: ProjectionView;
   private readonly lineNumbers: DiffLineNumberGutter[] = [];
-  private readonly headerHandles: BlockDecorationHandle[] = [];
+  // Header + `⋯` gap widgets (BlockDecoration bands). Re-placed on each re-diff: their text
+  // (gap counts, leading-gap subtitle) and positions change as the diff re-flows.
+  private overlayHandles: BlockDecorationHandle[] = [];
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
@@ -137,7 +139,7 @@ export class DiffMultiBufferView {
       new DiffLineNumberGutter(view, lineLabels(dmb.newNums), undefined, 2, gutterBg(dmb, 'new')),
     ];
 
-    this.installHeaders(dmb);
+    this.installOverlays(dmb);
     this.installNavigation();
     if (this.editable) {
       // Re-diff after the new side settles: the live Document already has the edit (write-through),
@@ -160,12 +162,26 @@ export class DiffMultiBufferView {
     return buildDiffMultiBuffer(files, this.cwd, { headers: 'widget' });
   }
 
-  /** Anchor a filename-header widget above each file's first row (the search-view pattern). The
-   *  anchor mark tracks the row across edits; clicking jumps to the file. */
-  private installHeaders(dmb: DiffMultiBuffer): void {
+  /** (Re)place the header widgets (above each file's first row) + the `⋯` gap bands (below the
+   *  last shown row before each elision). Both are real widgets, not navigable buffer rows.
+   *
+   *  Re-placing tears down + recreates the overlay widgets, which flickers — so SKIP it when the
+   *  anchors are byte-identical to last time. Typing within a line doesn't change the gap/header
+   *  structure (same labels, same rows), so the common edit re-diffs without touching overlays;
+   *  only a line add/remove (which shifts rows or gap counts) actually re-places. */
+  private lastOverlayKey = '';
+  private installOverlays(dmb: DiffMultiBuffer): void {
+    const key = JSON.stringify([dmb.headerAnchors, dmb.gapAnchors]);
+    if (key === this.lastOverlayKey && this.overlayHandles.length) return;
+    this.lastOverlayKey = key;
+    for (const h of this.overlayHandles) h.remove();
+    this.overlayHandles = [];
     for (const h of dmb.headerAnchors) {
-      const widget = buildHeaderWidget(h.label, h.path, () => this.onActivate?.({ path: h.path, row: 0 }));
-      this.headerHandles.push(this.editor.inlineBlocks.add({ line: h.viewRow, widget, placement: 'above' }));
+      const widget = buildHeaderWidget(h.label, h.path, () => this.onActivate?.({ path: h.path, row: 0 }), h.subtitle);
+      this.overlayHandles.push(this.editor.inlineBlocks.add({ line: h.viewRow, widget, placement: 'above' }));
+    }
+    for (const g of dmb.gapAnchors) {
+      this.overlayHandles.push(this.editor.inlineBlocks.add({ line: g.viewRow, widget: buildGapWidget(g.label), placement: 'below' }));
     }
   }
 
@@ -229,8 +245,8 @@ export class DiffMultiBufferView {
     this.applyDecorations(dmb);
     this.lineNumbers[0]?.setData(lineLabels(dmb.oldNums), gutterBg(dmb, 'old'));
     this.lineNumbers[1]?.setData(lineLabels(dmb.newNums), gutterBg(dmb, 'new'));
-    // retarget swapped rows but didn't repaint — re-highlight + re-style the gap rows, else
-    // spliced sections lose their syntax colors and the `⋯ unchanged` styling.
+    this.installOverlays(dmb); // re-place header + gap widgets (counts/positions re-flowed)
+    // retarget swapped rows but didn't repaint — re-highlight the spliced sections.
     this.editor.repaintSyntax();
     // Restore the caret to where its source position now shows (it followed the reflow).
     if (anchor.kind === 'source') {
@@ -325,8 +341,8 @@ export class DiffMultiBufferView {
     this.reDiffTimer = null;
     for (const unsub of this.modifiedUnsubs) unsub(); // detach from the (possibly shared) Documents
     this.modifiedUnsubs.length = 0;
-    for (const handle of this.headerHandles) handle.remove();
-    this.headerHandles.length = 0;
+    for (const handle of this.overlayHandles) handle.remove();
+    this.overlayHandles = [];
     for (const gutter of this.lineNumbers) gutter.dispose();
     this.projectionView.dispose();
     for (const entry of this.sources.values()) {
