@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { ProjectionView } from './ProjectionView.ts';
 import type { Item } from './ViewProjection.ts';
+import { diffSegments } from '../multibuffer/diffSegments.ts';
 import { Point } from '../../text/Point.ts';
 
 // ProjectionView owns GtkSource buffers, so this needs GTK.
@@ -361,6 +362,64 @@ test('300 row-count-changing edits within editable segments never desync map↔b
     why = consistent();
   }
   assert.equal(why, '', 'map, view buffer, and source stayed consistent across 300 re-segmenting edits');
+});
+
+// --- retarget (minimal-churn projection swap — the re-diff-on-edit engine) -----------------
+// A re-diff produces a NEW item list (phantom rows appear/disappear). `retarget` applies only
+// the line-level delta vs the current view, so unchanged rows keep their caret + decorations
+// (no whole-buffer setText flash). The key properties: the result equals a fresh build, and
+// tags on untouched rows survive.
+
+test('retarget: minimal-churn item swap keeps unchanged rows (decorations survive)', () => {
+  const f = srcBuffer('l0\nl1\nl2\nl3\nl4\n');
+  const seg = (a: number, b: number): Item =>
+    ({ type: 'segment', segment: { sourceKey: 'f', startRow: a, endRow: b, editable: true, kind: 'real' } });
+  const gap: Item = { type: 'block', block: { kind: 'gap', text: '⋯' } };
+  const pv = new ProjectionView([seg(0, 2)], new Map([['f', f]]));
+  assert.equal(textOf(pv.buffer), 'l0\nl1\nl2');
+
+  // A decoration on view row 0; it must survive both a grow and a shrink.
+  const buf = pv.buffer as any;
+  const tag = new Gtk.TextTag({ name: 'test:deco' } as any);
+  buf.getTagTable().add(tag);
+  buf.applyTag(tag, asIter(buf.getIterAtLine(0)), asIter(buf.getIterAtLineOffset(0, 2)));
+  const hasDeco = () => asIter(buf.getIterAtLineOffset(0, 1)).hasTag(tag);
+  assert.equal(hasDeco(), true);
+
+  pv.retarget([seg(0, 2), gap, seg(4, 4)]); // append a gap + a second window
+  assert.equal(textOf(pv.buffer), 'l0\nl1\nl2\n⋯\nl4', 'rows appended at the bottom');
+  assert.equal(pv.view.viewRowCount, 5);
+  assert.equal(hasDeco(), true, 'row 0 decoration survived the append (no full re-materialize)');
+  // The appended gap row is re-locked read-only.
+  const ro = buf.getTagTable().lookup('vp:readonly');
+  assert.equal(asIter(buf.getIterAtLineOffset(3, 0)).hasTag(ro), true, 'gap row read-only after retarget');
+
+  pv.retarget([seg(0, 2)]); // shrink back
+  assert.equal(textOf(pv.buffer), 'l0\nl1\nl2');
+  assert.equal(hasDeco(), true, 'survived the shrink too');
+});
+
+test('retarget to a recomputed diff matches a fresh build (re-diff on edit)', () => {
+  const newBuf = srcBuffer('a\nb\nc\n');
+  const oldBuf = srcBuffer('a\nb\nc\n');
+  const keys = () => new Map([['new:f', newBuf], ['old:f', oldBuf]] as const);
+  const items0 = diffSegments(['a', 'b', 'c', ''], ['a', 'b', 'c', ''], 'new:f', 'old:f').items;
+  const pv = new ProjectionView(items0, keys());
+  assert.equal(textOf(pv.buffer), 'a\nb\nc\n', 'no diff yet → just the new side (trailing empty row)');
+
+  // The new side was edited (b→B): update the source as a write-through would, then re-diff.
+  pv.suspend();
+  (newBuf as any).setText('a\nB\nc\n', -1);
+  pv.resume();
+  const items1 = diffSegments(['a', 'b', 'c', ''], ['a', 'B', 'c', ''], 'new:f', 'old:f').items;
+  pv.retarget(items1);
+
+  // Retarget must produce exactly what a fresh materialization of the same items would (the
+  // removed `b` now shows as a phantom old-side row; `B` is the added new-side row).
+  const fresh = new ProjectionView(items1, keys());
+  assert.equal(textOf(pv.buffer), textOf(fresh.buffer), 'retarget result == fresh build');
+  assert.ok((textOf(pv.buffer) as string).includes('b'), 'the removed line reappeared as a phantom row');
+  fresh.dispose();
 });
 
 test('dispose stops syncing', () => {

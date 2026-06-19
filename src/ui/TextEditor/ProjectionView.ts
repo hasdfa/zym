@@ -27,6 +27,7 @@
 import { Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { Point } from '../../text/Point.ts';
 import { ViewProjection, type Item, type Fold } from './ViewProjection.ts';
+import { diffLines } from '../../util/lineDiff.ts';
 
 // node-gtk returns out-param iters directly or as [ok, iter]; normalize to an iter.
 const asIter = (res: any): any => (Array.isArray(res) ? res[res.length - 1] : res);
@@ -574,6 +575,92 @@ export class ProjectionView {
     this.items = items;
     this.projection = ViewProjection.build(items, (seg) => this.sourceLines(seg));
     this.materialize();
+  }
+
+  /**
+   * Re-target the view to a NEW item list with MINIMAL churn — the engine for a re-diff after
+   * the new side was edited (the diff structure changes: phantom/removed rows appear or
+   * disappear, runs split/merge). Unlike `rebuild` (which `setText`s the whole buffer, clearing
+   * every highlight tag → a flash, and resetting the caret), this builds the new map, line-diffs
+   * its text against the CURRENT view text, and applies only the changed lines. So rows that
+   * didn't move keep their caret position, syntax tags, and decorations; only the genuinely
+   * changed rows (usually just the re-flowed phantom rows) are spliced. Block / phantom rows are
+   * re-locked read-only afterwards (they shifted).
+   */
+  retarget(items: Item[]): void {
+    const next = ViewProjection.build(items, (seg) => this.sourceLines(seg));
+    this.viewSuppress = true;
+    try {
+      this.spliceTo(next.viewText);
+      this.items = items;
+      this.projection = next;
+      this.relockReadonly();
+      (this.buffer as any).setModified(false);
+    } finally {
+      this.viewSuppress = false;
+    }
+  }
+
+  /** Splice the view buffer to `target` by applying only its line-level diff against the current
+   *  text — leaving unchanged lines (their tags + the caret) in place. */
+  private spliceTo(target: string): void {
+    const buffer = this.buffer as any;
+    const current = buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true) as string;
+    if (current === target) return;
+    const ops = diffLines(current.split('\n'), target.split('\n'));
+    const b = target.split('\n');
+    let viewRow = 0; // row in the (mutating) buffer
+    let bi = 0; // index into the target lines
+    for (const op of ops) {
+      if (op === 'eq') {
+        viewRow++;
+        bi++;
+      } else if (op === 'del') {
+        this.deleteViewLine(viewRow); // line removed; the next line shifts into viewRow
+      } else {
+        this.insertViewLine(viewRow, b[bi]);
+        viewRow++;
+        bi++;
+      }
+    }
+  }
+
+  /** Delete the whole of view line `row` (its text + the newline that joins it to its
+   *  neighbour). The final line has no trailing newline, so swallow the PRECEDING one instead. */
+  private deleteViewLine(row: number): void {
+    const buffer = this.buffer as any;
+    const lastLine = buffer.getLineCount() - 1;
+    let start = asIter(buffer.getIterAtLine(row));
+    let end: any;
+    if (row < lastLine) {
+      end = asIter(buffer.getIterAtLine(row + 1));
+    } else {
+      end = buffer.getEndIter();
+      if (row > 0) {
+        start = asIter(buffer.getIterAtLine(row));
+        start.backwardChar(); // consume the '\n' before the last line, leaving no empty row
+      }
+    }
+    buffer.delete(start, end);
+  }
+
+  /** Insert `text` as a new view line at `row` (before the line currently there, or as a new
+   *  final line when `row` is past the end). */
+  private insertViewLine(row: number, text: string): void {
+    const buffer = this.buffer as any;
+    if (row < buffer.getLineCount()) {
+      buffer.insert(asIter(buffer.getIterAtLine(row)), text + '\n', -1);
+    } else {
+      buffer.insert(buffer.getEndIter(), '\n' + text, -1); // append past the (unterminated) last line
+    }
+  }
+
+  /** Clear + reapply the read-only tag across the buffer (block/phantom rows moved on retarget). */
+  private relockReadonly(): void {
+    const buffer = this.buffer as any;
+    const tag = buffer.getTagTable().lookup(READONLY_TAG);
+    buffer.removeTag(tag, buffer.getStartIter(), buffer.getEndIter());
+    this.applyReadonlyTags();
   }
 
   /** Ignore source-buffer change signals until `resume()` — for a bulk replace the owner
