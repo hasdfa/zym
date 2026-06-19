@@ -164,7 +164,10 @@ interface SessionState {
   savedAt: string;              // ISO timestamp, stamped by save()
   workspaces: WorkspaceState[]; // MVP runtime writes one user workspace + one per live agent
   activeWorkspace: number;      // index into workspaces; MVP: 0
-  docks?: { notificationLog: boolean; leftSplit?: number };  // window-level, shared
+  // window-level, shared. `visible` = per-side dock-visibility toggle
+  // (left/right/top/bottom); absent in pre-feature sessions → all sides shown.
+  docks?: { notificationLog: boolean; leftSplit?: number;
+            visible?: { left: boolean; right: boolean; top: boolean; bottom: boolean } };
   window?: { width: number; height: number; maximized: boolean };
 }
 ```

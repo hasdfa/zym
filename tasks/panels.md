@@ -20,6 +20,32 @@ Notifications/Diagnostics/Keybindings docks) — is a `Panel`.
   Files/Source-Control dock lives in the **right** slot — note the misleading
   `leftPanel` field / `revealLeftTab` names, which dock via `setRight`.
 
+## Dock visibility (toggleable docks)
+
+Each dock side is **independently show/hide-able without discarding its panels**.
+`Workbench` tracks a side's assigned *content* and its *visibility* separately
+(`dockContent` / `dockVisible`); the Paned slot shows the content only when the
+side is both occupied and visible, so hiding a dock just detaches its widget
+(tabs/state live on inside it) and re-showing re-attaches the same widget.
+
+- API: `setDockVisible(side, visible)` / `toggleDock(side)` (no-op on an empty
+  side) / `isDockVisible(side)` / `isDockOccupied(side)` / `dockVisibility()`.
+- The content setters (`setLeft/Right/Top/Bottom`) **force the side visible** when
+  given non-null content — putting something in a dock means you want to see it —
+  so the content pickers (bottom dock notifications/diagnostics/keymap, side-dock
+  `revealLeftTab`) need no separate "show" call. The bottom-dock content toggles
+  (`toggleNotificationLog`/`toggleDiagnosticsPanel`/`toggleKeymapPanel`) only
+  *close* when their panel is the currently-**shown** content; if it's selected but
+  the dock was hidden via the visibility toggle, they re-reveal it.
+- Commands `dock:toggle-{left,right,top,bottom}` (`ctrl-w g h/j/k/l`, by vim
+  direction: h=left, j=bottom, k=top, l=right), handled in
+  `AppWindow.toggleDockSide` (focuses into a freshly-shown dock; falls focus back to
+  the center when hiding out from under it). Left/top carry no built-in content yet,
+  so toggling them is a no-op + toast until a plugin contributes a panel there.
+- **Session-persisted**: `SessionDocks.visible` (per-side flags) is saved/restored
+  with the rest of the dock state; a toggle schedules an autosave. Sessions from
+  before this feature have no `visible` entry and restore all sides shown.
+
 ## Active / focus management
 
 Decisions (implemented in `Panel` + `PanelGroup`):
@@ -94,3 +120,5 @@ the tab's own root drops the entry (so restore re-derives from the tab itself).
 - [x] `requireTabBar`, non-expanding tabs, tab-bar bottom border.
 - [x] Zombie-safe dock close (bottom veto-hide; side per-tab close + safe re-add).
 - [x] Per-tab focus memory.
+- [x] Toggleable dock visibility (left/right/top/bottom) keeping panels alive,
+  session-persisted (see "Dock visibility" above).

@@ -142,6 +142,12 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'ctrl-w ctrl-w': 'pane:focus-next',
     'ctrl-w d d': 'agent:close', // close the active agent (terminate if running, then remove it)
 
+    // Toggle a dock side's visibility (keeping its panels), by vim direction.
+    'ctrl-w g h': 'dock:toggle-left',
+    'ctrl-w g j': 'dock:toggle-bottom',
+    'ctrl-w g k': 'dock:toggle-top',
+    'ctrl-w g l': 'dock:toggle-right', // right dock = Files / Source Control
+
     // Cycle the active workbench (the user / each agent) — previous / next.
     'super-,': 'workbench:previous',
     'super-.': 'workbench:next',

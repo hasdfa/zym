@@ -42,7 +42,7 @@ import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees } from 
 import { openGithubService, type GithubService } from '../github.ts';
 import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
-import { Workbench, type BottomDock } from './Workbench.ts';
+import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
 import { openFileOpener } from './FileOpener.ts';
 import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
@@ -283,9 +283,16 @@ export class AppWindow {
       serializeChild: (widget) => this.serializeChild(widget),
       createEditorTab: (path, restore) => this.createEditorTab(path, restore),
       createTerminalTab: (cwd) => this.createTerminalTab(cwd),
-      getDocks: () => ({ notificationLog: this.workbench.bottomDock === 'notifications' }),
+      getDocks: () => ({
+        notificationLog: this.workbench.bottomDock === 'notifications',
+        visible: this.workbench.dockVisibility(),
+      }),
       applyDocks: (docks) => {
         if (docks.notificationLog && this.workbench.bottomDock !== 'notifications') this.toggleNotificationLog();
+        // Apply per-side visibility *after* any content has been (re)established above,
+        // so a side restored as hidden stays hidden even though its content is present.
+        if (docks.visible)
+          for (const side of DOCK_SIDES) this.workbench.setDockVisible(side, docks.visible[side] !== false);
       },
       serializeAgentWorkspaces: () => this.serializeAgentWorkspaces(),
       restoreAgent: (ws) => this.restoreAgent(ws),
@@ -1698,6 +1705,11 @@ export class AppWindow {
       'config:open-as-text': 'Open config.json',
       'session:save': 'Save the session',
       'session:restore': 'Restore the last session',
+      // Dock visibility
+      'dock:toggle-left': 'Toggle the left dock',
+      'dock:toggle-right': 'Toggle the right dock (Files / Source Control)',
+      'dock:toggle-top': 'Toggle the top dock',
+      'dock:toggle-bottom': 'Toggle the bottom dock',
     });
   }
 
@@ -1719,7 +1731,56 @@ export class AppWindow {
       // Cycle the active workbench through [user, …agents] (the workbench-list order).
       'workbench:previous': () => this.cycleWorkbench(-1),
       'workbench:next': () => this.cycleWorkbench(1),
+      // Show/hide each dock side without discarding the panels it holds.
+      'dock:toggle-left': () => this.toggleDockSide('left'),
+      'dock:toggle-right': () => this.toggleDockSide('right'),
+      'dock:toggle-top': () => this.toggleDockSide('top'),
+      'dock:toggle-bottom': () => this.toggleDockSide('bottom'),
     });
+  }
+
+  // Show / hide a dock side (the dock-visibility toggle), keeping its panels intact.
+  // Showing moves focus into the dock; hiding falls focus back to the center when it
+  // was inside the dock. An empty side has nothing to toggle (reports a toast). The
+  // new layout is autosaved so it survives a restore.
+  private toggleDockSide(side: DockSide) {
+    if (!this.workbench.isDockOccupied(side)) {
+      this.toast(`No ${side} dock to toggle`);
+      return;
+    }
+    const focusWasInside = this.isFocusWithin(this.workbench.root) && this.isDockSideFocused(side);
+    this.workbench.toggleDock(side);
+    if (this.workbench.isDockVisible(side)) this.focusDockSide(side);
+    else if (focusWasInside) this.focusActivePane(); // dock hid out from under focus
+    this.sessionController.scheduleAutosave();
+  }
+
+  // Whether keyboard focus currently sits inside the named dock side's content.
+  private isDockSideFocused(side: DockSide): boolean {
+    if (side === 'right') return this.isFocusWithin(this.workbench.leftPanel.root);
+    if (side === 'bottom') {
+      const panel = this.bottomDockPanel();
+      return panel ? this.isFocusWithin(panel.root) : false;
+    }
+    return false; // left / top carry no built-in content yet
+  }
+
+  // Move focus into a freshly-shown dock side's content.
+  private focusDockSide(side: DockSide) {
+    if (side === 'right') {
+      this.focusSidePanel();
+    } else if (side === 'bottom') {
+      const panel = this.bottomDockPanel();
+      if (panel) this.focusDock(panel as Panel, () => this.focusBottomDockContent());
+    }
+    // left / top have no built-in content to focus yet.
+  }
+
+  // Focus whatever view currently fills the bottom dock.
+  private focusBottomDockContent() {
+    if (this.workbench.bottomDock === 'notifications') this.workbench.notificationLog.focus();
+    else if (this.workbench.bottomDock === 'diagnostics') this.workbench.diagnosticsPanel.focus();
+    else if (this.workbench.bottomDock === 'keymap') this.workbench.keymapPanel.focus();
   }
 
   // --- LSP commands ----------------------------------------------------------
@@ -1766,8 +1827,10 @@ export class AppWindow {
   }
 
   // Toggle the Diagnostics panel in the bottom dock (replacing whatever was there).
+  // Only closes when it's already the *shown* content — if it's selected but the
+  // bottom dock was hidden (via the dock-visibility toggle), this re-reveals it.
   private toggleDiagnosticsPanel() {
-    if (this.workbench.bottomDock === 'diagnostics') {
+    if (this.workbench.bottomDock === 'diagnostics' && this.workbench.isDockVisible('bottom')) {
       this.setBottomDock(null);
     } else {
       this.setBottomDock('diagnostics');
@@ -1777,7 +1840,7 @@ export class AppWindow {
 
   // Toggle the keybinding reference list in the bottom dock.
   private toggleKeymapPanel() {
-    if (this.workbench.bottomDock === 'keymap') {
+    if (this.workbench.bottomDock === 'keymap' && this.workbench.isDockVisible('bottom')) {
       this.setBottomDock(null);
     } else {
       this.setBottomDock('keymap');
@@ -2448,7 +2511,7 @@ export class AppWindow {
 
   // Toggle the notification log in the bottom dock (replacing whatever was there).
   private toggleNotificationLog() {
-    if (this.workbench.bottomDock === 'notifications') {
+    if (this.workbench.bottomDock === 'notifications' && this.workbench.isDockVisible('bottom')) {
       this.setBottomDock(null);
     } else {
       this.setBottomDock('notifications');
