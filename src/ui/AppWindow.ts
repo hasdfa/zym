@@ -2189,7 +2189,7 @@ export class AppWindow {
       });
       this.multibufferViews.set(view.root, view); // disposeChild tears it down on close
       child.select();
-      view.view.grabFocus();
+      view.focus();
     });
   }
 

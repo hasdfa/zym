@@ -9,6 +9,7 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { SyntaxController, type RevealedRange, type ProvidedFold } from '../../syntax/syntax-controller.ts';
+import type { SyntaxProjection } from '../../syntax/SyntaxProjection.ts';
 import { detectIndentation } from './detectIndentation.ts';
 import { handleAutoPairInsert, handleAutoPairBackspace } from './autoPair.ts';
 import { handleTagAutoClose } from './tagClose.ts';
@@ -229,6 +230,10 @@ export interface BufferEditorOptions {
    *  supply their own fold ranges (`setProvidedFolds`) — unchanged runs, not code
    *  structure; peek/preview panes set it false to disable folding entirely. */
   folding?: boolean;
+  /** A multi-source syntax projection (the multibuffer): highlight this buffer by pulling
+   *  each excerpt's captures from its source's parse rather than parsing the buffer as one
+   *  language. Mutually exclusive with `languagePath`. */
+  syntaxProjection?: SyntaxProjection;
 }
 
 // Syntax-highlight a signature fragment (falling back to plain escaped text when
@@ -429,6 +434,8 @@ export class TextEditor implements DocumentHost {
       // in N views parses once. Buffer-only / diff panes keep a private parse over their
       // own view buffer (the diff's old/new sides become separate parses in Phase 1b).
       documentSyntax: this.bufferMode ? undefined : this.document.syntax,
+      // A multibuffer buffer paints many sources stitched together via this projection.
+      projection: this.bufferMode?.syntaxProjection,
     });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
@@ -522,8 +529,11 @@ export class TextEditor implements DocumentHost {
     if (mode.initialText) this.setText(mode.initialText);
     this.placeholderLabel?.setVisible(this.buffer.getCharCount() === 0);
     // Tree-sitter highlighting from the compared file's type (after the text is set,
-    // so the first parse sees it). Grammars must be preloaded (preloadGrammars).
+    // so the first parse sees it). Grammars must be preloaded (preloadGrammars). A
+    // multibuffer instead paints its projection (its sources are already parsed) — no
+    // single-language step, so trigger the first paint directly.
     if (mode.languagePath) this.syntax.setLanguageForPath(mode.languagePath);
+    else if (mode.syntaxProjection) this.syntax.paint();
     // Read-only viewer (e.g. a diff pane): block edits at the view; vim normal-mode
     // navigation still works, and insert-mode keystrokes simply do nothing. Start
     // unfocused so a freshly-shown pane has no caret until it's actually focused

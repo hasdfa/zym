@@ -1,23 +1,25 @@
 /*
  * MultiBufferView — Phase 1a of the multibuffer (tasks/code-editing/multibuffer.md): ONE
- * read-only GtkSourceView stitching excerpts from many files, each with a filename header,
- * each highlighted by its own grammar. The validation vehicle for the excerpt coordinate
- * map + the multi-source syntax projection before the diff/editable phases build on it.
+ * read-only editor stitching excerpts from many files, each with a filename header, each
+ * highlighted by its own grammar. It IS a `TextEditor` (buffer mode, read-only) so it gets
+ * vim navigation, search, selection, and decorations for free; the per-file highlighting
+ * comes from an `ExcerptSyntaxProjection` the editor's painter renders through (one painter
+ * on the buffer — no second highlighter, no parsing the concatenation as one language).
  *
  * Read-only snapshot: each unique source is a bare GtkSource.Buffer + its own
- * `DocumentSyntax` (the Phase-0 per-Document parse), so the file's grammar paints its
- * excerpt. Reusing a *live* open Document (so an edited file re-projects) is the seam
- * Phase 1b/2 fill — here a source is read from disk once.
+ * `DocumentSyntax` (the Phase-0 per-Document parse), read from disk once. Reusing a *live*
+ * open Document (so an edited file re-projects) is the seam Phase 1b/2 fill.
  *
- * Navigation: the cursor row resolves through the coordinate map to a `(path, row)`; Enter
- * or double-click fires `onActivate` so the caller opens the file at that line.
+ * Navigation: the cursor row resolves through the coordinate map to `(path, row)`; Enter or
+ * double-click fires `onActivate` so the caller opens the file at that line.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
+import { TextEditor } from '../TextEditor/TextEditor.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import { MultiBufferProjection, type Excerpt, type Segment } from './MultiBufferModel.ts';
-import { MultiBufferSyntax } from './MultiBufferSyntax.ts';
+import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
 
 /** One file's contribution: the regions (source model row spans) to show. */
 export interface ExcerptInput {
@@ -44,45 +46,32 @@ interface SourceEntry {
 const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 
 export class MultiBufferView {
-  readonly root: InstanceType<typeof Gtk.ScrolledWindow>;
-  readonly view: InstanceType<typeof GtkSource.View>;
-  private readonly buffer: SourceBuffer;
-  private readonly projector: MultiBufferSyntax;
+  readonly root: InstanceType<typeof Gtk.Widget>;
+  readonly editor: TextEditor;
   private readonly sources = new Map<string, SourceEntry>();
-  private projection: MultiBufferProjection;
+  private readonly projection: MultiBufferProjection;
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private disposed = false;
 
   constructor(options: MultiBufferOptions) {
     this.onActivate = options.onActivate;
 
-    this.buffer = new GtkSource.Buffer();
-    this.buffer.setHighlightSyntax(false); // the projector owns highlighting
-    this.view = new GtkSource.View({ buffer: this.buffer });
-    this.view.setEditable(false);
-    this.view.setMonospace(true);
-    this.view.setName('MultiBufferView');
-    (this.view as any).setShowLineNumbers?.(false);
-
-    this.projector = new MultiBufferSyntax(this.view, this.buffer);
-
-    // Resolve each unique source once (read from disk, parse with its grammar), then build
-    // the projection text + coordinate map and paint it.
+    // Resolve each unique source once (read from disk, parse with its grammar), build the
+    // projection text + coordinate map, and hand the painter a projection over the sources.
     const excerpts = this.buildExcerpts(options.excerpts, options.cwd);
     this.projection = MultiBufferProjection.build(excerpts, (seg) => this.resolveLines(seg));
-    this.buffer.setText(this.projection.text, -1);
-    this.repaint();
+    const sources = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
+    const syntaxProjection = new ExcerptSyntaxProjection(this.projection, sources);
 
+    this.editor = new TextEditor({
+      buffer: { readOnly: true, initialText: this.projection.text, folding: false, syntaxProjection },
+    });
+    this.root = this.editor.root;
     this.installNavigation();
-
-    this.root = new Gtk.ScrolledWindow();
-    this.root.setHexpand(true);
-    this.root.setVexpand(true);
-    this.root.setChild(this.view);
   }
 
   /** Resolve sources from disk + parse them, and turn region inputs into Excerpts. Files
-   *  that can't be read are skipped (logged); regions are clamped to the file's line count. */
+   *  that can't be read are skipped; regions are clamped to the file's line count. */
   private buildExcerpts(inputs: ExcerptInput[], cwd?: string): Excerpt[] {
     const excerpts: Excerpt[] = [];
     for (const input of inputs) {
@@ -131,15 +120,13 @@ export class MultiBufferView {
     return entry.lines.slice(segment.startRow, segment.endRow + 1);
   }
 
-  private repaint(): void {
-    const sources = new Map<string, DocumentSyntax>();
-    for (const [key, entry] of this.sources) sources.set(key, entry.syntax);
-    this.projector.paint(this.projection, sources);
-  }
-
-  /** Enter (on the focused view) + double-click activate the row under the cursor/pointer. */
+  /** Enter (on the focused view) + double-click activate the row under the cursor/pointer.
+   *  Capture phase so Enter jumps before the vim layer treats it as a motion (this is a
+   *  read-only results surface — Enter-opens is the expected quickfix UX). */
   private installNavigation(): void {
+    const view = this.editor.sourceView as any;
     const keys = new Gtk.EventControllerKey();
+    keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => {
       if (keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter) {
         this.activateRow(this.cursorRow());
@@ -147,21 +134,21 @@ export class MultiBufferView {
       }
       return false;
     });
-    this.view.addController(keys);
+    view.addController(keys);
 
     const click = new Gtk.GestureClick();
     click.on('pressed', (nPress: number, x: number, y: number) => {
       if (nPress < 2) return; // double-click only
-      const by = (this.view as any).windowToBufferCoords(Gtk.TextWindowType.TEXT, x, y);
+      const by = view.windowToBufferCoords(Gtk.TextWindowType.TEXT, x, y);
       const yBuf = Array.isArray(by) ? by[by.length - 1] : y;
-      const r = (this.view as any).getLineAtY(yBuf);
+      const r = view.getLineAtY(yBuf);
       this.activateRow(asIter(Array.isArray(r) ? r[0] : r).getLine());
     });
-    this.view.addController(click);
+    view.addController(click);
   }
 
   private cursorRow(): number {
-    const buffer = this.buffer as any;
+    const buffer = (this.editor.sourceView as any).getBuffer();
     return asIter(buffer.getIterAtMark(buffer.getInsert())).getLine();
   }
 
@@ -170,9 +157,8 @@ export class MultiBufferView {
     if (loc) this.onActivate?.({ path: loc.sourceKey, row: loc.sourceRow });
   }
 
-  /** Re-apply token colors on a system light/dark change. */
-  restyle(): void {
-    this.projector.restyle();
+  focus(): void {
+    this.editor.focus();
   }
 
   dispose(): void {
@@ -180,5 +166,6 @@ export class MultiBufferView {
     this.disposed = true;
     for (const entry of this.sources.values()) entry.syntax.dispose();
     this.sources.clear();
+    this.editor.dispose();
   }
 }

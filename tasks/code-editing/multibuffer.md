@@ -117,8 +117,9 @@ synthesized-buffer `DiffView` — that buffer construction is what we replace.
   excerpts. Simplest data (all segments `real`, one source each, no phantoms, no
   old/new) so a coordinate-map / shared-parse bug surfaces in isolation. Designed the
   segment model diff-capable from day one; this exercises the easy subset.
-  Core + project-search wiring built (see **Phase 1a — as built**); GUI verification +
-  polish (line gutter, vim nav) remain.
+  Built as a `TextEditor` (vim/search/decorations for free) + a pluggable syntax
+  projection (see **Phase 1a — as built**); on-screen GUI verification + polish (per-source
+  line gutter) remain.
 - **Phase 1b — read-only diff multibuffer (the deliverable).** Add old/new
   duality, phantom removed rows, diff decorations + `foldUnchanged`, the two line
   gutters. Replaces `GitStagingView`'s accordion with one continuous read-only diff.
@@ -174,44 +175,59 @@ Known Phase-0 limitations (acceptable; revisit with Phase 2 correctness work):
 
 ## Phase 1a — as built
 
-`src/ui/multibuffer/`:
+**The multibuffer IS a `TextEditor`** (read-only buffer mode), so it gets vim navigation,
+search, selection, and decorations for free. The one thing that differs — highlighting must
+come from N source parses, not one parse of the concatenation — is handled by generalizing
+the painter to render through a pluggable **projection** (the plan's "translate model→view
+through that view's projection: folds today, excerpts later").
 
-- **`MultiBufferModel.ts`** — pure substrate, no GTK. `Segment { sourceKey, startRow,
-  endRow, editable, kind }` + `Excerpt { header, segments }`; `MultiBufferProjection.build`
-  produces the concatenated text (header / segment / `⋯` gap / blank rows) + a sorted
-  `RowEntry[]` coordinate map with binary-search `entryAt`, `sourceAt(viewRow)`,
+- **`src/syntax/SyntaxProjection.ts`** — the interface `SyntaxController` paints through when
+  the view isn't a 1:1 window on one Document: `paintSlices(viewFrom, viewTo) → SyntaxSlice[]`
+  (each slice = a source `DocumentSyntax` + the source rows to query + the linear
+  view↔source row mapping), `hasContent()`, `onDidReparse(cb)`, `decorate(buffer)`.
+- **`SyntaxController`** gained an optional `projection`. With one it paints each slice's
+  captures (from that source's parse) at the excerpt's view rows (`sliceIter`) and calls
+  `projection.decorate`; without one it paints its single `docSyntax` through the fold map
+  (the common case, unchanged). One painter ⇒ one `HighlightTags` on the buffer (no
+  collision), and every excerpt highlighted by its own grammar — the Phase-0 payoff, and the
+  fix for `DiffView`'s parse-interleaved-lines-as-one-language wart. Public `paint()` lets a
+  projection view trigger the first paint (no language-set step).
+- **`src/ui/multibuffer/MultiBufferModel.ts`** — pure substrate, no GTK. `Segment
+  { sourceKey, startRow, endRow, editable, kind }` + `Excerpt { header, segments }`;
+  `MultiBufferProjection.build` → concatenated text (header / segment / `⋯` gap / blank rows)
+  + a sorted `RowEntry[]` map with binary-search `entryAt`, `sourceAt(viewRow)`,
   `viewRowForSource`, `segmentsInViewRange`, `isEditable` (the Phase-2 write-through seam).
-- **`MultiBufferSyntax.ts`** — the multi-source projector. For each segment it pulls
-  captures from THAT source's shared `DocumentSyntax` (model coords) and paints them at the
-  excerpt's view rows (`viewRow = viewStart + (sourceRow - segment.startRow)`), so every
-  file is highlighted by its own grammar. Header/gap rows get `mb:header`/`mb:gap` tags.
-  This is the Phase-0 payoff (one parse, many projections) and fixes `DiffView`'s
-  one-language-for-interleaved-lines wart in advance.
-- **`MultiBufferView.ts`** — a dedicated read-only `GtkSourceView` (NOT a buffer-only
-  `TextEditor`, which would build a second `HighlightTags` on the buffer and parse the
-  concatenation as one language). Per-source bare `GtkSource.Buffer` + its own
-  `DocumentSyntax` (read-only disk snapshot); Enter / double-click resolve the cursor row
-  to `(path, row)` via the map and fire `onActivate`.
-- **`projectSearch.ts`** — `runProjectSearch(cwd, query, cb)` (rg --json grouped by file,
-  the SearchPicker streaming pattern) + pure `matchesToExcerptInputs` (pad matches by
-  context, merge overlapping/adjacent regions). Wired in `AppWindow.openSearchMultibuffer`:
-  command `project:search-multibuffer` (`space *`) searches the active editor's selected
-  text and opens the results as a multibuffer tab; `onActivate` opens the file at the line.
+- **`ExcerptSyntaxProjection.ts`** — implements `SyntaxProjection` from a
+  `MultiBufferProjection` + a `Map<sourceKey, DocumentSyntax>`; builds the `mb:header`/`mb:gap`
+  tags in `decorate` (distinct names from the painter's tags). (Replaces the earlier
+  standalone `MultiBufferSyntax` — painting now lives in the one painter.)
+- **`MultiBufferView.ts`** — a thin wrapper: resolve each unique source (bare
+  `GtkSource.Buffer` + its own `DocumentSyntax`, read-only disk snapshot), build the
+  projection, create `new TextEditor({ buffer: { readOnly, initialText, folding: false,
+  syntaxProjection } })`, and wire Enter / double-click → cursor row → `sourceAt` →
+  `onActivate`.
+- **`projectSearch.ts`** — `runProjectSearch(cwd, query, cb)` (rg --json grouped by file) +
+  pure `matchesToExcerptInputs` (pad by context, merge overlapping/adjacent regions). Wired
+  in `AppWindow.openSearchMultibuffer`: `project:search-multibuffer` (`space *`) searches the
+  active editor's selected text → results as a multibuffer tab; `onActivate` opens the file.
   Disposed via `disposeChild` (`multibufferViews`), freeing the per-source parses.
 
-Tests (all headless, 16 added): `MultiBufferModel.test.ts` (coordinate math),
-`MultiBuffer.test.ts` (projector paints translated rows from each own parse;
-ts-keyword-vs-json proves per-grammar; view assembles from disk + navigates),
-`projectSearch.test.ts` (region merge).
+Tests (headless): `MultiBufferModel.test.ts` (coordinate math), `MultiBuffer.test.ts` (the
+painter, in projection mode, paints translated rows from each own parse; ts-keyword-vs-json
+proves per-grammar; coordinate map resolves cursor rows), `projectSearch.test.ts` (region
+merge). Full suite 720 + `tsc` green. A headless runtime smoke drove rg → excerpts →
+`MultiBufferView` (a real `TextEditor`) → navigation against the repo.
 
 Known Phase-1a gaps / next:
-- **GUI-unverified**: the tab open + navigation paths run only live (the sandbox can't
-  present a GTK window). Verify `space *` in the running editor.
+- **GUI-unverified**: the on-screen GTK render + `space *` key dispatch run only live (the
+  sandbox can't present a window). Construction/projection/navigation are smoke-verified.
 - **Read-only snapshot**: a source is read from disk once; a *live* open Document (so an
-  edited file re-projects) is the seam Phase 1b/2 fill (the view layer would acquire via
-  `DocumentRegistry` instead of a bare buffer).
-- **No line-number gutter / vim nav yet** (dedicated view, not `TextEditor`). Whole-buffer
-  paint (fine for the ≤1000-match cap); viewport-bounding is a follow-up if needed.
+  edited file re-projects) is the seam Phase 1b/2 fill (acquire via `DocumentRegistry`).
+- **Line numbers / gutter**: folding off + line-number gutter off in 1a; per-source line
+  numbers (a multibuffer-aware gutter) are a follow-up. Whole-buffer paint (fine at the
+  ≤1000-match cap); viewport-bounding via the painter's persistent cache already applies.
+- **Tree queries / `=`** over the multibuffer no-op (single-source concepts); they'd resolve
+  per-source-at-cursor when Phase 2 makes excerpts editable.
 
 ## Correctness notes (bank for Phase 2, not Phase 1)
 

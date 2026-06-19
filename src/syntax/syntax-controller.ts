@@ -27,6 +27,7 @@ import { findBracketPair } from './bracketMatch.ts';
 import { type NodeRowRange } from './indent.ts';
 import { type TagName } from './tags.ts';
 import { DocumentSyntax } from './DocumentSyntax.ts';
+import type { SyntaxProjection, SyntaxSlice } from './SyntaxProjection.ts';
 import { rangeGaps, mergeRange, type LineRange } from './paintRegions.ts';
 import { HighlightTags } from './highlightTags.ts';
 import { GutterRenderer } from './gutterRenderers.ts';
@@ -142,6 +143,9 @@ export class SyntaxController {
   private readonly docSyntax: DocumentSyntax;
   private readonly ownsDocSyntax: boolean;
   private reparseUnsub: (() => void) | undefined;
+  // A multi-source projection (multibuffer): when set, the painter sources captures from
+  // many Documents stitched into this buffer instead of its single docSyntax + fold map.
+  private readonly projection: SyntaxProjection | null;
 
   // The syntax-highlight tag vocabulary (color + decoration tags) built from the
   // theme; owns capture→tag resolution and the paint sweep (see highlightTags.ts).
@@ -228,7 +232,13 @@ export class SyntaxController {
   constructor(
     view: SourceView,
     buffer: SourceBuffer,
-    options: { lineNumbers?: boolean; folding?: boolean; folds?: FoldHost; documentSyntax?: DocumentSyntax } = {},
+    options: {
+      lineNumbers?: boolean;
+      folding?: boolean;
+      folds?: FoldHost;
+      documentSyntax?: DocumentSyntax;
+      projection?: SyntaxProjection;
+    } = {},
   ) {
     this.view = view;
     this.buffer = buffer;
@@ -277,8 +287,12 @@ export class SyntaxController {
     // a private one over this view's own buffer (source == view → identity translation).
     this.docSyntax = options.documentSyntax ?? new DocumentSyntax(buffer);
     this.ownsDocSyntax = !options.documentSyntax;
-    // Repaint this view's viewport + rebuild its fold map after every (debounced) reparse.
-    this.reparseUnsub = this.docSyntax.onDidReparse(() => this.onReparse());
+    // A projection (multibuffer) stitches many Documents' parses into this buffer; without
+    // one, the painter paints its single docSyntax through the fold map (the common case).
+    this.projection = options.projection ?? null;
+    // Repaint this view after every (debounced) reparse — of the projection's sources in
+    // multibuffer mode, else of this view's own document parse.
+    this.reparseUnsub = (this.projection ?? this.docSyntax).onDidReparse(() => this.onReparse());
 
     // Keep the gutter wide enough as the line count grows. The reparse is driven off the
     // model by DocumentSyntax (not from here) — we only react to it via onReparse.
@@ -452,7 +466,7 @@ export class SyntaxController {
    * (small files / headless).
    */
   private repaint(): void {
-    if (!this.docSyntax.hasTree) return;
+    if (!this.hasContent()) return;
     this.lineTextCache.clear();
     const buffer = this.buffer as any;
     // Clear only OUR highlight tags (the fold placeholder tags are separate, untouched).
@@ -465,24 +479,57 @@ export class SyntaxController {
       this.paintViewLines(null, null); // whole buffer (headless / pre-layout)
       this.paintedRanges = [[0, buffer.getLineCount() - 1]];
     }
+    this.projection?.decorate(buffer); // style filename headers / gaps (multibuffer)
   }
 
-  /** Paint token highlighting over VIEW lines `[vFrom, vTo]` (null,null = whole buffer):
-   *  pull the corresponding MODEL-coordinate captures from the shared parse and translate
-   *  each onto this view (identity while the view has no collapsed folds). Additive — never
+  /** Whether there's anything to paint: the projection's sources (multibuffer) or this
+   *  view's own document parse. */
+  private hasContent(): boolean {
+    return this.projection ? this.projection.hasContent() : this.docSyntax.hasTree;
+  }
+
+  /** Trigger a full (re)paint now. The single-source path paints on setLanguageForPath /
+   *  reparse; a projection (multibuffer) view calls this once its content + sources are in
+   *  place, since it has no language-set step. */
+  paint(): void {
+    this.onReparse();
+  }
+
+  /** Paint token highlighting over VIEW lines `[vFrom, vTo]` (null,null = whole buffer).
+   *  In multibuffer mode it pulls each overlapping source's captures and paints them at the
+   *  excerpt's view rows; otherwise it pulls the single document parse and translates
+   *  through the fold map (identity while the view has no collapsed folds). Additive — never
    *  clears — so it doesn't disturb already-painted neighbours. */
   private paintViewLines(vFrom: number | null, vTo: number | null): void {
-    if (!this.docSyntax.hasTree) return;
+    if (!this.hasContent()) return;
+    if (this.projection) {
+      const from = vFrom ?? 0;
+      const to = vTo ?? (this.buffer as any).getLineCount() - 1;
+      for (const slice of this.projection.paintSlices(from, to)) {
+        const captures = slice.syntax.captures(slice.fromRow, slice.toRow);
+        this.highlight.paint(this.buffer, captures, (row, col) => this.sliceIter(slice, row, col));
+      }
+      return;
+    }
     const [mFrom, mTo] = vFrom === null || vTo === null ? [null, null] : this.modelLineRange(vFrom, vTo);
     const captures = this.docSyntax.captures(mFrom, mTo);
     this.highlight.paint(this.buffer, captures, (row, col) => this.viewIterForModel(row, col));
+  }
+
+  /** A VIEW-buffer iter for a source `(row, col)` capture inside a projection `slice` (a
+   *  linear excerpt mapping). Astral columns convert against the view line, which is a
+   *  verbatim copy of the source row. */
+  private sliceIter(slice: SyntaxSlice, sourceRow: number, sourceCol: number): any {
+    const viewRow = slice.viewStart + (sourceRow - slice.sourceStart);
+    const col = slice.syntax.hasAstral ? this.toCodepointColumn(viewRow, sourceCol) : sourceCol;
+    return asIter((this.buffer as any).getIterAtLineOffset(viewRow, col));
   }
 
   /** On scroll (no reparse): paint just the parts of the visible range not already in the
    *  persistent cache, then record it. Never clears — existing tags stay valid because the
    *  text didn't change — so scroll-down-then-up costs nothing, and a held ctrl-d/u keeps up. */
   private paintNewlyVisible(): void {
-    if (!this.docSyntax.hasTree) return;
+    if (!this.hasContent()) return;
     const range = this.visibleRange();
     if (!range) return; // unrealized / headless — only the reparse path (whole buffer) runs there
     const [top, bottom] = range;
@@ -606,7 +653,7 @@ export class SyntaxController {
    *  showing white until it stops. `paintNewlyVisible` skips already-painted lines, so a
    *  pass that reveals nothing new is nearly free. */
   private scheduleViewportRepaint(): void {
-    if (this.disposed || !this.docSyntax.hasTree) return;
+    if (this.disposed || !this.hasContent()) return;
     if (this.viewportThrottleId) return; // a pass is already pending this interval
     this.viewportThrottleId = setTimeout(() => {
       this.viewportThrottleId = null;
