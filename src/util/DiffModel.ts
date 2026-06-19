@@ -47,6 +47,38 @@ export interface DiffModel {
   stats: { added: number; removed: number };
 }
 
+/** A diff line carrying just what buffer synthesis needs — generic over the unified
+ *  `DiffLine` and the side-by-side `SideLine`. */
+interface RenderableLine {
+  kind: string;
+  text: string;
+}
+
+/**
+ * Whether a synthesized diff buffer for `lines` needs a trailing newline. Only an
+ * empty *decorated* last line (added/removed/filler) needs one: GtkTextView can't
+ * paint a line background on a final empty line that has no character or newline to
+ * carry it. A non-empty last line — or an undecorated (context) one — needs nothing,
+ * so we skip it and avoid a spurious trailing blank row in the common case.
+ */
+export function needsTrailingNewline(lines: readonly RenderableLine[]): boolean {
+  const last = lines[lines.length - 1];
+  return !!last && last.text === '' && last.kind !== 'context';
+}
+
+/**
+ * Text for a synthesized diff buffer: the line texts joined by newlines, terminated
+ * only when `needsTrailingNewline` (so an empty changed last line keeps its background
+ * without forcing a blank row onto every diff). `terminate` can be forced — the
+ * side-by-side panes terminate in lockstep so they stay equal-height for scroll-sync.
+ */
+export function diffBufferText(
+  lines: readonly RenderableLine[],
+  terminate: boolean = needsTrailingNewline(lines),
+): string {
+  return lines.map((line) => line.text).join('\n') + (terminate ? '\n' : '');
+}
+
 /** Split text into lines, treating a single trailing newline as a terminator
  *  (so "a\nb" and "a\nb\n" both yield ["a", "b"]); "" yields []. */
 export function splitLines(text: string): string[] {
@@ -122,6 +154,41 @@ export function computeIntraLineDiff(
   return { oldRanges, newRanges, hasCommon };
 }
 
+/**
+ * Tidy a line's raw intra-line change spans for display:
+ *  - **Merge** spans separated only by whitespace into one — many small word
+ *    highlights with blank gaps between them read as noise; a single span over the
+ *    whole run (the gap included) is clearer.
+ *  - **Promote** a lone span that covers all of the line's non-whitespace content
+ *    to the full-line background: return `[]` so the caller paints only the line
+ *    background, not a redundant word highlight over (essentially) the whole line.
+ *
+ * `text` is the line the ranges index into; offsets are codepoints (buffer columns),
+ * so slice on the codepoint array, not the UTF-16 string. Ranges come in ascending,
+ * non-overlapping order (the forward scan in `computeIntraLineDiff`).
+ */
+export function refineWordRanges(text: string, ranges: readonly WordRange[]): WordRange[] {
+  if (ranges.length === 0) return [];
+  const cps = [...text];
+  // Inclusive-empty: an empty slice (from >= to, e.g. adjacent spans or a line edge)
+  // counts as blank, which is what we want for both the merge and the promote tests.
+  const isBlank = (from: number, to: number) => cps.slice(from, to).every((c) => /\s/.test(c));
+
+  // Merge spans whose gap is entirely whitespace into one (covering the gap).
+  const merged: WordRange[] = [[ranges[0][0], ranges[0][1]]];
+  for (let i = 1; i < ranges.length; i++) {
+    const last = merged[merged.length - 1];
+    const [start, end] = ranges[i];
+    if (isBlank(last[1], start)) last[1] = end;
+    else merged.push([start, end]);
+  }
+
+  // A single span flanked only by whitespace is the whole meaningful line — let the
+  // line background carry it and drop the span.
+  if (merged.length === 1 && isBlank(0, merged[0][0]) && isBlank(merged[0][1], cps.length)) return [];
+  return merged;
+}
+
 /** Pair each hunk's removed↔added lines and attach intra-line change spans to the
  *  pairs that share content (a real modification, not a full-line replacement). */
 function annotateWordDiffs(lines: DiffLine[], hunks: DiffHunk[]): void {
@@ -135,8 +202,11 @@ function annotateWordDiffs(lines: DiffLine[], hunks: DiffHunk[]): void {
     for (let i = 0; i < Math.min(dels.length, adds.length); i++) {
       const { oldRanges, newRanges, hasCommon } = computeIntraLineDiff(dels[i].text, adds[i].text);
       if (!hasCommon) continue; // wholly different — the full-line bg says enough
-      dels[i].wordRanges = oldRanges;
-      adds[i].wordRanges = newRanges;
+      // Refine for display; an empty result means "let the line background say it".
+      const del = refineWordRanges(dels[i].text, oldRanges);
+      const add = refineWordRanges(adds[i].text, newRanges);
+      if (del.length) dels[i].wordRanges = del;
+      if (add.length) adds[i].wordRanges = add;
     }
   }
 }

@@ -16,7 +16,15 @@ import { DiffGutter } from './DiffGutter.ts';
 import { DiffLineNumberGutter, sideLineLabels } from './DiffLineNumberGutter.ts';
 import { applyDiffDecorations } from './applyDiffDecorations.ts';
 import { revealRow, changeStartRows } from './diffNav.ts';
-import { splitSides, foldUnchanged, diffFoldLabel, type DiffModel, type SideLine } from '../../util/DiffModel.ts';
+import {
+  splitSides,
+  foldUnchanged,
+  diffFoldLabel,
+  diffBufferText,
+  needsTrailingNewline,
+  type DiffModel,
+  type SideLine,
+} from '../../util/DiffModel.ts';
 
 // `Tab` switches focus between the two panes — registered once (selector-scoped to
 // this widget's descendant views); each instance registers the command handler.
@@ -45,8 +53,11 @@ export class SideBySideDiffView {
     const { left, right } = splitSides(model);
     // The two sides have context (and therefore fold) rows at identical indices,
     // so the fold plans match index-for-index — fold them in lockstep to stay aligned.
-    this.left = makePane(left, options.languagePath);
-    this.right = makePane(right, options.languagePath);
+    // Terminate both panes identically (so they stay equal-height for scroll-sync) when
+    // either side's last row is an empty changed line needing a newline for its background.
+    const terminate = needsTrailingNewline(left) || needsTrailingNewline(right);
+    this.left = makePane(left, terminate, options.languagePath);
+    this.right = makePane(right, terminate, options.languagePath);
     const leftToModel = (line: number) => this.left.modelLineForViewLine(line);
     const rightToModel = (line: number) => this.right.modelLineForViewLine(line);
     // Each side shows its own file's line numbers (old on the left, new on the right),
@@ -127,18 +138,22 @@ export class SideBySideDiffView {
   dispose(): void {
     for (const gutter of this.gutters) gutter.dispose();
     for (const gutter of this.lineNumbers) gutter.dispose();
+    // Tear both panes down explicitly: on a mode switch the root is detached (not
+    // destroyed), so each TextEditor's `destroy` fallback never fires and its global
+    // StyleManager handler would otherwise leak.
+    this.left.dispose();
+    this.right.dispose();
   }
 }
 
 /** A read-only pane for one side, with per-line diff backgrounds applied. Folding
- *  is left enabled (the caller installs the diff folds via `setProvidedFolds`). */
-function makePane(lines: SideLine[], languagePath?: string): TextEditor {
-  // Trailing newline terminates the last line so an empty last row can still carry
-  // its line background (and both panes stay equal-height for scroll-sync).
+ *  is left enabled (the caller installs the diff folds via `setProvidedFolds`). The
+ *  caller decides `terminate` jointly for both panes so they stay equal-height. */
+function makePane(lines: SideLine[], terminate: boolean, languagePath?: string): TextEditor {
   const editor = new TextEditor({
-    buffer: { readOnly: true, initialText: lines.map((l) => l.text).join('\n') + '\n', languagePath },
+    buffer: { readOnly: true, initialText: diffBufferText(lines, terminate), languagePath },
   });
-  applyDiffDecorations(editor.decorations.layer('diff'), lines);
+  applyDiffDecorations(editor.decorations.layer('diff'), lines, terminate);
   return editor;
 }
 

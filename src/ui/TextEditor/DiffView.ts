@@ -19,7 +19,7 @@ import { DiffGutter } from './DiffGutter.ts';
 import { DiffLineNumberGutter, oldLineLabels, newLineLabels } from './DiffLineNumberGutter.ts';
 import { applyDiffDecorations } from './applyDiffDecorations.ts';
 import { revealRow, changeStartRows } from './diffNav.ts';
-import { foldUnchanged, diffFoldLabel, type DiffModel } from '../../util/DiffModel.ts';
+import { diffBufferText, needsTrailingNewline, foldUnchanged, diffFoldLabel, type DiffModel } from '../../util/DiffModel.ts';
 
 export class DiffView {
   readonly root: InstanceType<typeof Gtk.Box>;
@@ -33,15 +33,17 @@ export class DiffView {
 
   constructor(model: DiffModel, options: { languagePath?: string } = {}) {
     // The buffer is the diff lines verbatim; unchanged runs fold (diff fold method).
-    // Trailing newline so the last content line is terminated — otherwise an empty
-    // last changed line has no character/newline to carry its line background.
-    const text = model.lines.map((line) => line.text).join('\n') + '\n';
+    // Terminate the buffer only when the last line is empty and changed (so it can
+    // carry its line background) — no spurious trailing blank row otherwise; the
+    // decorations span the unterminated last line's content to match.
+    const terminated = needsTrailingNewline(model.lines);
+    const text = diffBufferText(model.lines, terminated);
     this.editor = new TextEditor({
       buffer: { readOnly: true, initialText: text, languagePath: options.languagePath },
     });
     this.root = this.editor.root;
 
-    applyDiffDecorations(this.editor.decorations.layer('diff'), model.lines);
+    applyDiffDecorations(this.editor.decorations.layer('diff'), model.lines, terminated);
     const viewToModel = (line: number) => this.editor.modelLineForViewLine(line);
     const view = this.editor.sourceView;
     // File line numbers as two columns (old | new), left of the +/− mark; each keys
@@ -93,5 +95,9 @@ export class DiffView {
   dispose(): void {
     this.gutter.dispose();
     for (const gutter of this.lineNumbers) gutter.dispose();
+    // Tear the editor down explicitly: on a mode switch the root is detached (not
+    // destroyed), so the TextEditor's `destroy` fallback never fires and its global
+    // StyleManager handler would otherwise leak.
+    this.editor.dispose();
   }
 }
