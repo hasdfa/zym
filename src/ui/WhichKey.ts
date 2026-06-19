@@ -20,7 +20,7 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 const SHOW_DELAY_MS = 350;
 const MAX_ROWS = 8; // entries per column before spilling into the next
-const KEY_COLOR = theme.ui.textAccent;
+const KEY_COLOR = theme.ui.text.accent;
 
 addStyles(`
   #WhichKey {

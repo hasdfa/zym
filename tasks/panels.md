@@ -43,7 +43,7 @@ Decisions (implemented in `Panel` + `PanelGroup`):
   *direct* focus when that widget is the panel root (empty pane) or a direct
   panel child. Content that delegates focus to a descendant (an editor's view)
   shows its own focus ring and gets no outline. Styled with a thin
-  selection-colored outline (`theme.ui.selectedBg`).
+  selection-colored outline (`theme.ui.surface.selected`).
 - **Every panel child is marked `.is-panel-child`.** `add()` stamps the class on
   every child; it is the sole entry point, so no widget reaches a panel without
   it. Focus/active logic relies on that class to identify direct panel children.

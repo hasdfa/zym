@@ -52,10 +52,10 @@ addStyles(`
   /* A mark replaces (conceals) the match's first character: a glyph with no
      background, so it reads as the character having been swapped for a label. */
   .quilx-leap-mark { font-weight: bold; }
-  .quilx-leap-label { color: ${theme.ui.error}; }
+  .quilx-leap-label { color: ${theme.ui.status.error}; }
   /* Paged-out placeholders share the label color; the dot glyph (and lighter
      weight) is what marks them as not-yet-labeled. */
-  .quilx-leap-dot { color: ${theme.ui.error}; font-weight: normal; }
+  .quilx-leap-dot { color: ${theme.ui.status.error}; font-weight: normal; }
 `);
 
 /** Request shape handed over by the vim layer's leap motion via `setLeapInput`. */
@@ -222,7 +222,7 @@ export class Leap {
     if (this.dimTag) return this.dimTag;
     const tag = new Gtk.TextTag({ name: 'leap:dim' } as any);
     const fg = new Gdk.RGBA();
-    fg.parse(theme.ui.textMuted);
+    fg.parse(theme.ui.text.muted);
     (tag as any).foregroundRgba = fg;
     this.buffer.getTagTable().add(tag);
     this.dimTag = tag;
@@ -235,7 +235,7 @@ export class Leap {
     if (this.concealTag) return this.concealTag;
     const tag = new Gtk.TextTag({ name: 'leap:conceal' } as any);
     const bg = new Gdk.RGBA();
-    bg.parse(theme.ui.bg ?? theme.ui.popoverBg);
+    bg.parse(theme.ui.editor.background ?? theme.ui.surface.popover);
     (tag as any).foregroundRgba = bg;
     this.buffer.getTagTable().add(tag);
     this.concealTag = tag;

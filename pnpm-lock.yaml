@@ -11,6 +11,9 @@ importers:
 
   .:
     dependencies:
+      color-bits:
+        specifier: ^1.1.1
+        version: 1.1.1
       diff:
         specifier: ^9.0.0
         version: 9.0.0
@@ -50,6 +53,9 @@ packages:
 
   '@types/node@25.9.3':
     resolution: {integrity: sha512-603BddQMv3pUcr4U2dhujk83N2tTDVr/34wII2B6bJy6g+8WD6yUb11jszNs0gdi4PesVWl7ABt8nYMVpnLUcg==}
+
+  color-bits@1.1.1:
+    resolution: {integrity: sha512-KOU0xOussQ1b7jDqEb2wx89ZGdCepRI30c0LZRUrjcb6zS0sgfxYt0UmocvG6EhTvbraJZQjZZn7wN10tFWgjg==}
 
   cssesc@3.0.0:
     resolution: {integrity: sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg==}
@@ -108,6 +114,8 @@ snapshots:
   '@types/node@25.9.3':
     dependencies:
       undici-types: 7.24.6
+
+  color-bits@1.1.1: {}
 
   cssesc@3.0.0: {}
 

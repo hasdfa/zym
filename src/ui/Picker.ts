@@ -50,7 +50,7 @@ const PROMPT_GAP = 5; // gap from the slot to the entry text
 // Color of the matched characters. Sourced from the theme's accent foreground
 // (Zed's `text.accent`). Baked into Pango markup at row-build time, so it can't
 // be a CSS variable (and Pango can't gradient-fill text, so it's a solid color).
-export const HIGHLIGHT_COLOR = theme.ui.textAccent;
+export const HIGHLIGHT_COLOR = theme.ui.text.accent;
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -129,7 +129,7 @@ addStyles(`
      shown in place of the matches, tinted with the theme's error color. */
   #PickerError {
     padding: 0.5em 1em;
-    color: ${theme.ui.error};
+    color: ${theme.ui.status.error};
   }
   /* The action row uses the current prompt; set it apart from the matches with a
      separator and the accent color. */

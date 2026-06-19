@@ -21,9 +21,9 @@ import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-const POPUP_BG = theme.ui.bg ?? theme.ui.popoverBg;
-const SELECTED_BG = theme.ui.selectedBg;
-const DETAIL_COLOR = theme.ui.textMuted;
+const POPUP_BG = theme.ui.editor.background ?? theme.ui.surface.popover;
+const SELECTED_BG = theme.ui.surface.selected;
+const DETAIL_COLOR = theme.ui.text.muted;
 fonts.monospace('#CompletionPopup .completion-label'); // labels in the app monospace (reactive)
 const LIST_WIDTH_PX = 420;
 const DOC_WIDTH_PX = 440;

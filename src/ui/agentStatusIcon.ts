@@ -23,10 +23,10 @@ export const WORKING_GLYPH = String.fromCodePoint(0xf1978); // nf-md-cog-sync
 // Status → indicator color: working (muted cog), waiting on the user (warning/
 // amber), idle/ready (success/green), exited (muted).
 const STATUS_COLOR: Record<AgentStatus, string> = {
-  working: theme.ui.textMuted,
-  waiting: theme.ui.warning,
-  idle: theme.ui.success,
-  exited: theme.ui.textMuted,
+  working: theme.ui.text.muted,
+  waiting: theme.ui.status.warning,
+  idle: theme.ui.status.success,
+  exited: theme.ui.text.muted,
 };
 
 const DOT_CLASSES = ['quilx-agent-working', 'quilx-agent-waiting', 'quilx-agent-idle', 'quilx-agent-exited'];
@@ -128,7 +128,7 @@ export function agentWorktreeMarkup(worktree: WorktreeInfo | null): string | nul
   if (!worktree?.linked) return null;
   const name = worktree.branch ?? worktree.name;
   return (
-    `<span foreground="${theme.ui.textMuted}">` +
+    `<span foreground="${theme.ui.text.muted}">` +
     `<span font_family="${ICON_FONT_FAMILY}">${Icons.git}</span> ${escapeMarkup(name)}</span>`
   );
 }

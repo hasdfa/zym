@@ -31,11 +31,11 @@ type ChangeKind = 'added' | 'modified' | 'removed';
 // semantic colors. Staged changes use the `info` blue so they read as a distinct
 // (already-staged, unstageable) state next to the unstaged add/modify/remove.
 const COLORS: Record<ChangeKind, string> = {
-  added: theme.ui.success,
-  modified: theme.ui.warning,
-  removed: theme.ui.error,
+  added: theme.ui.status.success,
+  modified: theme.ui.status.warning,
+  removed: theme.ui.status.error,
 };
-const STAGED_COLOR = theme.ui.info;
+const STAGED_COLOR = theme.ui.status.info;
 // U+258F LEFT ONE EIGHTH BLOCK — the thinnest full-height block glyph (~1px), so
 // stacked lines read as one continuous hairline bar.
 const BAR = '▏';

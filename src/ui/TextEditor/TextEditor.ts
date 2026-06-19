@@ -58,11 +58,11 @@ import {
 } from '../../gi.ts';
 
 addStyles(`
-  .quilx-editor { color: ${theme.ui.fg}; caret-color: ${theme.ui.fg}; }
+  .quilx-editor { color: ${theme.ui.editor.foreground}; caret-color: ${theme.ui.editor.foreground}; }
   /* Pending-command preview ("showcmd"), floated in the editor's bottom-right. */
   .quilx-showcmd {
-    background-color: ${theme.ui.bg ?? theme.ui.popoverBg};
-    color: ${theme.ui.fg};
+    background-color: ${theme.ui.editor.background ?? theme.ui.surface.popover};
+    color: ${theme.ui.editor.foreground};
     opacity: 0.75;
     padding: 1px 6px;
     margin: 4px;
@@ -70,30 +70,30 @@ addStyles(`
   }
   /* Hollow caret shown over the cursor's character while the editor is unfocused. */
   .quilx-unfocused-caret {
-    border: 1.5px solid ${theme.ui.textMuted};
+    border: 1.5px solid ${theme.ui.text.muted};
     border-radius: 1px;
   }
   /* Filled caret block for positions with no glyph to reverse-video (empty line,
      past end-of-line, end-of-buffer). */
   .quilx-block-caret {
-    background-color: ${theme.ui.fg};
+    background-color: ${theme.ui.editor.foreground};
     border-radius: 1px;
   }
   /* Beam caret for extra (multi-cursor) carets in insert mode — a thin vertical
      bar, like the primary insert-mode caret. */
   .quilx-beam-caret {
-    background-color: ${theme.ui.fg};
+    background-color: ${theme.ui.editor.foreground};
   }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
   .quilx-placeholder {
-    color: ${theme.ui.textMuted};
+    color: ${theme.ui.text.muted};
     opacity: 0.6;
   }
   /* LSP hover card: a floating tooltip over the editor. */
   .quilx-hover {
-    background-color: ${theme.ui.popoverBg};
-    color: ${theme.ui.fg};
-    border: 1px solid alpha(${theme.ui.fg}, 0.2);
+    background-color: ${theme.ui.surface.popover};
+    color: ${theme.ui.editor.foreground};
+    border: 1px solid alpha(${theme.ui.editor.foreground}, 0.2);
     border-radius: 6px;
     padding: 6px 8px;
     box-shadow: 0 1px 3px ${theme.ui.shadow};
@@ -104,16 +104,16 @@ addStyles(`
      error (load/save failure). */
   .quilx-banner-warning,
   .quilx-banner-error {
-    color: ${theme.ui.fg};
+    color: ${theme.ui.editor.foreground};
     padding: 2px 8px;
   }
-  .quilx-banner-warning { background-color: mix(${theme.ui.bg ?? theme.ui.popoverBg}, ${theme.ui.warning}, 0.25); }
-  .quilx-banner-error   { background-color: mix(${theme.ui.bg ?? theme.ui.popoverBg}, ${theme.ui.error},   0.25); }
+  .quilx-banner-warning { background-color: mix(${theme.ui.editor.background ?? theme.ui.surface.popover}, ${theme.ui.status.warning}, 0.25); }
+  .quilx-banner-error   { background-color: mix(${theme.ui.editor.background ?? theme.ui.surface.popover}, ${theme.ui.status.error},   0.25); }
   .quilx-banner-warning label,
   .quilx-banner-error   label { font-weight: bold; }
   .quilx-banner-warning button,
   .quilx-banner-error   button {
-    color: ${theme.ui.fg};
+    color: ${theme.ui.editor.foreground};
     min-height: 0;
     padding: 1px 8px;
   }
@@ -1439,7 +1439,7 @@ export class TextEditor implements DocumentHost {
     // A theme that defines its own background owns the whole editor scheme
     // (background + line numbers); built once since it doesn't vary by system
     // light/dark. Otherwise we follow the Adwaita light/dark scheme.
-    const themeScheme = theme.ui.bg ? createSourceScheme(theme) : null;
+    const themeScheme = theme.ui.editor.background ? createSourceScheme(theme) : null;
     const apply = () => {
       const scheme =
         themeScheme ?? schemeManager.getScheme(styleManager.getDark() ? 'Adwaita-dark' : 'Adwaita');

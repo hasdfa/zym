@@ -13,7 +13,7 @@ import { GtkSource, registerClass } from '../gi.ts';
 import { theme } from '../theme/theme.ts';
 
 // Line-number gutter color (muted), matching how syntax colors are themed.
-const LINE_NUMBER_COLOR = theme.ui.lineNumber;
+const LINE_NUMBER_COLOR = theme.ui.editor.lineNumber;
 
 /** The slice of SyntaxController the gutter renderers read (assigned as
  *  `.controller` right after construction). Structural, so the renderers don't

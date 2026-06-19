@@ -56,14 +56,14 @@ export type DecorationStyle = LineStyle | HighlightStyle;
 // than foregrounds so they compose with syntax colors. All tints come from the
 // theme palette (kept dim so text stays readable).
 const STYLE_BACKGROUND: Record<DecorationStyle, string> = {
-  highlight: theme.ui.searchMatch,
-  'highlight-strong': theme.ui.searchMatchCurrent,
-  added: theme.ui.diffAddedBg,
-  removed: theme.ui.diffRemovedBg,
-  filler: theme.ui.diffFillerBg, // dimmed neutral pad for an aligned-but-empty row
-  'word-add': theme.ui.diffAddedWordBg, // stronger, over the added line's background
-  'word-del': theme.ui.diffRemovedWordBg, // stronger, over the removed line's background
-  fold: theme.ui.diffFoldBg, // faint neutral band for a collapsed-context placeholder
+  highlight: theme.ui.search.match,
+  'highlight-strong': theme.ui.search.matchCurrent,
+  added: theme.ui.diff.added,
+  removed: theme.ui.diff.removed,
+  filler: theme.ui.diff.filler, // dimmed neutral pad for an aligned-but-empty row
+  'word-add': theme.ui.diff.addedWord, // stronger, over the added line's background
+  'word-del': theme.ui.diff.removedWord, // stronger, over the removed line's background
+  fold: theme.ui.diff.fold, // faint neutral band for a collapsed-context placeholder
   flash: theme.ui.flash,
 };
 

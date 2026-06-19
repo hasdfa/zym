@@ -18,7 +18,7 @@ import { quilx } from '../quilx.ts';
 import { Key } from '../keymap/Key.ts';
 import type { BindingInfo } from '../KeymapManager.ts';
 
-const KEY_COLOR = theme.ui.textAccent;
+const KEY_COLOR = theme.ui.text.accent;
 
 // Friendlier names for the known registration sources; others show verbatim.
 const SOURCE_LABELS: Record<string, string> = {

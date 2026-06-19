@@ -25,9 +25,9 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 // Octicon glyph + GitHub-style colour for each PR state (open green, merged
 // purple, closed red), rendered in the bundled icon font ahead of the title.
 const STATE_STYLE: Record<PrState, { glyph: string; color: string }> = {
-  open: { glyph: String.fromCodePoint(0xf407), color: theme.ui.prOpen }, // git-pull-request
-  merged: { glyph: String.fromCodePoint(0xf419), color: theme.ui.prMerged }, // git-merge
-  closed: { glyph: String.fromCodePoint(0xf407), color: theme.ui.prClosed }, // git-pull-request
+  open: { glyph: String.fromCodePoint(0xf407), color: theme.ui.pr.open }, // git-pull-request
+  merged: { glyph: String.fromCodePoint(0xf419), color: theme.ui.pr.merged }, // git-merge
+  closed: { glyph: String.fromCodePoint(0xf407), color: theme.ui.pr.closed }, // git-pull-request
 };
 
 export function stateGlyphMarkup(state: PrState): string {

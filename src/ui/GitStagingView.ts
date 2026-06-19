@@ -77,7 +77,7 @@ const STATE_LETTER: Record<GitFileState, string> = {
 
 // The file list lives in the center (not the left dock), so it doesn't inherit the
 // dock background — paint it with the theme editor background explicitly.
-const FILES_BG = theme.ui.bg ?? theme.ui.popoverBg;
+const FILES_BG = theme.ui.editor.background ?? theme.ui.surface.popover;
 
 // Inline-diff height estimate (the inner view scrolls past the cap). No header bar
 // (the staging diff passes `header: false`), so only a little vertical padding.
@@ -92,7 +92,7 @@ addStyles(`
   #GitStagingView,
   #GitStagingView list { background-color: ${FILES_BG}; }
   #GitStagingView .git-header {
-    color: ${theme.ui.textMuted};
+    color: ${theme.ui.text.muted};
     font-weight: bold;
     padding: 6px 8px 3px 8px;
   }
@@ -101,12 +101,12 @@ addStyles(`
   #GitStagingView #GitRow { padding: 0 8px 0 20px; }
   /* The full path is colored like \`git status\`: staged green, unstaged/untracked red. */
   #GitStagingView #GitRow.staged .git-path,
-  #GitStagingView #GitRow.staged .git-badge { color: ${theme.ui.success}; }
+  #GitStagingView #GitRow.staged .git-badge { color: ${theme.ui.status.success}; }
   #GitStagingView #GitRow.unstaged .git-path,
-  #GitStagingView #GitRow.unstaged .git-badge { color: ${theme.ui.error}; }
+  #GitStagingView #GitRow.unstaged .git-badge { color: ${theme.ui.status.error}; }
   #GitStagingView .git-badge { font-weight: bold; font-feature-settings: "tnum" 1; }
   #GitStagingView row:selected { background-color: transparent; }
-  #GitStagingView:focus-within row:selected { background-color: ${theme.ui.selectedBg}; }
+  #GitStagingView:focus-within row:selected { background-color: ${theme.ui.surface.selected}; }
   /* Inline diff row: flush, with a left accent marking it as nested under its file. */
   #GitStagingView .git-diff-row { padding: 0; }
   #GitStagingView .git-diff-row:selected { background-color: transparent; }

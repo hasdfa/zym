@@ -17,8 +17,8 @@ import { SideBySideDiffView } from './SideBySideDiffView.ts';
 import type { DiffModel } from '../../util/DiffModel.ts';
 import { theme } from '../../theme/theme.ts';
 
-const ADDED_COLOR = theme.ui.success;
-const REMOVED_COLOR = theme.ui.error;
+const ADDED_COLOR = theme.ui.status.success;
+const REMOVED_COLOR = theme.ui.status.error;
 // Nerd Font glyphs for the header controls.
 const ICON_PREV = String.fromCodePoint(0xf077); // chevron-up
 const ICON_NEXT = String.fromCodePoint(0xf078); // chevron-down

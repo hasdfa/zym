@@ -20,7 +20,7 @@ import { quilx } from '../quilx.ts';
 import { theme } from '../theme/theme.ts';
 
 // The theme's selection color, used to outline an active empty pane.
-const SELECTED_COLOR = theme.ui.selectedBg ?? '@theme_selected_bg_color';
+const SELECTED_COLOR = theme.ui.surface.selected ?? '@theme_selected_bg_color';
 
 // Square off the tab buttons (Adwaita rounds them by default) and strip the gaps
 // Adwaita puts around and between them. Structural, not color-derived, so it's
