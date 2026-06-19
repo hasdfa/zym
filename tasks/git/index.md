@@ -37,11 +37,10 @@ Invariant (grep-checkable): nothing outside `git.ts`/`github.ts` imports
 
 ## I/O model
 
-`git`/`gh` run through `node:child_process` (simpler than `Gio.Subprocess`, hands
-us stdout directly). A probe under the live GLib main loop fixed the rules: async
-git is **callback-form, no promise wrappers** — `execFile` callbacks fire promptly,
-but promises/microtasks are starved (they only fire when the loop yields);
-synchronous `execFileSync` / `node:fs` work.
+Use `node:child_process` + the `git`/`gh` CLI directly: `execFileSync` for fast
+local reads, and async (`execFile` callbacks or Promise wrappers) for
+slow/networked ops. Node async IO and Promises resolve normally under the live
+GLib loop. Simpler than `Gio.Subprocess`, and hands us stdout directly.
 
 All git spawning goes through a **broker process** (`src/git/broker.ts` +
 `broker-main.mjs`): the long-lived ~1.5 GB node-gtk process must never `fork()`

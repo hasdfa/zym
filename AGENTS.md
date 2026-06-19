@@ -1,0 +1,5 @@
+- Read `./tasks/index.md` and relevant files in `./tasks` before anything else
+- Update `./tasks` after doing a relevant change
+- Your memory files should never contain data; at most, they should point to `./tasks`
+- Run the typescript check with `pnpm run typecheck`
+- When creating a worktree, run `pnpm install`

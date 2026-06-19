@@ -7,11 +7,11 @@ through a small `LspDocument` interface.
 ## Decisions
 
 - **Transport: Node IO.** `child_process.spawn` + `vscode-jsonrpc/node` over stdio.
-  This works under node-gtk's GLib loop because the loop is run from the GTK
-  `activate` callback (a macrotask), not the top-level module microtask — see
-  node-gtk issue #442 / `runLoopEntry`. Validated end-to-end against `clangd`
-  (initialize 9ms, idle round-trip 2ms, idle diagnostics push 56ms). No heartbeat
-  needed: reads wake the loop via uv's backend fd.
+  Node async IO and Promises resolve normally under node-gtk's GLib loop. The one
+  rule: start the loop from a **macrotask** (the GTK `activate` callback, via
+  `runLoopEntry`), not the top-level ES-module body. Validated end-to-end against
+  `clangd` (initialize 9ms, idle round-trip 2ms, idle diagnostics push 56ms). No
+  heartbeat needed: reads wake the loop via uv's backend fd.
 - **Client libraries:** Microsoft's `vscode-jsonrpc` + `vscode-languageserver-protocol`
   (MIT) — JSON-RPC framing, stream transport, and all LSP types. No hand-rolled
   protocol.
