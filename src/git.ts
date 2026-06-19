@@ -394,8 +394,10 @@ class CliGitRepo implements GitRepo {
         // refresh ls-files before rebuilding. (Plain working-tree edits don't
         // change the set, but they're cheap relative to the rebuild + repaint.)
         cli.git(this.root!, LSFILES_ARGS, (lsOk, lsOut) => {
+          // Fresh ls-files output is repo-relative (join with root); the carried-over
+          // set is already absolute (`trackedAbs`, so don't re-prefix it).
           const tracked = lsOk ? parseLsFiles(lsOut) : [...this.state.tracked];
-          this.state = this.buildState(parsed, numstat, tracked, untrackedAdded, lsOk);
+          this.state = this.buildState(parsed, numstat, tracked, untrackedAdded, !lsOk);
           this.lastSignature = sig;
           this.reading = false;
           this.notify();

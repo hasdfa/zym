@@ -12,7 +12,7 @@ import { Gtk } from '../gi.ts';
 import { openPicker, highlightMarkup } from './Picker.ts';
 import { Icons } from './icons.ts';
 import { quilx } from '../quilx.ts';
-import { repoRoot, currentBranch, listBranches, type GitRepo, type GitOpDone } from '../git.ts';
+import { repoRoot, listBranches, type GitRepo, type GitOpDone } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -28,47 +28,48 @@ export function openBranchPicker(host: Overlay, cwd: string, git: GitRepo): void
     });
     return;
   }
-  const current = currentBranch(root);
-  const branches = listBranches(root); // includes the current branch (marked below)
-
-  openPicker({
-    host,
-    placeholder: 'Switch branch…',
-    promptIcon: Icons.git,
-    items: branches,
-    // Highlight the fuzzy match; tag the current branch with a muted "current".
-    // Branch names are identifiers — render them in the picker's (app) monospace
-    // font rather than the prose/sans face.
-    formatMain: (item, positions) => {
-      const main = highlightMarkup(item.text, positions);
-      return item.value === current ? { main, detail: 'current' } : main;
-    },
-    onSelect: (branch) => {
-      if (branch === current) return; // already here — nothing to do
-      git.switchBranch(branch, report(`Switched to ${branch}`));
-    },
-    // Always offer to create the typed name off HEAD — shown after any matches
-    // (whenever the query is non-empty), so it's available even when branches match.
-    action: {
-      label: (query) => `Create branch: ${query.trim()}`,
-      run: (query) => {
-        const name = query.trim();
-        if (name) git.createBranch(name, report(`Created branch ${name}`));
+  const current = git.getBranch(); // the cached current branch (no spawn)
+  listBranches(root, (branches) => {
+    // includes the current branch (marked below)
+    openPicker({
+      host,
+      placeholder: 'Switch branch…',
+      promptIcon: Icons.git,
+      items: branches,
+      // Highlight the fuzzy match; tag the current branch with a muted "current".
+      // Branch names are identifiers — render them in the picker's (app) monospace
+      // font rather than the prose/sans face.
+      formatMain: (item, positions) => {
+        const main = highlightMarkup(item.text, positions);
+        return item.value === current ? { main, detail: 'current' } : main;
       },
-    },
+      onSelect: (branch) => {
+        if (branch === current) return; // already here — nothing to do
+        git.switchBranch(branch, report(`Switched to ${branch}`));
+      },
+      // Always offer to create the typed name off HEAD — shown after any matches
+      // (whenever the query is non-empty), so it's available even when branches match.
+      action: {
+        label: (query) => `Create branch: ${query.trim()}`,
+        run: (query) => {
+          const name = query.trim();
+          if (name) git.createBranch(name, report(`Created branch ${name}`));
+        },
+      },
+    });
   });
 }
 
 /** Pick another branch (not the current one) to delete. */
 export function openDeleteBranchPicker(host: Overlay, cwd: string, git: GitRepo): void {
-  pickOtherBranch(host, cwd, 'Delete branch…', Icons.trash, (branch) =>
+  pickOtherBranch(host, cwd, git, 'Delete branch…', Icons.trash, (branch) =>
     git.deleteBranch(branch, report(`Deleted branch ${branch}`)),
   );
 }
 
 /** Pick another branch to merge into the current one. */
 export function openMergeBranchPicker(host: Overlay, cwd: string, git: GitRepo): void {
-  pickOtherBranch(host, cwd, 'Merge branch into current…', Icons.gitMerge, (branch) =>
+  pickOtherBranch(host, cwd, git, 'Merge branch into current…', Icons.gitMerge, (branch) =>
     git.mergeBranch(branch, report(`Merged ${branch}`)),
   );
 }
@@ -86,7 +87,7 @@ export function openRenameBranchPicker(host: Overlay, cwd: string, git: GitRepo)
     });
     return;
   }
-  const current = currentBranch(root);
+  const current = git.getBranch();
   openPicker({
     host,
     placeholder: 'Rename current branch to…',
@@ -108,6 +109,7 @@ export function openRenameBranchPicker(host: Overlay, cwd: string, git: GitRepo)
 function pickOtherBranch(
   host: Overlay,
   cwd: string,
+  git: GitRepo,
   placeholder: string,
   promptIcon: string,
   onPick: (branch: string) => void,
@@ -117,18 +119,20 @@ function pickOtherBranch(
     openPicker({ host, placeholder, promptIcon, onSelect: () => {}, error: 'Not a git repository' });
     return;
   }
-  const current = currentBranch(root);
-  const branches = listBranches(root).filter((b) => b !== current);
-  if (branches.length === 0) {
-    quilx.notifications.addInfo('No other branches');
-    return;
-  }
-  openPicker({
-    host,
-    placeholder,
-    promptIcon,
-    items: branches,
-    onSelect: (branch) => onPick(branch),
+  const current = git.getBranch();
+  listBranches(root, (all) => {
+    const branches = all.filter((b) => b !== current);
+    if (branches.length === 0) {
+      quilx.notifications.addInfo('No other branches');
+      return;
+    }
+    openPicker({
+      host,
+      placeholder,
+      promptIcon,
+      items: branches,
+      onSelect: (branch) => onPick(branch),
+    });
   });
 }
 
