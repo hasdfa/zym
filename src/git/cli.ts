@@ -2,15 +2,20 @@
  * git/cli.ts — a thin wrapper over the `git` command line, used by the Source
  * Control UI for status, staging, and committing.
  *
- * Why the CLI (not the libgit2 `GitRepo` in ../git.ts): it gives us exactly what
- * `git status`/`git diff` print without re-deriving it, and respects the user's
- * hooks and config (name/email, GPG, pre-commit/commit-msg) for free. node I/O
- * is fine here — a probe under the live GLib loop confirmed `execFileSync` and
- * `execFile` callbacks work; only promise/microtask resolution is starved, so we
- * use the callback form and avoid promise wrappers.
+ * Why the CLI (not libgit2): it gives us exactly what `git status`/`git diff`
+ * print without re-deriving it, and respects the user's hooks and config
+ * (name/email, GPG, pre-commit/commit-msg) for free.
+ *
+ * I/O model: every `git` invocation is **asynchronous** (callback form) and runs
+ * through the process runner (`../process/runner.ts`), so the big node-gtk parent
+ * never forks and the UI thread never blocks on a spawn. The few facts we used to
+ * read synchronously (the repo root, a directory's worktree, the worktree list)
+ * are derived straight from the on-disk git layout instead — pure `fs` reads, no
+ * subprocess at all (see `repoRoot` / `worktreeInfo` / `listWorktrees`).
  */
+import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { brokerGit, brokerGitSync } from './broker.ts';
+import { type ProcResult, runProcess } from '../process/runner.ts';
 
 export type GitFileState =
   | 'new'
@@ -33,39 +38,44 @@ export interface GitChange {
 
 export type GitDone = (ok: boolean, stdout: string, stderr: string) => void;
 
-/**
- * Run git synchronously and return stdout. Throws on non-zero exit (so existing
- * `try`/`catch` callers keep working). Spawned via the broker process so the big
- * node-gtk parent never forks — see `git/broker.ts`.
- */
-export function gitSync(cwd: string, args: string[]): string {
-  const res = brokerGitSync(cwd, args);
-  if (!res.ok) throw new Error(res.stderr || `git ${args.join(' ')} failed`);
-  return res.stdout;
+function decode(r: ProcResult, onDone: GitDone): void {
+  onDone(r.ok, r.stdout.toString('utf8'), r.stderr.toString('utf8'));
 }
 
-/** Run git asynchronously (callback form — promises are starved under the loop). */
+/** Run git asynchronously (callback form). Routed through the process runner so
+ *  the big parent never forks; promises are starved under the GLib loop, so the
+ *  whole git surface is callback-based. */
 export function git(cwd: string, args: string[], onDone: GitDone): void {
-  brokerGit(cwd, args, onDone);
+  runProcess({ file: 'git', args, cwd }, (r) => decode(r, onDone));
 }
 
-// repoRoot(cwd) is invariant for a fixed directory over the life of its checkout,
-// but it's on hot paths — every workbench switch rebinds the git chrome, which
-// forks `git rev-parse --show-toplevel`. fork() cost scales with this process's
-// RSS, so under the long-lived node-gtk process (which accrues native memory)
-// these synchronous spawns grow to tens of ms each and stall the UI. Memoize by
-// cwd; `invalidateRepoRoot` drops entries when a directory's git topology changes.
+// --- repo topology (derived from the on-disk layout — no subprocess) ----------
+
+// repoRoot(cwd) is invariant for a fixed checkout, but it's on hot paths (every
+// workbench switch rebinds the git chrome). It's also exactly the nearest
+// ancestor of `cwd` containing a `.git` entry — what `git rev-parse
+// --show-toplevel` reports — so we walk the filesystem for it directly, with no
+// fork. Memoized by cwd; `invalidateRepoRoot` drops entries when a directory's
+// git topology changes.
 const repoRootCache = new Map<string, string | null>();
 
 /** The repository top-level for `cwd`, or null when not inside a repo. Memoized. */
 export function repoRoot(cwd: string): string | null {
   const cached = repoRootCache.get(cwd);
   if (cached !== undefined) return cached;
-  let root: string | null;
-  try {
-    root = gitSync(cwd, ['rev-parse', '--show-toplevel']).trim() || null;
-  } catch {
-    root = null;
+  let root: string | null = null;
+  let dir = Path.resolve(cwd);
+  for (;;) {
+    if (Fs.existsSync(Path.join(dir, '.git'))) {
+      root = dir;
+      break;
+    }
+    const parent = Path.dirname(dir);
+    if (parent === dir) break; // reached the filesystem root
+    dir = parent;
+  }
+  if (root) {
+    try { root = Fs.realpathSync(root); } catch { /* keep the walked path */ }
   }
   repoRootCache.set(cwd, root);
   return root;
@@ -76,6 +86,68 @@ export function repoRoot(cwd: string): string | null {
 export function invalidateRepoRoot(cwd?: string): void {
   if (cwd === undefined) repoRootCache.clear();
   else repoRootCache.delete(cwd);
+}
+
+/** The git dir backing the worktree rooted at `root`: `<root>/.git` is either a
+ *  directory (the main checkout) or a file "gitdir: <path>" (a linked worktree).
+ *  Returns the resolved git-dir path, or null when there's no readable `.git`. */
+function gitDirFor(root: string): string | null {
+  const gp = Path.join(root, '.git');
+  try {
+    const st = Fs.statSync(gp);
+    if (st.isDirectory()) return gp;
+    if (st.isFile()) {
+      const m = Fs.readFileSync(gp, 'utf8').match(/gitdir:\s*(.+)/);
+      if (m) return Path.resolve(root, m[1].trim());
+    }
+  } catch { /* no .git */ }
+  return null;
+}
+
+/** The *common* git dir for the worktree rooted at `root` — the main checkout's
+ *  `.git`, shared by every linked worktree (where refs and `worktrees/` live). */
+function commonDirFor(root: string): string | null {
+  const gd = gitDirFor(root);
+  if (!gd) return null;
+  // A linked worktree's git dir (`<common>/worktrees/<name>`) carries a `commondir`
+  // file pointing back (relative) to the common dir; the main checkout has none.
+  try {
+    const cdFile = Path.join(gd, 'commondir');
+    if (Fs.existsSync(cdFile)) return Path.resolve(gd, Fs.readFileSync(cdFile, 'utf8').trim());
+  } catch { /* fall through to the main-checkout case */ }
+  return gd;
+}
+
+/** The branch checked out in `gitDir` (its HEAD), or null when detached. */
+function readHeadBranch(gitDir: string): string | null {
+  try {
+    const head = Fs.readFileSync(Path.join(gitDir, 'HEAD'), 'utf8').trim();
+    const m = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The HEAD commit OID for `gitDir` (refs resolved against `commonDir`), or null. */
+function readHeadOid(gitDir: string, commonDir: string): string | null {
+  try {
+    const head = Fs.readFileSync(Path.join(gitDir, 'HEAD'), 'utf8').trim();
+    if (/^[0-9a-f]{40,64}$/i.test(head)) return head; // detached
+    const m = head.match(/^ref:\s*(.+)$/);
+    if (!m) return null;
+    const ref = m[1].trim();
+    const loose = Path.join(commonDir, ref);
+    if (Fs.existsSync(loose)) return Fs.readFileSync(loose, 'utf8').trim();
+    const packed = Path.join(commonDir, 'packed-refs');
+    if (Fs.existsSync(packed)) {
+      for (const line of Fs.readFileSync(packed, 'utf8').split('\n')) {
+        const pm = line.match(/^([0-9a-f]{40,64})\s+(.+)$/i);
+        if (pm && pm[2].trim() === ref) return pm[1];
+      }
+    }
+  } catch { /* unreadable */ }
+  return null;
 }
 
 /** Where a directory sits in git: its worktree root, branch, and whether it's a
@@ -95,18 +167,14 @@ export interface WorktreeInfo {
 export function worktreeInfo(cwd: string): WorktreeInfo | null {
   const root = repoRoot(cwd);
   if (!root) return null;
+  // A linked worktree's `.git` is a file; the main checkout's is a directory.
   let linked = false;
-  try {
-    // A linked worktree's git dir is `<common>/worktrees/<name>`; the main
-    // checkout's is the plain `<root>/.git`.
-    linked = gitSync(cwd, ['rev-parse', '--git-dir']).includes('/worktrees/');
-  } catch {
-    /* leave linked=false on any git error */
-  }
-  return { root, name: Path.basename(root), branch: currentBranch(root), linked };
+  try { linked = Fs.statSync(Path.join(root, '.git')).isFile(); } catch { /* leave false */ }
+  const gd = gitDirFor(root);
+  return { root, name: Path.basename(root), branch: gd ? readHeadBranch(gd) : null, linked };
 }
 
-/** One entry from `git worktree list` — a checkout (main or linked) of the repo. */
+/** One entry from the worktree list — a checkout (main or linked) of the repo. */
 export interface WorktreeEntry {
   /** The worktree's top-level directory (absolute). */
   path: string;
@@ -120,53 +188,62 @@ export interface WorktreeEntry {
   linked: boolean;
 }
 
-/** Every worktree of the repository containing `cwd` (`git worktree list
- *  --porcelain`); the main checkout is first (`linked:false`). Empty outside a
- *  repo. */
+/** Every worktree of the repository containing `cwd`; the main checkout is first
+ *  (`linked:false`). Empty outside a repo. Read straight from the git layout
+ *  (`<common>/worktrees/*`), so it never forks. */
 export function listWorktrees(cwd: string): WorktreeEntry[] {
-  let out: string;
-  try {
-    out = gitSync(cwd, ['worktree', 'list', '--porcelain', '-z']);
-  } catch {
-    return [];
-  }
-  // Porcelain records are blank-line separated; with -z lines are NUL-joined and
-  // records are double-NUL separated. Parse defensively for both forms.
-  const entries: WorktreeEntry[] = [];
-  for (const block of out.split(/\0\0|\n\n/)) {
-    let path: string | null = null;
-    let head: string | null = null;
-    let branch: string | null = null;
-    for (const line of block.split(/\0|\n/)) {
-      if (line.startsWith('worktree ')) path = line.slice('worktree '.length);
-      else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length) || null;
-      else if (line.startsWith('branch ')) branch = line.slice('branch '.length).replace(/^refs\/heads\//, '') || null;
-    }
-    if (!path) continue;
-    entries.push({ path, name: Path.basename(path), branch, head, linked: entries.length > 0 });
+  const root = repoRoot(cwd);
+  if (!root) return [];
+  const commonDir = commonDirFor(root);
+  if (!commonDir) return [];
+
+  // The common dir is `<main>/.git`; the main worktree is its parent.
+  const mainRoot = Path.dirname(commonDir);
+  const entries: WorktreeEntry[] = [
+    {
+      path: mainRoot,
+      name: Path.basename(mainRoot),
+      branch: readHeadBranch(commonDir),
+      head: readHeadOid(commonDir, commonDir),
+      linked: false,
+    },
+  ];
+
+  let names: string[] = [];
+  try { names = Fs.readdirSync(Path.join(commonDir, 'worktrees')).sort(); } catch { /* none */ }
+  for (const name of names) {
+    const adminDir = Path.join(commonDir, 'worktrees', name);
+    let wtPath: string | null = null;
+    try {
+      // `gitdir` holds the path to the linked worktree's `.git` file; its parent
+      // is the worktree root.
+      wtPath = Path.dirname(Fs.readFileSync(Path.join(adminDir, 'gitdir'), 'utf8').trim());
+    } catch { /* stale admin entry */ }
+    if (!wtPath) continue;
+    entries.push({
+      path: wtPath,
+      name: Path.basename(wtPath),
+      branch: readHeadBranch(adminDir),
+      head: readHeadOid(adminDir, commonDir),
+      linked: true,
+    });
   }
   return entries;
 }
 
-/** Absolute path of `.git/COMMIT_EDITMSG` (handles worktrees/submodules). */
-export function commitMsgPath(root: string): string {
-  const p = gitSync(root, ['rev-parse', '--git-path', 'COMMIT_EDITMSG']).trim();
-  return Path.isAbsolute(p) ? p : Path.join(root, p);
+/** Absolute path of `.git/COMMIT_EDITMSG` (handles worktrees/submodules). Async:
+ *  resolved via `git rev-parse --git-path`, falling back to `<root>/.git/…`. */
+export function commitMsgPath(root: string, onDone: (path: string) => void): void {
+  git(root, ['rev-parse', '--git-path', 'COMMIT_EDITMSG'], (ok, stdout) => {
+    const p = stdout.trim();
+    if (ok && p) onDone(Path.isAbsolute(p) ? p : Path.join(root, p));
+    else onDone(Path.join(root, '.git', 'COMMIT_EDITMSG'));
+  });
 }
 
 const STATUS_PORCELAIN_ARGS = ['status', '--porcelain=v2', '-z'];
 
-/** `git status --porcelain=v2 -z` → a flat list of changes (synchronous). */
-export function getChanges(root: string): GitChange[] {
-  try {
-    return parseChanges(root, gitSync(root, STATUS_PORCELAIN_ARGS));
-  } catch {
-    return [];
-  }
-}
-
-/** Async form of `getChanges` — for callers on the UI thread (the Source Control
- *  panel refresh) that must not block on the spawn. Empties on error. */
+/** Async `git status --porcelain=v2 -z` → a flat list of changes. Empties on error. */
 export function getChangesAsync(root: string, onDone: (changes: GitChange[]) => void): void {
   git(root, STATUS_PORCELAIN_ARGS, (ok, stdout) => onDone(ok ? parseChanges(root, stdout) : []));
 }
@@ -223,7 +300,7 @@ export function applyPatch(
   if (opts.cached) args.push('--cached');
   if (opts.reverse) args.push('--reverse');
   args.push('-');
-  brokerGit(root, args, onDone, patch); // `patch` is fed to git's stdin by the broker
+  runProcess({ file: 'git', args, cwd: root, input: patch }, (r) => decode(r, onDone));
 }
 
 export function unstage(root: string, relPath: string, onDone: GitDone): void {
@@ -257,25 +334,16 @@ export function commit(root: string, messageFile: string, onDone: GitDone): void
 
 // --- branches ----------------------------------------------------------------
 
-/** The current branch name, or null (detached HEAD / not a repo). */
-export function currentBranch(root: string): string | null {
-  try {
-    return gitSync(root, ['branch', '--show-current']).trim() || null;
-  } catch {
-    return null;
-  }
+/** The current branch name, or null (detached HEAD / not a repo). Async. */
+export function currentBranch(root: string, onDone: (branch: string | null) => void): void {
+  git(root, ['branch', '--show-current'], (ok, stdout) => onDone(ok ? stdout.trim() || null : null));
 }
 
-/** Local branch names, most-recently-committed first. */
-export function listBranches(root: string): string[] {
-  try {
-    return gitSync(root, ['branch', '--format=%(refname:short)', '--sort=-committerdate'])
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
+/** Local branch names, most-recently-committed first. Async. */
+export function listBranches(root: string, onDone: (branches: string[]) => void): void {
+  git(root, ['branch', '--format=%(refname:short)', '--sort=-committerdate'], (ok, stdout) =>
+    onDone(ok ? stdout.split('\n').map((s) => s.trim()).filter(Boolean) : []),
+  );
 }
 
 /** Switch to an existing branch. */
@@ -310,21 +378,23 @@ export interface Stash {
   description: string; // e.g. "WIP on master: 1a2b3c …"
 }
 
-/** The stash entries, newest first. */
-export function listStashes(root: string): Stash[] {
-  try {
-    return gitSync(root, ['stash', 'list', '--format=%gd%x09%gs'])
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        const tab = line.indexOf('\t');
-        return tab === -1
-          ? { ref: line, description: '' }
-          : { ref: line.slice(0, tab), description: line.slice(tab + 1) };
-      });
-  } catch {
-    return [];
-  }
+/** The stash entries, newest first. Async. */
+export function listStashes(root: string, onDone: (stashes: Stash[]) => void): void {
+  git(root, ['stash', 'list', '--format=%gd%x09%gs'], (ok, stdout) =>
+    onDone(
+      ok
+        ? stdout
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => {
+              const tab = line.indexOf('\t');
+              return tab === -1
+                ? { ref: line, description: '' }
+                : { ref: line.slice(0, tab), description: line.slice(tab + 1) };
+            })
+        : [],
+    ),
+  );
 }
 
 /** Stash the working-tree changes. */

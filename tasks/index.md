@@ -131,13 +131,25 @@ See [git/index.md](git/index.md) for the architecture and per-feature status.
   (`gitSync`/`git`, porcelain-v2 status parsing); `src/git.ts` exposes the
   `GitRepo` interface backed by `CliGitRepo`, with `acquireGitRepo`/`releaseGitRepo`
   pooling one polling repo per root.
-- [~] **PERF — git spawning.** Each `GitGutter.refresh()` fires 2 `git show`
-  spawns per `notify()`, and the poll runs `git status`/`numstat` per root.
-  Largely mitigated: all git spawns go through a **broker process** so the big
-  node-gtk process never `fork()`s (fork cost scaled with RSS), off-screen gutters
-  defer their refetch, and `seed`/`GitPanel.refresh` are async. Remaining: coalesce
-  the `onChange` fan-out (per-file gate; one `git status` per root for all gutters)
-  and retire the still-blocking `gitSync`. See [git/index.md](git/index.md).
+- [~] **PERF — git spawning.** All spawns go through the **process runner**
+  (below) so the big node-gtk process never `fork()`s (fork cost scales with RSS);
+  off-screen gutters defer their refetch, `GitPanel.refresh` is async, and the
+  whole git/gh surface is async (no `gitSync`; repo topology is read from the
+  on-disk git layout, pure fs). Remaining: coalesce the `onChange` fan-out (per-file
+  gate; one `git status` per root for all gutters, instead of per-editor `git show`
+  pairs on every `notify()`). See [git/index.md](git/index.md).
+
+### Process runner
+
+`src/process/runner.ts` (+ `runner-main.ts`, `codec.ts`) — the generic spawn broker.
+The long-lived ~1.5 GB node-gtk process must never `fork()` (this Node's libuv has
+no `posix_spawn` fast path, so fork cost scales with RSS); instead it forks one
+tiny child once, and that child runs every command (~1 ms each).
+`runProcess({ file, args, cwd, input }, onDone)` is async-only; **binary,
+length-prefixed IPC** (no JSON) carries stdout/stderr as raw bytes (up to 64 MiB).
+git (`git/cli.ts`) and gh (`github.ts`) both route through it; any subsystem that
+shells out reuses the same primitive. Direct-spawn fallback if the child is down.
+(`src/process/runner.test.ts`.)
 
 ## Code editing
 

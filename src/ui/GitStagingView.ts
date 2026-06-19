@@ -39,7 +39,7 @@ import {
   type GitFileState,
   type GitDone,
   repoRoot,
-  getChanges,
+  getChangesAsync,
   stage,
   unstage,
   discard,
@@ -122,6 +122,8 @@ export class GitStagingView {
   private gitUnsub?: () => void;
 
   private readonly list: InstanceType<typeof Gtk.ListBox>;
+  // Bumps per refresh; a slower async `git status` that's been superseded is dropped.
+  private refreshGen = 0;
   private fileRows: RowInfo[] = [];
   // Open inline diffs, keyed by `${kind}:${relPath}` (so a file with both a staged
   // and an unstaged row can show each independently).
@@ -314,6 +316,21 @@ export class GitStagingView {
   // --- Change list -----------------------------------------------------------
 
   private refresh(): void {
+    const gen = ++this.refreshGen;
+    if (!this.repo) {
+      this.rebuild(null);
+      return;
+    }
+    // `git status` runs off the UI thread; the gen guard drops a result superseded
+    // by a newer refresh, and we only touch the DOM once the fresh changes land
+    // (so the list never flashes empty mid-fetch).
+    getChangesAsync(this.repo, (changes) => {
+      if (gen === this.refreshGen) this.rebuild(changes);
+    });
+  }
+
+  // Rebuild the list from `changes` (null = not a git repository).
+  private rebuild(changes: GitChange[] | null): void {
     const prevKey = this.selectedKey();
     const keepFocus = this.hasFocusWithin();
     const scrollValue = this.root.getVadjustment().getValue();
@@ -332,12 +349,11 @@ export class GitStagingView {
     }
     this.fileRows = [];
 
-    if (!this.repo) {
+    if (!changes) {
       this.list.append(this.messageRow('Not a git repository'));
       return;
     }
 
-    const changes = getChanges(this.repo);
     const staged = changes.filter((c) => c.staged);
     const unstaged = changes.filter((c) => c.unstaged && c.state !== 'untracked');
     const untracked = changes.filter((c) => c.state === 'untracked');

@@ -7,18 +7,36 @@ import * as Path from 'node:path';
 import { openGitRepo, type GitRepo } from './git.ts';
 
 // Integration test: drive a throwaway repo with the real `git` CLI and assert the
-// CLI-backed GitRepo's synchronous (seeded) reads. The async poll/monitor need the
-// GLib loop, but the constructor seeds state synchronously — which is what these
-// getters return — so no loop is required here.
+// CLI-backed GitRepo's cached reads. State is populated by an async warm-up poll
+// (git runs off-thread through the process runner), so `settled()` awaits the
+// first poll landing before the synchronous getters are asserted.
 
 const G = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+/** Resolve once the repo's async warm-up has populated its cached state. */
+function settled(repo: GitRepo): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const ready = () => repo.getBranch() !== null || repo.getStatus() !== null;
+    if (ready()) return resolve();
+    const un = repo.onChange(() => {
+      if (ready()) {
+        un();
+        resolve();
+      }
+    });
+    setTimeout(() => {
+      un();
+      resolve();
+    }, 5000).unref?.(); // safety net so a stuck poll can't hang the suite
+  });
+}
 
 let dir: string;
 let bare: string;
 let repo: GitRepo;
 
-before(() => {
+before(async () => {
   dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-'));
   bare = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-bare-'));
   execFileSync('git', ['init', '--bare'], { cwd: bare });
@@ -44,6 +62,7 @@ before(() => {
   Fs.writeFileSync(Path.join(dir, 'untracked.txt'), 'hello\n');
 
   repo = openGitRepo(dir);
+  await settled(repo);
 });
 
 after(() => {
@@ -84,13 +103,14 @@ test('getTrackedPaths lists tracked files only (absolute)', () => {
   for (const p of repo.getTrackedPaths()) assert.ok(Path.isAbsolute(p));
 });
 
-test('untracked insertions: text counted (incl. no trailing newline), binary → 0', () => {
+test('untracked insertions: text counted (incl. no trailing newline), binary → 0', async () => {
   const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-u-'));
   try {
     execFileSync('git', ['init', '-b', 'main'], { cwd: d });
     Fs.writeFileSync(Path.join(d, 'multi.txt'), 'a\nb\nc'); // 3 lines, no trailing \n
     Fs.writeFileSync(Path.join(d, 'bin.dat'), Buffer.from([1, 2, 0, 3, 4])); // NUL → binary
     const r = openGitRepo(d);
+    await settled(r);
     // 3 from multi.txt, 0 from the binary file
     assert.deepEqual(r.getStatus(), { added: 3, removed: 0 });
     r.dispose();

@@ -7,12 +7,26 @@
  * issue lookup shells out to the `gh` CLI, degrading to "none" when gh is absent,
  * unauthenticated, or the branch has no PR.
  */
-import { execFile } from 'node:child_process';
 // github.ts is a public facade alongside git.ts; it may use the internal git CLI
 // helpers directly. It deliberately imports from `git/cli.ts` (pure node) rather
 // than the public `git.ts` so it stays GTK-free and testable in isolation — the
 // rest of the codebase still imports git helpers only via git.ts / github.ts.
-import { currentBranch, gitSync, repoRoot } from './git/cli.ts';
+import { git as gitCli, repoRoot } from './git/cli.ts';
+import { runProcess } from './process/runner.ts';
+
+// Run `gh` through the shared process runner (so the big node-gtk parent never
+// forks), decoding output to text. `err` is non-null on a non-zero exit,
+// mirroring the `execFile` callback shape the call sites were written against.
+function gh(
+  cwd: string,
+  args: string[],
+  onDone: (err: Error | null, stdout: string, stderr: string) => void,
+): void {
+  runProcess({ file: 'gh', args, cwd }, (r) => {
+    const stderr = r.stderr.toString('utf8');
+    onDone(r.ok ? null : new Error(stderr.trim() || 'gh command failed'), r.stdout.toString('utf8'), stderr);
+  });
+}
 
 export interface GithubRepo {
   host: string; // always 'github.com' (GitHub.com only, for now)
@@ -92,32 +106,41 @@ export function repoWebUrl(r: GithubRepo): string {
 
 /**
  * Resolve the GitHub repo for `root` by trying `remoteNames` in order (e.g.
- * upstream then origin). Returns the first that parses as a GitHub remote.
+ * upstream then origin). Calls back with the first that parses as a GitHub
+ * remote, or null. Async (the git lookups go through the process runner).
  */
-export function resolveGithubRepo(root: string, remoteNames: string[]): GithubRepo | null {
+export function resolveGithubRepo(
+  root: string,
+  remoteNames: string[],
+  onDone: (repo: GithubRepo | null) => void,
+): void {
   // List the remotes first so we never run `get-url` on a missing one (which
   // would leak git's "No such remote" to stderr).
-  let remotes: Set<string>;
-  try {
-    remotes = new Set(
-      gitSync(root, ['remote'])
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    );
-  } catch {
-    return null;
-  }
-  for (const name of remoteNames) {
-    if (!remotes.has(name)) continue;
-    try {
-      const repo = parseGithubRemote(gitSync(root, ['remote', 'get-url', name]).trim());
-      if (repo) return repo;
-    } catch {
-      // unreadable remote — try the next
+  gitCli(root, ['remote'], (ok, stdout) => {
+    if (!ok) {
+      onDone(null);
+      return;
     }
-  }
-  return null;
+    const remotes = new Set(stdout.split('\n').map((s) => s.trim()).filter(Boolean));
+    // Try the names in order, sequentially — the first GitHub remote wins.
+    const tryNext = (i: number): void => {
+      if (i >= remoteNames.length) {
+        onDone(null);
+        return;
+      }
+      const name = remoteNames[i];
+      if (!remotes.has(name)) {
+        tryNext(i + 1);
+        return;
+      }
+      gitCli(root, ['remote', 'get-url', name], (urlOk, urlOut) => {
+        const repo = urlOk ? parseGithubRemote(urlOut.trim()) : null;
+        if (repo) onDone(repo);
+        else tryNext(i + 1);
+      });
+    };
+    tryNext(0);
+  });
 }
 
 /**
@@ -125,10 +148,9 @@ export function resolveGithubRepo(root: string, remoteNames: string[]): GithubRe
  * when gh is unavailable/unauthenticated or the branch has no PR.
  */
 export function fetchPullRequest(cwd: string, onDone: (pr: PullRequest | null) => void): void {
-  execFile(
-    'gh',
+  gh(
+    cwd,
     ['pr', 'view', '--json', 'number,url,title,state,statusCheckRollup,closingIssuesReferences'],
-    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
     (err, stdout) => {
       if (err) {
         onDone(null);
@@ -211,12 +233,7 @@ function parseChecks(stdout: string): CiCheck[] {
  * checks fail/pending, but still prints the JSON.)
  */
 export function fetchChecks(cwd: string, onDone: (checks: CiCheck[]) => void): void {
-  execFile(
-    'gh',
-    ['pr', 'checks', '--json', 'name,link,bucket'],
-    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
-    (_err, stdout) => onDone(parseChecks(stdout)),
-  );
+  gh(cwd, ['pr', 'checks', '--json', 'name,link,bucket'], (_err, stdout) => onDone(parseChecks(stdout)));
 }
 
 /** The current branch PR's failed CI checks (name + run URL) — the subset of
@@ -272,7 +289,7 @@ function fetchList(
 ): void {
   // Surface a failure through `onError` when supplied, else degrade to empty.
   const fail = (message: string) => (onError ? onError(message) : onDone([]));
-  execFile('gh', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+  gh(cwd, args, (err, stdout, stderr) => {
     if (err) {
       fail(stderr?.trim() || err.message || 'gh command failed');
       return;
@@ -308,22 +325,16 @@ function fetchList(
  * when gh is unavailable/unauthenticated or the lookup fails.
  */
 export function fetchDefaultBranch(cwd: string, onDone: (branch: string | null) => void): void {
-  execFile(
-    'gh',
+  gh(
+    cwd,
     ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
-    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
     (err, stdout) => onDone(err ? null : stdout.trim() || null),
   );
 }
 
-/** True when the current branch has an upstream tracking branch on a remote. */
-function hasUpstream(cwd: string): boolean {
-  try {
-    gitSync(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-    return true;
-  } catch {
-    return false;
-  }
+/** Whether the current branch has an upstream tracking branch on a remote. Async. */
+function hasUpstream(cwd: string, onDone: (has: boolean) => void): void {
+  gitCli(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], (ok) => onDone(ok));
 }
 
 /**
@@ -334,36 +345,28 @@ function hasUpstream(cwd: string): boolean {
  * the create-PR page.
  */
 export function createPullRequestWeb(cwd: string, onDone: (ok: boolean, stderr: string) => void): void {
-  const openWeb = () =>
-    execFile(
-      'gh',
-      ['pr', 'create', '--web'],
-      { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
-      (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
-    );
+  const openWeb = () => gh(cwd, ['pr', 'create', '--web'], (err, _stdout, stderr) => onDone(!err, stderr ?? ''));
 
-  if (hasUpstream(cwd)) {
-    openWeb();
-    return;
-  }
-
-  const branch = currentBranch(cwd);
-  if (!branch) {
-    onDone(false, 'Cannot create a pull request from a detached HEAD.');
-    return;
-  }
-  execFile(
-    'git',
-    ['push', '--set-upstream', 'origin', branch],
-    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
-    (err, _stdout, stderr) => {
-      if (err) {
-        onDone(false, stderr?.trim() || `Could not push '${branch}' to origin.`);
+  hasUpstream(cwd, (has) => {
+    if (has) {
+      openWeb();
+      return;
+    }
+    gitCli(cwd, ['branch', '--show-current'], (branchOk, branchOut) => {
+      const branch = branchOk ? branchOut.trim() : '';
+      if (!branch) {
+        onDone(false, 'Cannot create a pull request from a detached HEAD.');
         return;
       }
-      openWeb();
-    },
-  );
+      gitCli(cwd, ['push', '--set-upstream', 'origin', branch], (pushOk, _stdout, stderr) => {
+        if (!pushOk) {
+          onDone(false, stderr.trim() || `Could not push '${branch}' to origin.`);
+          return;
+        }
+        openWeb();
+      });
+    });
+  });
 }
 
 /**
@@ -375,12 +378,7 @@ export function checkoutPullRequest(
   number: number,
   onDone: (ok: boolean, stderr: string) => void,
 ): void {
-  execFile(
-    'gh',
-    ['pr', 'checkout', String(number)],
-    { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
-    (err, _stdout, stderr) => onDone(!err, stderr ?? ''),
-  );
+  gh(cwd, ['pr', 'checkout', String(number)], (err, _stdout, stderr) => onDone(!err, stderr ?? ''));
 }
 
 // --- reactive GitHub model -------------------------------------------------
@@ -591,9 +589,27 @@ class CliGithubService implements GithubService {
   // scheduled-refresh busy hold.
   private lookup(onSettled?: () => void): void {
     if (!this.repoResolved) {
-      this.repo = this.repoDir ? resolveGithubRepo(this.repoDir, this.remoteNames()) : null;
-      this.repoResolved = true;
+      this.repoResolved = true; // resolve once (matches the prior synchronous semantics)
+      if (!this.repoDir) {
+        onSettled?.();
+        return;
+      }
+      const gen = this.generation;
+      resolveGithubRepo(this.repoDir, this.remoteNames(), (repo) => {
+        if (gen !== this.generation) {
+          onSettled?.();
+          return; // superseded by a rebind/dispose
+        }
+        this.repo = repo;
+        this.lookupResolved(onSettled);
+      });
+      return;
     }
+    this.lookupResolved(onSettled);
+  }
+
+  // The repo is resolved; query its default branch (once) and the PR/CI.
+  private lookupResolved(onSettled?: () => void): void {
     if (!this.repo || !this.repoDir) {
       onSettled?.();
       return;

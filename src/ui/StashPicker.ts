@@ -34,30 +34,31 @@ export function openStashPicker(host: Overlay, cwd: string, action: StashAction,
     });
     return;
   }
-  const stashes = listStashes(root);
-  if (stashes.length === 0) {
-    quilx.notifications.addInfo('No stashes');
-    return;
-  }
-  // value = stash ref ("stash@{N}"); the description is what's matched/shown.
-  const refByLabel = new Map<string, string>();
-  const items = stashes.map((s) => {
-    const label = s.description || s.ref;
-    refByLabel.set(label, s.ref);
-    return { value: label, text: label };
-  });
-  openPicker({
-    host,
-    placeholder: `Stash to ${action}…`,
-    promptIcon: action === 'drop' ? Icons.trash : Icons.stash,
-    items,
-    onSelect: (label) => {
-      const ref = refByLabel.get(label);
-      if (!ref) return;
-      RUN[action](git, ref, (ok, stderr) => {
-        if (ok) quilx.notifications.addSuccess(`Stash ${PAST[action]}`);
-        else quilx.notifications.addError(`Stash ${action} failed`, { detail: stderr.trim() });
-      });
-    },
+  listStashes(root, (stashes) => {
+    if (stashes.length === 0) {
+      quilx.notifications.addInfo('No stashes');
+      return;
+    }
+    // value = stash ref ("stash@{N}"); the description is what's matched/shown.
+    const refByLabel = new Map<string, string>();
+    const items = stashes.map((s) => {
+      const label = s.description || s.ref;
+      refByLabel.set(label, s.ref);
+      return { value: label, text: label };
+    });
+    openPicker({
+      host,
+      placeholder: `Stash to ${action}…`,
+      promptIcon: action === 'drop' ? Icons.trash : Icons.stash,
+      items,
+      onSelect: (label) => {
+        const ref = refByLabel.get(label);
+        if (!ref) return;
+        RUN[action](git, ref, (ok, stderr) => {
+          if (ok) quilx.notifications.addSuccess(`Stash ${PAST[action]}`);
+          else quilx.notifications.addError(`Stash ${action} failed`, { detail: stderr.trim() });
+        });
+      },
+    });
   });
 }

@@ -29,33 +29,40 @@ modules — **`src/git.ts`** and **`src/github.ts`**. Everything under
   `import { … } from '../git.ts'`.
 - `src/github.ts` is the GitHub facade: the reactive `GithubService` plus the
   `gh`-backed read functions. It is the one other module allowed to use
-  `git/cli.ts` directly (it imports `gitSync`/`currentBranch`/`repoRoot`) —
-  deliberately, so it stays GTK-free and unit-testable.
+  `git/cli.ts` directly (it imports the async `git`/`repoRoot`) — deliberately,
+  so it stays GTK-free and unit-testable. Its `gh` spawns also route through the
+  process runner.
 
 Invariant (grep-checkable): nothing outside `git.ts`/`github.ts` imports
 `git/cli.ts` or `git/status.ts`.
 
 ## I/O model
 
-Use `node:child_process` + the `git`/`gh` CLI directly: `execFileSync` for fast
-local reads, and async (`execFile` callbacks or Promise wrappers) for
-slow/networked ops. Node async IO and Promises resolve normally under the live
-GLib loop. Simpler than `Gio.Subprocess`, and hands us stdout directly.
+Use `node:child_process` + the `git`/`gh` CLI directly. **Every** git/gh
+invocation is **asynchronous** (callback form) — there is no synchronous git path.
+Node async IO resolves normally under the live GLib loop; promises/microtasks are
+starved, so the whole surface is callbacks (no promise wrappers). Simpler than
+`Gio.Subprocess`, and hands us stdout directly.
 
-All git spawning goes through a **broker process** (`src/git/broker.ts` +
-`broker-main.mjs`): the long-lived ~1.5 GB node-gtk process must never `fork()`
-(this Node's libuv has no `posix_spawn` fast path, so fork cost scales with RSS —
-tens of ms/spawn). The parent forks once to launch a tiny child; every `git` then
-forks *that* (~1 ms). `cli.ts`'s `git` (async, stdin/stdout framing) and `gitSync`
-(blocking FIFO round trip, for the synchronous callers) route through it, with a
-direct-spawn fallback if the broker is down.
+All spawning goes through the **process runner** (`src/process/runner.ts` +
+`runner-main.ts` — see [../index.md](../index.md) "Process runner"): the long-lived
+~1.5 GB node-gtk process must never `fork()` (this Node's libuv has no
+`posix_spawn` fast path, so fork cost scales with RSS — tens of ms/spawn). The
+parent forks once to launch a tiny child; every command then forks *that* (~1 ms).
+`cli.ts`'s `git()` and github.ts's `gh()` both call `runProcess`, with a
+direct-spawn fallback if the runner is down. IPC is **binary**
+(`src/process/codec.ts`): a length-prefixed frame whose stdout/stderr (up to
+64 MiB) cross the pipe as raw bytes, never JSON-escaped.
 
-**Remaining perf work:** retire `brokerGitSync` by converting its cold synchronous
-callers (`repoRoot` — memoized/pre-warmable, pickers, github remotes) — the FIFO
-round trip removes the fork cost but still blocks the main thread; and coalesce the
-`onChange` fan-out (one `git status` per root feeding all gutters instead of
-per-editor `git show` pairs, plus a per-file gate so a gutter only re-fetches when
-its own file moved).
+Repo topology is derived straight from the on-disk git layout — pure `fs` reads,
+no subprocess: `repoRoot` (walk up for `.git`, memoized), `worktreeInfo`, and
+`listWorktrees` (read `<common>/worktrees/*` + HEAD via `commondir`/`gitdir`).
+The cold callers (branch/stash pickers, github remote resolution, the commit
+message path) take a callback.
+
+**Remaining perf work:** coalesce the `onChange` fan-out (one `git status` per
+root feeding all gutters instead of per-editor `git show` pairs, plus a per-file
+gate so a gutter only re-fetches when its own file moved).
 
 ## Backend: the git CLI helper — `src/git/cli.ts` (internal)
 
@@ -66,18 +73,19 @@ pre-commit/commit-msg) for free.
 Core primitives (note: `cwd`/`root` is the first arg of every call):
 
 ```ts
-gitSync(cwd, args): string;                  // synchronous (broker FIFO round trip; throws on non-zero)
-git(cwd, args, onDone): void;                // async (broker); onDone(ok, stdout, stderr)
-repoRoot(cwd): string | null;                // rev-parse --show-toplevel (memoized)
-commitMsgPath(root): string;                 // .git/COMMIT_EDITMSG (via rev-parse --git-path)
+git(cwd, args, onDone): void;                // async (process runner); onDone(ok, stdout, stderr)
+repoRoot(cwd): string | null;                // nearest ancestor with `.git` — pure fs, memoized
+commitMsgPath(root, onDone): void;           // async; .git/COMMIT_EDITMSG (via rev-parse --git-path)
 ```
 
-It also exposes `worktreeInfo` / `listWorktrees` / `invalidateRepoRoot`.
+It also exposes the pure-fs `worktreeInfo` / `listWorktrees`, `invalidateRepoRoot`,
+and the async `currentBranch(root, cb)` / `listBranches(root, cb)` /
+`listStashes(root, cb)`. There is no `gitSync`.
 
 ### Status model
 
-`getChanges(root)` parses `git status --porcelain=v2 -z` into a flat list the
-panel groups itself; a file edited in both index and worktree is pushed as
+`getChangesAsync(root, cb)` parses `git status --porcelain=v2 -z` into a flat list
+the panel groups itself; a file edited in both index and worktree is pushed as
 **two** rows (staged + unstaged):
 
 ```ts
@@ -90,10 +98,10 @@ interface GitChange {
 }
 ```
 
-`getChangesAsync(root, cb)` is the async form (broker `git()`), used by the Source
-Control panel so its refresh never blocks the UI thread. Porcelain v2 reports
-staged (X) and unstaged (Y) state per file in one call. Per-row line counts (±) are
-not surfaced in the panel.
+It runs the runner's async `git()`, so the Source Control panel (and the staging
+view) refresh without blocking the UI thread. Porcelain v2 reports staged (X) and
+unstaged (Y) state per file in one call. Per-row line counts (±) are not surfaced
+in the panel.
 
 ### Mutations
 
@@ -331,7 +339,7 @@ Porcelain v2 includes the staged X state, so an external `git add` fires
 
 ## Phasing
 
-- [x] Backend: `src/git/cli.ts` helper (`gitSync` / `git`) + porcelain v2 parsing
+- [x] Backend: `src/git/cli.ts` helper (async `git`, pure-fs topology) + porcelain v2 parsing
 - [x] Left-dock: Source Control as a sibling tab of FileTree (lazily created on
   first reveal — not built/subscribed at startup)
 - [x] Status viewer: staged/changes/untracked lists with stage/unstage/discard
@@ -357,7 +365,10 @@ Porcelain v2 includes the staged X state, so an external `git add` fires
 - [x] Two-module boundary: rest of codebase imports only `git.ts`/`github.ts`; `src/git/` internal
 - [x] CLI-backed `CliGitRepo`: pure parsers (`status.ts` + `status.test.ts`), async
   warm-up + 1.5 s poll + chokidar `HEAD` watch + cached getters + coordinated
-  mutations (`git.test.ts`); all git spawns via the broker process
+  mutations (`git.test.ts`); all spawns via the process runner (binary IPC, async-only)
+- [x] **All-async git** — no `gitSync`; repo topology
+  (`repoRoot`/`worktreeInfo`/`listWorktrees`) read straight from the on-disk git
+  layout (pure fs); cold callers (pickers, github remotes, commit path) take callbacks
 
 ## Decisions (as built)
 

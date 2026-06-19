@@ -2320,15 +2320,16 @@ export class AppWindow {
   private startCommit() {
     const repo = repoRoot(this.workbench.cwd);
     if (!repo) return;
-    const msgPath = commitMsgPath(repo);
-    try {
-      Fs.writeFileSync(msgPath, ''); // fresh, empty message
-    } catch (error) {
-      quilx.notifications.addError('Could not start commit', { detail: (error as Error).message });
-      return;
-    }
-    const editor = this.openFile(msgPath);
-    this.commitEditors.set(editor.root, { repo, msgPath });
+    commitMsgPath(repo, (msgPath) => {
+      try {
+        Fs.writeFileSync(msgPath, ''); // fresh, empty message
+      } catch (error) {
+        quilx.notifications.addError('Could not start commit', { detail: (error as Error).message });
+        return;
+      }
+      const editor = this.openFile(msgPath);
+      this.commitEditors.set(editor.root, { repo, msgPath });
+    });
   }
 
   // Finalize a commit when its message tab closes: commit the saved message, or
