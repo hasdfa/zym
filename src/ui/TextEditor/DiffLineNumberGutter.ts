@@ -44,7 +44,18 @@ export class DiffLineNumberGutter {
     this.renderer.setXpad(4);
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, position);
 
-    // Reserve width for the widest label up front (labels are equal-width already).
+    this.primeWidth(labels);
+  }
+
+  /** Swap the per-row labels (after a re-diff re-flows the rows) and repaint. */
+  setLabels(labels: string[]): void {
+    (this.renderer as any).labels = labels;
+    this.primeWidth(labels);
+    (this.renderer as any).queueDraw?.();
+  }
+
+  /** Reserve width for the widest label (a number measured on a short line would crop). */
+  private primeWidth(labels: string[]): void {
     const width = labels.reduce((max, label) => Math.max(max, label.length), 1);
     this.renderer.setText('0'.repeat(width), -1);
     this.renderer.queueResize();

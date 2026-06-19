@@ -2118,7 +2118,7 @@ export class AppWindow {
       // Save commands only apply with an editor open.
       'file:save': {
         didDispatch: () => this.saveActive(),
-        when: () => this.activeEditor !== null || this.activeMultibuffer() !== null,
+        when: () => this.activeEditor !== null || this.activeSavableSurface() !== null,
       },
       'file:save-as': { didDispatch: () => this.saveAsDialog(), when: () => this.activeEditor !== null },
       'git:diff-current': {
@@ -2226,8 +2226,9 @@ export class AppWindow {
     }
     const showHead = (rel: string): Promise<string> =>
       new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
-    // Read-only diff: NEW side = the file's current text (an open document's live text, incl.
-    // unsaved edits, else from disk), OLD side = the HEAD blob. A deleted file → empty new.
+    // Editable diff: NEW side = the file's current text (an open document's live text, incl.
+    // unsaved edits, else from disk) backed by a live Document (edit in place + save + live
+    // re-diff), OLD side = the HEAD blob. A deleted file → empty new.
     const files = await Promise.all(
       paths.map(async (path) => {
         const oldText = await showHead(Path.relative(root, path));
@@ -2246,6 +2247,8 @@ export class AppWindow {
     const view = new DiffMultiBufferView({
       files,
       cwd,
+      editable: true,
+      documents: this.documents,
       onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
     });
     const child = this.workbench.center.add(view.root, {
@@ -2819,10 +2822,10 @@ export class AppWindow {
   // --- File operations (routed to the active editor) -------------------------
 
   private saveActive() {
-    // An editable multibuffer (project search) saves every file it touched, not one Document.
-    const mbv = this.activeMultibuffer();
-    if (mbv) {
-      mbv.save();
+    // An editable multibuffer (project search OR diff) saves every file it touched, not one Document.
+    const surface = this.activeSavableSurface();
+    if (surface) {
+      surface.save();
       return;
     }
     const editor = this.activeEditor;
@@ -2831,13 +2834,25 @@ export class AppWindow {
     else this.saveAsDialog();
   }
 
-  /** The multibuffer hosted by the active center/focused child, if any (for save routing). */
+  /** The active center/focused child resolved to a widget, for surface lookups. */
+  private activeChildWidget(): Widget | null {
+    return Panel.active?.activeChild ?? this.workbench.center.activePanel.activeChild ?? null;
+  }
+
+  /** The project-search multibuffer hosted by the active child, if any. */
   private activeMultibuffer(): MultiBufferView | null {
     const focused = Panel.active?.activeChild;
     const focusedMb = focused ? this.multibufferViews.get(focused) : undefined;
     if (focusedMb) return focusedMb;
     const centerChild = this.workbench.center.activePanel.activeChild;
     return centerChild ? this.multibufferViews.get(centerChild) ?? null : null;
+  }
+
+  /** The active editable surface (project-search or diff multibuffer) that owns a `save()`. */
+  private activeSavableSurface(): { save(): void } | null {
+    const widget = this.activeChildWidget();
+    if (!widget) return null;
+    return this.multibufferViews.get(widget) ?? this.diffMultibufferViews.get(widget) ?? null;
   }
 
   private openDialog() {

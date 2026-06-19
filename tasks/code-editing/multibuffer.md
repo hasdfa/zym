@@ -377,9 +377,23 @@ Stack N sources on the proven substrate.
   *Remaining:* a close-confirmation / unsaved-snapshot for multibuffer-only edits (a file edited
   ONLY here, not open in a tab, discards unsaved edits on close — G11); jump-to-source polish.
   **This unblocks the editable DIFF surface (3b/G5):** the re-segmentation + `isViewRangeEditable`
-  gate are exactly the two walls that reverted it. The diff's extra problem is RE-diffing on
-  edit (segment STRUCTURE changes — phantom rows appear/disappear — not just window sizes),
-  which is still its own follow-up (task #12).
+  gate are exactly the two walls that reverted it.
+- **3b — editable diff surface WIRED (2026-06-19), GUI-unverified.** The RE-diff-on-edit wall
+  (segment STRUCTURE changes — phantom/removed rows appear/disappear — not just window sizes,
+  which flashed under the old whole-buffer re-materialize) is solved by **`ProjectionView.retarget`**:
+  it builds the new projection, line-diffs its text against the current view, and applies only
+  the changed rows (so unchanged rows keep caret + decorations; block/phantom rows re-locked).
+  `DiffMultiBufferView({ editable: true, documents })` backs the NEW side with live Documents
+  (write-through + save + cross-source undo via `undoTarget`), the OLD side stays a read-only
+  blob (phantom rows reject edits via `isViewRangeEditable`), and a debounced
+  `editor.model.onDidChangeText` recomputes the windowed diff and `retarget`s, refreshing the
+  old|new gutters (`DiffLineNumberGutter.setLabels`) + added/removed decorations. `space g D` is
+  now editable; `file:save` routes to the active diff (or search) multibuffer. Tests:
+  `ProjectionView.test.ts` (retarget == fresh build; decoration survives), `diffEditable.test.ts`
+  (substrate), `DiffMultiBufferEditable.test.ts` (write-through, phantom rejection, the real
+  debounced re-diff re-flow, save). ⚠️ GUI-UNVERIFIED: re-diff smoothness (no flash / caret
+  stability as phantom rows appear/disappear), gutter alignment after re-flow. **Remaining for
+  G5:** staging ops (stage/unstage hunks/lines from the diff) + retiring `GitStagingView`.
 - **3d UI polish ✅ (2026-06-19).** Three project-search refinements on top of the shipped surface:
   - **Per-excerpt line numbers** — `MultiBufferGutter` (a `GtkSource.GutterRendererText` in the
     left gutter) renders each row's SOURCE line number via the live `ViewProjection`
