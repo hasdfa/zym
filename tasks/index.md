@@ -131,14 +131,13 @@ See [git/index.md](git/index.md) for the architecture and per-feature status.
   (`gitSync`/`git`, porcelain-v2 status parsing); `src/git.ts` exposes the
   `GitRepo` interface backed by `CliGitRepo`, with `acquireGitRepo`/`releaseGitRepo`
   pooling one polling repo per root.
-- [ ] **PERF — gate `GitGutter.refresh()` (notify-storm fix).** `GitGutter`
-  subscribes `git.onChange(() => this.refresh())` and `refresh()` fires **2 `git
-  show` spawns** (`:rel` + `HEAD:rel`) *unconditionally on every notify*
-  (`GitGutter.ts:177-184`). With many open editors/worktrees there are ~90
-  `onChange` listeners across the pooled repos, so one working-tree change →
-  `notify()` (`git.ts:510`) → dozens of gutters each re-`git show` → ~100 spawns.
-  Each `fork()` scales with memory that makes every fork expensive —
-  see [lifecycle-and-disposal.md](lifecycle-and-disposal.md).
+- [~] **PERF — git spawning.** Each `GitGutter.refresh()` fires 2 `git show`
+  spawns per `notify()`, and the poll runs `git status`/`numstat` per root.
+  Largely mitigated: all git spawns go through a **broker process** so the big
+  node-gtk process never `fork()`s (fork cost scaled with RSS), off-screen gutters
+  defer their refetch, and `seed`/`GitPanel.refresh` are async. Remaining: coalesce
+  the `onChange` fan-out (per-file gate; one `git status` per root for all gutters)
+  and retire the still-blocking `gitSync`. See [git/index.md](git/index.md).
 
 ## Code editing
 

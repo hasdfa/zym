@@ -35,110 +35,28 @@ modules — **`src/git.ts`** and **`src/github.ts`**. Everything under
 Invariant (grep-checkable): nothing outside `git.ts`/`github.ts` imports
 `git/cli.ts` or `git/status.ts`.
 
-## I/O model (measured, not assumed)
+## I/O model
 
-A probe under the live GLib main loop (`startLoop()` + `loop.run()`) found:
+`git`/`gh` run through `node:child_process` (simpler than `Gio.Subprocess`, hands
+us stdout directly). A probe under the live GLib main loop fixed the rules: async
+git is **callback-form, no promise wrappers** — `execFile` callbacks fire promptly,
+but promises/microtasks are starved (they only fire when the loop yields);
+synchronous `execFileSync` / `node:fs` work.
 
-- `child_process.execFileSync` / `node:fs` sync — **work**.
-- `child_process.execFile` **callbacks** — **fire promptly** with full stdout.
-- **Promise / microtask** resolution — fires only when the loop yields, so it is
-  effectively starved (this, not "child_process is broken", is why the earlier
-  promise-based `simple-git` attempt appeared to hang).
+All git spawning goes through a **broker process** (`src/git/broker.ts` +
+`broker-main.mjs`): the long-lived ~1.5 GB node-gtk process must never `fork()`
+(this Node's libuv has no `posix_spawn` fast path, so fork cost scales with RSS —
+tens of ms/spawn). The parent forks once to launch a tiny child; every `git` then
+forks *that* (~1 ms). `cli.ts`'s `git` (async, stdin/stdout framing) and `gitSync`
+(blocking FIFO round trip, for the synchronous callers) route through it, with a
+direct-spawn fallback if the broker is down.
 
-So: use `node:child_process` + the `git`/`gh` CLI directly — `execFileSync` for
-fast local reads, `execFile` (callback form) for slow/networked ops. **No
-promise wrappers** until loop integration drains microtasks. This is simpler than
-`Gio.Subprocess` and hands us stdout directly.
-
-### PERF — git-spawn storm is the dominant CPU cost (measured live, 2026-06-19)
-
-Live diagnosis of a high-CPU session (CDP CPU profile + `/proc` spawn sampling on
-the running editor) found the main-thread CPU is **git subprocess spawning**, not
-GTK or JS layout:
-
-- CPU profile (6 s, main thread ~60% in `top`): ~15% of samples in `child_process`
-  `spawn`, all under `git @ src/git/cli.ts:44`; the remaining "84% in the node-gtk
-  GLib loop frame" is a profiler artifact (native loop + blocked/`fork()` time), not
-  actionable JS.
-- `/proc` sampling: **~7.7–8.5 short-lived process spawns/sec**, overwhelmingly
-  `git` (caught only in the fork window, so they read as `comm=node`).
-
-Drivers, in order:
-1. **Per-root poll × N open worktrees.** Each pooled `CliGitRepo` polls every
-   `POLL_INTERVAL_MS = 1500` and each `pollOnce` runs **2 git spawns** (status +
-   numstat), **+1** (ls-files) when the signature moves. The session had **4 repo
-   roots open** (`src/quilx` + 3 `tmp/quilx-*` worktrees) → ~5 git/s baseline before
-   any change.
-2. **`notify()` fan-out on every working-tree change.** Active agents editing files
-   keep flipping the signature → `notify()` → each open editor's `GitGutter.refresh`
-   fires **2 `git show` spawns** (`:rel` + `HEAD:rel`), and `GitPanel.refresh` calls
-   **synchronous `gitSync`** (`cli.ts:39`, `execFileSync`) on the UI thread. Per
-   workbench. (This is the index PERF item under ## Git — confirmed live.)
-3. **Expensive forks.** The process is ~1.5 GB RSS / 23.7 GB VIRT, so every
-   `fork()` copies a large page-table → each spawn is costly. The leak fixes are in
-   place (`TextEditor.dispose()` disposes `gitGutter`, `git.ts` off Ggit), so this is
-   *legitimate* polling load multiplied by open-worktree count and agent edit rate,
-   not a retained-listener leak.
-
-Fix directions: coalesce/debounce `notify()` fan-out; consider a single `git
-status` per root feeding all gutters instead of per-editor `git show` pairs;
-per-file gate so a `notify()` only re-`git show`s when *that file's* status
-actually changed; convert the remaining cold synchronous callers (`repoRoot` —
-memoized, pre-warmable; pickers; github remote reads) so `brokerGitSync` can be
-retired entirely (its FIFO round trip removes the *fork* cost but still blocks the
-main thread for the git duration).
-
-Done:
-- **Off-screen gutters defer.** `GitGutter.refresh()` skips its two `git show`
-  spawns while the editor is unmapped (`isVisible = () => root.getMapped()`),
-  remembers a `refreshPending` flag, and catches up via `notifyVisible()` wired to
-  the editor root's `map` signal. Inactive tabs / hidden-dock editors no longer
-  contribute to the `onChange` spawn storm — only the visible editor(s) refresh.
-- **Git broker process** (`src/git/broker.ts` + `src/git/broker-main.mjs`) —
-  attacks the *per-fork cost* rather than the count. This Node binary spawns with
-  a plain `fork()` (libuv's `posix_spawn` fast path isn't compiled in), so each
-  `git` copies the parent's page tables — measured ~51 ms at the editor's ~1.5 GB
-  RSS vs ~1 ms at 78 MB. Every `git` now runs by forking a tiny long-lived broker
-  child (~1 ms, independent of editor RSS); the big node-gtk process forks once to
-  launch it. `cli.ts`'s `gitSync` / `git` / `applyPatch` route through it:
-  - **async** over the broker's stdin/stdout (length-framed, id-keyed) — the
-    LSP-proven pipe pattern under the GLib loop;
-  - **sync** over a FIFO pair (`gitSync`'s callers can't await), opened `O_RDWR`
-    so neither side blocks on open; the parent blocks on a framed round trip.
-  - Robustness: lazily (re)spawned, and any failure falls back to spawning `git`
-    directly (pre-broker behaviour) so git never silently stops. The child + its
-    stdin are `unref`'d and stdout is ref'd only while async calls are in flight,
-    so short-lived hosts (tests/scripts) still exit. Tested end-to-end
-    (sync/async/stdin/large-output/concurrency/interleave/single-child); full git
-    suite green.
-- **Async repo warm-up (no sync git in `git.ts`).** `CliGitRepo`'s constructor no
-  longer does a synchronous `seed()` (`git status` + `numstat` + `ls-files`) or a
-  sync `rev-parse` for the git dir. It now `warmUp()`s asynchronously: an async
-  `rev-parse --absolute-git-dir` (used to attach the chokidar `HEAD` watch once it
-  lands — `startHeadWatch`, deferred if a subscriber arrives first) plus an immediate
-  async `pollOnce()` that primes the cache and notifies. Constructing/acquiring a
-  repo never blocks the UI thread. Tradeoff: the getters return the empty state
-  until the first poll lands (~tens of ms), so a freshly-acquired repo's branch
-  indicator is blank for a frame; subscribers added on the same tick as the
-  acquire (the normal case) are notified when status returns. A `disposed` guard
-  drops warm-up/poll callbacks that land after `dispose()`. `trySync` removed —
-  `git.ts` no longer calls `gitSync` at all.
-- **chokidar replaces the Gio `FileMonitor` on `HEAD`.** The instant
-  branch-switch/commit watch is now a `chokidar` watch on `<git-dir>/HEAD`
-  (`startHeadWatch`, attached once the async warm-up resolves the git dir) instead
-  of a `Gio.FileMonitor`; chokidar handles the atomic rename git does to `HEAD`. On
-  a HEAD event it resets the signature and `pollOnce()`s. The **1.5 s working-tree
-  poll is unchanged** (it still catches edits/staging). This drops the last
-  `Gio`/node-gtk dependency from `git.ts` (the `gi.ts` import is gone). New dep:
-  `chokidar@^5`. Verified end-to-end (poll catches a working-tree edit; the HEAD
-  watch catches a `git switch`; clean process exit on dispose).
-- **Async `GitPanel.refresh`.** The Source Control panel rebuilt its change list
-  from a *synchronous* `getChanges` (`git status`) on every `notify()`. Now
-  `getChangesAsync` (broker `git()`); `refresh()` kicks the fetch and a generation
-  guard drops a result superseded by a newer refresh, then `applyChanges()` does
-  the save-focus/clear/build/restore-scroll. No `git status` on the UI thread per
-  poll. (`GitStagingView` still uses sync `getChanges` — a one-shot on user-open,
-  not poll-driven.)
+**Remaining perf work:** retire `brokerGitSync` by converting its cold synchronous
+callers (`repoRoot` — memoized/pre-warmable, pickers, github remotes) — the FIFO
+round trip removes the fork cost but still blocks the main thread; and coalesce the
+`onChange` fan-out (one `git status` per root feeding all gutters instead of
+per-editor `git show` pairs, plus a per-file gate so a gutter only re-fetches when
+its own file moved).
 
 ## Backend: the git CLI helper — `src/git/cli.ts` (internal)
 
@@ -149,8 +67,8 @@ pre-commit/commit-msg) for free.
 Core primitives (note: `cwd`/`root` is the first arg of every call):
 
 ```ts
-gitSync(cwd, args): string;                  // execFileSync, fast local reads (64 MiB cap)
-git(cwd, args, onDone): void;                // execFile callback, onDone(ok, stdout, stderr)
+gitSync(cwd, args): string;                  // synchronous (broker FIFO round trip; throws on non-zero)
+git(cwd, args, onDone): void;                // async (broker); onDone(ok, stdout, stderr)
 repoRoot(cwd): string | null;                // rev-parse --show-toplevel (memoized)
 commitMsgPath(root): string;                 // .git/COMMIT_EDITMSG (via rev-parse --git-path)
 ```
@@ -173,8 +91,10 @@ interface GitChange {
 }
 ```
 
-Porcelain v2 reports staged (X) and unstaged (Y) state per file in one call.
-Per-row line counts (±) are not surfaced in the panel.
+`getChangesAsync(root, cb)` is the async form (broker `git()`), used by the Source
+Control panel so its refresh never blocks the UI thread. Porcelain v2 reports
+staged (X) and unstaged (Y) state per file in one call. Per-row line counts (±) are
+not surfaced in the panel.
 
 ### Mutations
 
@@ -278,9 +198,10 @@ is the CSS/selector identity.
 ### Status viewer — `src/ui/GitPanel.ts`
 
 Component **`GitPanel`** (`#GitPanel`), exposing `root` (a scrollable column).
-Constructed with `{ cwd, git, onOpenFile, onCommit }`; rebuilds on
-`git.onChange`. `setRoot(cwd, git)` re-roots it when an agent moves into a
-worktree.
+Constructed with `{ cwd, git, onOpenFile, onCommit }`; rebuilds on `git.onChange`
+via an async `getChangesAsync` fetch (a generation guard drops a result superseded
+by a newer refresh — no `git status` on the UI thread). `setRoot(cwd, git)`
+re-roots it when an agent moves into a worktree.
 
 - **Staged** group — `RowKind: 'staged'`, per-row unstage, drawn in
   `theme.ui.success`.
@@ -323,8 +244,10 @@ A `GtkSource.GutterRendererText` subclass drawing a VS Code-style change bar per
 line. Two in-process Myers diffs feed it (`util/lineDiff`): the live buffer vs the
 file's **index** blob (unstaged changes — green added / amber modified / red
 deletion marker) and the index vs the **HEAD** blob (staged changes — blue). Both
-base blobs are refetched on load and on any `GitRepo.onChange`, debounced and
-generation-guarded against stale async results.
+base blobs are refetched (two `git show` spawns) on load and on any
+`GitRepo.onChange`, debounced and generation-guarded against stale async results.
+The refetch is **skipped while the editor is unmapped** (off-screen tabs/docks)
+and runs on the next `map`, so only visible editors refetch on a repo change.
 
 It also drives **hunk-level staging**: `stageHunk`/`unstageHunk` (`space h s` /
 `space h u`) synthesize a unified diff for the hunk under the cursor and
@@ -399,31 +322,13 @@ be added as we iterate.
   (`.quilx-diff-added/-removed`, the `theme.ui.success/error/warning` keys).
 - **Destructive ops** (discard, force) confirm first and never run implicitly.
 
-## Resolved: Ggit retired → CLI-backed `GitRepo`
+## Correctness edge cases (parsers + `status.test.ts`)
 
-**Done.** `src/git.ts` is now `CliGitRepo`, backed by `src/git/cli.ts` + the pure
-parsers in `src/git/status.ts`. The `GitRepo` interface is byte-for-byte the same,
-so no consumer changed. `Ggit` is fully removed (`git.ts`, `gi.ts`, and the
-`generate-types` script); the leak probe reports **zero `Ggit*` objects**.
-
-**Why it had to go.** Ggit handed back GObjects via GI `<Type>.new()` /
-transfer-full returns, and **node-gtk never frees those** — upstream bug
-[romgrk/node-gtk#446](https://github.com/romgrk/node-gtk/issues/446) (GObjects
-from GI function returns are never GC'd, vs `new <Type>()` which is). The 1.5 s
-poll created several per tick (`Repository`, `Diff`, `Tree`, `Ref`, …), so the
-heap grew without bound and every V8 major-GC mark got slower — surfacing as
-increasingly long, high-CPU UI hangs the longer quilx ran. (A related leak was
-also fixed in `TextEditor.ts`: `followSystemColorScheme` now disconnects its
-global `Adw.StyleManager` `notify::dark` handler on `destroy`.)
-
-The CLI replacement satisfies the synchronous-read contract via the
-poll→cache→getters architecture documented above, kills node-gtk#446 for git,
-and fixes the old staging-signature gap (porcelain v2 includes the staged X
-state, so external `git add` now fires `onChange`) as a side effect. Correctness
-edge cases the parsers/tests cover: not-a-repo → all null/empty; detached HEAD →
-branch = short SHA, ahead/behind null; unborn branch (`diff HEAD` fails) →
-everything untracked/added; renames consume the trailing original-path token;
-worktrees/submodules resolve via `cwd`.
+Not-a-repo → all null/empty; detached HEAD → branch = short SHA, ahead/behind
+null; unborn branch (`diff HEAD` fails) → everything untracked/added; renames
+consume the trailing original-path token; worktrees/submodules resolve via `cwd`.
+Porcelain v2 includes the staged X state, so an external `git add` fires
+`onChange`.
 
 ## Phasing
 
@@ -451,10 +356,9 @@ worktrees/submodules resolve via `cwd`.
   accordion — see [../code-editing/multibuffer.md](../code-editing/multibuffer.md)
 - [x] Mutations are coordinated `GitRepo` methods; busy+refresh primitives private to the impl
 - [x] Two-module boundary: rest of codebase imports only `git.ts`/`github.ts`; `src/git/` internal
-- [x] Migrated off Ggit → CLI-backed `GitRepo` (node-gtk#446):
-  - [x] `src/git/status.ts`: pure `parseStatus`/`parseNumstat`/`parseLsFiles` + unit tests (`status.test.ts`)
-  - [x] `CliGitRepo`: async warm-up + 1.5 s poll + chokidar `HEAD` watch + cached getters + coordinated mutations; integration tests (`git.test.ts`)
-  - [x] Flipped `openGitRepo` to `CliGitRepo`; deleted `GgitRepo` + Ggit from `gi.ts`/`generate-types`; leak probe shows zero `Ggit*` objects
+- [x] CLI-backed `CliGitRepo`: pure parsers (`status.ts` + `status.test.ts`), async
+  warm-up + 1.5 s poll + chokidar `HEAD` watch + cached getters + coordinated
+  mutations (`git.test.ts`); all git spawns via the broker process
 
 ## Decisions (as built)
 
