@@ -75,8 +75,14 @@ export interface SessionState {
   workspaces: WorkspaceState[];
   /** Index into `workspaces` of the active root. MVP: always 0. */
   activeWorkspace: number;
-  /** Window-level, shared across workspaces. */
-  docks?: { notificationLog: boolean; leftSplit?: number };
+  /** Window-level, shared across workspaces. `visible` is the per-side dock-
+   *  visibility toggle (left/right/top/bottom); absent in pre-existing sessions,
+   *  treated as all-shown on restore. */
+  docks?: {
+    notificationLog: boolean;
+    leftSplit?: number;
+    visible?: { left: boolean; right: boolean; top: boolean; bottom: boolean };
+  };
   /** Window geometry, restored with the session. */
   window?: { width: number; height: number; maximized: boolean };
 }

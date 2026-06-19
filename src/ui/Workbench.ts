@@ -17,6 +17,11 @@
  * width left between the left and right docks, not spanning the whole window —
  * and open at roughly a quarter of the column's height.
  *
+ * Each dock side (left/right/top/bottom) is independently toggleable: its assigned
+ * content and its visibility are tracked separately, so a dock can be hidden and
+ * re-shown without tearing down the panels it holds (`toggleDock`/`setDockVisible`).
+ * The per-side visibility is persisted in the session.
+ *
  * Nesting (outermost → in):
  *   hLeft[ left | hCenterRight[ vTop[ top | vBottom[ center | bottom ] ] | right ] ]
  */
@@ -37,6 +42,10 @@ const DOCK_FRACTION = 0.25;
 // Anything with a single top-level widget can occupy a dock slot — a Panel for
 // the side docks, the splittable PanelGroup for the center.
 type Dockable = { root: InstanceType<typeof Gtk.Widget> };
+
+// The four toggleable dock sides (the center is not a dock — it is never hidden).
+export type DockSide = 'left' | 'right' | 'top' | 'bottom';
+export const DOCK_SIDES: DockSide[] = ['left', 'right', 'top', 'bottom'];
 
 // What currently occupies the (otherwise empty) bottom dock.
 export type BottomDock = 'notifications' | 'diagnostics' | 'keymap' | null;
@@ -99,6 +108,18 @@ export class Workbench<TOwner = unknown> {
   private readonly vTop: InstanceType<typeof Gtk.Paned>;
   private readonly vBottom: InstanceType<typeof Gtk.Paned>;
 
+  // Each dock side keeps its assigned content *and* a visibility flag, decoupled so
+  // a dock can be hidden without losing its panels: the Paned slot shows the content
+  // only when the side is both occupied and visible. Toggling visibility just detaches
+  // / re-attaches the content widget (its tabs/state live on inside it). Defaults to
+  // visible — content is shown as soon as it's assigned (see setSlot below).
+  private readonly dockContent: Record<DockSide, Dockable | null> = {
+    left: null, right: null, top: null, bottom: null,
+  };
+  private readonly dockVisible: Record<DockSide, boolean> = {
+    left: true, right: true, top: true, bottom: true,
+  };
+
   constructor(owner: TOwner, contents: WorkbenchContents, options: { showSideDock: boolean }) {
     this.owner = owner;
     this.cwd = contents.cwd;
@@ -149,30 +170,76 @@ export class Workbench<TOwner = unknown> {
     this.setCenter(contents.center);
   }
 
-  setLeft(panel: Dockable | null) {
-    this.hLeft.setStartChild(panel?.root ?? null);
-  }
+  // Assign a side's content. Assigning a non-null panel also (re)shows the side —
+  // putting something in a dock means you want to see it — so the dock-content
+  // pickers (bottom: notifications/diagnostics/keymap; right: reveal a tab) need no
+  // separate "show" call. Clearing (null) leaves the visibility flag untouched, so a
+  // later re-assignment restores the side's last shown/hidden state.
+  setLeft(panel: Dockable | null) { this.setSlot('left', panel); }
+  setRight(panel: Dockable | null) { this.setSlot('right', panel); }
+  setTop(panel: Dockable | null) { this.setSlot('top', panel); }
+  setBottom(panel: Dockable | null) { this.setSlot('bottom', panel); }
 
   setCenter(panel: Dockable | null) {
     this.vBottom.setStartChild(panel?.root ?? null);
   }
 
-  setRight(panel: Dockable | null) {
-    this.hCenterRight.setEndChild(panel?.root ?? null);
-    // Give the dock a stable width (it doesn't resize with the window); the user
-    // can still drag the handle wider. Min-width, so a narrow file tree won't
-    // collapse it.
-    if (panel) panel.root.setSizeRequest(SIDEBAR_WIDTH, -1);
+  private setSlot(side: DockSide, panel: Dockable | null) {
+    this.dockContent[side] = panel;
+    if (panel) this.dockVisible[side] = true;
+    this.applyDock(side);
   }
 
-  setTop(panel: Dockable | null) {
-    this.vTop.setStartChild(panel?.root ?? null);
-    if (panel) this.sizeDock(this.vTop, DOCK_FRACTION); // top is the start child
+  /** Is a panel currently assigned to this side (regardless of visibility)? */
+  isDockOccupied(side: DockSide): boolean {
+    return this.dockContent[side] !== null;
   }
 
-  setBottom(panel: Dockable | null) {
-    this.vBottom.setEndChild(panel?.root ?? null);
-    if (panel) this.sizeDock(this.vBottom, 1 - DOCK_FRACTION); // bottom is the end child
+  /** Is this side currently shown (occupied *and* not hidden)? */
+  isDockVisible(side: DockSide): boolean {
+    return this.dockContent[side] !== null && this.dockVisible[side];
+  }
+
+  /** Show / hide a dock side without discarding its content. */
+  setDockVisible(side: DockSide, visible: boolean) {
+    this.dockVisible[side] = visible;
+    this.applyDock(side);
+  }
+
+  /** Flip a dock side's visibility (keeping its panels). No-op on an empty side. */
+  toggleDock(side: DockSide): void {
+    if (!this.isDockOccupied(side)) return;
+    this.setDockVisible(side, !this.dockVisible[side]);
+  }
+
+  /** The visibility flags for all sides, for session persistence. */
+  dockVisibility(): Record<DockSide, boolean> {
+    return { ...this.dockVisible };
+  }
+
+  // Push a side's effective state (content if visible, else null) into its Paned slot.
+  private applyDock(side: DockSide) {
+    const panel = this.dockVisible[side] ? this.dockContent[side] : null;
+    switch (side) {
+      case 'left':
+        this.hLeft.setStartChild(panel?.root ?? null);
+        break;
+      case 'right':
+        this.hCenterRight.setEndChild(panel?.root ?? null);
+        // Give the dock a stable width (it doesn't resize with the window); the user
+        // can still drag the handle wider. Min-width, so a narrow file tree won't
+        // collapse it.
+        if (panel) panel.root.setSizeRequest(SIDEBAR_WIDTH, -1);
+        break;
+      case 'top':
+        this.vTop.setStartChild(panel?.root ?? null);
+        if (panel) this.sizeDock(this.vTop, DOCK_FRACTION); // top is the start child
+        break;
+      case 'bottom':
+        this.vBottom.setEndChild(panel?.root ?? null);
+        if (panel) this.sizeDock(this.vBottom, 1 - DOCK_FRACTION); // bottom is the end child
+        break;
+    }
   }
 
   // Position a vertical dock paned so the dock takes DOCK_FRACTION of the column

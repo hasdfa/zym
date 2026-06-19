@@ -17,10 +17,14 @@ import { quilx } from './quilx.ts';
 import { SESSION_VERSION, type SessionState, type TabState, type WorkspaceState } from './SessionManager.ts';
 import type { PanelGroup, RestoredChild } from './ui/PanelGroup.ts';
 import type { FileTree } from './ui/FileTree.ts';
+import type { DockSide } from './ui/Workbench.ts';
 
 export interface SessionDocks {
   notificationLog: boolean;
   leftSplit?: number;
+  // Per-side dock visibility (the dock-visibility toggle). Absent in sessions saved
+  // before this existed, so restore treats a missing entry as "shown".
+  visible?: Record<DockSide, boolean>;
 }
 
 export interface SessionControllerOptions {
