@@ -303,21 +303,27 @@ Stack N sources on the proven substrate.
   like a real diff: changed hunks + `CONTEXT` lines, long unchanged runs → a `⋯ N unchanged
   lines` gap row) — `diffSegments` was refactored to expose `diffRows` (per-row op + old/new
   line indices) + `rowsToItems`, and `buildDiffMultiBuffer` windows each file. **Remaining:**
-  GUI verification; expandable elided gaps (currently fixed); and the **editable** GUI wiring
-  (below) — after which it replaces `GitStagingView` (G5).
-  **Editable MECHANISM ✅ PROVEN + seams in** (`diffEditable.test.ts`): with the new side a live
-  `Document`'s model + the old side a base blob, an in-place edit to a context/added row writes
-  through to the Document (→ propagates to its tab + saves), a removed (phantom) row rejects
-  edits, and the `ProjectionView` coordinates undo. Seams added: `Document.modelBuffer` getter;
-  `TextEditor` `buffer.undoTarget` (use the PV as the editor's undo target). **Remaining GUI
-  wiring (design-laden):** `DiffMultiBufferView` sources the new side from registry-acquired
-  live `Document`s + flips editable + passes the PV as `undoTarget`; `AppWindow` acquires /
-  releases them; a **save** path (save the touched Documents); and **live re-diff on edit-idle**
-  (a row-count edit re-segments — reuse `lineDiff`), without which the diff display goes stale
-  as you add/remove lines. These are the rest of 3b/3d. **old|new line-number gutters DONE:** `buildDiffMultiBuffer` emits
-  per-row `oldNums`/`newNums` (from `diffRows`), and `DiffMultiBufferView` wires two
-  `DiffLineNumberGutter`s (old | new), blank on the side a row doesn't exist (added has no
-  old, removed no new).
+  GUI verification; expandable elided gaps (currently fixed). It is **READ-ONLY** —
+  `space g D`: each changed file's hunks (+ context, long unchanged runs elided to `⋯`),
+  per-side syntax highlighting, added/removed backgrounds, old|new line gutters
+  (`buildDiffMultiBuffer` emits per-row `oldNums`/`newNums` from `diffRows`), jump-to-source.
+  NEW side = the file's current text (open document's live text incl. unsaved edits, else
+  disk); OLD side = the HEAD blob.
+  **Highlight-bleed fix (GUI):** the new side wasn't highlighted unless language-set — fixed
+  by parsing each side's bare buffer; the painter reads the LIVE projection via a
+  `() => ViewProjection` getter (so a future re-materialize can't leave it stale).
+  **EDITABLE diff — substrate PROVEN, surface DEFERRED.** The mechanism works at the substrate
+  level (`diffEditable.test.ts`: new-side write-through to a live `Document` + phantom-old
+  rejection + PV-coordinated undo; seams `Document.modelBuffer`, `TextEditor.buffer.undoTarget`,
+  `EditorModel.setEditableCheck`). But a first editable WIRING (live Documents + re-diff +
+  save) hit a wall in GUI testing: editing a continuous diff smoothly needs **incremental
+  re-segmentation** (splice only the edited file's rows + preserve cursor/decorations) — the
+  whole-buffer re-materialize shortcut flashes + jumps the caret on every line add/remove and
+  on undo (reverse-sync rebuild), and the per-row edit gate leaked through some vim paths
+  (`cc` on a removed line corrupted the line above). So the surface was reverted to read-only;
+  editable is a dedicated follow-up = incremental re-materialize (reverse-sync minimal-splice +
+  decoration/cursor preservation) + bulletproof per-row edit gating, then it replaces
+  `GitStagingView` (G5).
 - **3b — segment model ✅ DONE.** `src/ui/multibuffer/diffSegments.ts`: `diffSegments(old,
   new, newKey, oldKey)` line-diffs (reusing `lineDiff`) and emits `ViewProjection` items —
   `eq`/`ins` → editable `real` rows over the NEW source (context + added), `del` → read-only

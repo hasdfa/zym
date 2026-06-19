@@ -541,6 +541,12 @@ export class TextEditor implements DocumentHost {
     this.syntax.setLanguageForPath(path);
   }
 
+  /** Repaint syntax highlighting (multibuffer/projection mode) — e.g. after the owner
+   *  re-materializes the view buffer, which clears tags the painter must reapply. */
+  repaintSyntax(): void {
+    this.syntax.paint();
+  }
+
   private installBufferMode(mode: BufferEditorOptions): void {
     if (mode.initialText) this.setText(mode.initialText);
     this.placeholderLabel?.setVisible(this.buffer.getCharCount() === 0);

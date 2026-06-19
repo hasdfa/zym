@@ -21,13 +21,16 @@ const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 export class ExcerptSyntaxProjection implements SyntaxProjection {
   private headerTag: any = null;
   private gapTag: any = null;
-  private readonly projection: ViewProjection;
+  // A GETTER, not a captured instance: a re-diff (`ProjectionView.rebuild`) swaps in a NEW
+  // ViewProjection, so the painter must read the live one each paint or it highlights with
+  // stale coordinates (shifted highlighting after an edit).
+  private readonly getProjection: () => ViewProjection;
   private readonly sources: Map<string, DocumentSyntax>;
 
   // Note: explicit field assignment (not constructor parameter properties) — Node runs .ts
   // in strip-only mode, which rejects parameter properties at runtime.
-  constructor(projection: ViewProjection, sources: Map<string, DocumentSyntax>) {
-    this.projection = projection;
+  constructor(getProjection: () => ViewProjection, sources: Map<string, DocumentSyntax>) {
+    this.getProjection = getProjection;
     this.sources = sources;
   }
 
@@ -38,7 +41,7 @@ export class ExcerptSyntaxProjection implements SyntaxProjection {
 
   paintSlices(viewFrom: number, viewTo: number): SyntaxSlice[] {
     const slices: SyntaxSlice[] = [];
-    for (const run of this.projection.segmentRunsInViewRange(viewFrom, viewTo)) {
+    for (const run of this.getProjection().segmentRunsInViewRange(viewFrom, viewTo)) {
       const syntax = this.sources.get(run.sourceKey);
       if (!syntax) continue;
       slices.push({
@@ -61,7 +64,7 @@ export class ExcerptSyntaxProjection implements SyntaxProjection {
    *  from the painter's highlight tags, so no collision). */
   decorate(buffer: any): void {
     if (!this.headerTag) this.buildTags(buffer);
-    for (const { viewRow, kind } of this.projection.blockRows()) {
+    for (const { viewRow, kind } of this.getProjection().blockRows()) {
       if (kind === 'header') this.applyRow(buffer, this.headerTag, viewRow);
       else if (kind === 'gap') this.applyRow(buffer, this.gapTag, viewRow);
     }

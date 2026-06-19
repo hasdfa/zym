@@ -16,6 +16,7 @@ import { SyntaxController } from '../../syntax/syntax-controller.ts';
 import { excerptsToItems, type Excerpt, type Segment } from './MultiBufferModel.ts';
 import { ViewProjection } from '../TextEditor/ViewProjection.ts';
 import { ProjectionView } from '../TextEditor/ProjectionView.ts';
+import { buildDiffMultiBuffer } from './diffMultiBuffer.ts';
 import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
 
 Gtk.init();
@@ -51,7 +52,7 @@ function paintMultibuffer(excerpts: Excerpt[], lines: Record<string, string[]>, 
   const view = new GtkSource.View({ buffer });
   const syntax = new SyntaxController(view, buffer, {
     folding: false,
-    projection: new ExcerptSyntaxProjection(projection, sources),
+    projection: new ExcerptSyntaxProjection(() => projection, sources),
   });
   syntax.paint();
   return { buffer: buffer as any, projection, syntax };
@@ -136,7 +137,7 @@ test('a ProjectionView-backed multibuffer (the MultiBufferView path) materialize
   const view = new GtkSource.View({ buffer: pv.buffer });
   const syntax = new SyntaxController(view, pv.buffer, {
     folding: false,
-    projection: new ExcerptSyntaxProjection(pv.view, new Map([['/a.ts', aSyn], ['/b.ts', bSyn]])),
+    projection: new ExcerptSyntaxProjection(() => pv.view, new Map([['/a.ts', aSyn], ['/b.ts', bSyn]])),
   });
   syntax.paint();
   assert.ok(tokenHasTag(buffer, 1, 'const', 'ts:keyword'), 'a.ts excerpt painted from its own parse');
@@ -163,6 +164,31 @@ test('a multi-row capture in one excerpt does not bleed its tag into another', (
   assert.ok(!tokenHasTag(buffer, 4, 'const', 'ts:comment'), 'comment does NOT bleed into the code excerpt');
   assert.ok(tokenHasTag(buffer, 4, 'const', 'ts:keyword'), 'the code excerpt is highlighted normally');
   a.dispose();
+});
+
+test('the diff multibuffer highlights both the new (context/added) and old (removed) sides', () => {
+  if (!hasJs) return;
+  const oldText = 'const a = 1;\nconst removed = 2;\nconst c = 3;\n';
+  const newText = 'const a = 1;\nconst added = 9;\nconst c = 3;\n';
+  const dmb = buildDiffMultiBuffer([{ path: '/x.ts', oldText, newText }]);
+  const newSyn = source(newText, '/x.ts');
+  const oldSyn = source(oldText, '/x.ts');
+  const pv = new ProjectionView(
+    dmb.items,
+    new Map([['new:/x.ts', (newSyn as any).sourceBuffer], ['old:/x.ts', (oldSyn as any).sourceBuffer]]),
+  );
+  const view = new GtkSource.View({ buffer: pv.buffer });
+  const syntax = new SyntaxController(view, pv.buffer, {
+    folding: false,
+    projection: new ExcerptSyntaxProjection(() => pv.view, new Map([['new:/x.ts', newSyn], ['old:/x.ts', oldSyn]])),
+  });
+  syntax.paint();
+  // rows: 0 x.ts 1 const a(ctx,new) 2 const removed(removed,old) 3 const added(added,new) 4 const c(ctx,new)
+  assert.ok(tokenHasTag(pv.buffer, 1, 'const', 'ts:keyword'), 'new-side context line highlighted');
+  assert.ok(tokenHasTag(pv.buffer, 2, 'const', 'ts:keyword'), 'old-side removed line highlighted');
+  assert.ok(tokenHasTag(pv.buffer, 3, 'const', 'ts:keyword'), 'new-side added line highlighted');
+  newSyn.dispose();
+  oldSyn.dispose();
 });
 
 test('the coordinate map resolves cursor rows back to source locations', () => {

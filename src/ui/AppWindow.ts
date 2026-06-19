@@ -2218,16 +2218,19 @@ export class AppWindow {
     }
     const showHead = (rel: string): Promise<string> =>
       new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
+    // Read-only diff: NEW side = the file's current text (an open document's live text, incl.
+    // unsaved edits, else from disk), OLD side = the HEAD blob. A deleted file → empty new.
     const files = await Promise.all(
       paths.map(async (path) => {
         const oldText = await showHead(Path.relative(root, path));
-        // Prefer a live open document's text (unsaved edits), else read from disk; a deleted
-        // file → empty new side (all removed).
-        let newText = '';
-        try {
-          newText = Fs.readFileSync(path, 'utf8');
-        } catch {
-          /* deleted on disk */
+        const open = this.documents.find(path);
+        let newText = open ? open.getText() : '';
+        if (!open) {
+          try {
+            newText = Fs.readFileSync(path, 'utf8');
+          } catch {
+            /* deleted on disk */
+          }
         }
         return { path, oldText, newText };
       }),

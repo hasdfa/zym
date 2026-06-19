@@ -216,6 +216,18 @@ test('read-only editor: edits no-op and input stays disabled across vim modes', 
   assert.equal(m.isReadOnly(), true);
 });
 
+test('setEditableCheck rejects edits on non-editable rows (diff phantom/header rows)', () => {
+  const buffer = new GtkSource.Buffer();
+  buffer.setText('a\nb\nc\n', -1);
+  const view = new GtkSource.View({ buffer });
+  const m = new EditorModel(view, buffer);
+  m.setEditableCheck((startRow, endRow) => startRow === 1 && endRow === 1); // only row 1 editable
+  m.setTextInBufferRange(new Range(new Point(0, 0), new Point(0, 0)), 'X'); // a vim op on row 0
+  assert.equal(m.getText(), 'a\nb\nc\n', 'edit on a non-editable row is rejected');
+  m.setTextInBufferRange(new Range(new Point(1, 0), new Point(1, 0)), 'Y'); // row 1 is editable
+  assert.equal(m.getText(), 'a\nYb\nc\n', 'edit on an editable row applies');
+});
+
 test('editing across a fold reveals it and edits the real (former-folded) text', () => {
   const doc = new Document();
   doc.setText('abXYZcd\n');

@@ -69,7 +69,7 @@ export class MultiBufferView {
     this.projectionView = new ProjectionView(excerptsToItems(excerpts), sourceBuffers);
     this.projection = this.projectionView.view;
     const syntaxMap = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
-    const syntaxProjection = new ExcerptSyntaxProjection(this.projection, syntaxMap);
+    const syntaxProjection = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
 
     this.editor = new TextEditor({
       buffer: { readOnly: true, folding: false, syntaxProjection, externalBuffer: this.projectionView.buffer },

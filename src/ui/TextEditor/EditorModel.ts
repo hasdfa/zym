@@ -475,6 +475,15 @@ export class EditorModel {
   // mode handling re-enables it on insert and normal-mode operators (x/dd/p) mutate the
   // buffer programmatically through `setTextInBufferRange`, bypassing the native editable flag.
   private readOnly = false;
+  // Per-row editability gate (the editable diff multibuffer): only some view rows accept edits
+  // (new-side real rows), others reject (removed phantom / header / gap). Like `readOnly`,
+  // vim operators bypass the native editable tag, so the model must check.
+  private editableAt: ((startRow: number, endRow: number) => boolean) | null = null;
+
+  /** Restrict edits to rows where `check(startRow, endRow)` holds (view rows). */
+  setEditableCheck(check: ((startRow: number, endRow: number) => boolean) | null): void {
+    this.editableAt = check;
+  }
 
   /** Wire the fold projection (the editor passes its SyntaxController's view). */
   setFoldAccess(access: FoldAccess): void {
@@ -750,6 +759,8 @@ export class EditorModel {
     // A read-only viewer rejects every edit — this is the single funnel all vim operators
     // (and programmatic edits) route through, so gating it here blocks them all.
     if (this.readOnly) return new Range(r.start, r.start);
+    // A partially-editable surface (diff multibuffer) rejects edits on non-editable rows.
+    if (this.editableAt && !this.editableAt(r.start.row, r.end.row)) return new Range(r.start, r.start);
     // An edit spanning a fold placeholder reveals those folds first, then acts on the
     // real (former-folded) text — so deleting/changing a selection that includes a
     // folded region works. Marks keep the edit range across the expansion.
