@@ -49,6 +49,8 @@ import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
+import { MultiBufferView } from './multibuffer/MultiBufferView.ts';
+import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
@@ -155,6 +157,9 @@ export class AppWindow {
   // Tab-hosted staging views (git:open-staging), keyed by root widget so the view
   // is disposed (releasing its embedded editor's document ref) when its tab closes.
   private readonly stagingViews = new Map<Widget, GitStagingView>();
+  // Tab-hosted multibuffers (project:search-multibuffer), keyed by root widget so the view
+  // is disposed (freeing its per-source DocumentSyntax parses) when its tab closes.
+  private readonly multibufferViews = new Map<Widget, MultiBufferView>();
   // Session modified-status registrations (editors, running agents), keyed by the
   // tab's root widget so the registration is disposed when the tab closes.
   private readonly participants = new Map<Widget, DisposableLike>();
@@ -1208,6 +1213,8 @@ export class AppWindow {
     this.editors.delete(widget);
     this.stagingViews.get(widget)?.dispose(); // release its embedded editor + git subscription
     this.stagingViews.delete(widget);
+    this.multibufferViews.get(widget)?.dispose(); // free its per-source parses
+    this.multibufferViews.delete(widget);
     this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
@@ -2115,6 +2122,11 @@ export class AppWindow {
         didDispatch: () => this.openStagingView(),
         description: 'Open the staging view (status + diff) in a tab',
       },
+      'project:search-multibuffer': {
+        didDispatch: () => this.openSearchMultibuffer(),
+        description: 'Search the selected text across the project, shown as a multibuffer',
+        when: () => this.activeEditor !== null,
+      },
       'app:quit': () => this.onQuit(),
       'command-palette:toggle': () => openCommandPicker(this.overlay),
     });
@@ -2142,6 +2154,42 @@ export class AppWindow {
       const name = Path.basename(path);
       const viewer = new DiffViewer(model, { title: `${name} (working tree ↔ HEAD)`, languagePath: path });
       this.workbench.center.add(viewer.root, { title: `± ${name}`, requireTabBar: true });
+    });
+  }
+
+  /** Search the project for the active editor's selected text and show every match,
+   *  grouped by file with context, in a continuous read-only multibuffer tab. Phase 1a
+   *  of the multibuffer (tasks/code-editing/multibuffer.md). */
+  private openSearchMultibuffer(): void {
+    const query = this.activeEditor?.getSelectedText().trim() ?? '';
+    if (query === '') {
+      this.toast('Select text to search for');
+      return;
+    }
+    const cwd = this.workbench.cwd;
+    runProjectSearch(cwd, query, (result) => {
+      if (result.error) {
+        this.toast(result.error);
+        return;
+      }
+      const files = result.files ?? [];
+      if (files.length === 0) {
+        this.toast(`No results for “${query}”`);
+        return;
+      }
+      const excerpts = matchesToExcerptInputs(files, { context: 2 });
+      const view = new MultiBufferView({
+        excerpts,
+        cwd,
+        onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+      });
+      const child = this.workbench.center.add(view.root, {
+        title: `${Icons.search}  ${query}`,
+        requireTabBar: true,
+      });
+      this.multibufferViews.set(view.root, view); // disposeChild tears it down on close
+      child.select();
+      view.view.grabFocus();
     });
   }
 

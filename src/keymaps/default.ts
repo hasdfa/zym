@@ -30,6 +30,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space o': 'file:find', // fuzzy file picker
   'space O': 'file:open-path', // open by path (directory-navigating opener)
   'space /': 'project:search', // full-text search (ripgrep)
+  'space *': 'project:search-multibuffer', // selected text → all matches in a multibuffer
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space p r': 'scripts:run', // "p"ackage "r"un — run a package.json script in a terminal

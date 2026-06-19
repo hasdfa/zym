@@ -112,12 +112,13 @@ synthesized-buffer `DiffView` — that buffer construction is what we replace.
   `DocumentSyntax` (model parse, shared) + view painter (projection-aware paint + fold
   state). No multibuffer yet; a refactor that also removes redundant per-view parses.
   See **Phase 0 — as built** below.
-- **Phase 1a — multibuffer core, validated on project-wide search.** Excerpt map +
+- **[~] Phase 1a — multibuffer core, validated on project-wide search.** Excerpt map +
   syntax projector + filename headers + read-only single `GtkSourceView` over N
   excerpts. Simplest data (all segments `real`, one source each, no phantoms, no
-  old/new) so a coordinate-map / shared-parse bug surfaces in isolation. Design the
-  segment model diff-capable from day one; this just exercises the easy subset.
-  (Shippable later as "editable project search".)
+  old/new) so a coordinate-map / shared-parse bug surfaces in isolation. Designed the
+  segment model diff-capable from day one; this exercises the easy subset.
+  Core + project-search wiring built (see **Phase 1a — as built**); GUI verification +
+  polish (line gutter, vim nav) remain.
 - **Phase 1b — read-only diff multibuffer (the deliverable).** Add old/new
   duality, phantom removed rows, diff decorations + `foldUnchanged`, the two line
   gutters. Replaces `GitStagingView`'s accordion with one continuous read-only diff.
@@ -170,6 +171,47 @@ Known Phase-0 limitations (acceptable; revisit with Phase 2 correctness work):
   `Document.viewPointFromModel`; correct for whole-line folds, not stress-tested for a
   fold splitting a multi-line token. Realized-view viewport-bounded paint + scroll repaint
   are unchanged in logic but only exercised live (headless tests hit the whole-buffer path).
+
+## Phase 1a — as built
+
+`src/ui/multibuffer/`:
+
+- **`MultiBufferModel.ts`** — pure substrate, no GTK. `Segment { sourceKey, startRow,
+  endRow, editable, kind }` + `Excerpt { header, segments }`; `MultiBufferProjection.build`
+  produces the concatenated text (header / segment / `⋯` gap / blank rows) + a sorted
+  `RowEntry[]` coordinate map with binary-search `entryAt`, `sourceAt(viewRow)`,
+  `viewRowForSource`, `segmentsInViewRange`, `isEditable` (the Phase-2 write-through seam).
+- **`MultiBufferSyntax.ts`** — the multi-source projector. For each segment it pulls
+  captures from THAT source's shared `DocumentSyntax` (model coords) and paints them at the
+  excerpt's view rows (`viewRow = viewStart + (sourceRow - segment.startRow)`), so every
+  file is highlighted by its own grammar. Header/gap rows get `mb:header`/`mb:gap` tags.
+  This is the Phase-0 payoff (one parse, many projections) and fixes `DiffView`'s
+  one-language-for-interleaved-lines wart in advance.
+- **`MultiBufferView.ts`** — a dedicated read-only `GtkSourceView` (NOT a buffer-only
+  `TextEditor`, which would build a second `HighlightTags` on the buffer and parse the
+  concatenation as one language). Per-source bare `GtkSource.Buffer` + its own
+  `DocumentSyntax` (read-only disk snapshot); Enter / double-click resolve the cursor row
+  to `(path, row)` via the map and fire `onActivate`.
+- **`projectSearch.ts`** — `runProjectSearch(cwd, query, cb)` (rg --json grouped by file,
+  the SearchPicker streaming pattern) + pure `matchesToExcerptInputs` (pad matches by
+  context, merge overlapping/adjacent regions). Wired in `AppWindow.openSearchMultibuffer`:
+  command `project:search-multibuffer` (`space *`) searches the active editor's selected
+  text and opens the results as a multibuffer tab; `onActivate` opens the file at the line.
+  Disposed via `disposeChild` (`multibufferViews`), freeing the per-source parses.
+
+Tests (all headless, 16 added): `MultiBufferModel.test.ts` (coordinate math),
+`MultiBuffer.test.ts` (projector paints translated rows from each own parse;
+ts-keyword-vs-json proves per-grammar; view assembles from disk + navigates),
+`projectSearch.test.ts` (region merge).
+
+Known Phase-1a gaps / next:
+- **GUI-unverified**: the tab open + navigation paths run only live (the sandbox can't
+  present a GTK window). Verify `space *` in the running editor.
+- **Read-only snapshot**: a source is read from disk once; a *live* open Document (so an
+  edited file re-projects) is the seam Phase 1b/2 fill (the view layer would acquire via
+  `DocumentRegistry` instead of a bare buffer).
+- **No line-number gutter / vim nav yet** (dedicated view, not `TextEditor`). Whole-buffer
+  paint (fine for the ≤1000-match cap); viewport-bounding is a follow-up if needed.
 
 ## Correctness notes (bank for Phase 2, not Phase 1)
 
