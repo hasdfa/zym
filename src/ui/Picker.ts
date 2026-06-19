@@ -57,7 +57,7 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 // libadwaita's `.card` fill (`@card_bg_color`) is semi-transparent — meant to
 // sit on a window, not float over editor content. Override it with the opaque
 // popover background so the editor doesn't show through.
-addStyles(`
+addStyles(/* css */`
   #Picker {
     padding: 0;
     border: 1px solid var(--border-color);
@@ -153,6 +153,8 @@ export interface PickerAction {
   label: (query: string) => string;
   /** Run the action with the current query; the picker closes first. */
   run: (query: string) => void;
+  /** When supplied, the action row is hidden if this returns false. */
+  visible?: (query: string) => boolean;
 }
 
 /**
@@ -295,6 +297,13 @@ export interface PickerOptions {
    * selected location's source.
    */
   preview?: PickerPreview;
+  /**
+   * Suppress the `has-prompt` class on the card (and thus the row indent that
+   * aligns row text with the icon-offset entry text). Use when a `promptIcon` is
+   * present for the entry but the rows render their own icons via `formatMain` and
+   * should keep the standard row padding instead.
+   */
+  disableIconPadding?: boolean;
 }
 
 /** A side-preview pane plus the hook that refreshes it as the selection moves. */
@@ -470,7 +479,9 @@ export function openPicker(options: PickerOptions): PickerHandle {
   panel.setMarginTop(48);
   // Mirror the entry's `has-prompt` onto the card so the rows inset to align with
   // the (icon-offset) entry text — see the `#Picker.has-prompt #PickerRow` rule.
-  if (entry.hasCssClass('has-prompt')) panel.addCssClass('has-prompt');
+  // Skipped when `disableIconPadding` is set: the caller renders its own per-row
+  // icons via `formatMain` and wants standard row padding, not the extra indent.
+  if (entry.hasCssClass('has-prompt') && !options.disableIconPadding) panel.addCssClass('has-prompt');
   panel.append(entryHost);
   if (options.preview) {
     // Horizontal split: the result list keeps a fixed width, the preview pane
@@ -653,7 +664,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     // The prompt-driven action sits after the matches; it appears only when the
     // user has typed something for it to act on — and, when `actionWhenEmpty`,
     // only if nothing matched (so it reads as a "nothing found, do this instead").
-    if (options.action && query.length > 0 && (!options.actionWhenEmpty || results.length === 0)) {
+    if (options.action && query.length > 0 && (!options.actionWhenEmpty || results.length === 0) && (options.action.visible === undefined || options.action.visible(query))) {
       const label = new Gtk.Label({ xalign: 0 });
       label.setText(options.action.label(query));
       label.setName('PickerAction');

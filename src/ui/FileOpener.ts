@@ -41,6 +41,7 @@ export function openFileOpener(host: Overlay, dir: string, onChoose: (path: stri
     host,
     placeholder: 'Open file…',
     promptIcon: fileIconGlyph('', true), // the folder glyph, matching the directory rows
+    disableIconPadding: true, // rows render their own icons via formatMain; skip the prompt-indent
     // The prompt holds a full path; seed it with the starting directory (trailing
     // slash → list its contents, with an empty filter).
     query: withTrailingSlash(dir),
@@ -70,6 +71,16 @@ export function openFileOpener(host: Overlay, dir: string, onChoose: (path: stri
       // stays open); open a file by closing and handing back its absolute path.
       if ((item as FileItem).isDir) return withTrailingSlash(value);
       onChoose(value);
+    },
+    action: {
+      label: (query) => `Create: ${Path.basename(query)}`,
+      // Only surface when the query names a file (non-empty basename, no trailing slash).
+      visible: (query) => !query.endsWith('/') && Path.basename(query).length > 0,
+      run: (query) => {
+        Fs.mkdirSync(Path.dirname(query), { recursive: true });
+        if (!Fs.existsSync(query)) Fs.writeFileSync(query, '');
+        onChoose(query);
+      },
     },
   });
 }
