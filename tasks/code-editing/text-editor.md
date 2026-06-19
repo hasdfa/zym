@@ -408,4 +408,4 @@ open/parse costs (those are our tree-sitter path).
 
 [inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),
 [virtual-lines.md](virtual-lines.md), [decorations.md](decorations.md),
-[folding.md](folding.md), [diff.md](diff.md).
+[folding.md](folding.md), [diff.md](diff.md), [multibuffer.md](multibuffer.md).

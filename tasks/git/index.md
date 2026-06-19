@@ -346,6 +346,8 @@ worktrees/submodules resolve via `cwd`.
   commit. See [staging-interface.md](staging-interface.md).
 - [ ] In-panel diffs in `GitPanel` itself
 - [ ] More git diff sources (commit / PR) — see code-editing/diff.md
+- [ ] **Continuous multi-file editable diff** to replace `GitStagingView`'s
+  accordion — see [../code-editing/multibuffer.md](../code-editing/multibuffer.md)
 - [x] Mutations are coordinated `GitRepo` methods; busy+refresh primitives private to the impl
 - [x] Two-module boundary: rest of codebase imports only `git.ts`/`github.ts`; `src/git/` internal
 - [x] Migrated off Ggit → CLI-backed `GitRepo` (node-gtk#446):
