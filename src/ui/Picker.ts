@@ -9,7 +9,7 @@
  * the candidate strings and an `onSelect` callback. Items may arrive
  * asynchronously via the returned handle's `setItems`.
  */
-import { GLib, Gtk, Pango } from '../gi.ts';
+import { Gtk, Pango } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
@@ -526,7 +526,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
   // down here so a dismissed picker leaves no dangling commands.
   let commandsSub: { dispose(): void } | null = null;
   // Pending side-preview refresh (debounced as the selection moves); cleared on close.
-  let previewTimer = 0;
+  let previewTimer: NodeJS.Timeout | null = null;
 
   // Remember whatever held focus before the picker grabbed it, so that
   // dismissing without a selection returns focus there (e.g. back to the editor)
@@ -539,7 +539,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     commandsSub?.dispose();
     readlineSub.dispose();
     promptSpinner?.stop();
-    if (previewTimer) GLib.sourceRemove(previewTimer);
+    if (previewTimer) clearTimeout(previewTimer);
     host.removeOverlay(panel);
     if (restoreFocus) previousFocus?.grabFocus();
   };
@@ -549,15 +549,14 @@ export function openPicker(options: PickerOptions): PickerHandle {
   // message rows have no item, so the preview clears for them.
   const refreshPreview = () => {
     if (!options.preview) return;
-    if (previewTimer) GLib.sourceRemove(previewTimer);
-    previewTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, PREVIEW_DELAY_MS, () => {
-      previewTimer = 0;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      previewTimer = null;
       const row = listBox.getSelectedRow();
       const index = row ? row.getIndex() : -1;
       const item = index >= 0 && index < results.length ? results[index] : null;
       options.preview!.update(item);
-      return GLib.SOURCE_REMOVE;
-    });
+    }, PREVIEW_DELAY_MS);
   };
 
   // Scroll the list so the selected row is fully visible. The card never takes
@@ -795,15 +794,14 @@ export function openPicker(options: PickerOptions): PickerHandle {
   // rather than the app losing focus entirely (where the focus stays on the entry).
   const focus = new Gtk.EventControllerFocus();
   focus.on('leave', () => {
-    GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
-      if (closed) return GLib.SOURCE_REMOVE;
+    setTimeout(() => {
+      if (closed) return;
       const root = panel.getRoot() as any;
       const windowActive = root?.isActive?.() ?? true;
       const focused = root?.getFocus?.() ?? null;
       const focusWithin = !!focused && (focused === panel || focused.isAncestor(panel));
       if (windowActive && !focusWithin) close();
-      return GLib.SOURCE_REMOVE;
-    });
+    }, 0);
   });
   panel.addController(focus);
 

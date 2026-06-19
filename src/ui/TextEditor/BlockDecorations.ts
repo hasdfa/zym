@@ -31,7 +31,7 @@
  * 0); `add()` before map defers placement to the `map` signal. Layout changes that
  * move anchors (edits, fold toggles) aren't auto-followed — call `repositionAll()`.
  */
-import { Gtk, GLib, type SourceView } from '../../gi.ts';
+import { Gtk, type SourceView } from '../../gi.ts';
 
 export type BlockDecorationPlacement = 'below' | 'above';
 
@@ -176,7 +176,7 @@ export class BlockDecorations {
   private scheduleFlush(tries: number): void {
     if (this.flushPending) return;
     this.flushPending = true;
-    GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 16, () => {
+    setTimeout(() => {
       this.flushPending = false;
       let allReady = true;
       for (const block of this.blocks) {
@@ -185,8 +185,7 @@ export class BlockDecorations {
         else this.place(block);
       }
       if (!allReady && tries < 30) this.scheduleFlush(tries + 1);
-      return false; // GLib.SOURCE_REMOVE
-    });
+    }, 16);
   }
 
   private markLine(block: Block): number {

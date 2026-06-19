@@ -18,7 +18,7 @@
  */
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Adw, GLib, Gtk, Pango } from '../gi.ts';
+import { Adw, Gtk, Pango } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
@@ -140,9 +140,9 @@ export class WorkbenchList {
   // The built rows, in list-box order (user first, then agents in launch order).
   // Includes rows mid-removal (`removing`) until their collapse transition finishes.
   private handles: RowHandle[] = [];
-  // Outstanding GLib source ids for in-flight row transitions, cancelled on dispose
+  // Outstanding timer IDs for in-flight row transitions, cancelled on dispose
   // (and on a full rebuild) so a deferred callback never touches a freed widget.
-  private timers = new Set<number>();
+  private timers = new Set<NodeJS.Timeout>();
   // The agent whose row is selected (kept stable across rebuilds); null selects the
   // user row by default. Reflects the last-focused agent; see AppWindow.
   private selected: AgentTerminal | null = null;
@@ -250,7 +250,7 @@ export class WorkbenchList {
   // collapse toggle (which re-renders all rows with different content). Add/remove of
   // individual agents goes through `syncAgents` instead, so it can animate.
   private rebuild(): void {
-    for (const id of this.timers) GLib.sourceRemove(id);
+    for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
     for (const handle of this.handles) for (const unsub of handle.unsubs) unsub();
     this.handles = [];
@@ -353,18 +353,14 @@ export class WorkbenchList {
     });
   }
 
-  // Run `fn` after `ms` (0 → next idle) on the GLib loop, tracking the source so a
-  // dispose/rebuild can cancel it before it touches a freed widget.
+  // Run `fn` after `ms` (0 → next tick), tracking the timer so a dispose/rebuild
+  // can cancel it before it touches a freed widget.
   private defer(ms: number, fn: () => void): void {
-    let id = 0;
-    const callback = () => {
+    let id: NodeJS.Timeout;
+    id = setTimeout(() => {
       this.timers.delete(id);
       fn();
-      return GLib.SOURCE_REMOVE;
-    };
-    id = ms <= 0
-      ? GLib.idleAdd(GLib.PRIORITY_DEFAULT, callback)
-      : GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, ms, callback);
+    }, ms > 0 ? ms : 0);
     this.timers.add(id);
   }
 
@@ -574,7 +570,7 @@ export class WorkbenchList {
   }
 
   dispose(): void {
-    for (const id of this.timers) GLib.sourceRemove(id);
+    for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
     for (const handle of this.handles) for (const unsub of handle.unsubs) unsub();
     this.handles = [];

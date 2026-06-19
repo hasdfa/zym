@@ -105,7 +105,7 @@ app.on('activate', () => {
   // Headless: confirm the controller drives the API without throwing (rendering /
   // gap reservation need a realized view — run interactively).
   if (process.env.POC_VERIFY) {
-    GLib.timeoutAdd(0, 500, () => {
+    setTimeout(() => {
       let ok = true, err = '';
       try {
         handle?.remove();
@@ -115,8 +115,7 @@ app.on('activate', () => {
       } catch (e) { ok = false; err = String((e as Error)?.stack ?? e); }
       console.error(JSON.stringify({ controllerApi: ok ? 'PASS (add/remove/invalidate/repositionAll no throw)' : `FAIL (${err})` }, null, 2));
       loop.quit(); app.quit();
-      return false;
-    });
+    }, 500);
   }
 
   startLoop();

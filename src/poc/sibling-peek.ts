@@ -168,7 +168,7 @@ app.on('activate', () => {
   });
 
   // Defer the initial peek until mapped+laid-out (get_iter_location is 0 before).
-  view.on('map', () => GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 32, () => { if (!peek) showPeek(); return false; }));
+  view.on('map', () => setTimeout(() => { if (!peek) showPeek(); }, 32));
 
   const window = new Adw.ApplicationWindow({ application: app });
   window.setTitle('quilx POC — sibling-overlay peek (Ctrl+Space; type in the peek vs the file)');

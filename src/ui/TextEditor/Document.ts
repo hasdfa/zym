@@ -23,7 +23,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Adw, Gio, GLib, GtkSource, type SourceBuffer } from '../../gi.ts';
+import { Adw, Gio, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
 import { Point } from '../../text/Point.ts';
 import type { LspDocument, DocumentEdit } from '../../lsp/LspManager.ts';
@@ -60,7 +60,7 @@ interface ViewEntry {
 }
 
 /** The view-side reactions a Document routes to the active (focused) view: cursor
- *  restore + focus on load, modal dialogs, toasts, and the cursor for LSP requests. */
+ *  restore + focus on load, modal dialogs, banners, and the cursor for LSP requests. */
 export interface DocumentHost {
   /** About to replace the document content (capture the caret when `reload` so a
    *  silent external-change reload keeps it). */
@@ -75,11 +75,11 @@ export interface DocumentHost {
   presentDialog(dialog: InstanceType<typeof Adw.AlertDialog>): void;
   /** Whether the view currently holds focus (drives prompt timing). */
   hasFocus(): boolean;
-  /** Surface an error message (load/save failures). */
-  toast(message: string): void;
-  /** Reflect an on-disk change (or its resolution) in the view's warning banner.
-   *  Shown persistently until the user reloads/saves it away — not a transient toast. */
-  onDiskStateChanged(state: 'synced' | 'changed' | 'deleted', path: string | null): void;
+  /** Show a persistent info banner above the content. `action` provides an optional
+   *  labelled button alongside the dismiss button. */
+  showBanner(message: string, kind: 'error' | 'warning', action?: { label: string; onClick: () => void }): void;
+  /** Hide the info banner. */
+  hideBanner(): void;
   /** The view's cursor, for LSP requests (completion/hover anchor at the active view). */
   lspCursor(): Point;
 }
@@ -116,7 +116,7 @@ export class Document {
   private diskMtimeMs: number | null = null;
   private diskState: 'synced' | 'changed' | 'deleted' = 'synced';
   private fileMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private deletionCheckTimer = 0;
+  private deletionCheckTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.model = new GtkSource.Buffer();
@@ -249,7 +249,7 @@ export class Document {
     if (!this.hosts.includes(host)) this.hosts.push(host);
     if (!this.activeHost) this.activeHost = host;
     // A view opening onto an already-changed document gets the banner immediately.
-    host.onDiskStateChanged(this.diskState, this._currentFile);
+    this.syncBannerForHost(host);
   }
   removeHost(host: DocumentHost): void {
     const index = this.hosts.indexOf(host);
@@ -558,8 +558,8 @@ export class Document {
   dispose(): void {
     this.fileMonitor?.cancel();
     this.fileMonitor = null;
-    if (this.deletionCheckTimer) GLib.sourceRemove(this.deletionCheckTimer);
-    this.deletionCheckTimer = 0;
+    if (this.deletionCheckTimer) clearTimeout(this.deletionCheckTimer);
+    this.deletionCheckTimer = null;
     // Only close an LSP doc we actually opened — a lazily-assigned, never-shown document
     // has a path but never ran didOpen.
     if (this.contentLoaded) quilx.lsp.didClose(this.lspDocument);
@@ -608,7 +608,7 @@ export class Document {
       this.host?.didLoad(content, path, !!opts.silent);
       this.emitTitleChange();
     } catch (error) {
-      this.host?.toast(`Could not open ${Path.basename(path)}: ${(error as Error).message}`);
+      this.host?.showBanner(`Could not open ${Path.basename(path)}: ${(error as Error).message}`, 'error');
     }
   }
 
@@ -674,7 +674,7 @@ export class Document {
       this.emitTitleChange();
       quilx.notifications.addTrace(`Saved ${Path.basename(path)}`);
     } catch (error) {
-      this.host?.toast(`Could not save: ${(error as Error).message}`);
+      this.host?.showBanner(`Could not save: ${(error as Error).message}`, 'error');
     }
   }
 
@@ -714,23 +714,31 @@ export class Document {
 
   private scheduleDeletionCheck(): void {
     if (this.deletionCheckTimer) return;
-    this.deletionCheckTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 200, () => {
-      this.deletionCheckTimer = 0;
+    this.deletionCheckTimer = setTimeout(() => {
+      this.deletionCheckTimer = null;
       if (this._currentFile && this.statMtimeMs(this._currentFile) === null) {
         this.setDiskState('deleted');
       } else if (this._currentFile) {
         this.onDiskChanged();
       }
-      return GLib.SOURCE_REMOVE;
-    });
+    }, 200);
   }
 
   private setDiskState(state: 'synced' | 'changed' | 'deleted'): void {
     if (state === this.diskState) return;
     this.diskState = state;
     this.emitTitleChange();
-    // Every view onto this document shows (or hides) its own banner — the warning
-    // is persistent, so unlike the old toast there's no focus gating or one-shot dedup.
-    for (const host of this.hosts) host.onDiskStateChanged(state, this._currentFile);
+    for (const host of this.hosts) this.syncBannerForHost(host);
+  }
+
+  private syncBannerForHost(host: DocumentHost): void {
+    const path = this._currentFile;
+    if (this.diskState === 'synced' || !path) {
+      host.hideBanner();
+    } else if (this.diskState === 'deleted') {
+      host.showBanner('file deleted on disk', 'warning', { label: 'Save', onClick: () => this.save() });
+    } else {
+      host.showBanner('file changed on disk', 'warning', { label: 'Reload', onClick: () => this.loadFile(path) });
+    }
   }
 }

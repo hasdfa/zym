@@ -9,7 +9,7 @@
  * card floats at the bottom-centre of the supplied overlay, styled like the
  * picker.
  */
-import { GLib, Gtk } from '../gi.ts';
+import { Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
@@ -40,7 +40,7 @@ function escapeMarkup(text: string): string {
 export class WhichKey {
   private readonly host: Overlay;
   private panel: InstanceType<typeof Gtk.Widget> | null = null;
-  private timer = 0;
+  private timer: NodeJS.Timeout | null = null;
 
   constructor(host: Overlay) {
     this.host = host;
@@ -56,11 +56,10 @@ export class WhichKey {
       return;
     }
     // Show after a delay so a quickly-completed sequence never flashes.
-    this.timer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, SHOW_DELAY_MS, () => {
-      this.timer = 0;
+    this.timer = setTimeout(() => {
+      this.timer = null;
       this.show(pending);
-      return false; // one-shot
-    });
+    }, SHOW_DELAY_MS);
   }
 
   private show(pending: PendingBinding[]): void {
@@ -107,8 +106,8 @@ export class WhichKey {
 
   private cancelTimer(): void {
     if (this.timer) {
-      GLib.sourceRemove(this.timer);
-      this.timer = 0;
+      clearTimeout(this.timer);
+      this.timer = null;
     }
   }
 }

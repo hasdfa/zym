@@ -13,7 +13,7 @@
  * whatever is focused. This is the building block of the future splittable
  * panel tree (VS Code-style editor groups).
  */
-import { Adw, GLib, Gtk, Pango } from '../gi.ts';
+import { Adw, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { quilx } from '../quilx.ts';
@@ -255,10 +255,9 @@ export class Panel {
     if (this.root.grabFocus()) return true;
     // The root may not be mappable yet (e.g. the last tab was only just closed);
     // a widget can't take focus until mapped, so retry on the next layout pass.
-    GLib.idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+    setTimeout(() => {
       if (this.view.getNPages() === 0) this.root.grabFocus();
-      return GLib.SOURCE_REMOVE;
-    });
+    }, 0);
     return true;
   }
 
