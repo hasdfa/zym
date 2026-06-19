@@ -35,20 +35,12 @@ modules — **`src/git.ts`** and **`src/github.ts`**. Everything under
 Invariant (grep-checkable): nothing outside `git.ts`/`github.ts` imports
 `git/cli.ts` or `git/status.ts`.
 
-## I/O model (measured, not assumed)
+## I/O model
 
-A probe under the live GLib main loop (`startLoop()` + `loop.run()`) found:
-
-- `child_process.execFileSync` / `node:fs` sync — **work**.
-- `child_process.execFile` **callbacks** — **fire promptly** with full stdout.
-- **Promise / microtask** resolution — fires only when the loop yields, so it is
-  effectively starved (this, not "child_process is broken", is why the earlier
-  promise-based `simple-git` attempt appeared to hang).
-
-So: use `node:child_process` + the `git`/`gh` CLI directly — `execFileSync` for
-fast local reads, `execFile` (callback form) for slow/networked ops. **No
-promise wrappers** until loop integration drains microtasks. This is simpler than
-`Gio.Subprocess` and hands us stdout directly.
+Use `node:child_process` + the `git`/`gh` CLI directly: `execFileSync` for fast
+local reads, and async (`execFile` callbacks or Promise wrappers) for
+slow/networked ops. Node async IO and Promises resolve normally under the live
+GLib loop. Simpler than `Gio.Subprocess`, and hands us stdout directly.
 
 ## Backend: the git CLI helper — `src/git/cli.ts` (internal)
 
