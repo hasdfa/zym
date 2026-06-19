@@ -617,7 +617,7 @@ export class TextEditor implements DocumentHost {
     // The LSP document lives on `this.document` (one per file; didOpen/didChange/
     // didClose are driven there off the model). This view contributes the diagnostics
     // renderer and signature help.
-    this.diagnostics = new DiagnosticsView(this.view, this.textDecorations, this.editorModel, () => this._currentFile);
+    this.diagnostics = new DiagnosticsView(this.view, this.syntax, this.textDecorations, this.editorModel, () => this._currentFile);
     // Inlay hints (parameter names / inferred types) trailing each line, per view.
     this.inlayHints = new InlayHintController(
       this.view,
@@ -770,7 +770,7 @@ export class TextEditor implements DocumentHost {
   private installGitGutter() {
     if (this.bufferMode || !this.gitRepo) return; // file mode with a repo only
     this.gitGutter = new GitGutter(
-      this.view,
+      this.syntax, // feed the change-bar cell into the editor's single composite gutter
       () => this._currentFile,
       () => this.document.getText(), // diff against the MODEL (full file), not the collapsed view
       this.gitRepo,

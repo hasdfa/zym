@@ -14,13 +14,14 @@
  * unified diff for the hunk under the cursor and `git apply` it to the index;
  * reverting is done in the buffer by the editor (it owns the edit).
  *
- * Mirrors DiagnosticsView: a `GtkSource.GutterRendererText` subclass driven by a
- * line→kind map, repainted with `queueDraw()`.
+ * It no longer owns a gutter renderer: it feeds a per-line change-bar cell into the
+ * editor's single composite gutter (SyntaxController, the `GutterCellSink`) and asks
+ * it to redraw — see gutterRenderers.ts.
  */
 import * as Path from 'node:path';
-import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
+import type { GutterCellSink } from '../../syntax/gutterRenderers.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot } from '../../git.ts';
 import type { GitRepo } from '../../git.ts';
@@ -51,35 +52,9 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-class GitGutterRenderer extends GtkSource.GutterRendererText {
-  // Assigned after construction; read on every draw. (line is 0-based.)
-  kindByLine!: Map<number, ChangeKind>;
-  stagedLines!: Set<number>;
-  viewToModel!: (line: number) => number;
-  buffer!: any;
-
-  queryData(_lines: any, line: number) {
-    // The diff is keyed by MODEL/file lines; translate this view line (folds collapse
-    // text, so view lines diverge). A folded body's changed lines have no view line of
-    // their own → their bars simply don't show (no pile-up at the collapsed position).
-    const modelLine = this.viewToModel(line);
-    const kind = this.kindByLine?.get(modelLine);
-    if (kind) {
-      this.setMarkup(`<span foreground="${COLORS[kind]}">${BAR}</span>`, -1);
-      return;
-    }
-    // Staged-only lines (no overlapping unstaged change) read blue.
-    if (this.stagedLines?.has(modelLine)) {
-      this.setMarkup(`<span foreground="${STAGED_COLOR}">${BAR}</span>`, -1);
-      return;
-    }
-    this.setMarkup(' ', -1);
-  }
-}
-registerClass(GitGutterRenderer);
-
 export class GitGutter {
-  private readonly view: SourceView;
+  // The shared composite gutter we feed our change-bar cell into (not a renderer we own).
+  private readonly gutter: GutterCellSink;
   private readonly getPath: () => string | null;
   private readonly getText: () => string;
   // The repo whose HEAD/index changes re-trigger a diff (and that staging pokes for
@@ -88,7 +63,6 @@ export class GitGutter {
   // root (`rootFor`), so they're correct regardless of this.
   private git: GitRepo;
   private gitUnsub?: () => void;
-  private readonly renderer: GitGutterRenderer;
   // Unstaged changes (index → buffer): the stage / revert targets.
   private readonly kindByLine = new Map<number, ChangeKind>();
   // Staged changes (HEAD → index), mapped onto buffer rows: the unstage targets.
@@ -118,27 +92,35 @@ export class GitGutter {
   private readonly viewToModelLine: (line: number) => number;
 
   constructor(
-    view: SourceView,
+    gutter: GutterCellSink,
     getPath: () => string | null,
     getText: () => string,
     gitRepo: GitRepo,
     viewToModelLine?: (line: number) => number,
   ) {
-    this.view = view;
+    this.gutter = gutter;
     this.getPath = getPath;
     this.getText = getText;
     this.git = gitRepo;
     this.viewToModelLine = viewToModelLine ?? ((line) => line);
 
-    this.renderer = new GitGutterRenderer();
-    (this.renderer as any).kindByLine = this.kindByLine;
-    (this.renderer as any).stagedLines = this.stagedLines;
-    (this.renderer as any).viewToModel = this.viewToModelLine;
-    (this.renderer as any).buffer = (view as any).getBuffer();
-    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
+    // Contribute the change-bar column to the editor's single composite gutter.
+    this.gutter.setGitCell((viewLine) => this.cellFor(viewLine));
 
     // HEAD / index moved (commit / checkout / staging): re-fetch the bases and re-diff.
     this.gitUnsub = this.git.onChange(() => this.refresh());
+  }
+
+  /** Change-bar markup for a VIEW line: unstaged kind color, else staged blue, else ''
+   *  (a blank, padded cell). The diff is keyed by MODEL/file lines; translate this view
+   *  line back (folds collapse text, so they diverge — a folded body's changed lines have
+   *  no view line of their own, so their bars simply don't show). */
+  private cellFor(viewLine: number): string {
+    const modelLine = this.viewToModelLine(viewLine);
+    const kind = this.kindByLine.get(modelLine);
+    if (kind) return `<span foreground="${COLORS[kind]}">${BAR}</span>`;
+    if (this.stagedLines.has(modelLine)) return `<span foreground="${STAGED_COLOR}">${BAR}</span>`;
+    return '';
   }
 
   /** Re-point at a different repo (the editor's workbench re-rooted into a worktree):
@@ -245,7 +227,7 @@ export class GitGutter {
 
   dispose(): void {
     if (this.updateTimer) clearTimeout(this.updateTimer);
-    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.renderer);
+    this.gutter.setGitCell(null); // drop our column from the composite gutter
     this.gitUnsub?.();
     this.subs.dispose();
   }
@@ -288,7 +270,7 @@ export class GitGutter {
       }
     }
 
-    this.renderer.queueDraw();
+    this.gutter.redrawGutter();
   }
 
   private markUnstaged(hunk: Hunk): void {

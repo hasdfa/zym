@@ -337,10 +337,33 @@ defer past the first frame or large-file guard; **startup** ~680ms = module load
 `preloadGrammars` (all grammars) ~230ms — lazy per-language load. `UnderlineOverlay` squiggles
 still redraw per frame under diagnostics (marginal).
 
-### Gutter rendering — the next native lever *(researched, not built)*
+### Gutter rendering — collapsed 4 renderers → 1 *(done)*
 
-GtkSourceView's author profiled exactly this; two findings reframe where the native scroll
-floor (above) actually sits:
+**Done (2026-06-18):** the main view's four gutter renderers were collapsed into a **single
+composite `GtkSourceGutterRendererText`** (`GutterRenderer` in `gutterRenderers.ts`) that
+composes line number + fold chevron + git bar + diagnostic glyph into **one markup string
+(one `PangoLayout`) per line** — down from four. `SyntaxController` owns the one renderer and
+its deferred-install / width-priming machinery; `GitGutter` and `DiagnosticsView` no longer
+own renderers, they feed a per-line cell through the `GutterCellSink` (`setGitCell` /
+`setDiagCell` + `redrawGutter`). The gutter is now **display-only**: the chevron still shows
+▾/▸ but no longer takes clicks (folding stays keyboard-driven — `za`/`zo`/`zc`/`zR`/`zM`).
+Dropping per-renderer click targeting was the only thing forcing the chevron to be its own
+renderer, so this went past the originally-planned 4→2 straight to **4→1**.
+
+**Measured (`src/poc/gutter-bench.ts`, headless — isolates the per-line Pango markup-parse +
+shaping cost, the "native + unmeasured" part below):** for a 45-line viewport the current
+4-renderer gutter spends ~0.85–1.1 ms/frame building 4 layouts/line; the composite spends
+~0.2 ms/frame (1 layout/line) — a **~4× / ~80% cut** of the gutter's own layout cost. The
+bench *under*-counts the real win: it omits the per-line `queryData` C→JS FFI (~2µs × 4
+renderers × 45 lines ≈ 0.36 ms/frame today) and `gsk_text_node` creation, both of which also
+scaled with renderer count and are now 1×. Honest framing: at ~5–7% of a 60Hz frame budget
+the gutter was a real but *not dominant* slice of the scroll floor on this hardware (native
+GTK/GSK text render is still the floor); the win grows with viewport height and on slower
+hardware. `src/poc/gutter-visual.ts` snapshots the composite gutter to a PNG for visual
+verification (all four columns, colors, chevrons, glyphs confirmed).
+
+Background — GtkSourceView's author profiled exactly this; two findings reframe where the
+native scroll floor (above) actually sits:
 
 - **GTK4 caches the text's render nodes** (`GtkTextLineDisplay`), so scrolling *translates*
   cached per-line nodes rather than re-rendering them — the text itself is cheap. The per-frame
@@ -362,26 +385,24 @@ the vfunc already keeps us off the slow `query_data` GObject *signal*, per
 [Builder GTK4 Porting II](https://blogs.gnome.org/chergert/2022/04/29/builder-gtk-4-porting-continued/));
 the **`PangoLayout` cost is native + unmeasured** and is the part "Faster Numbers" removed.
 
-**Idea — collapse the renderers (combine the gutter models).** A shared per-view gutter
-aggregator (`line → { number, chevron, gitKind, diagSeverity }`) that the existing controllers
-write into, feeding **one** composite renderer that composes a single fixed-width markup string
-per line (monospace makes the column math exact: right-justify the number with leading spaces,
-`<span>` per element for color/font). That cuts `queryData` + markup-parse + `PangoLayout` from
-**4× to 1× per line**. The chevron is the only *interactive* element (its `activate` needs the
-clicked x-region, which the vfunc doesn't hand us), so the low-risk shape is **4→2**: keep the
-chevron its own tiny renderer, merge the three non-interactive ones. The `queryData` FFI saving
-is marginal (already cheap); the real prize is the **layout-count reduction**, still unmeasured.
+**How it landed (the composite).** One renderer's `queryData` composes a single markup string
+per line: right-justified line number (`<span>` muted), a space + chevron, then the git-bar and
+diagnostic-glyph cells (each a `<span>` the owning controller hands over, or a space on clean
+lines so a bar/glyph appearing later doesn't shift the text column — monospace makes the column
+math exact). `GitGutter`/`DiagnosticsView` keep all their own logic (diff/hunks, severity map);
+they just write a cell function instead of inserting a renderer. Disposal: `SyntaxController`
+removes the renderer + nulls the cell closures (which capture the providers) on `dispose`, and
+the `setGitCell`/`setDiagCell(null)` paths guard against running after the controller is gone
+(tab-close detaches, never destroys — see lifecycle-and-disposal.md).
 
-Orthogonal: the `gsk_text_node` digit-cache (a custom *base* `GtkSourceGutterRenderer` with a
-manual `snapshot`) makes the line-number layout itself nearly free while keeping fold-aware
-numbering — the maximal version, more work (hand-build a `PangoGlyphString` in node-gtk). *Not*
+**Remaining follow-up (not done):** the `gsk_text_node` digit-cache (a custom *base*
+`GtkSourceGutterRenderer` with a manual `snapshot` that caches the `0–9` glyphs and draws via
+`gsk_text_node_new()` instead of a `PangoLayout`) would make the number itself nearly free while
+keeping fold-aware numbering — the maximal version, more work (hand-build a `PangoGlyphString` in
+node-gtk). Only worth it if the remaining ~0.2 ms/frame gutter layout shows up as hot. *Not*
 applicable: the [PCRE2 + JIT](https://blogs.gnome.org/chergert/2020/09/30/gtksourceview-gets-a-jit/)
 work optimizes the `.lang` regex engine we don't use, and nothing in the blog touches the
 open/parse costs (those are our tree-sitter path).
-
-**Gate:** measure the gutter's native cost first (A/B: custom vs built-in `setShowLineNumbers`,
-or renderers disabled — we've only ever A/B'd the overlays). If it's a real chunk of the floor,
-the 4→2 collapse is the next change; pair with `gsk_text_node` only if numbers stay hot.
 
 ## Related friction evidence
 

@@ -5,15 +5,16 @@
  *  - inline squiggles: custom-drawn wavy underline spans painted by the editor's
  *    `UnderlineOverlay` (anti-aliased Cairo waves, nicer than GtkTextTag's fixed
  *    `Pango.Underline.ERROR`), re-synced on every update
- *  - gutter glyphs: a Nerd Font severity icon per affected line, drawn by a
- *    `GtkSource.GutterRendererText` (same approach as the fold gutter) so we get
- *    colored glyphs from the bundled Symbols Nerd Font rather than theme icons
+ *  - gutter glyphs: a Nerd Font severity icon per affected line, fed as a per-line
+ *    cell into the editor's single composite gutter (SyntaxController, the
+ *    `GutterCellSink`) — it composes the colored Symbols-Nerd-Font glyph into the
+ *    one gutter markup string rather than this view owning its own renderer.
  *
  * Ranges arrive as LSP ranges (in the producing server's position encoding) and
  * are converted to quilx `Range`s via `EditorModel` + `position.lspToRange`.
  * Re-renders whenever the store updates for this editor's file.
  */
-import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
+import { type SourceView } from '../../gi.ts';
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { quilx } from '../../quilx.ts';
@@ -21,7 +22,7 @@ import { ICON_FONT_FAMILY } from '../../fonts.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 import { lspToRange } from '../position.ts';
-import { isLineFolded } from '../../syntax/syntax-controller.ts';
+import type { GutterCellSink } from '../../syntax/gutterRenderers.ts';
 import { severityStyle } from './severity.ts';
 import { VirtualText, type AnnotationStyleName } from '../../ui/TextEditor/VirtualText.ts';
 import type { EditorModel } from '../../ui/TextEditor/EditorModel.ts';
@@ -39,7 +40,8 @@ export class DiagnosticsView {
   private readonly model: EditorModel;
   private readonly getPath: () => string | null;
   private readonly decorations: TextDecorations;
-  private readonly renderer: any;
+  // The shared composite gutter we feed our severity-glyph cell into.
+  private readonly gutter: GutterCellSink;
   // line → most-severe DiagnosticSeverity on that line (lower number = worse).
   private readonly severityByLine = new Map<number, number>();
   // Error lens: native end-of-line trailing message per line (GtkSourceAnnotations).
@@ -48,6 +50,7 @@ export class DiagnosticsView {
 
   constructor(
     view: SourceView,
+    gutter: GutterCellSink,
     decorations: TextDecorations,
     model: EditorModel,
     getPath: () => string | null,
@@ -56,11 +59,17 @@ export class DiagnosticsView {
     this.model = model;
     this.getPath = getPath;
     this.decorations = decorations;
+    this.gutter = gutter;
 
-    this.renderer = new DiagnosticGutterRenderer();
-    this.renderer.severityByLine = this.severityByLine;
-    this.renderer.buffer = (view as any).getBuffer();
-    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
+    // Contribute the severity-glyph column to the editor's single composite gutter.
+    // severityByLine is keyed by VIEW line (the LSP range is translated to view space),
+    // so a diagnostic inside a fold lands on the placeholder line — no pile-up.
+    this.gutter.setDiagCell((viewLine) => {
+      const severity = this.severityByLine.get(viewLine);
+      if (severity === undefined) return '';
+      const sev = severityStyle(severity);
+      return `<span face="${ICON_FONT_FAMILY}" size="85%" foreground="${sev.color}">${sev.glyph}</span>`;
+    });
 
     this.annotations = new VirtualText(view);
 
@@ -106,7 +115,7 @@ export class DiagnosticsView {
       }
     }
     this.decorations.setUnderlines(underlines);
-    this.renderer.queueDraw();
+    this.gutter.redrawGutter();
 
     // Error lens: the worst message per line, trailing the line (`+N` when several).
     if (quilx.config.get('editor.errorLens') !== false) {
@@ -126,27 +135,10 @@ export class DiagnosticsView {
     this.decorations.clearUnderlines();
     this.severityByLine.clear();
     this.annotations.dispose();
-    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.renderer);
+    this.gutter.setDiagCell(null); // drop our column from the composite gutter
     this.subscriptions.dispose();
   }
 }
-
-// Draws the Nerd Font severity glyph for any line that has diagnostics. Reads the
-// `severityByLine` map the view keeps in sync; `queueDraw()` triggers a refresh.
-class DiagnosticGutterRenderer extends GtkSource.GutterRendererText {
-  queryData(_lines: any, line: number) {
-    const severity: number | undefined = (this as any).severityByLine?.get(line);
-    // Blank for clean lines, and for diagnostic lines hidden inside a fold (so
-    // glyphs don't pile up at the collapsed position).
-    if (severity === undefined || isLineFolded((this as any).buffer, line)) {
-      this.setMarkup(' ', -1);
-      return;
-    }
-    const sev = severityStyle(severity);
-    this.setMarkup(`<span face="${ICON_FONT_FAMILY}" size="85%" foreground="${sev.color}">${sev.glyph}</span>`, -1);
-  }
-}
-registerClass(DiagnosticGutterRenderer);
 
 // Expand an empty (point) range to one character so the squiggle is visible.
 function visibleRange(range: Range): Range {

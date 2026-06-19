@@ -27,7 +27,7 @@ import { isFunctionNodeType, isClassNodeType, STRING_COMMENT_RE, RUN_FOLD_RE } f
 import { collectCaptures, type RawCapture, type VisibleRange } from './injection.ts';
 import { rangeGaps, mergeRange, type LineRange } from './paintRegions.ts';
 import { HighlightTags } from './highlightTags.ts';
-import { FoldRenderer, LineNumberRenderer } from './gutterRenderers.ts';
+import { GutterRenderer } from './gutterRenderers.ts';
 /** The view↔model projection a SyntaxController folds through (the editor's Document). */
 export interface FoldHost {
   foldViewRange(buffer: SourceBuffer, viewStart: number, viewEnd: number, placeholder: string): any;
@@ -154,15 +154,21 @@ export class SyntaxController {
   // separately from the parse-driven highlight tags (not in `allTags`).
   private readonly bracketMatchTag: any;
 
-  // The fold-aware line-number gutter renderer (null when line numbers are off),
-  // and the digit width its size is currently primed for. GtkSourceGutterRendererText
-  // sizes from its set text, so we prime it to the widest number and re-prime when
-  // the line count crosses a digit boundary (see primeLineNumbers).
-  private lineNumberRenderer: any = null;
-  private lineNumberPrimedDigits = 0;
+  // The single composite gutter renderer (number + chevron + git + diag), null
+  // until installed / when no gutter is wanted, and the digit width its size is
+  // currently primed for. GtkSourceGutterRendererText sizes from its set text, so
+  // we prime it to the widest line and re-prime when the digit count changes
+  // (see primeGutter).
+  private gutterRenderer: any = null;
+  private lineNumberPrimedDigits = -1;
+  // Git change bar / diagnostic glyph cells, fed by GitGutter / DiagnosticsView via
+  // setGitCell / setDiagCell (they no longer own renderers). null = no such column;
+  // a function returns the per-line markup fragment (or '' for a blank, padded cell).
+  private gitCell: ((viewLine: number) => string) | null = null;
+  private diagCell: ((viewLine: number) => string) | null = null;
   // Cached line-number digit width. The gutter renderer reads this once per visible
   // line per paint, so it must not call getLineCount() (an FFI) each time; it's
-  // refreshed from primeLineNumbers (on every buffer edit) and lazily on first read.
+  // refreshed from primeGutter (on every buffer edit) and lazily on first read.
   private cachedLineDigits = 0;
   // The gutter is installed lazily after the first paint (see the constructor note);
   // these track the deferred state.
@@ -272,7 +278,7 @@ export class SyntaxController {
     this.connect(buffer, 'insert-text', (location: any, text: string) => this.onInsert(location, text));
     this.connect(buffer, 'delete-range', (start: any, end: any) => this.onDelete(start, end));
     this.connect(buffer, 'changed', () => {
-      this.primeLineNumbers(); // keep the gutter wide enough as the line count grows
+      this.primeGutter(); // keep the gutter wide enough as the line count grows
       this.scheduleRefresh();
     });
 
@@ -316,6 +322,16 @@ export class SyntaxController {
       try { target.off(event, cb); } catch { /* target already finalized — nothing to detach */ }
     }
     this.connections.length = 0;
+    // Remove the composite renderer and drop its back-reference to us + the git/diag cell
+    // closures (which capture GitGutter / DiagnosticsView), so a detached-but-retained view
+    // doesn't pin this controller and its providers (tab-close detaches, never destroys).
+    if (this.gutterRenderer) {
+      try { (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.gutterRenderer); } catch { /* gutter already gone */ }
+      (this.gutterRenderer as any).controller = null;
+      this.gutterRenderer = null;
+    }
+    this.gitCell = null;
+    this.diagCell = null;
     this.resetTree(); // delete the parse tree + injection parsers (frees their wasm allocations)
   }
 
@@ -595,45 +611,80 @@ export class SyntaxController {
       const size = layout.getPixelSize();
       return Array.isArray(size) ? size[0] : (size?.width ?? 0);
     };
-    // Gutter width = the line-number text width + the fold chevron width + a small fixed
-    // GtkSourceGutter padding (measured empirically: xpad barely affects the allocated
-    // width). Reserving exactly this keeps the text column fixed when the gutter installs.
+    // Gutter width = line-number text + (space + fold chevron) + the git / diagnostic
+    // cells (one monospace char each, when present) + a small fixed GtkSourceGutter
+    // padding (measured empirically: xpad barely affects the allocated width). Reserving
+    // exactly this keeps the text column fixed when the composite gutter installs.
     const m4 = measure('0'.repeat(this.lineNumberWidth()));
-    const mF = this.foldingEnabled ? measure('▾') : 0;
-    this.reservedPx = m4 + mF + GUTTER_PADDING_PX;
+    const mFold = this.foldingEnabled ? measure(' ▾') : 0;
+    const extraCols = (this.gitCell ? 1 : 0) + (this.diagCell ? 1 : 0);
+    const mExtra = extraCols ? measure('0'.repeat(extraCols)) : 0;
+    this.reservedPx = m4 + mFold + mExtra + GUTTER_PADDING_PX;
     view.setLeftMargin(this.reservedPx);
   }
   private reservedPx = 0;
 
   /**
-   * Insert the line-number + fold gutter renderers. Deferred until after the first paint
-   * (when the view's line metrics are validated) so the gutter only queries the visible
-   * lines, not every line in the buffer — see the constructor note. Idempotent.
+   * Insert the single composite gutter renderer (line number + chevron + git + diag).
+   * Deferred until after the first paint (when the view's line metrics are validated) so
+   * the gutter only queries the visible lines, not every line in the buffer — see the
+   * constructor note. Idempotent. Skipped entirely when neither numbers nor folding are
+   * wanted (compact / peek views); git + diag cells are only fed in full file mode, which
+   * always wants both, so the renderer always exists when they register.
    */
   private installGutter(): void {
     if (this.gutterInstalled || this.disposed) return;
+    if (!this.wantLineNumbers && !this.foldingEnabled) return;
     this.gutterInstalled = true;
     // Drop the reserved left margin: the gutter now occupies that space, so swapping them
     // in the same layout pass keeps the text column fixed (no shift).
     if (this.gutterReserved) (this.view as any).setLeftMargin(0);
     const gutter = (this.view as any).getGutter(Gtk.TextWindowType.LEFT);
-    // Custom, fold-aware line numbers (GtkSourceView's built-in gutter renders a number
-    // for every folded line at the collapsed y — a mashup). Leftmost, then the chevron.
-    if (this.wantLineNumbers) {
-      const lineNumbers = new LineNumberRenderer();
-      (lineNumbers as any).controller = this;
-      lineNumbers.setXpad(3);
-      gutter.insert(lineNumbers, 0);
-      this.lineNumberRenderer = lineNumbers;
-      this.primeLineNumbers();
-    }
-    if (this.foldingEnabled) {
-      const renderer = new FoldRenderer();
-      (renderer as any).controller = this;
-      renderer.setXpad(4);
-      gutter.insert(renderer, this.wantLineNumbers ? 1 : 0);
-    }
+    // ONE renderer composes the whole gutter (custom + fold-aware: GtkSourceView's
+    // built-in line numbers render a number for every folded line at the collapsed y —
+    // a mashup — and four separate renderers each build a PangoLayout per line; this
+    // builds one). Display-only: the chevron shows but doesn't take clicks (keyboard folds).
+    const renderer = new GutterRenderer();
+    (renderer as any).controller = this;
+    renderer.setXpad(3);
+    gutter.insert(renderer, 0);
+    this.gutterRenderer = renderer;
+    this.primeGutter();
   }
+
+  // --- Composite gutter cells (GutterCellSink) -------------------------------
+  // GitGutter / DiagnosticsView feed their per-line markup here instead of inserting
+  // their own renderers; the one composite renderer reads it back via gitCellFor /
+  // diagCellFor. Setting a cell re-primes the width (the column appeared / vanished)
+  // and redraws.
+
+  /** @internal The git change-bar column is active (read by the renderer for width). */
+  get hasGitColumn(): boolean { return this.gitCell !== null; }
+  /** @internal The diagnostic-glyph column is active. */
+  get hasDiagColumn(): boolean { return this.diagCell !== null; }
+
+  setGitCell(cell: ((viewLine: number) => string) | null): void {
+    this.gitCell = cell;
+    if (this.disposed) return; // GitGutter.dispose may run after ours — don't touch the buffer
+    this.lineNumberPrimedDigits = -1; // force re-prime (column width changed)
+    this.primeGutter();
+    this.redrawGutter();
+  }
+
+  setDiagCell(cell: ((viewLine: number) => string) | null): void {
+    this.diagCell = cell;
+    if (this.disposed) return;
+    this.lineNumberPrimedDigits = -1;
+    this.primeGutter();
+    this.redrawGutter();
+  }
+
+  /** Markup fragment for the git bar / diagnostic glyph on `viewLine` ('' = blank). */
+  gitCellFor(viewLine: number): string { return this.gitCell ? this.gitCell(viewLine) : ''; }
+  diagCellFor(viewLine: number): string { return this.diagCell ? this.diagCell(viewLine) : ''; }
+
+  /** Repaint the gutter (a git/diagnostic recompute changed a cell). No-op pre-install. */
+  redrawGutter(): void { this.gutterRenderer?.queueDraw(); }
 
   /** Paint newly-revealed lines while scrolling. A THROTTLE (one pass per frame), not a
    *  trailing debounce — so a held ctrl-d/ctrl-u stays highlighted as it goes instead of
@@ -1022,28 +1073,31 @@ export class SyntaxController {
 
   /** Digit width to pad line numbers to, so the gutter doesn't jitter while scrolling.
    *  Returns a cached value (the renderer calls this per visible line per frame); the
-   *  cache is refreshed by primeLineNumbers on edits, and lazily on first read. */
+   *  cache is refreshed by primeGutter on edits, and lazily on first read. */
   lineNumberWidth(): number {
     return this.cachedLineDigits || (this.cachedLineDigits = String((this.buffer as any).getLineCount()).length);
   }
 
   /**
-   * Size the line-number gutter to the widest number. GtkSourceGutterRendererText
-   * measures its width from the *currently set* text, and at the gutter's measure
-   * pass no per-line text is set yet — so without this the column collapses to the
-   * padding and no numbers show. Setting representative text + queue_resize fixes
-   * the allocation; re-run only when the digit count changes (cheap no-op otherwise).
+   * Size the composite gutter to its widest line. GtkSourceGutterRendererText measures
+   * its width from the *currently set* text, and at the gutter's measure pass no per-line
+   * text is set yet — so without this the column collapses to the padding and nothing
+   * shows. Set representative text (widest number + the chevron / git / diag cells) +
+   * queue_resize; re-run only when the digit count changes (cheap no-op otherwise).
    */
-  private primeLineNumbers(): void {
+  private primeGutter(): void {
     // Compute the fresh width (one getLineCount per edit) and keep the per-frame cache
     // current, even before the renderer exists, so the renderer's first read is right.
     const digits = String((this.buffer as any).getLineCount()).length;
     this.cachedLineDigits = digits;
-    if (!this.lineNumberRenderer) return;
+    if (!this.gutterRenderer) return;
     if (digits === this.lineNumberPrimedDigits) return;
     this.lineNumberPrimedDigits = digits;
-    this.lineNumberRenderer.setText('0'.repeat(digits), -1);
-    this.lineNumberRenderer.queueResize();
+    // Representative widest content: number + (space+chevron) + git cell + diag cell. The
+    // extra cells are one monospace char each (the bar/glyph aren't wider than a digit).
+    const extra = (this.foldingEnabled ? 2 : 0) + (this.gitCell ? 1 : 0) + (this.diagCell ? 1 : 0);
+    this.gutterRenderer.setText('0'.repeat((this.wantLineNumbers ? digits : 0) + extra), -1);
+    this.gutterRenderer.queueResize();
   }
 
   /** A folded FoldRegion for an active handle (reuse the map's tracked object when it
