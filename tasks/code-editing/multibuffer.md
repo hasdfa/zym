@@ -126,6 +126,11 @@ synthesized-buffer `DiffView` — that buffer construction is what we replace.
 - **Phase 2 — editable.** Flip new-side segments `editable`, write-through to the
   `Document`, live re-diff on edit. The same write-through then powers
   search-replace-all and multi-file refactors.
+- **Later — unify the display model (post-Phase-2).** Make *every* `TextEditor`
+  excerpt-backed (a normal file = one full-file excerpt; folds become a transform in the
+  same coordinate stack), so folds/diagnostics/decorations/gutters/search are written once.
+  A maintenance win, not a perf one, gated on Phase 2 write-through. Design + migration path:
+  [multibuffer-unification.md](multibuffer-unification.md).
 
 ## Phase 0 — as built
 
