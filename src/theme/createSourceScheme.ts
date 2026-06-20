@@ -6,6 +6,9 @@
  * small scheme XML into a temp dir on the StyleSchemeManager's search path and
  * load it back by id. The search dir lives under the XDG cache (reused across launches and
  * shared by concurrent instances, which write identical content) so it never accumulates.
+ * The result is memoized by Theme identity — every editor open requests the scheme, but only
+ * the first does disk I/O + a manager rescan; a future live theme-swap (a new Theme object)
+ * naturally misses the cache and regenerates.
  *
  * The scheme also maps GtkSourceView's standard `def:` styles onto the theme's
  * syntax palette, so the `.lang` fallback engine (used for languages without a
@@ -41,10 +44,14 @@ const DEF_STYLES: Array<[def: string, capture: string]> = [
 ];
 
 let searchDir: string | null = null;
+let cached: { theme: Theme; scheme: StyleScheme } | null = null;
 
 /** Build and load a GtkSource.StyleScheme for `theme` (its concrete editor background +
- *  syntax colors). Only meaningful when `!theme.followSystemScheme`. */
+ *  syntax colors). Only meaningful when `!theme.followSystemScheme`. Memoized by Theme
+ *  identity, so repeated editor opens are a pointer compare rather than a disk write + rescan. */
 export function createSourceScheme(theme: Theme): StyleScheme {
+  if (cached && cached.theme === theme) return cached.scheme;
+
   const manager = GtkSource.StyleSchemeManager.getDefault();
   if (searchDir === null) {
     const base = process.env.XDG_CACHE_HOME ?? Path.join(Os.homedir(), '.cache');
@@ -59,6 +66,7 @@ export function createSourceScheme(theme: Theme): StyleScheme {
 
   const scheme = manager.getScheme(id);
   if (!scheme) throw new Error(`failed to load generated scheme "${id}"`);
+  cached = { theme, scheme };
   return scheme;
 }
 
