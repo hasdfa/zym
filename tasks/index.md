@@ -62,43 +62,10 @@ App data follows XDG: config in `$XDG_CONFIG_HOME/quilx`, state (sessions, frece
 
 ### Plugin system
 
-See [plugins.md](plugins.md) for the architecture (Atom-inspired) and
+See [plugins.md](plugins.md) for the architecture (Atom-inspired) and status, and
 [plugin-creation.md](plugin-creation.md) for the step-by-step guide to adding one.
-A plugin is a manifest + `activate(ctx)`/`deactivate`; the `PluginContext` exposes
-disposable-tracked contribution points (languages/grammars/LSP servers, keymaps,
-commands, config schema, stylesheets, `observeTextEditors`) so deactivation tears
-everything down. The `PluginRegistry` (`quilx`-level `plugins` singleton) owns
-activation state.
-
-- [x] **Plugin core** — `src/plugin/` (`types.ts`, `PluginContext.ts`,
-  `PluginRegistry.ts`, `index.ts`). Contribution registries made
-  disposable-aware: `LanguageRegistry.register*` return Disposables,
-  `Config.removeSchema`, `styles.addRemovable` (queue-or-install, removable),
-  `grammar.clearGrammar`. Keymaps/commands already returned Disposables.
-- [x] **First plugin: TypeScript** — `plugins/typescript/` (the former
-  `src/lang/builtin.ts`). Contributes the TS/JS/TSX detection, tree-sitter
-  grammars (queries vendored under `queries/`, `GrammarDef.highlightsPath`), and
-  the flow/tsserver/deno/eslint server candidates. Activated at startup
-  (`src/index.ts`: `registerBuiltinPlugins()` → `plugins.activateAll()`) before
-  `preloadGrammars`, so the registry is populated before anything reads it.
-- [x] **HTML plugin** — `plugins/html/`. Detection (`.html`/`.htm`/`.xhtml`),
-  the bundled `tree-sitter-html` grammar (highlights + folds, palette-adapted),
-  and the `vscode-html-language-server` (single-file). Exercises *cross-plugin
-  injections*: `<style>` → a CSS grammar this plugin vendors injection-only, and
-  `<script>` → the TypeScript plugin's tsx grammar (`js`), each a no-op if its
-  guest grammar isn't registered.
-- [x] **More bundled plugins** (`registerBuiltinPlugins()` in `src/plugin/index.ts`
-  registers all 10): **markdown** (LSP + config + vendored block/inline grammars +
-  image preview), **css** (CSS/SCSS/Sass; bundled + vendored grammars), **json**
-  (JSON/JSONC), **cpp** (C/C++; clangd), **rust** (rust-analyzer), **python**
-  (pyright/pylsp/ruff), **bash** (shell; bash-language-server), and **color-preview**
-  (the `observeTextEditors` reference consumer — no language layer). See
-  [plugins.md](plugins.md) → Bundled plugins.
-- [ ] UI-component / panel contributions (register a `Panel`/dock widget).
-- [ ] Snippets, menus, and command-palette categories as contribution points.
-- [ ] Out-of-repo plugin discovery + loading (npm-style packages, a manifest
-  file), enable/disable persisted to config, and a plugin-manager UI.
-- [ ] Per-plugin config namespace + settings UI integration.
+10 bundled plugins ship: typescript, html, css, json, cpp, rust, python, bash,
+markdown, color-preview.
 
 ## System integration
 

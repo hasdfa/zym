@@ -9,15 +9,6 @@ the core, and can be activated/deactivated cleanly at runtime.
 > [plugin-creation.md](plugin-creation.md). This file is the architecture; that
 > one is the recipe.
 
-The TypeScript support was the first thing extracted: it used to be the in-process
-"built-in pack" (`src/lang/builtin.ts`); it is now `plugins/typescript/`, the
-reference plugin. Several more bundled plugins followed, each exercising a
-different slice of the contribution model (config schema, vendored grammars,
-cross-language injection, per-editor decorations) — see Bundled plugins below.
-
-> **Adding a plugin?** See [plugin-creation.md](plugin-creation.md) for the
-> step-by-step recipe (this page is the architecture).
-
 ## Model
 
 A plugin is a **manifest** (`id`, `name`, `description?`, `version?`) plus
@@ -106,112 +97,41 @@ disposable-aware:
 Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
 `quilx.commands.add`).
 
+## Status
+
+- [x] **Plugin core** — `src/plugin/` (`types.ts`, `PluginContext.ts`,
+  `PluginRegistry.ts`, `index.ts`). Contribution registries made
+  disposable-aware: `LanguageRegistry.register*` return Disposables,
+  `Config.removeSchema`, `styles.addRemovable` (queue-or-install, removable),
+  `grammar.clearGrammar`. Keymaps/commands already returned Disposables.
+- [x] **First plugin: TypeScript** — `plugins/typescript/` (the former
+  `src/lang/builtin.ts`). Contributes the TS/JS/TSX detection, tree-sitter
+  grammars (queries vendored under `queries/`, `GrammarDef.highlightsPath`), and
+  the flow/tsserver/deno/eslint server candidates. Activated at startup
+  (`src/index.ts`: `registerBuiltinPlugins()` → `plugins.activateAll()`) before
+  `preloadGrammars`, so the registry is populated before anything reads it.
+- [x] **HTML plugin** — `plugins/html/`. Detection (`.html`/`.htm`/`.xhtml`),
+  the bundled `tree-sitter-html` grammar (highlights + folds, palette-adapted),
+  and the `vscode-html-language-server` (single-file). Exercises *cross-plugin
+  injections*: `<script>` → a CSS grammar this plugin vendors injection-only, and
+  `<script>` → the TypeScript plugin's tsx grammar (`js`), each a no-op if its
+  guest grammar isn't registered.
+- [x] **More bundled plugins** (`registerBuiltinPlugins()` in `src/plugin/index.ts`
+  registers all 10): **markdown** (LSP + config + vendored block/inline grammars +
+  image preview), **css** (CSS/SCSS/Sass; bundled + vendored grammars), **json**
+  (JSON/JSONC), **cpp** (C/C++; clangd), **rust** (rust-analyzer), **python**
+  (pyright/pylsp/ruff), **bash** (shell; bash-language-server), and **color-preview**
+  (the `observeTextEditors` reference consumer — no language layer).
+- [ ] UI-component / panel contributions (register a `Panel`/dock widget).
+- [ ] Snippets, menus, and command-palette categories as contribution points.
+- [ ] Out-of-repo plugin discovery + loading (npm-style packages, a manifest
+  file), enable/disable persisted to config, and a plugin-manager UI.
+- [ ] Per-plugin config namespace + settings UI integration.
+
 ## Files
 
-- `src/plugin/types.ts` — `Plugin`, `PluginManifest`, `PluginContext`, `PluginLanguages`.
-- `src/plugin/PluginContext.ts` — `PluginContextImpl` (wraps the singletons, tracks disposables).
-- `src/plugin/PluginRegistry.ts` — `PluginRegistry`, `PluginInfo`.
-- `src/plugin/index.ts` — the `plugins` singleton + `registerBuiltinPlugins()`.
-- `plugins/typescript/` — the TypeScript plugin (`index.ts`, `queries/`, `typescript.test.ts`).
-- `plugins/markdown/` — the Markdown plugin (`index.ts`, `imagePreview.ts`,
-  vendored `grammars/`, `build-grammars.sh`, `queries/`, `*.test.ts`).
-- `plugins/html/` — the HTML plugin (`index.ts`, `queries/html/`, `queries/css/`,
-  `html.test.ts`, `grammar.test.ts`).
-- `plugins/css/` — the CSS plugin (`index.ts`, `queries/`, vendored `grammars/`,
-  `build-grammars.sh`, `css.test.ts`, `grammar.test.ts`).
-- `plugins/json/` — the JSON plugin (`index.ts`, `queries/`, `json.test.ts`,
-  `grammar.test.ts`).
-- `plugins/cpp/` — the C / C++ plugin (`index.ts`, `queries/c/`, `queries/cpp/`,
-  `cpp.test.ts`, `grammar.test.ts`).
-- `plugins/rust/` — the Rust plugin (`index.ts`, `queries/rust/`, `rust.test.ts`,
-  `grammar.test.ts`).
-- `plugins/python/` — the Python plugin (`index.ts`, `queries/python/`,
-  `python.test.ts`, `grammar.test.ts`).
-- `plugins/bash/` — the Bash plugin (`index.ts`, `queries/bash/`, `bash.test.ts`,
-  `grammar.test.ts`).
-- `plugins/color-preview/` — the color-preview plugin (`index.ts` editor wiring +
-  `colors.ts` pure parser/contrast, `colors.test.ts`); the `observeTextEditors`
-  reference consumer.
-- `src/Workspace.ts` — the `observeTextEditors`/`addTextEditor` editor registry the
-  seam is backed by (beyond the file-opener it already held).
-
-## Bundled plugins
-
-- **typescript** — TS/JS/TSX detection, tree-sitter grammars (vendored under
-  `queries/`), and the flow/tsserver/deno/eslint server candidates. Exercises the
-  `languages` surface.
-- **markdown** — detection (`.md`/`.markdown`/…), the **marksman** language
-  server (single-file; skipped gracefully if not on PATH), and a `markdown.*`
-  config schema (authoring preferences, surfaced in the settings UI). First plugin
-  to exercise `registerConfig`. Ships the split tree-sitter Markdown grammar —
-  a block grammar plus an inline grammar injected into its `inline` nodes, both
-  vendored under `grammars/` (built by `build-grammars.sh`); fenced code blocks
-  inject the fence language's grammar through the registry. The grammar registers
-  only when the vendored wasm/query files exist (an `Fs.existsSync` guard), so a
-  missing build degrades to LSP-only rather than throwing and rolling back the
-  whole plugin. Also a consumer of `observeTextEditors`: `imagePreview.ts` renders
-  local `![alt](src)` images inline below their line via `BlockDecorations`.
-- **html** — HTML detection (`.html`/`.htm`/`.xhtml`/`.shtml`), the bundled
-  `tree-sitter-html` grammar (highlighting + folding), and **vscode-html-language-server**
-  (from `vscode-langservers-extracted`, single-file, with embedded CSS/JS
-  completion). The reference for **cross-language injection across plugins**: HTML's
-  `<script>` blocks re-highlight via the TypeScript plugin's `js` grammar and
-  `<style>` blocks via a `css` grammar this plugin vendors **injection-only** (no
-  `registerLanguage`, so no `.css` file opens as CSS — that grammar id exists just
-  so the `<style>` injection resolves). Both injections no-op cleanly if the guest
-  grammar isn't registered.
-- **css** — CSS/SCSS/Sass detection, tree-sitter grammars, and language servers.
-  First plugin to **mix a bundled grammar with a vendored one**: CSS uses the
-  bundled `tree-sitter-css.wasm`; SCSS uses `tree-sitter-scss.wasm`, vendored under
-  `grammars/` and built by the plugin's own `build-grammars.sh` (the Markdown
-  recipe). Sass (indented) is detection + LSP only — no ABI-14 grammar exists for
-  it. `vscode-css-language-server` (from `vscode-langservers-extracted`, the eslint
-  sibling) serves CSS + SCSS; **SomeSass** serves indented Sass (optional, skipped
-  if absent).
-- **json** — JSON/JSONC detection, the bundled `tree-sitter-json` grammar
-  (highlighting + folding), and `vscode-json-language-server` (the same
-  `vscode-langservers-extracted` package as the eslint/css servers). One grammar
-  backs both dialects — it parses `//`/block comments as `(comment)` nodes — and a
-  single ServerDef serves the `json` / `jsonc` languageIds.
-- **rust** — Rust detection (`.rs`), the bundled `tree-sitter-rust` grammar
-  (highlighting + folding, queries vendored under `queries/rust/`), and
-  **rust-analyzer** as the language server. Like deno/marksman/clangd, rust-analyzer
-  is a standalone binary installed out of band (rustup / distro) — no `install`
-  spec, skipped if absent; it roots at a Cargo workspace (`Cargo.toml`/`Cargo.lock`)
-  or a `rust-project.json`.
-- **cpp** — C/C++ detection and the bundled `tree-sitter-c` / `tree-sitter-cpp`
-  grammars (highlighting + folding), with **clangd** as the language server. Two
-  grammars (C++ is a superset, so it carries its own queries), `.h` headers map to
-  C by convention while `.hpp`/`.hh`/… map to C++, and a single `clangd` ServerDef
-  serves the `c` / `cpp` languageIds (single-file; prefers a `compile_commands.json`
-  root; skipped gracefully if clangd isn't on PATH, like marksman).
-- **python** — Python detection (`.py`/`.pyi`/`.pyw`) and the bundled
-  `tree-sitter-python` grammar (highlighting + folding), with **pyright** as the
-  type-checking language server (single-file), **pylsp** as a same-group
-  lower-priority alternative, and **ruff** as an additive (ungrouped)
-  linter/formatter server. **All three are installable**: pyright via a plain
-  `{ via: 'npm' }` spec; the pip-only ruff/pylsp via the `{ command }` escape hatch
-  — a self-contained `python3 -m venv` built in the server's managed dir, with the
-  venv's console script symlinked into the `node_modules/.bin` the manager searches
-  (the only discoverable managed path), so nothing touches the user's global env.
-  Needs `python3`; absent servers are skipped gracefully until installed.
-- **bash** — shell detection (`.sh`/`.bash`/`.ksh`/`.zsh`/… plus extension-less
-  config files like `.bashrc`/`.profile`/`PKGBUILD`) and the bundled
-  `tree-sitter-bash` grammar (highlighting + folding, queries under `queries/bash/`),
-  with **bash-language-server** as the LSP (single-file; prefers a `.git` root),
-  installable via a plain `{ via: 'npm' }` spec. The language sets `lspId:
-  'shellscript'` (the protocol's id for shell). The grammar's external scanner imports
-  `isalpha`, which the pinned web-tree-sitter runtime omits — shimmed once in
-  `src/syntax/grammar.ts` alongside the Markdown scanner's `strcmp`/`towlower`.
-- **color-preview** — the first **`observeTextEditors`** consumer (no language layer at
-  all). Background-tints color literals — hex (`#rgb`…`#rrggbbaa`), `rgb()/rgba()`,
-  `hsl()/hsla()` — with the color they represent, contrast-picking black/white
-  text. Language-agnostic (scans buffer text, so colors light up in CSS, JS, HTML).
-  Pure parsing/contrast in `colors.ts` (unit-tested); the editor wiring re-syncs a
-  `color-preview` decoration layer on edits (debounced). A clickable swatch / color
-  picker is a later focusable-overlay feature; named colors await tree-sitter
-  scoping (a bare-word regex would tint identifiers). See
-  [code-editing/inline-widgets.md](code-editing/inline-widgets.md).
+- Plugin managing code is at `src/plugin`
+- Default bundled plugins are at `plugins`
 
 ## What's next
 
