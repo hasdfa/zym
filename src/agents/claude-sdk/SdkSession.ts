@@ -75,6 +75,37 @@ export interface QuestionRequest {
   questions: AgentQuestion[];
 }
 
+/** One entry in a subagent's captured transcript. */
+export type SubagentMessage =
+  | { kind: 'text'; text: string }
+  | { kind: 'tool'; toolId: string; name: string; input: unknown; result?: { isError: boolean; text: string } };
+
+/** A spawned subagent's conversation, kept out of the main thread and shown on a
+ *  dedicated page. Keyed by the spawning `Agent` tool's tool_use_id. */
+export interface SubagentInfo {
+  id: string;
+  agentType: string;
+  description: string;
+  /** The instruction the main agent gave the subagent (shown atop its page). */
+  prompt: string;
+  status: 'running' | 'completed';
+  messages: SubagentMessage[];
+}
+
+/** Live progress for a subagent (Task) or background task, keyed by `id` (the
+ *  originating tool_use_id). */
+export interface TaskProgress {
+  id: string;
+  description: string;
+  subagentType?: string;
+  lastTool?: string;
+  tokens: number;
+  toolUses: number;
+  durationMs: number;
+  status: string;
+  done: boolean;
+}
+
 export interface SdkSessionOptions {
   /** Base argv (default `['claude']`); the stream-json/permission flags are added. */
   command?: string[];
@@ -102,6 +133,9 @@ export class SdkSession {
   // The request_id of an in-flight interrupt; its `control_response` success flips
   // the status to idle immediately, ahead of the trailing `result` event.
   private interruptReqId: string | null = null;
+  // Subagent transcripts, keyed by the spawning `Agent` tool's tool_use_id. Their
+  // events (parent_tool_use_id set) are captured here, not shown in the main thread.
+  private readonly subagents = new Map<string, SubagentInfo>();
   // The permission request/response file pair + its watcher. The server writes the
   // request atomically; we answer by writing the response atomically.
   private readonly permRequestFile: string;
@@ -249,6 +283,11 @@ export class SdkSession {
   onInit(cb: (m: { model: string; slashCommands: string[] }) => void): Disposable { return this.emitter.on('init', cb as (v?: unknown) => void); }
   onError(cb: (m: { message: string }) => void): Disposable { return this.emitter.on('error', cb as (v?: unknown) => void); }
   onInterrupted(cb: () => void): Disposable { return this.emitter.on('interrupted', cb as (v?: unknown) => void); }
+  onThinkingTokens(cb: (m: { tokens: number }) => void): Disposable { return this.emitter.on('thinking-tokens', cb as (v?: unknown) => void); }
+  onTaskProgress(cb: (m: TaskProgress) => void): Disposable { return this.emitter.on('task-progress', cb as (v?: unknown) => void); }
+  onSubagentStart(cb: (m: { id: string; agentType: string; description: string }) => void): Disposable { return this.emitter.on('subagent-start', cb as (v?: unknown) => void); }
+  onSubagentUpdate(cb: (m: { id: string }) => void): Disposable { return this.emitter.on('subagent-update', cb as (v?: unknown) => void); }
+  onSubagentDone(cb: (m: { id: string }) => void): Disposable { return this.emitter.on('subagent-done', cb as (v?: unknown) => void); }
   onUnhandled(cb: (m: { event: unknown }) => void): Disposable { return this.emitter.on('unhandled', cb as (v?: unknown) => void); }
   onPermission(cb: (r: PermissionRequest) => void): Disposable { return this.emitter.on('permission', cb as (v?: unknown) => void); }
   onQuestion(cb: (r: QuestionRequest) => void): Disposable { return this.emitter.on('question', cb as (v?: unknown) => void); }
@@ -310,10 +349,21 @@ export class SdkSession {
       }
       return true;
     }
-    if (isThinkingTokens(event)) return true; // known; not surfaced in the UI yet
-    if (event.type === 'stream_event') { this.onStreamEvent(event); return true; }
+    if (isThinkingTokens(event)) {
+      this.emitter.emit('thinking-tokens', { tokens: (event as { estimated_tokens?: number }).estimated_tokens ?? 0 });
+      return true;
+    }
+    // Events from a spawned subagent carry parent_tool_use_id (the `Agent` tool's
+    // id); they're captured into that subagent's transcript, never the main thread.
+    const parent = parentToolUseId(event);
+    if (event.type === 'stream_event') {
+      if (parent) return true; // subagent text isn't streamed to the main thread; captured below
+      this.onStreamEvent(event);
+      return true;
+    }
     if (event.type === 'assistant') {
       const message = (event as { message?: { content?: ContentBlock[]; usage?: TokenUsage } }).message;
+      if (parent) { this.onSubagentAssistant(parent, message?.content ?? []); return true; }
       this.onAssistant(message?.content ?? []);
       this.onUsage(message?.usage); // live context occupancy (per-message, not the aggregate)
       return true;
@@ -324,10 +374,85 @@ export class SdkSession {
       this.setStatus('idle');
       return true;
     }
-    if (event.type === 'rate_limit_event' || event.type === 'system') return true; // known; ignored
-    if (event.type === 'user') { this.onUser(event); return true; } // tool results / echoed user turns
+    if (event.type === 'system') {
+      const sub = (event as { subtype?: string }).subtype;
+      // Subagent / background-task lifecycle — live progress for the Task/Bash row.
+      if (sub === 'task_started' || sub === 'task_progress' || sub === 'task_notification') {
+        this.onTaskEvent(event as unknown as Record<string, unknown>, sub);
+        return true;
+      }
+      return true; // other system subtypes: known; ignored
+    }
+    if (event.type === 'rate_limit_event') return true; // known; ignored
+    if (event.type === 'user') {
+      if (parent) { this.onSubagentUser(parent, event); return true; }
+      this.onUser(event); // tool results / echoed user turns
+      return true;
+    }
     return false;
   }
+
+  // Normalize a task_started/progress/notification event and emit it keyed by the
+  // originating tool_use_id, so the matching tool row can show live progress. A
+  // local_agent task also opens/closes a captured subagent transcript.
+  private onTaskEvent(e: Record<string, unknown>, subtype: string): void {
+    const usage = (e.usage ?? {}) as { total_tokens?: number; tool_uses?: number; duration_ms?: number };
+    const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+    const id = str(e.tool_use_id) ?? '';
+    if (subtype === 'task_started' && id && str(e.task_type) === 'local_agent') {
+      const info: SubagentInfo = { id, agentType: str(e.subagent_type) ?? 'agent', description: str(e.description) ?? '', prompt: str(e.prompt) ?? '', status: 'running', messages: [] };
+      this.subagents.set(id, info);
+      this.emitter.emit('subagent-start', { id, agentType: info.agentType, description: info.description });
+    } else if (subtype === 'task_notification' && id) {
+      const info = this.subagents.get(id);
+      if (info) { info.status = 'completed'; this.emitter.emit('subagent-done', { id }); }
+    }
+    this.emitter.emit('task-progress', {
+      id,
+      description: str(e.description) ?? str(e.summary) ?? '',
+      subagentType: str(e.subagent_type),
+      lastTool: str(e.last_tool_name),
+      tokens: usage.total_tokens ?? 0,
+      toolUses: usage.tool_uses ?? 0,
+      durationMs: usage.duration_ms ?? 0,
+      status: str(e.status) ?? (subtype === 'task_started' ? 'started' : 'running'),
+      done: subtype === 'task_notification',
+    });
+  }
+
+  // Capture a subagent's assistant message (text + tool_use) into its transcript.
+  private onSubagentAssistant(parentId: string, blocks: ContentBlock[]): void {
+    const info = this.subagents.get(parentId);
+    if (!info) return;
+    for (const block of blocks) {
+      if (block.type === 'text') {
+        const text = (block as { text?: string }).text ?? '';
+        if (text) info.messages.push({ kind: 'text', text });
+      } else if (block.type === 'tool_use') {
+        const b = block as { id?: string; name?: string; input?: unknown };
+        info.messages.push({ kind: 'tool', toolId: b.id ?? '', name: b.name ?? 'tool', input: b.input });
+      }
+    }
+    this.emitter.emit('subagent-update', { id: parentId });
+  }
+
+  // Attach a subagent's tool_result to the matching tool message in its transcript.
+  private onSubagentUser(parentId: string, event: StreamEvent): void {
+    const info = this.subagents.get(parentId);
+    if (!info) return;
+    const content = (event as { message?: { content?: unknown } }).message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      const b = block as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
+      if (b.type !== 'tool_result' || !b.tool_use_id) continue;
+      const msg = info.messages.find((m): m is Extract<SubagentMessage, { kind: 'tool' }> => m.kind === 'tool' && m.toolId === b.tool_use_id);
+      if (msg) msg.result = { isError: !!b.is_error, text: toolResultText(b.content) };
+    }
+    this.emitter.emit('subagent-update', { id: parentId });
+  }
+
+  /** A captured subagent transcript (for the subagent page), or undefined. */
+  getSubagent(id: string): SubagentInfo | undefined { return this.subagents.get(id); }
 
   // The per-message usage is the real context occupancy at that point (input +
   // both cache tiers); the aggregate result.usage sums every tool-loop request,
@@ -370,7 +495,12 @@ export class SdkSession {
     for (const block of content) {
       const b = block as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
       if (b.type !== 'tool_result' || !b.tool_use_id) continue;
-      this.emitter.emit('tool-result', { id: b.tool_use_id, isError: !!b.is_error, text: toolResultText(b.content) });
+      const text = toolResultText(b.content);
+      this.emitter.emit('tool-result', { id: b.tool_use_id, isError: !!b.is_error, text });
+      // An `Agent` tool result is the subagent's final answer — also append it to
+      // that subagent's transcript so its page shows the complete conversation.
+      const sub = this.subagents.get(b.tool_use_id);
+      if (sub && text) { sub.messages.push({ kind: 'text', text }); this.emitter.emit('subagent-update', { id: b.tool_use_id }); }
     }
   }
 
@@ -487,6 +617,13 @@ export function parseQuestions(input: unknown): AgentQuestion[] {
     });
   }
   return out;
+}
+
+/** The `parent_tool_use_id` of an event (the spawning `Agent` tool), or null for
+ *  main-agent events. */
+function parentToolUseId(event: StreamEvent): string | null {
+  const p = (event as { parent_tool_use_id?: string | null }).parent_tool_use_id;
+  return typeof p === 'string' && p ? p : null;
 }
 
 /** Flatten a tool_result's `content` (a string, or an array of text blocks) to text. */

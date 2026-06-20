@@ -15,7 +15,7 @@
  * first-class workbench owner registered in `quilx.agents` — the chrome reads
  * `status` / `changedFiles` / etc., never the concrete class.
  */
-import { Gtk, Adw } from '../gi.ts';
+import { Gtk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { fonts, ICON_FONT_FAMILY } from '../fonts.ts';
@@ -24,11 +24,12 @@ import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { TextEditor } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
 import { MarkdownView } from './markdown/MarkdownView.ts';
-import { toolMarkup, toolFilePath } from './toolDisplay.ts';
+import { toolMarkup, toolDetailMarkup, toolFilePath, describeTool } from './toolDisplay.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
-import { SdkSession, type PermissionRequest, type QuestionRequest } from '../agents/claude-sdk/SdkSession.ts';
+import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
+import { SdkSession, type PermissionRequest, type QuestionRequest, type TaskProgress } from '../agents/claude-sdk/SdkSession.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentStatus } from '../agents/types.ts';
 import type { TabState } from '../SessionManager.ts';
@@ -55,7 +56,21 @@ addStyles(`
   .quilx-conversation-thinking { opacity: 0.55; font-style: italic; padding-left: 12px; }
   .quilx-conversation-tool { opacity: 0.8; }
   .quilx-conversation-toolrow { opacity: 0.85; }
+  /* File tools open their file via a flat button styled as an inline link. */
+  .quilx-conversation-toolbutton {
+    padding: 1px 4px; min-height: 0;
+  }
   .quilx-conversation-thinking-row { padding: 6px 12px; }
+  /* A message queued while the agent is busy — a right-aligned bubble above the spinner. */
+  .quilx-conversation-pending {
+    background: var(--t-ui-surface-selected);
+    border-radius: 10px;
+    padding: 6px 10px;
+    margin: 0 12px;
+  }
+  /* Subagent transcript: the "view conversation" link + the pushed page's header. */
+  .quilx-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
+  .quilx-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
   .quilx-conversation-result {
     opacity: 0.7;
     background: var(--t-ui-surface-popover);
@@ -105,6 +120,8 @@ addStyles(`
     padding: 6px 12px;
     border-top: 1px solid var(--t-ui-border); /* divider between the input and the status strip */
   }
+  /* The footer metadata (model · context · cost) reads as muted secondary text. */
+  .quilx-conversation-footer-label { color: var(--t-ui-text-muted); }
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
   .quilx-conversation-mode { min-height: 0; }
   .quilx-cmode-default { color: var(--t-ui-text-muted); }
@@ -183,12 +200,17 @@ export interface AgentConversationOptions {
 }
 
 export class AgentConversation implements Agent {
-  readonly root: InstanceType<typeof Gtk.Box>;
+  readonly root: InstanceType<typeof Adw.NavigationView>; // root page = the conversation; subagent transcripts push pages
   private readonly session: SdkSession;
   private readonly cwd: string;
   private readonly messages: InstanceType<typeof Gtk.Box>;
   private readonly scroller: InstanceType<typeof Gtk.ScrolledWindow>;
-  private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // spinner above the prompt, fading while working
+  private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // spinner + pending message above the prompt
+  private readonly thinkingLabel: InstanceType<typeof Gtk.Label>; // "Thinking…" + live token count
+  private readonly thinkingRow: InstanceType<typeof Gtk.Box>; // the spinner row (shown while working)
+  private readonly pendingBox: InstanceType<typeof Gtk.Box>; // a queued message shown above the spinner
+  private readonly pendingLabel: InstanceType<typeof Gtk.Label>;
+  private pendingText = ''; // a message submitted while busy, sent once the agent is idle
   private readonly input: TextEditor;
   private readonly promptContainer: InstanceType<typeof Gtk.Box>;
   private readonly footer: InstanceType<typeof Gtk.Box>;
@@ -203,7 +225,7 @@ export class AgentConversation implements Agent {
   // row's status icon + append a preview.
   // Each tool row supplies a handler that fills in its result (per-tool layout:
   // Bash output toggle, Task markdown card, or a plain preview).
-  private readonly toolRows = new Map<string, { onResult: (isError: boolean, text: string) => void }>();
+  private readonly toolRows = new Map<string, { onResult: (isError: boolean, text: string) => void; onProgress?: (p: TaskProgress) => void }>();
   // The structured task list (TaskCreate/TaskUpdate): a dedicated sticky panel,
   // not message rows. `tasks` is keyed by task id (from the TaskCreate result);
   // `pendingTaskCreates` maps a TaskCreate tool_use_id → subject until its result
@@ -212,6 +234,11 @@ export class AgentConversation implements Agent {
   private readonly pendingTaskCreates = new Map<string, string>();
   private readonly tasksPanel: InstanceType<typeof Gtk.Box>;
   private readonly tasksList: InstanceType<typeof Gtk.Box>;
+  // Running subagents (Agent tool), keyed by tool_use_id — a sticky panel like the
+  // tasks one, shown while any subagent is running. Clicking an entry opens its page.
+  private readonly subagents = new Map<string, { agentType: string; description: string; status: 'running' | 'completed' }>();
+  private readonly subagentsPanel: InstanceType<typeof Gtk.Box>;
+  private readonly subagentsList: InstanceType<typeof Gtk.Box>;
   private _costUsd: number | null = null;
   private _contextTokens: number | null = null;
   private _contextWindow = 1_000_000; // refined from result.modelUsage[model].contextWindow
@@ -251,19 +278,33 @@ export class AgentConversation implements Agent {
     this.scroller = new Gtk.ScrolledWindow({ vexpand: true });
     this.scroller.setChild(this.messages);
 
-    // A "thinking" spinner shown just above the prompt while the agent is working,
-    // fading in/out via a Revealer crossfade.
-    const thinkingRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    thinkingRow.addCssClass('quilx-conversation-thinking-row');
+    // Above the prompt, in a slide Revealer: an optional right-aligned "pending"
+    // message (a turn the user queued while the agent was busy) over a "Thinking…"
+    // spinner row. The reveal is shown while working or while a message is pending.
+    this.thinkingRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
+    this.thinkingRow.addCssClass('quilx-conversation-thinking-row');
     const spinner = new Adw.Spinner();
     spinner.setSizeRequest(16, 16); // Adw.Spinner fills its allocation otherwise
-    thinkingRow.append(spinner);
-    const thinkingLabel = new Gtk.Label({ label: 'Thinking…' });
-    thinkingLabel.addCssClass('quilx-conversation-system');
-    thinkingRow.append(thinkingLabel);
+    this.thinkingRow.append(spinner);
+    this.thinkingLabel = new Gtk.Label({ label: 'Thinking…' });
+    this.thinkingLabel.addCssClass('quilx-conversation-system');
+    this.thinkingRow.append(this.thinkingLabel);
+
+    this.pendingBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, halign: Gtk.Align.END });
+    this.pendingBox.addCssClass('quilx-conversation-pending');
+    this.pendingBox.setVisible(false);
+    this.pendingLabel = new Gtk.Label({ xalign: 1, wrap: true });
+    const pendingHint = new Gtk.Label({ xalign: 1, label: 'Pending' });
+    pendingHint.addCssClass('quilx-conversation-system');
+    this.pendingBox.append(this.pendingLabel);
+    this.pendingBox.append(pendingHint);
+
+    const thinkingContent = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
+    thinkingContent.append(this.pendingBox);
+    thinkingContent.append(this.thinkingRow);
     this.thinkingReveal = new Gtk.Revealer();
-    this.thinkingReveal.setTransitionType(Gtk.RevealerTransitionType.CROSSFADE);
-    this.thinkingReveal.setChild(thinkingRow);
+    this.thinkingReveal.setTransitionType(Gtk.RevealerTransitionType.SLIDE_UP);
+    this.thinkingReveal.setChild(thinkingContent);
     this.thinkingReveal.setRevealChild(false);
 
     // A buffer-only editor (full vim editing) as the prompt input, wrapped in a
@@ -289,7 +330,8 @@ export class AgentConversation implements Agent {
       if (mode) this.session.setPermissionMode(mode);
     });
     this.footerLabel = new Gtk.Label({ xalign: 0, hexpand: true });
-    this.footer = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
+    this.footerLabel.addCssClass('quilx-conversation-footer-label');
+    this.footer = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 14 });
     this.footer.addCssClass('quilx-conversation-footer');
     this.footer.append(this.statusIcon.widget);
     this.footer.append(this.modeDropdown);
@@ -306,6 +348,16 @@ export class AgentConversation implements Agent {
     this.tasksPanel.append(tasksHeader);
     this.tasksPanel.append(this.tasksList);
 
+    // A sticky panel listing running subagents (Agent tool); hidden when none run.
+    this.subagentsPanel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    this.subagentsPanel.addCssClass('quilx-conversation-tasks');
+    this.subagentsPanel.setVisible(false);
+    const subagentsHeader = new Gtk.Label({ xalign: 0, label: 'Subagents' });
+    subagentsHeader.addCssClass('quilx-conversation-tasks-header');
+    this.subagentsList = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
+    this.subagentsPanel.append(subagentsHeader);
+    this.subagentsPanel.append(this.subagentsList);
+
     // The input and its status strip live together in a bordered, rounded card.
     // `overflow: hidden` (the GTK CSS property) doesn't exist — the equivalent is
     // setOverflow(HIDDEN), which clips children to the rounded border so the
@@ -316,13 +368,18 @@ export class AgentConversation implements Agent {
     inputCard.append(this.promptContainer);
     inputCard.append(this.footer);
 
-    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
+    const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
+    mainBox.addCssClass('quilx-conversation');
+    mainBox.append(this.tasksPanel);
+    mainBox.append(this.subagentsPanel);
+    mainBox.append(this.scroller);
+    mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
+    mainBox.append(inputCard);
+
+    // A NavigationView so a subagent's transcript can push its own page.
+    this.root = new Adw.NavigationView();
     this.root.setName('AgentConversation');
-    this.root.addCssClass('quilx-conversation');
-    this.root.append(this.tasksPanel);
-    this.root.append(this.scroller);
-    this.root.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
-    this.root.append(inputCard);
+    this.root.add(Adw.NavigationPage.new(mainBox, 'Conversation'));
 
     this.installCommands(); // after this.root exists (commands register on it)
     quilx.agents.add(this); // join the registry → sidebar lists it
@@ -468,7 +525,10 @@ export class AgentConversation implements Agent {
     const text = this.input.getText().trim();
     if (!text) return;
     this.input.setText('');
-    this.session.prompt(text);
+    if (this._status === 'idle') { this.session.prompt(text); return; }
+    // The agent is busy — queue (accumulate) the message; it's sent on next idle.
+    this.pendingText = this.pendingText ? `${this.pendingText}\n\n${text}` : text;
+    this.refreshThinking();
   }
 
   // --- session → state + rows -------------------------------------------------
@@ -483,7 +543,21 @@ export class AgentConversation implements Agent {
       }),
       this.session.onUserMessage(({ text }) => {
         this.endTurn();
+        this.thinkingLabel.setText('Thinking…'); // reset the live token count for the new turn
         this.addMarkdownBlock('quilx-conversation-user', Gtk.Align.END).setMarkdown(text);
+      }),
+      // Live "Thinking… (N tokens)" while the model reasons before producing output.
+      this.session.onThinkingTokens(({ tokens }) => {
+        this.thinkingLabel.setText(tokens > 0 ? `Thinking… (${formatCount(tokens)} tokens)` : 'Thinking…');
+      }),
+      // Subagent / background-task live progress → the originating tool row.
+      this.session.onTaskProgress((p) => this.toolRows.get(p.id)?.onProgress?.(p)),
+      // The sticky subagents panel is shown by addAgentButton (on the spawn) and
+      // hidden here once the subagent completes.
+      this.session.onSubagentDone(({ id }) => {
+        const s = this.subagents.get(id);
+        if (s) s.status = 'completed';
+        this.renderSubagentsPanel();
       }),
       this.session.onAssistantStart(() => {
         this.assistantRaw = '';
@@ -510,6 +584,7 @@ export class AgentConversation implements Agent {
       this.session.onToolUse(({ id, name, input }) => {
         if (this.handleTaskTool(id, name, input)) return; // TaskCreate/TaskUpdate → tasks panel, no row
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
+        if (name === 'Agent') { this.endTurn(); this.addAgentButton(id, input); return; } // subagent → button + panel
         this.recordChangedFile(name, input);
         this.endTurn(); // close the current message; post-tool text opens a fresh bubble
         this.addToolRow(id, name, input);
@@ -543,11 +618,28 @@ export class AgentConversation implements Agent {
     const wasAttention = this.needsAttention;
     this._status = status;
     this._acknowledged = this._viewed;
-    // Fade the thinking spinner in/out as the agent starts/stops producing a turn.
-    this.thinkingReveal.setRevealChild(status === 'working');
+    this.refreshThinking();
     this.updateFooter();
     for (const handler of this.statusHandlers) handler();
     if (this.needsAttention !== wasAttention) this.emitAttention();
+    // A message queued while the agent was busy is sent once it goes idle.
+    if (status === 'idle' && this.pendingText) {
+      const text = this.pendingText;
+      this.pendingText = '';
+      this.refreshThinking();
+      this.session.prompt(text); // re-enters 'working' and renders the user turn
+    }
+  }
+
+  // Reveal the strip above the prompt when the agent is working (the spinner) or a
+  // message is queued (the pending bubble); both can show at once.
+  private refreshThinking(): void {
+    const working = this._status === 'working';
+    const pending = this.pendingText !== '';
+    this.thinkingRow.setVisible(working);
+    this.pendingLabel.setText(this.pendingText);
+    this.pendingBox.setVisible(pending);
+    this.thinkingReveal.setRevealChild(working || pending);
   }
 
   private recordChangedFile(toolName: string, input: unknown): void {
@@ -697,21 +789,34 @@ export class AgentConversation implements Agent {
 
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     const status = new Gtk.Label({ valign: Gtk.Align.START });
-    const tool = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, hexpand: true });
-    tool.addCssClass('quilx-conversation-toolrow');
-    setMarkupSafe(tool, toolMarkup(name, input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${name} ${summarizeInput(input)}`);
     header.append(status);
-    header.append(tool);
-    row.append(header);
 
-    // File tools (Read/Write/Edit/…) are clickable → open the file in the editor.
     const filePath = toolFilePath(name, input);
     if (filePath && this.onOpenFile) {
-      header.setCursorFromName('pointer');
-      const click = new Gtk.GestureClick();
-      click.on('released', () => this.onOpenFile!(filePath));
-      header.addController(click);
+      // File tools (Read/Write/Edit/…): the icon + name stay a plain label; only
+      // the file path is a flat button that opens the file in the editor.
+      const { icon, title, detail } = describeTool(name, input, this.cwd);
+      const head = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
+      head.addCssClass('quilx-conversation-toolrow');
+      setMarkupSafe(head, `${iconSpan(icon)}${title ? `  <b>${escapeMarkup(title)}</b>` : ''}`, title || name);
+      header.append(head);
+
+      const pathLabel = new Gtk.Label({ xalign: 0, wrap: true });
+      pathLabel.addCssClass('quilx-conversation-toolrow');
+      setMarkupSafe(pathLabel, toolDetailMarkup(detail, fonts.monospaceFamily), detail);
+      const button = new Gtk.Button();
+      button.addCssClass('flat');
+      button.addCssClass('quilx-conversation-toolbutton');
+      button.setChild(pathLabel);
+      button.on('clicked', () => this.onOpenFile!(filePath));
+      header.append(button);
+    } else {
+      const tool = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, hexpand: true });
+      tool.addCssClass('quilx-conversation-toolrow');
+      setMarkupSafe(tool, toolMarkup(name, input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${name} ${summarizeInput(input)}`);
+      header.append(tool);
     }
+    row.append(header);
 
     const resultBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     resultBox.setMarginStart(22); // align under the tool text, past the status icon
@@ -722,8 +827,130 @@ export class AgentConversation implements Agent {
     if (name === 'TodoWrite' && Array.isArray(todos)) resultBox.append(renderTodos(todos));
 
     this.messages.append(row);
-    if (id) this.toolRows.set(id, { onResult: (isError, text) => this.fillToolResult(status, resultBox, name, isError, text) });
+    if (id) {
+      // Background-task rows (run_in_background) get a live progress line.
+      let progress: InstanceType<typeof Gtk.Label> | null = null;
+      this.toolRows.set(id, {
+        onResult: (isError, text) => this.fillToolResult(status, resultBox, name, isError, text),
+        onProgress: (p) => {
+          if (!progress) {
+            progress = new Gtk.Label({ xalign: 0, wrap: true });
+            progress.addCssClass('quilx-conversation-system');
+            resultBox.append(progress);
+          }
+          progress.setText(progressLine(p));
+          this.scrollToBottom();
+        },
+      });
+    }
     this.scrollToBottom();
+  }
+
+  // The `Agent` tool: a single inline button (agent type + description) that opens
+  // the subagent's transcript page. Nothing else of the subagent conversation
+  // appears in the main thread (its activity is captured on its own page).
+  private addAgentButton(id: string, input: unknown): void {
+    const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+    const type = typeof i.subagent_type === 'string' ? i.subagent_type : 'agent';
+    const desc = typeof i.description === 'string' ? i.description : '';
+    const label = new Gtk.Label({ xalign: 0, wrap: true });
+    setMarkupSafe(label, `${iconSpan(NERDFONT.TOOL.SUBAGENT)}  <b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
+    const button = new Gtk.Button({ halign: Gtk.Align.START });
+    button.addCssClass('flat');
+    button.addCssClass('quilx-conversation-subagent-link');
+    button.setChild(label);
+    button.on('clicked', () => this.pushSubagentPage(id));
+    const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    row.addCssClass('quilx-conversation-row');
+    row.append(button);
+    this.messages.append(row);
+
+    // Show it in the running-subagents panel right away (driven by the spawn, not
+    // by the later task_started, so it's robust); hidden again on completion.
+    this.subagents.set(id, { agentType: type, description: desc, status: 'running' });
+    this.renderSubagentsPanel();
+    this.scrollToBottom();
+  }
+
+  // Re-render the running-subagents panel; hide it once none are running.
+  private renderSubagentsPanel(): void {
+    const running = [...this.subagents.values()].some((s) => s.status === 'running');
+    if (!running) { this.subagentsPanel.setVisible(false); return; }
+    clearBox(this.subagentsList);
+    for (const [id, s] of this.subagents) {
+      if (s.status !== 'running') continue;
+      const label = new Gtk.Label({ xalign: 0, wrap: true });
+      setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.SYNC, theme.ui.status.warning)}  <b>${escapeMarkup(s.agentType)}</b>${s.description ? `  ${escapeMarkup(s.description)}` : ''}`, `${s.agentType} ${s.description}`);
+      const button = new Gtk.Button({ halign: Gtk.Align.START });
+      button.addCssClass('flat');
+      button.addCssClass('quilx-conversation-subagent-link');
+      button.setChild(label);
+      button.on('clicked', () => this.pushSubagentPage(id));
+      this.subagentsList.append(button);
+    }
+    this.subagentsPanel.setVisible(true);
+  }
+
+  // Push a NavigationView page rendering a subagent's captured transcript (assistant
+  // text + its tool uses/results). Live-updates while the subagent is still running.
+  private pushSubagentPage(id: string): void {
+    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
+    box.addCssClass('quilx-conversation-transcript');
+    const scroller = new Gtk.ScrolledWindow({ vexpand: true });
+    scroller.setChild(box);
+
+    const render = () => {
+      clearBox(box);
+      const info = this.session.getSubagent(id);
+      if (!info) return;
+      // The instruction the main agent gave the subagent, at the top (a user turn).
+      if (info.prompt) {
+        const promptView = new MarkdownView();
+        promptView.root.addCssClass('quilx-conversation-user');
+        box.append(promptView.root);
+        promptView.setMarkdown(info.prompt);
+      }
+      for (const m of info.messages) {
+        if (m.kind === 'text') {
+          const view = new MarkdownView();
+          view.root.addCssClass('quilx-conversation-assistant');
+          box.append(view.root);
+          view.setMarkdown(m.text);
+        } else {
+          const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
+          label.addCssClass('quilx-conversation-toolrow');
+          setMarkupSafe(label, toolMarkup(m.name, m.input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${m.name} ${summarizeInput(m.input)}`);
+          box.append(label);
+          if (m.result && m.result.text.trim()) {
+            const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(m.result.text.trim(), 12, 1200) });
+            out.addCssClass('quilx-conversation-result');
+            out.setMarginStart(22);
+            box.append(out);
+          }
+        }
+      }
+    };
+    render();
+    // Refresh while the subagent is still streaming into its transcript.
+    const sub = this.session.onSubagentUpdate(({ id: uid }) => { if (uid === id) render(); });
+
+    const info = this.session.getSubagent(id);
+    const title = info ? `${info.agentType}${info.status === 'running' ? ' (running)' : ''}` : 'Subagent';
+    const back = new Gtk.Button({ label: '‹ Back', halign: Gtk.Align.START });
+    back.addCssClass('flat');
+    back.on('clicked', () => this.root.pop());
+    const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
+    header.addCssClass('quilx-conversation-subagent-header');
+    header.append(back);
+    header.append(new Gtk.Label({ label: title }));
+    const page = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    page.addCssClass('quilx-conversation');
+    page.append(header);
+    page.append(scroller);
+
+    const navPage = Adw.NavigationPage.new(page, title);
+    navPage.on('hidden', () => sub.dispose()); // stop refreshing once popped
+    this.root.push(navPage);
   }
 
   // Bash: no icon — the command (monospace) is itself the toggle that reveals the
@@ -731,18 +958,41 @@ export class AgentConversation implements Agent {
   private addBashRow(id: string, input: unknown): void {
     const command = (input as { command?: unknown })?.command;
     const cmd = typeof command === 'string' ? command : summarizeInput(input);
-    const mono = (text: string) => `<span face="${escapeMarkup(fonts.monospaceFamily)}">${escapeMarkup(text)}</span>`;
+    const firstLine = cmd.split('\n', 1)[0];
+    const multiline = cmd.includes('\n');
+
+    // bash syntax highlighting when the grammar is available, else plain mono.
+    const monoWrap = (inner: string) => `<span face="${escapeMarkup(fonts.monospaceFamily)}">${inner}</span>`;
+    const highlight = (text: string): string => {
+      let inner: string | null = null;
+      try { inner = highlightToMarkup(text, 'bash'); } catch { /* no grammar */ }
+      return monoWrap(inner ?? escapeMarkup(text));
+    };
 
     const expander = new Gtk.Expander();
     expander.addCssClass('quilx-conversation-row');
-    const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
+    const label = new Gtk.Label({ xalign: 0, selectable: true, hexpand: true });
     label.addCssClass('quilx-conversation-toolrow');
-    setMarkupSafe(label, mono(cmd), cmd);
     expander.setLabelWidget(label);
     const content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     expander.setChild(content);
+
+    // Collapsed: the command is cropped to its first line; the full (multiline)
+    // command shows only once expanded.
+    let errored = false;
+    const render = () => {
+      const full = expander.getExpanded() || !multiline;
+      const text = full ? cmd : firstLine;
+      label.setWrap(full);
+      label.setEllipsize(full ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END);
+      const prefix = errored ? `<span foreground="${theme.ui.status.error}">✗</span> ` : '';
+      setMarkupSafe(label, prefix + highlight(text), text);
+    };
+    render();
+    expander.on('notify::expanded', render);
     this.messages.append(expander);
 
+    let progress: InstanceType<typeof Gtk.Label> | null = null;
     if (id) this.toolRows.set(id, {
       onResult: (isError, text) => {
         const trimmed = text.trim();
@@ -752,9 +1002,20 @@ export class AgentConversation implements Agent {
           content.append(out);
         }
         if (isError) {
-          setMarkupSafe(label, `<span foreground="${theme.ui.status.error}">✗</span> ${mono(cmd)}`, cmd);
-          expander.setExpanded(true);
+          errored = true;
+          expander.setExpanded(true); // also triggers render() via notify::expanded
+          render();
         }
+      },
+      // Background-bash progress (run_in_background); shown in the expander body.
+      onProgress: (p) => {
+        if (!progress) {
+          progress = new Gtk.Label({ xalign: 0, wrap: true });
+          progress.addCssClass('quilx-conversation-system');
+          content.append(progress);
+        }
+        progress.setText(progressLine(p));
+        this.scrollToBottom();
       },
     });
     this.scrollToBottom();
@@ -775,7 +1036,7 @@ export class AgentConversation implements Agent {
     if (name === 'Read' && !isError) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (name === 'Task') {
+    if (name === 'Task' || name === 'Agent') {
       const view = new MarkdownView();
       view.root.addCssClass('quilx-conversation-task-result');
       resultBox.append(view.root);
@@ -986,4 +1247,20 @@ function truncateLines(text: string, maxLines: number, maxChars: number): string
   const truncated = lines.length > maxLines || out.length > maxChars;
   if (out.length > maxChars) out = out.slice(0, maxChars);
   return truncated ? out.replace(/\s+$/, '') + ' …' : out;
+}
+
+// Compact count: 1234 → "1.2k".
+function formatCount(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+// One muted progress line for a subagent / background task.
+function progressLine(p: TaskProgress): string {
+  const meta: string[] = [];
+  if (p.lastTool) meta.push(p.lastTool);
+  if (p.tokens) meta.push(`${formatCount(p.tokens)} tokens`);
+  if (p.durationMs) meta.push(`${(p.durationMs / 1000).toFixed(1)}s`);
+  const desc = p.description.length > 70 ? `${p.description.slice(0, 70)}…` : p.description;
+  const head = `${p.done ? '✓' : '⋯'} ${desc}`.trim();
+  return meta.length ? `${head}  ·  ${meta.join('  ·  ')}` : head;
 }

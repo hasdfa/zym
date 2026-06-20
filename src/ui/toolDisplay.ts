@@ -84,6 +84,9 @@ const TOOLS: Record<string, ToolDescriptor> = {
   WebFetch: { icon: G.web, title: 'WebFetch', detail: (i, { s }) => s(i.url) },
   WebSearch: { icon: G.grep, title: 'WebSearch', detail: (i, { s }) => s(i.query) },
   Task: { icon: G.task, title: (i, { s }) => i.subagent_type ? `Task · ${s(i.subagent_type)}` : 'Task', detail: (i, { s }) => s(i.description) || truncate(s(i.prompt), 120) },
+  // `Agent` is the subagent-spawn tool (the live name for `Task`); its transcript
+  // is shown on a dedicated page (see AgentConversation).
+  Agent: { icon: G.task, title: (i, { s }) => i.subagent_type ? `Agent · ${s(i.subagent_type)}` : 'Agent', detail: (i, { s }) => s(i.description) || truncate(s(i.prompt), 120) },
   TodoWrite: { icon: G.todo, title: 'TodoWrite', detail: (i) => Array.isArray(i.todos) ? `${i.todos.length} item${i.todos.length === 1 ? '' : 's'}` : '' },
 
   // Skill / agent meta-tools.

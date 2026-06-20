@@ -181,6 +181,64 @@ test('parseQuestions returns [] for non-AskUserQuestion shapes', () => {
   assert.deepEqual(parseQuestions(null), []);
 });
 
+test('thinking_tokens and task_* system events are surfaced (not dropped as unhandled)', () => {
+  const { session, fake } = makeSession();
+  const log: unknown[][] = [];
+  session.onThinkingTokens(({ tokens }) => log.push(['think', tokens]));
+  session.onTaskProgress((p) => log.push(['task', p.id, p.lastTool, p.tokens, p.done]));
+  session.onUnhandled(() => log.push(['unhandled']));
+  session.start();
+
+  fake.emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 150 } as unknown as StreamEvent);
+  fake.emit({ type: 'system', subtype: 'task_progress', tool_use_id: 't1', description: 'Fetching',
+    subagent_type: 'Explore', last_tool_name: 'WebFetch', usage: { total_tokens: 8652, tool_uses: 2, duration_ms: 4605 } } as unknown as StreamEvent);
+  fake.emit({ type: 'system', subtype: 'task_notification', tool_use_id: 't1', status: 'completed',
+    summary: 'done', usage: { total_tokens: 9287 } } as unknown as StreamEvent);
+
+  assert.deepEqual(log[0], ['think', 150]);
+  assert.deepEqual(log[1], ['task', 't1', 'WebFetch', 8652, false]);
+  assert.deepEqual(log[2], ['task', 't1', undefined, 9287, true]); // notification → done
+  assert.ok(!log.some((e) => e[0] === 'unhandled'), 'no unhandled');
+  session.dispose();
+});
+
+test('subagent events are captured into a transcript, kept out of the main thread', () => {
+  const { session, fake } = makeSession();
+  const main: string[] = [];
+  session.onToolUse(({ name }) => main.push(`tool:${name}`));
+  session.onAssistantText(({ delta }) => main.push(`text:${delta}`));
+  let started: string | undefined;
+  let done = false;
+  session.onSubagentStart(({ id }) => { started = id; });
+  session.onSubagentDone(() => { done = true; });
+  session.start();
+
+  const P = 'toolu_agent1';
+  // The Agent spawn (parent null) IS a main-thread tool row.
+  fake.emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: P, name: 'Agent', input: { subagent_type: 'general-purpose' } }] } } as StreamEvent);
+  fake.emit({ type: 'system', subtype: 'task_started', tool_use_id: P, task_type: 'local_agent', subagent_type: 'general-purpose', description: 'demo' } as unknown as StreamEvent);
+
+  // Subagent activity (parent set) → captured, NOT surfaced in the main thread.
+  fake.emit({ type: 'assistant', parent_tool_use_id: P, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_inner', name: 'Bash', input: { command: 'pwd' } }] } } as unknown as StreamEvent);
+  fake.emit({ type: 'user', parent_tool_use_id: P, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_inner', content: '/repo', is_error: false }] } } as unknown as StreamEvent);
+  fake.emit({ type: 'system', subtype: 'task_notification', tool_use_id: P, status: 'completed' } as unknown as StreamEvent);
+  // The Agent result (parent null) is the subagent's final answer.
+  fake.emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: P, content: 'final answer' }] } } as unknown as StreamEvent);
+
+  assert.equal(started, P);
+  assert.equal(done, true);
+  assert.deepEqual(main, ['tool:Agent'], 'only the Agent spawn reached the main thread');
+
+  const info = session.getSubagent(P)!;
+  assert.equal(info.status, 'completed');
+  assert.equal(info.agentType, 'general-purpose');
+  assert.deepEqual(info.messages, [
+    { kind: 'tool', toolId: 'toolu_inner', name: 'Bash', input: { command: 'pwd' }, result: { isError: false, text: '/repo' } },
+    { kind: 'text', text: 'final answer' },
+  ]);
+  session.dispose();
+});
+
 test('process exit flips to exited and fires onExit', () => {
   const { session, fake } = makeSession();
   let exitCode: number | null | undefined;
