@@ -92,11 +92,16 @@ export class DiffLineNumberGutter {
   }
 }
 
-/** Markup for one number cell — its label tinted (background_alpha) when the row is added/removed. */
+/** Markup for one number column: `[space][number][space]` — a single space hugging each side of
+ *  the (right-aligned) number, the whole run carrying the cell background so an added/removed tint
+ *  reads as a solid band, the spaces included. `label` is already padded to the column width (a
+ *  blank side — added has no old #, removed no new — is all spaces of that width), so the two
+ *  columns stay aligned and there's no other spacing in the gutter. */
 function cellMarkup(label: string, bg: string | null): string {
-  if (!bg) return `<span foreground="${COLOR}">${label || ' '}</span>`;
+  const content = ` ${label} `;
+  if (!bg) return `<span foreground="${COLOR}">${content}</span>`;
   const { rgb, alphaPct } = pangoBackground(bg);
-  return `<span background="${rgb}" background_alpha="${alphaPct}%" foreground="${COLOR}">${label || ' '}</span>`;
+  return `<span background="${rgb}" background_alpha="${alphaPct}%" foreground="${COLOR}">${content}</span>`;
 }
 
 class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
@@ -105,11 +110,18 @@ class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
   newLabels!: string[];
   oldBg: (string | null)[] | null = null;
   newBg: (string | null)[] | null = null;
+  // View rows that carry a header-widget band ABOVE them (an excerpt's first row). Their gutter
+  // cell is taller by the band, so the number must bottom-align to land on the text instead of
+  // floating up beside the filename widget. Other rows top-align (a `⋯` gap band sits BELOW its
+  // row, so its number must stay at the top). `queryData` runs per line right before that line is
+  // drawn, so toggling `yalign` here applies per row.
+  headerRows: Set<number> = new Set();
 
   queryData(_lines: any, line: number) {
+    (this as any).yalign = this.headerRows.has(line) ? 1 : 0;
     const oldCell = cellMarkup(this.oldLabels?.[line] ?? '', this.oldBg?.[line] ?? null);
     const newCell = cellMarkup(this.newLabels?.[line] ?? '', this.newBg?.[line] ?? null);
-    this.setMarkup(`${oldCell} ${newCell}`, -1);
+    this.setMarkup(`${oldCell}${newCell}`, -1); // no separator — each column carries its own [space..space]
   }
 }
 registerClass(CombinedDiffLineNumberRenderer);
@@ -130,6 +142,7 @@ export class CombinedDiffLineNumberGutter {
     newLabels: string[],
     oldBg: (string | null)[],
     newBg: (string | null)[],
+    headerRows: Set<number> = new Set(),
   ) {
     this.view = view;
     this.renderer = new CombinedDiffLineNumberRenderer();
@@ -137,17 +150,25 @@ export class CombinedDiffLineNumberGutter {
     this.renderer.newLabels = newLabels;
     this.renderer.oldBg = oldBg;
     this.renderer.newBg = newBg;
-    this.renderer.setXpad(4);
+    this.renderer.headerRows = headerRows;
+    this.renderer.setXpad(0); // the `[space][number][space]` format carries the gutter's only spacing
     (this.view.getGutter(Gtk.TextWindowType.LEFT) as any).insert(this.renderer, 1);
     this.primeWidth(oldLabels, newLabels);
   }
 
-  /** Swap the per-row labels + backgrounds (after a re-diff re-flows the rows) and repaint. */
-  setData(oldLabels: string[], newLabels: string[], oldBg: (string | null)[], newBg: (string | null)[]): void {
+  /** Swap the per-row labels + backgrounds + header rows (after a re-diff re-flows the rows) and repaint. */
+  setData(
+    oldLabels: string[],
+    newLabels: string[],
+    oldBg: (string | null)[],
+    newBg: (string | null)[],
+    headerRows: Set<number> = new Set(),
+  ): void {
     this.renderer.oldLabels = oldLabels;
     this.renderer.newLabels = newLabels;
     this.renderer.oldBg = oldBg;
     this.renderer.newBg = newBg;
+    this.renderer.headerRows = headerRows;
     this.primeWidth(oldLabels, newLabels);
     (this.renderer as any).queueDraw?.();
   }
@@ -155,7 +176,8 @@ export class CombinedDiffLineNumberGutter {
   /** Reserve width for the widest old + new columns (a number measured on a short line crops). */
   private primeWidth(oldLabels: string[], newLabels: string[]): void {
     const w = (labels: string[]) => labels.reduce((max, l) => Math.max(max, l.length), 1);
-    this.renderer.setText(`${'0'.repeat(w(oldLabels))} ${'0'.repeat(w(newLabels))}`, -1);
+    // Mirror the rendered run ` old  new ` (each column ` <num> `, adjacent → two spaces at the seam).
+    this.renderer.setText(` ${'0'.repeat(w(oldLabels))}  ${'0'.repeat(w(newLabels))} `, -1);
     this.renderer.queueResize();
   }
 

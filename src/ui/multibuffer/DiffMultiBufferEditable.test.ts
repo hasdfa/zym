@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gtk } from '../../gi.ts';
+import { Gtk, Gdk, GLib } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
 import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
 import { DiffMultiBufferView } from './DiffMultiBufferView.ts';
@@ -20,6 +20,16 @@ import { Point } from '../../text/Point.ts';
 
 Gtk.init();
 quilx.lsp.configure({ enable: false });
+
+// Drive the GLib main loop (the ONLY loop the app runs) with BLOCKING iterations until `done()`
+// or a frame budget elapses — so the frame clock actually dispatches its ticks (a non-blocking
+// `iteration(false)` only catches a tick by luck, since ticks fire on wall-clock time). A
+// `queueMicrotask`/`Promise`-scheduled re-diff is invisible to this loop entirely (Node drains
+// microtasks only on a libuv turn), so it never satisfies `done()` — which is the bug under test.
+const pumpUntil = (done: () => boolean, maxFrames = 90) => {
+  const ctx = GLib.MainContext.default();
+  for (let i = 0; i < maxFrames && !done(); i++) ctx.iteration(true);
+};
 
 let tmpSeq = 0;
 function tmpFile(content: string): string {
@@ -209,6 +219,109 @@ test('editable diff: undo of an `o` just before a trailing fold reverts the view
   // deferred re-diff would run, which left the view stale.
   assert.deepEqual(linesOf(mbv), before, 'undo reverted the view synchronously');
   assert.equal(registry.find(path)!.getText(), newText, 'and the document');
+  mbv.dispose();
+});
+
+test('editable diff: `O` on an excerpt-first line re-diffs under the GLib loop (caret follows, not stranded on the fold-marker row)', () => {
+  // A leading `⋯` gap elides the file head, so the first SHOWN row sits right under the leading
+  // fold marker. `O` inserts a blank above it; the re-diff reveals the elided leading context, so
+  // the inserted (added) row shifts DOWN past the now-shown rows and the caret must follow.
+  //
+  // This is driven through a REALIZED view + GLib frame pumping because the bug only manifests
+  // under the app's actual loop: the re-diff was scheduled on a `queueMicrotask`, which Node drains
+  // only on a libuv turn — never during GLib iteration — so in the app it never ran. The frame
+  // clock (a tick callback) is the only scheduler that fires here, so this test fails the moment
+  // the re-diff goes back to a microtask/timeout.
+  const oldText = '\naaaa\naaaa\naaaa\n\nxxxx\nxxxx\nxxxx\n\nbbbb\nbbbb\nbbbb\n';
+  const newText = '\naaaa\naaaa\naaaa\n\nyyyy\nyyyy\nyyyy\n\nbbbb\nbbbb\nbbbb\n';
+  const path = tmpFile(newText);
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
+
+  const win = new Gtk.Window({ defaultWidth: 600, defaultHeight: 400 });
+  win.setChild(mbv.root);
+  quilx.window = win as never;
+  win.present();
+  mbv.editor.sourceView.grabFocus();
+  pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
+  assert.equal(linesOf(mbv)[0], 'aaaa', 'a leading gap elides the head — first shown row is the context `aaaa`');
+
+  mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
+  // `O` via the real key dispatch (vim insert-above-with-newline).
+  quilx.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
+  // Let the frame clock dispatch — the re-diff runs on a tick callback (it would NEVER run under a
+  // microtask here). The caret leaves row 0 only once the re-diff reflows the view.
+  pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 2);
+
+  const caret = mbv.editor.model.getCursorBufferPosition();
+  assert.equal(linesOf(mbv)[caret.row], '', 'caret sits on the just-inserted blank row');
+  assert.ok(caret.row >= 2, `caret followed the reflow off the pre-reflow top row (row ${caret.row})`);
+  win.destroy();
+  mbv.dispose();
+});
+
+test('editable diff: re-diff reconciles the header/gap bands in place (no teardown → no flicker)', () => {
+  // The re-flow moves the bands and changes their text (the leading `⋯` subtitle disappears, the
+  // trailing gap shifts), but removing + re-adding each band collapses its reserved space and
+  // re-expands it a frame later — the flicker. The bands must be REUSED in place: same handle
+  // objects, zero add/remove churn across the re-diff.
+  const oldText = '\naaaa\naaaa\naaaa\n\nxxxx\nxxxx\nxxxx\n\nbbbb\nbbbb\nbbbb\n';
+  const newText = '\naaaa\naaaa\naaaa\n\nyyyy\nyyyy\nyyyy\n\nbbbb\nbbbb\nbbbb\n';
+  const path = tmpFile(newText);
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
+
+  const win = new Gtk.Window({ defaultWidth: 600, defaultHeight: 400 });
+  win.setChild(mbv.root);
+  quilx.window = win as never;
+  win.present();
+  mbv.editor.sourceView.grabFocus();
+  pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
+
+  // Spy on band churn: any add/remove across the re-diff would mean a teardown (the flicker).
+  let adds = 0, removes = 0;
+  const ib = mbv.editor.inlineBlocks as any;
+  const origAdd = ib.add.bind(ib);
+  ib.add = (o: any) => { adds++; return origAdd(o); };
+  const header = (mbv as any).headerOverlays[0].handle;
+  const gap = (mbv as any).gapOverlays[0].handle;
+  for (const h of [header, gap]) { const r = h.remove.bind(h); h.remove = () => { removes++; return r(); }; }
+
+  mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
+  quilx.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
+  pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 2);
+
+  assert.equal(adds, 0, 'no bands added across the re-diff (reused in place)');
+  assert.equal(removes, 0, 'no bands removed across the re-diff (reused in place)');
+  assert.equal((mbv as any).headerOverlays[0].handle, header, 'the header band handle is the same (reused, not recreated)');
+  assert.equal((mbv as any).gapOverlays[0].handle, gap, 'the gap band handle is the same (reused, not recreated)');
+  win.destroy();
+  mbv.dispose();
+});
+
+test('editable diff: the gutter bottom-aligns an excerpt-first row, top-aligns the rest', () => {
+  // An excerpt's first row carries the filename-header band ABOVE it, so its gutter cell is taller;
+  // the line number must bottom-align to sit on the text instead of floating up beside the header
+  // widget. Every other row (incl. a row with a `⋯` gap band BELOW it) stays top-aligned.
+  const oldText = '\naaaa\naaaa\naaaa\n\nxxxx\nxxxx\nxxxx\n\nbbbb\nbbbb\nbbbb\n';
+  const newText = '\naaaa\naaaa\naaaa\n\nyyyy\nyyyy\nyyyy\n\nbbbb\nbbbb\nbbbb\n';
+  const path = tmpFile(newText);
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
+  const win = new Gtk.Window({ defaultWidth: 600, defaultHeight: 400 });
+  win.setChild(mbv.root);
+  quilx.window = win as never;
+  win.present();
+  mbv.editor.sourceView.grabFocus();
+  pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
+
+  const renderer = ((mbv as any).lineNumbers as any).renderer;
+  assert.deepEqual([...renderer.headerRows], [0], 'view row 0 is the excerpt-first row (header band above)');
+  renderer.queryData(null, 0);
+  assert.equal(renderer.yalign, 1, 'excerpt-first row bottom-aligns the number onto the text line');
+  renderer.queryData(null, 1);
+  assert.equal(renderer.yalign, 0, 'a normal row top-aligns');
+  win.destroy();
   mbv.dispose();
 });
 

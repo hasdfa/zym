@@ -47,11 +47,13 @@ const newKey = (path: string): string => `new:${path}`;
 const oldKey = (path: string): string => `old:${path}`;
 const REDIFF_DEBOUNCE_MS = 120;
 
-/** Right-align line numbers (blank for null) into an equal-width gutter column. */
+/** Right-align line numbers into an equal-width gutter column; a null (the side a row doesn't exist
+ *  on) is all spaces of that width, so the column stays aligned and the `[space][number][space]`
+ *  cell background spans a consistent width. */
 function lineLabels(nums: readonly (number | null)[]): string[] {
   let width = 1;
   for (const n of nums) if (n !== null) width = Math.max(width, String(n).length);
-  return nums.map((n) => (n === null ? '' : String(n).padStart(width)));
+  return nums.map((n) => (n === null ? ' '.repeat(width) : String(n).padStart(width)));
 }
 
 /** Per-row gutter cell tints: the old column reddens removed rows, the new column greens added
@@ -61,6 +63,12 @@ function gutterBg(dmb: DiffMultiBuffer, side: 'old' | 'new'): (string | null)[] 
   const want = side === 'old' ? 'removed' : 'added';
   const color = side === 'old' ? theme.ui.diff.removedWord : theme.ui.diff.addedWord;
   return dmb.rowKinds.map((kind) => (kind === want ? color : null));
+}
+
+/** The view rows that carry a header-widget band ABOVE them (each excerpt's first row) — the gutter
+ *  bottom-aligns these so the line number lands on the text, not up in the filename widget's band. */
+function headerRows(dmb: DiffMultiBuffer): Set<number> {
+  return new Set(dmb.headerAnchors.map((h) => h.viewRow));
 }
 
 interface SourceEntry {
@@ -78,9 +86,12 @@ export class DiffMultiBufferView {
   private readonly sources = new Map<string, SourceEntry>();
   private readonly projectionView: ProjectionView;
   private lineNumbers: CombinedDiffLineNumberGutter | null = null;
-  // Header + `⋯` gap widgets (BlockDecoration bands). Re-placed on each re-diff: their text
-  // (gap counts, leading-gap subtitle) and positions change as the diff re-flows.
-  private overlayHandles: BlockDecorationHandle[] = [];
+  // Header + `⋯` gap widgets (BlockDecoration bands). Reconciled (not torn down) on each re-diff:
+  // a re-flow moves them and changes their text (gap counts, leading-gap subtitle), but reusing the
+  // handles in place avoids the band collapse/re-expand that flickers + jumps the text. Each entry
+  // keeps the anchor's CONTENT key so we only rebuild the widget when its content actually changed.
+  private headerOverlays: Array<{ handle: BlockDecorationHandle; key: string }> = [];
+  private gapOverlays: Array<{ handle: BlockDecorationHandle; key: string }> = [];
   // Expand-context state: NEW-side rows the user forced visible, and a reveal-everything flag.
   // The current diff's anchors, kept for the keyboard `expandContextAtCursor`.
   private revealAll = false;
@@ -151,6 +162,7 @@ export class DiffMultiBufferView {
       lineLabels(dmb.newNums),
       gutterBg(dmb, 'old'),
       gutterBg(dmb, 'new'),
+      headerRows(dmb),
     );
 
     this.installOverlays(dmb);
@@ -240,28 +252,61 @@ export class DiffMultiBufferView {
   /** (Re)place the header widgets (above each file's first row) + the `⋯` gap bands (below the
    *  last shown row before each elision). Both are real widgets, not navigable buffer rows.
    *
-   *  Re-placing tears down + recreates the overlay widgets, which flickers — so SKIP it when the
-   *  anchors are byte-identical to last time. Typing within a line doesn't change the gap/header
-   *  structure (same labels, same rows), so the common edit re-diffs without touching overlays;
-   *  only a line add/remove (which shifts rows or gap counts) actually re-places. */
-  private lastOverlayKey = '';
+   *  RECONCILED by ordinal, not torn down: a re-flow moves the bands and changes their text, but
+   *  removing + re-adding every band collapses its reserved space and re-expands it a frame later,
+   *  which flickers and jumps the text. Instead we reuse each handle in place (`update`), rebuilding
+   *  its widget only when the anchor's CONTENT key changed, and add/remove just the count delta. A
+   *  no-structure-change re-diff (typing within a line) updates nothing. */
+  private static headerKey(h: DiffMultiBuffer['headerAnchors'][number]): string {
+    return `${h.path}\n${h.label}\n${h.subtitle ?? ''}`;
+  }
+  private static gapKey(g: DiffMultiBuffer['gapAnchors'][number]): string {
+    return `${g.label}\n${g.revealRows.join(',')}`;
+  }
   private installOverlays(dmb: DiffMultiBuffer): void {
     this.gapAnchors = dmb.gapAnchors; // kept for the keyboard expand (`expandContextAtCursor`)
     this.headerAnchors = dmb.headerAnchors;
-    const key = JSON.stringify([dmb.headerAnchors, dmb.gapAnchors]);
-    if (key === this.lastOverlayKey && this.overlayHandles.length) return;
-    this.lastOverlayKey = key;
-    for (const h of this.overlayHandles) h.remove();
-    this.overlayHandles = [];
-    for (const h of dmb.headerAnchors) {
-      const widget = buildHeaderWidget(h.label, h.path, () => this.onActivate?.({ path: h.path, row: 0 }), h.subtitle);
-      this.overlayHandles.push(this.editor.inlineBlocks.add({ line: h.viewRow, widget, placement: 'above' }));
-    }
-    for (const g of dmb.gapAnchors) {
+    this.reconcileOverlays(
+      this.headerOverlays,
+      dmb.headerAnchors,
+      DiffMultiBufferView.headerKey,
+      (h) => h.viewRow,
+      (h) => buildHeaderWidget(h.label, h.path, () => this.onActivate?.({ path: h.path, row: 0 }), h.subtitle),
+      'above',
+    );
+    this.reconcileOverlays(
+      this.gapOverlays,
+      dmb.gapAnchors,
+      DiffMultiBufferView.gapKey,
+      (g) => g.viewRow,
       // Clicking the gap reveals a chunk of its elided lines (extends the window above it).
-      const widget = buildGapWidget(g.label, () => this.revealChunk(g.revealRows, true));
-      this.overlayHandles.push(this.editor.inlineBlocks.add({ line: g.viewRow, widget, placement: 'below' }));
+      (g) => buildGapWidget(g.label, () => this.revealChunk(g.revealRows, true)),
+      'below',
+    );
+  }
+
+  /** Reconcile one band kind (headers or gaps) against its new anchors, reusing handles in place. */
+  private reconcileOverlays<A>(
+    entries: Array<{ handle: BlockDecorationHandle; key: string }>,
+    anchors: A[],
+    keyOf: (a: A) => string,
+    lineOf: (a: A) => number,
+    build: (a: A) => InstanceType<typeof Gtk.Widget>,
+    placement: 'above' | 'below',
+  ): void {
+    for (let i = 0; i < anchors.length; i++) {
+      const key = keyOf(anchors[i]);
+      const line = lineOf(anchors[i]);
+      if (i < entries.length) {
+        // Reuse: move it; swap the widget only if its content changed (else keep the live one).
+        const widget = entries[i].key === key ? undefined : build(anchors[i]);
+        entries[i].handle.update({ line, widget });
+        entries[i].key = key;
+      } else {
+        entries.push({ handle: this.editor.inlineBlocks.add({ line, widget: build(anchors[i]), placement }), key });
+      }
     }
+    while (entries.length > anchors.length) entries.pop()!.handle.remove();
   }
 
   private currentNewText(file: DiffFile): string {
@@ -305,17 +350,24 @@ export class DiffMultiBufferView {
     }, REDIFF_DEBOUNCE_MS);
   }
 
-  // Re-diff on a microtask (a line-count-changing edit): runs after the edit command settles but
-  // before the next paint, so the reflow + caret-follow happen with no visible flash. Supersedes
-  // a pending debounce.
-  private microReDiffScheduled = false;
+  // Re-diff on the next FRAME (a line-count-changing edit), via a GTK tick callback: it runs after
+  // the edit command settles (so vim has placed the caret) but in the frame's update phase BEFORE
+  // the paint, so the reflow + caret-follow happen with no visible flash. Supersedes a pending
+  // debounce.
+  //
+  // A `queueMicrotask`/`Promise` is WRONG here: Node drains microtasks only on a libuv turn, which
+  // under node-gtk's GLib main loop can come many paints later (or not until idle), so the re-diff
+  // never ran in the app — the inserted line stayed unreflowed with the caret stranded on the
+  // pre-reflow row (e.g. `O` on an excerpt's first line left the caret where the leading `⋯` fold
+  // marker sat). The frame clock is the only scheduler that fires under the GLib loop before paint.
+  private microReDiffTickId = 0;
   private scheduleMicroReDiff(): void {
-    if (this.microReDiffScheduled || this.disposed) return;
-    this.microReDiffScheduled = true;
+    if (this.microReDiffTickId || this.disposed) return;
     if (this.reDiffTimer) { clearTimeout(this.reDiffTimer); this.reDiffTimer = null; }
-    queueMicrotask(() => {
-      this.microReDiffScheduled = false;
+    this.microReDiffTickId = (this.editor.sourceView as any).addTickCallback(() => {
+      this.microReDiffTickId = 0;
       if (!this.disposed && !this.suppressReDiff) this.reDiff();
+      return false; // G_SOURCE_REMOVE — run once
     });
   }
 
@@ -336,7 +388,7 @@ export class DiffMultiBufferView {
       this.suppressReDiff = false;
     }
     this.applyDecorations(dmb);
-    this.lineNumbers?.setData(lineLabels(dmb.oldNums), lineLabels(dmb.newNums), gutterBg(dmb, 'old'), gutterBg(dmb, 'new'));
+    this.lineNumbers?.setData(lineLabels(dmb.oldNums), lineLabels(dmb.newNums), gutterBg(dmb, 'old'), gutterBg(dmb, 'new'), headerRows(dmb));
     this.installOverlays(dmb); // re-place header + gap widgets (counts/positions re-flowed)
     // retarget swapped rows but didn't repaint — re-highlight the spliced sections.
     this.editor.repaintSyntax();
@@ -432,10 +484,13 @@ export class DiffMultiBufferView {
     this.disposed = true;
     if (this.reDiffTimer) clearTimeout(this.reDiffTimer);
     this.reDiffTimer = null;
+    if (this.microReDiffTickId) (this.editor.sourceView as any).removeTickCallback(this.microReDiffTickId);
+    this.microReDiffTickId = 0;
     for (const unsub of this.modifiedUnsubs) unsub(); // detach from the (possibly shared) Documents
     this.modifiedUnsubs.length = 0;
-    for (const handle of this.overlayHandles) handle.remove();
-    this.overlayHandles = [];
+    for (const { handle } of [...this.headerOverlays, ...this.gapOverlays]) handle.remove();
+    this.headerOverlays = [];
+    this.gapOverlays = [];
     this.lineNumbers?.dispose();
     this.projectionView.dispose();
     for (const entry of this.sources.values()) {
