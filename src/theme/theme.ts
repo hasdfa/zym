@@ -9,9 +9,9 @@
  * consumed `Theme.ui` mirrors the file's `ui` shape 1:1 — concern-grouped nested
  * objects, so a theme JSON's `ui.editor.background` is read in code as exactly
  * `theme.ui.editor.background`. `syntax` maps a tree-sitter capture name → a color
- * + optional font style. `loadTheme` deep-merges the file's `ui` over `DEFAULT_THEME_UI`
+ * + optional font style. `loadTheme` deep-merges the file's `ui` over `DEFAULT_THEME.ui`
  * (the built-in fallback theme), derives the diff tints, and splits the syntax
- * tokens into the color + style maps.
+ * tokens into the color + style maps. Every `theme.ui.*` field is guaranteed filled.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -23,19 +23,20 @@ import { alpha as withAlpha, darken, formatHEXA, lighten, parse } from 'color-bi
  * UI / editor chrome colors, grouped by concern to mirror the theme JSON's `ui`
  * object 1:1 (read in code as `theme.ui.editor.background`, `theme.ui.status.error`,
  * `theme.ui.diff.addedWord`, …). Every field is filled at load from the theme file
- * over `DEFAULT_THEME_UI`, so consumers never see `undefined` — except `editor.background`.
+ * over `DEFAULT_THEME.ui`, so consumers never see `undefined` — read any of them directly.
  */
 export interface ThemeUi {
   editor: {
     /** Default editor text foreground. */
     foreground: string;
     /**
-     * Editor background. When set, the theme owns the full GtkSourceView style
-     * scheme (background + line numbers, which GtkSourceView reads only from the
-     * scheme); when omitted, the editor follows the system light/dark Adwaita
-     * scheme. See createSourceScheme / TextEditor.followSystemColorScheme.
+     * Editor background — always filled (the theme's value, else `surface.popover`).
+     * Whether the editor uses this via a theme-owned GtkSourceView scheme, or instead
+     * follows the system light/dark Adwaita scheme, is decided by
+     * `Theme.followSystemScheme` (set when the theme file omits this field) — not by
+     * this value. See createSourceScheme / TextEditor.followSystemColorScheme.
      */
-    background?: string;
+    background: string;
     /** Line-number gutter foreground. */
     lineNumber: string;
   };
@@ -136,6 +137,13 @@ export type SyntaxStyles = Record<string, SyntaxStyle>;
 export interface Theme {
   name: string;
   appearance: 'light' | 'dark';
+  /**
+   * True when the theme file omitted `ui.editor.background`: the editor follows the
+   * system light/dark Adwaita scheme instead of a theme-owned GtkSourceView scheme
+   * (see TextEditor.followSystemColorScheme / createSourceScheme). `ui.editor.background`
+   * is still filled (with `surface.popover`) so color consumers always have a value.
+   */
+  followSystemScheme: boolean;
   ui: ThemeUi;
   syntax: SyntaxColors;
   /** Per-capture font styling (bold/italic/scale/background/…). */
@@ -165,7 +173,7 @@ interface ThemeSyntaxToken {
 /**
  * The on-disk theme — a format we own (see theme.schema.json). Mirrors the consumed
  * `Theme` shape, but `ui` is a deep-partial of `ThemeUi` (every field optional): the
- * loader deep-merges it over `DEFAULT_THEME_UI`. `syntax` key order drives tag
+ * loader deep-merges it over `DEFAULT_THEME.ui`. `syntax` key order drives tag
  * priority (see SyntaxColors).
  */
 interface ThemeFromFile {
@@ -190,26 +198,35 @@ interface ThemeFromFileUi {
 }
 
 /*
- * The built-in fallback theme — a complete dark `ThemeUi`, structured exactly like
- * a theme file's `ui` so the rest of the app never needs an inline color literal
- * (the theme module is the single source of color). The loader deep-merges a theme
- * file's `ui` over this; a theme's own values always win. `editor.background` is the
- * one field with no default — its absence is the signal to follow the system
- * light/dark scheme (see ThemeUi.editor.background). The `diff.added`/`removed`
+ * The built-in default theme — a complete dark `Theme` of concrete RGB colors (no CSS
+ * variables, so any value is safe to interpolate into Pango markup as well as CSS). It
+ * is the single source of color defaults: `loadTheme` deep-merges a theme file's `ui`
+ * over `DEFAULT_THEME.ui` (a theme's own values always win), so every `theme.ui.*`
+ * field is guaranteed filled and the rest of the app never needs an inline color
+ * literal. Also exported as a ready-to-use last-resort theme. The `diff.added`/`removed`
  * (line + word) tints are DERIVED from `status` per appearance (see diffTones); here
- * they're the dark derivation of the default status colors.
+ * they're the dark derivation of the default status colors. `syntax`/`syntaxStyle` are
+ * empty — syntax coloring is sparse and per-theme; the loader fills `markup.*` defaults
+ * via applyMarkupDefaults.
  */
-const DEFAULT_THEME_UI: ThemeUi = {
-  editor: { foreground: '#ffffff', lineNumber: '#888888' },
-  text: { muted: '#9a9996', accent: '#c678dd' },
-  border: 'rgba(0, 0, 0, 0.3)',
-  shadow: 'rgba(0, 0, 0, 0.3)',
-  surface: { popover: '#1e1e1e', selected: 'rgba(127, 127, 127, 0.25)' },
-  status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
-  search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
-  diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
-  flash: '#f5c21188',
-  pr: { open: '#3fb950', merged: '#a371f7', closed: '#f85149' },
+export const DEFAULT_THEME: Theme = {
+  name: 'default',
+  appearance: 'dark',
+  followSystemScheme: false,
+  ui: {
+    editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
+    text: { muted: '#9a9996', accent: '#c678dd' },
+    border: 'rgba(0, 0, 0, 0.3)',
+    shadow: 'rgba(0, 0, 0, 0.3)',
+    surface: { popover: '#1e1e1e', selected: 'rgba(127, 127, 127, 0.25)' },
+    status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
+    search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
+    diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
+    flash: '#f5c21188',
+    pr: { open: '#3fb950', merged: '#a371f7', closed: '#f85149' },
+  },
+  syntax: {},
+  syntaxStyle: {},
 };
 
 /** Load the owned theme `<name>.json` from next to this module. */
@@ -244,9 +261,9 @@ function diffTones(
 
 /**
  * Normalize an on-disk `ThemeFromFile` into the internal `Theme` the app consumes:
- * deep-merge the file's `ui` over `DEFAULT_THEME_UI` (concern by concern), derive the
- * diff tints, and split each `syntax` token into the color + style maps. Exported
- * for tests.
+ * deep-merge the file's `ui` over `DEFAULT_THEME.ui` (concern by concern), fill +
+ * flag `editor.background` (see followSystemScheme), derive the diff tints, and split
+ * each `syntax` token into the color + style maps. Exported for tests.
  */
 export function adaptTheme(file: ThemeFromFile): Theme {
   if (file.appearance !== 'light' && file.appearance !== 'dark') {
@@ -254,34 +271,42 @@ export function adaptTheme(file: ThemeFromFile): Theme {
   }
 
   const f = file.ui ?? {};
+  const D = DEFAULT_THEME.ui;
 
   // status drives the diff tints, so resolve it first; the diff.* keys still win
   // where the theme sets them, and the word tints fall back to their line tint.
-  const status = { ...DEFAULT_THEME_UI.status, ...f.status };
+  const status = { ...D.status, ...f.status };
   const derived = diffTones(status.success, status.error, file.appearance);
   const diff: ThemeUi['diff'] = {
     added: f.diff?.added ?? derived.added,
     addedWord: f.diff?.addedWord ?? f.diff?.added ?? derived.addedWord,
     removed: f.diff?.removed ?? derived.removed,
     removedWord: f.diff?.removedWord ?? f.diff?.removed ?? derived.removedWord,
-    filler: f.diff?.filler ?? DEFAULT_THEME_UI.diff.filler,
-    fold: f.diff?.fold ?? DEFAULT_THEME_UI.diff.fold,
+    filler: f.diff?.filler ?? D.diff.filler,
+    fold: f.diff?.fold ?? D.diff.fold,
   };
 
+  const surface = { ...D.surface, ...f.surface };
+
+  // editor.background is the one field a theme may omit; its absence means "follow the
+  // system light/dark scheme" (recorded as followSystemScheme). We still FILL the field
+  // — with the popover surface — so every color consumer reads a concrete value.
+  const followSystemScheme = f.editor?.background === undefined;
+
   const ui: ThemeUi = {
-    editor: { ...DEFAULT_THEME_UI.editor, ...f.editor }, // editor.background absent ⇒ follow system scheme
-    text: { ...DEFAULT_THEME_UI.text, ...f.text },
-    border: f.border ?? DEFAULT_THEME_UI.border,
-    shadow: f.shadow ?? DEFAULT_THEME_UI.shadow,
-    surface: { ...DEFAULT_THEME_UI.surface, ...f.surface },
+    editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? surface.popover },
+    text: { ...D.text, ...f.text },
+    border: f.border ?? D.border,
+    shadow: f.shadow ?? D.shadow,
+    surface,
     status,
     search: {
-      match: f.search?.match ?? DEFAULT_THEME_UI.search.match,
-      matchCurrent: f.search?.matchCurrent ?? f.search?.match ?? DEFAULT_THEME_UI.search.matchCurrent,
+      match: f.search?.match ?? D.search.match,
+      matchCurrent: f.search?.matchCurrent ?? f.search?.match ?? D.search.matchCurrent,
     },
     diff,
-    flash: f.flash ?? DEFAULT_THEME_UI.flash,
-    pr: { ...DEFAULT_THEME_UI.pr, ...f.pr },
+    flash: f.flash ?? D.flash,
+    pr: { ...D.pr, ...f.pr },
   };
 
   // Preserve `syntax` key order — it drives tag priority (see SyntaxColors).
@@ -301,7 +326,7 @@ export function adaptTheme(file: ThemeFromFile): Theme {
   }
 
   applyMarkupDefaults(syntax, syntaxStyle, ui);
-  return { name: file.name, appearance: file.appearance, ui, syntax, syntaxStyle };
+  return { name: file.name, appearance: file.appearance, followSystemScheme, ui, syntax, syntaxStyle };
 }
 
 /**
@@ -314,11 +339,11 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
   const fg = ui.editor.foreground;
   const colorDefaults: SyntaxColors = {
     'markup.heading': syntax.function ?? syntax.keyword ?? fg,
-    'markup.link': syntax.function ?? ui.text.accent ?? fg,
+    'markup.link': syntax.function ?? ui.text.accent,
     'markup.link.url': syntax.string ?? syntax.comment ?? fg,
     'markup.raw': syntax.string ?? fg,
     'markup.list': syntax.punctuation ?? syntax.operator ?? fg,
-    'markup.quote': syntax.comment ?? ui.text.muted ?? fg,
+    'markup.quote': syntax.comment ?? ui.text.muted,
   };
   for (const [cap, color] of Object.entries(colorDefaults)) {
     if (color && syntax[cap] === undefined) syntax[cap] = color;
@@ -343,10 +368,8 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
     'markup.link': { underline: true },
     'markup.quote': { italic: true },
     // Inline code → text-only background; block code (fences) → full-line background.
-    ...(ui.surface.popover ? {
-      'markup.raw': { background: ui.surface.popover },
-      'markup.raw.block': { lineBackground: ui.surface.popover },
-    } : {}),
+    'markup.raw': { background: ui.surface.popover },
+    'markup.raw.block': { lineBackground: ui.surface.popover },
   };
   for (const [cap, style] of Object.entries(styleDefaults)) {
     syntaxStyle[cap] = { ...style, ...syntaxStyle[cap] };
@@ -355,6 +378,29 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
 
 /** The active theme. */
 export const theme = loadTheme('quilx');
+
+/**
+ * The theme's `ui.*` color tokens as CSS custom-property declarations — one per leaf,
+ * named `--t-ui-<dashed-path>`: `theme.ui.editor.background` → `--t-ui-editor-background`,
+ * `theme.ui.search.matchCurrent` → `--t-ui-search-match-current` (camelCase keys are
+ * dashed). Installed once on the root `#AppWindow` selector (see src/styles.ts) so any
+ * CSS under the window can read a theme color as `var(--t-ui-…)` instead of interpolating
+ * the literal. Pango markup can't read CSS variables, so markup / GtkTextTag consumers
+ * still read `theme.ui.*` directly. Returns the declaration lines, newline-joined.
+ */
+export function themeUiCssVariables(t: Theme): string {
+  const dash = (key: string): string => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  const lines: string[] = [];
+  const walk = (node: Record<string, unknown>, path: string[]): void => {
+    for (const [key, value] of Object.entries(node)) {
+      const next = [...path, dash(key)];
+      if (typeof value === 'string') lines.push(`--t-ui-${next.join('-')}: ${value};`);
+      else if (value && typeof value === 'object') walk(value as Record<string, unknown>, next);
+    }
+  };
+  walk(t.ui as unknown as Record<string, unknown>, []);
+  return lines.join('\n');
+}
 
 /**
  * Resolve a tree-sitter capture name against `lookup` by longest-prefix fallback:

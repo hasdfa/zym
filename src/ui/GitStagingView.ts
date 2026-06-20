@@ -27,8 +27,6 @@
 import * as Fs from 'node:fs';
 import { Gtk, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
-import { fonts } from '../fonts.ts';
-import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { computeDiff, foldUnchanged, needsTrailingNewline, type DiffModel } from '../util/DiffModel.ts';
@@ -76,8 +74,7 @@ const STATE_LETTER: Record<GitFileState, string> = {
 };
 
 // The file list lives in the center (not the left dock), so it doesn't inherit the
-// dock background — paint it with the theme editor background explicitly.
-const FILES_BG = theme.ui.editor.background ?? theme.ui.surface.popover;
+// dock background — paint it with the theme editor background explicitly (CSS below).
 
 // Inline-diff height estimate (the inner view scrolls past the cap). No header bar
 // (the staging diff passes `header: false`), so only a little vertical padding.
@@ -85,14 +82,13 @@ const DIFF_LINE_PX = 20;
 const DIFF_HEADER_PX = 12;
 const DIFF_MAX_PX = 480;
 
-// File paths use the app monospace font (same as the editor), via the central sheet.
-fonts.monospace('#GitStagingView .git-path');
-
 addStyles(`
+  /* File paths use the app monospace font, same as the editor. */
+  #GitStagingView .git-path { font: var(--t-font-monospace); }
   #GitStagingView,
-  #GitStagingView list { background-color: ${FILES_BG}; }
+  #GitStagingView list { background-color: var(--t-ui-editor-background); }
   #GitStagingView .git-header {
-    color: ${theme.ui.text.muted};
+    color: var(--t-ui-text-muted);
     font-weight: bold;
     padding: 6px 8px 3px 8px;
   }
@@ -101,12 +97,12 @@ addStyles(`
   #GitStagingView #GitRow { padding: 0 8px 0 20px; }
   /* The full path is colored like \`git status\`: staged green, unstaged/untracked red. */
   #GitStagingView #GitRow.staged .git-path,
-  #GitStagingView #GitRow.staged .git-badge { color: ${theme.ui.status.success}; }
+  #GitStagingView #GitRow.staged .git-badge { color: var(--t-ui-status-success); }
   #GitStagingView #GitRow.unstaged .git-path,
-  #GitStagingView #GitRow.unstaged .git-badge { color: ${theme.ui.status.error}; }
+  #GitStagingView #GitRow.unstaged .git-badge { color: var(--t-ui-status-error); }
   #GitStagingView .git-badge { font-weight: bold; font-feature-settings: "tnum" 1; }
   #GitStagingView row:selected { background-color: transparent; }
-  #GitStagingView:focus-within row:selected { background-color: ${theme.ui.surface.selected}; }
+  #GitStagingView:focus-within row:selected { background-color: var(--t-ui-surface-selected); }
   /* Inline diff row: flush, with a left accent marking it as nested under its file. */
   #GitStagingView .git-diff-row { padding: 0; }
   #GitStagingView .git-diff-row:selected { background-color: transparent; }

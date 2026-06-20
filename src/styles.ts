@@ -14,6 +14,7 @@
  */
 import { Gdk, Gtk } from './gi.ts';
 import { Disposable } from './util/eventKit.ts';
+import { theme, themeUiCssVariables } from './theme/theme.ts';
 
 const PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION;
 
@@ -156,5 +157,18 @@ addStyles(`
     --popover-radius: 15px;
     --popover-radius-small: 6px;
     --font-size-small: 0.85em;
+  }
+`);
+
+// Active-theme color tokens as CSS variables on the root window. Every `theme.ui.*`
+// leaf becomes `--t-ui-<dashed-path>` (e.g. `theme.ui.editor.background` →
+// `--t-ui-editor-background`), so CSS under `#AppWindow` reads a theme color as
+// `var(--t-ui-…)` instead of interpolating the literal. See themeUiCssVariables and
+// tasks/styling.md. (Markup / GtkTextTag consumers can't read CSS vars and still use
+// `theme.ui.*` directly.) Static today because `theme` is load-constant; when live
+// theme-switching lands this becomes a keyed sheet re-set on theme change.
+addStyles(`
+  #AppWindow {
+    ${themeUiCssVariables(theme).replace(/\n/g, '\n    ')}
   }
 `);

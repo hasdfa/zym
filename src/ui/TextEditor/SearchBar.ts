@@ -17,7 +17,6 @@
 import { Gdk, Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { fonts } from '../../fonts.ts';
 import { regexSpans, replacementSpans, applySpans } from './regexHighlight.ts';
 import type { SourceView } from '../../gi.ts';
 import type { Point } from '../../text/Point.ts';
@@ -36,9 +35,6 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 // Floating "elevated surface": use the theme's popover background so it reads as
 // a panel over the editor, not part of it.
 const POPOVER_BG = theme.ui.surface.popover;
-// Match the editor: the search/replace inputs use the app monospace font (from
-// the central, reactive font store).
-fonts.monospace('#SearchBar entry > text');
 
 const ENTRY_WIDTH_CHARS = 28;
 const COUNT_WIDTH_CHARS = 11; // fits the longest label ("Bad pattern") so it never reflows
@@ -60,14 +56,15 @@ addStyles(`
     background-color: ${POPOVER_BG};
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
-    box-shadow: 0px 6px 20px 8px ${theme.ui.shadow};
+    box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
     padding: 4px;
   }
   #SearchBar entry { min-height: 0; }
-  /* #SearchBar entry > text font comes from the font store — see fonts.monospace(...). */
+  /* The search/replace inputs match the editor's monospace font. */
+  #SearchBar entry > text { font: var(--t-font-monospace); }
   #SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
   /* Bad regex: tint the entry text. */
-  #SearchBar entry.invalid > text { color: ${theme.ui.status.error}; }
+  #SearchBar entry.invalid > text { color: var(--t-ui-status-error); }
   #SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
   /* Linked search+replace inputs: square the touching corners and merge the
      shared border so the two entries read as one control. */

@@ -33,7 +33,7 @@ const COLOR_DANGER = theme.ui.status.error;
 
 // The conflict icon is error-colored.
 addStyles(`
-  .quilx-conflict { color: ${theme.ui.status.error}; }
+  .quilx-conflict { color: var(--t-ui-status-error); }
 `);
 
 // A "+N"/"-M"/"↑N"/"↓M" count, as an inline markup span: a smaller, coloured run

@@ -41,10 +41,9 @@ const DEF_STYLES: Array<[def: string, capture: string]> = [
 
 let searchDir: string | null = null;
 
-/** Build and load a GtkSource.StyleScheme for `theme`. Requires `theme.ui.editor.background`. */
+/** Build and load a GtkSource.StyleScheme for `theme` (its concrete editor background +
+ *  syntax colors). Only meaningful when `!theme.followSystemScheme`. */
 export function createSourceScheme(theme: Theme): StyleScheme {
-  if (!theme.ui.editor.background) throw new Error(`theme "${theme.name}" has no ui.editor.background`);
-
   const manager = GtkSource.StyleSchemeManager.getDefault();
   if (searchDir === null) {
     searchDir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-scheme-'));
@@ -66,7 +65,7 @@ function schemeXml(id: string, theme: Theme): string {
   const bg = ui.editor.background;
   const styles = [
     `<style name="text" foreground="${fg}" background="${bg}"/>`,
-    `<style name="line-numbers" foreground="${ui.editor.lineNumber ?? fg}" background="${bg}"/>`,
+    `<style name="line-numbers" foreground="${ui.editor.lineNumber}" background="${bg}"/>`,
     // GtkSourceAnnotation colors come from these scheme styles: AnnotationStyle.ERROR
     // uses diff:removed-line fg, WARNING uses diff:changed-line fg, ACCENT uses
     // diff:added-line fg (see GtkSource docs). Define them so error-lens annotations

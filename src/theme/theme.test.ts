@@ -1,6 +1,6 @@
 /*
  * Tests for the theme loader — `adaptTheme` deep-merges the file's nested `ui` over
- * `DEFAULT_THEME_UI`, derives the diff tints from the status colors per appearance, and
+ * `DEFAULT_THEME`, derives the diff tints from the status colors per appearance, and
  * splits each per-capture syntax token into the color + style maps.
  */
 import { test } from 'node:test';
@@ -16,6 +16,7 @@ test('loadTheme("quilx") resolves the shipped palette into the nested model', ()
   assert.equal(t.appearance, 'dark');
   assert.equal(t.ui.editor.foreground, '#f1f1f1');
   assert.equal(t.ui.editor.background, '#2d2d2d');
+  assert.equal(t.followSystemScheme, false); // theme sets its own editor.background
   assert.equal(t.ui.surface.popover, '#383838');
   assert.equal(t.ui.surface.selected, '#3f4b5b');
   assert.equal(t.ui.status.success, '#98be65');
@@ -23,18 +24,19 @@ test('loadTheme("quilx") resolves the shipped palette into the nested model', ()
   assert.equal(t.syntax.keyword, '#5ab9f9');
 });
 
-test('missing UI keys fall back to DEFAULT_THEME_UI; editor.background stays undefined', () => {
+test('missing UI keys fall back to DEFAULT_THEME; omitted editor.background fills + follows system', () => {
   const t = base();
-  assert.equal(t.ui.editor.foreground, '#ffffff'); // DEFAULT_THEME_UI
-  assert.equal(t.ui.editor.background, undefined); // absent ⇒ follow system scheme
-  assert.equal(t.ui.status.success, '#2ec27e'); // DEFAULT_THEME_UI
-  assert.equal(t.ui.pr.open, '#3fb950'); // DEFAULT_THEME_UI
+  assert.equal(t.ui.editor.foreground, '#ffffff'); // DEFAULT_THEME
+  assert.equal(t.ui.editor.background, '#1e1e1e'); // filled from surface.popover (never undefined)
+  assert.equal(t.followSystemScheme, true); // file omitted editor.background ⇒ follow system scheme
+  assert.equal(t.ui.status.success, '#2ec27e'); // DEFAULT_THEME
+  assert.equal(t.ui.pr.open, '#3fb950'); // DEFAULT_THEME
 });
 
 test('a partial concern deep-merges over the default concern', () => {
   const t = base({ ui: { status: { error: '#ff0000' } } });
   assert.equal(t.ui.status.error, '#ff0000'); // overridden
-  assert.equal(t.ui.status.success, '#2ec27e'); // sibling kept from DEFAULT_THEME_UI
+  assert.equal(t.ui.status.success, '#2ec27e'); // sibling kept from DEFAULT_THEME
 });
 
 test('search.matchCurrent falls back to search.match within the concern', () => {

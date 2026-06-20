@@ -269,7 +269,7 @@ export class SyntaxController {
     // Bracket-match highlight (subtle box-like background + bold).
     this.bracketMatchTag = mk({
       name: 'bracket-match',
-      background: theme.ui.surface.selected ?? theme.ui.surface.popover,
+      background: theme.ui.surface.selected,
       weight: Pango.Weight.BOLD,
     });
 
