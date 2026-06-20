@@ -1,5 +1,5 @@
 /*
- * MultiBufferGutter — a left-gutter renderer drawing each row's *source* line number in a
+ * SourceLineNumberGutter — a left-gutter renderer drawing each row's *source* line number in a
  * multibuffer (project search). A multibuffer view row doesn't equal a source line: header /
  * gap / blank rows are synthesized, and each excerpt shows a slice of a different file. So the
  * renderer asks the LIVE `ViewProjection` for the source line behind each view row
@@ -11,9 +11,9 @@
  * at runtime (the node-gtk vfunc constraint), width *primed* up front so a number measured on a
  * short line isn't cropped.
  */
-import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
-import { theme } from '../../theme/theme.ts';
-import type { ViewProjection } from '../TextEditor/ViewProjection.ts';
+import { Gtk, GtkSource, registerClass, type SourceView } from '../gi.ts';
+import { theme } from '../theme/theme.ts';
+import type { ViewProjection } from './TextEditor/ViewProjection.ts';
 
 const COLOR = theme.ui.editor.lineNumber;
 
@@ -37,7 +37,7 @@ class MultiBufferLineRenderer extends GtkSource.GutterRendererText {
 }
 registerClass(MultiBufferLineRenderer);
 
-export class MultiBufferGutter {
+export class SourceLineNumberGutter {
   private readonly view: SourceView;
   private readonly renderer: MultiBufferLineRenderer;
 

@@ -3,7 +3,7 @@
  * ExcerptSyntaxProjection, paints each excerpt from ITS OWN grammar at the right (translated)
  * view rows — one painter on one buffer, many source parses. This is the place a
  * stitched-coordinate or shared-parse bug surfaces in isolation (tasks/.../multibuffer.md).
- * The full MultiBufferView (a TextEditor wrapper) is exercised by the runtime smoke, which
+ * The full SearchResultsView (a TextEditor wrapper) is exercised by the runtime smoke, which
  * needs the app's singletons. Grammars come from bundled plugins; gated if not vendored.
  */
 import { test, before } from 'node:test';
@@ -35,7 +35,7 @@ const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 const seg = (sourceKey: string, startRow: number, endRow: number): Segment =>
   ({ sourceKey, startRow, endRow, editable: false, kind: 'real' });
 
-/** A parsed source over a bare buffer (the read-only-snapshot shape MultiBufferView uses). */
+/** A parsed source over a bare buffer (the read-only-snapshot shape SearchResultsView uses). */
 function source(text: string, path: string): DocumentSyntax {
   const buffer = new GtkSource.Buffer();
   buffer.setText(text, -1);
@@ -115,9 +115,9 @@ test('each excerpt uses its own grammar (ts keyword vs json string)', () => {
   json.dispose();
 });
 
-test('a ProjectionView-backed multibuffer (the MultiBufferView path) materializes + paints', () => {
+test('a ProjectionView-backed multibuffer (the SearchResultsView path) materializes + paints', () => {
   if (!hasJs) return;
-  // Mirrors MultiBufferView: a ProjectionView over the source BUFFERS materializes the view
+  // Mirrors SearchResultsView: a ProjectionView over the source BUFFERS materializes the view
   // buffer; the painter highlights it through an ExcerptSyntaxProjection over the PV's map.
   const aBuf = new GtkSource.Buffer(); aBuf.setText('// a\nconst aaa = 1;\nfunction fa() {}\n', -1);
   const bBuf = new GtkSource.Buffer(); bBuf.setText('const bbb = 2;\nlet ccc = 3;\n', -1);

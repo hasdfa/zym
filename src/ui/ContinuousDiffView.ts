@@ -1,5 +1,5 @@
 /*
- * DiffMultiBufferView — a CONTINUOUS multi-file diff in one scrollable editor
+ * ContinuousDiffView — a CONTINUOUS multi-file diff in one scrollable editor
  * (tasks/code-editing/multibuffer.md, Phase 3b / G5). Each changed file is a filename header
  * then its diff windowed like a real diff (changed hunks + context, long unchanged runs elided
  * to a `⋯` gap; see `buildDiffMultiBuffer`): context + added rows over the NEW side, removed
@@ -15,26 +15,27 @@
  *     re-flowed via `ProjectionView.retarget` — a minimal-churn splice (no whole-buffer
  *     re-materialize), so phantom rows appear/disappear without a flash or a caret jump.
  */
-import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
-import { theme } from '../../theme/theme.ts';
-import { TextEditor } from '../TextEditor/TextEditor.ts';
-import { Document } from '../TextEditor/Document.ts';
-import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
-import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
-import { ProjectionView } from '../TextEditor/ProjectionView.ts';
-import { ViewProjection } from '../TextEditor/ViewProjection.ts';
-import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
-import { applyDiffDecorations } from '../TextEditor/applyDiffDecorations.ts';
-import { CombinedDiffLineNumberGutter } from '../TextEditor/DiffLineNumberGutter.ts';
-import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './diffMultiBuffer.ts';
-import { buildHeaderWidget, buildGapWidget } from './MultiBufferHeader.ts';
-import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
-import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../../util/hunkPatch.ts';
-import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../../git.ts';
-import { quilx } from '../../quilx.ts';
+import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../gi.ts';
+import { theme } from '../theme/theme.ts';
+import { TextEditor } from './TextEditor/TextEditor.ts';
+import { Document } from './TextEditor/Document.ts';
+import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
+import { DocumentSyntax } from '../syntax/DocumentSyntax.ts';
+import { ProjectionView } from './TextEditor/ProjectionView.ts';
+import { ViewProjection } from './TextEditor/ViewProjection.ts';
+import { ExcerptSyntaxProjection } from './multibuffer/ExcerptSyntaxProjection.ts';
+import { MultiBufferDocument } from './multibuffer/MultiBufferDocument.ts';
+import { applyDiffDecorations } from './TextEditor/applyDiffDecorations.ts';
+import { CombinedDiffLineNumberGutter } from './TextEditor/DiffLineNumberGutter.ts';
+import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './multibuffer/diffMultiBuffer.ts';
+import { buildHeaderWidget, buildGapWidget } from './HeaderBands.ts';
+import type { BlockDecorationHandle } from './TextEditor/BlockDecorations.ts';
+import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
+import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
+import { quilx } from '../quilx.ts';
 import * as Path from 'node:path';
 
-export interface DiffMultiBufferOptions {
+export interface ContinuousDiffOptions {
   /** Changed files: base (old/HEAD) + current (new/working) content. */
   files: DiffFile[];
   cwd?: string;
@@ -85,7 +86,7 @@ interface SourceEntry {
   document?: Document;
 }
 
-export class DiffMultiBufferView {
+export class ContinuousDiffView {
   readonly root: InstanceType<typeof Gtk.Widget>;
   readonly editor: TextEditor;
   private readonly files: DiffFile[];
@@ -126,7 +127,7 @@ export class DiffMultiBufferView {
     return this.projectionView.view;
   }
 
-  constructor(options: DiffMultiBufferOptions) {
+  constructor(options: ContinuousDiffOptions) {
     this.onActivate = options.onActivate;
     this.files = options.files;
     this.cwd = options.cwd;
@@ -135,7 +136,7 @@ export class DiffMultiBufferView {
     this.gitRepo = options.git;
     this.repo = options.cwd ? repoRoot(options.cwd) : null;
     if (this.editable && !this.registry) {
-      throw new Error('DiffMultiBufferView: editable mode requires a DocumentRegistry');
+      throw new Error('ContinuousDiffView: editable mode requires a DocumentRegistry');
     }
 
     // Resolve each side's source ONCE (live Document for the new side when editable, else a
@@ -148,20 +149,17 @@ export class DiffMultiBufferView {
     const syntaxMap = new Map([...this.sources].map(([key, e]) => [key, e.syntax] as const));
     this.projectionView = new ProjectionView(dmb.items, sourceBuffers);
 
-    this.editor = new TextEditor({
-      buffer: {
-        readOnly: !this.editable,
-        folding: false,
-        syntaxProjection: new ExcerptSyntaxProjection(() => this.projection, syntaxMap),
-        externalBuffer: this.projectionView.buffer,
-        undoTarget: this.editable ? this.projectionView : undefined,
-      },
-    });
+    // One editor, natively backed by the multi-source projection (no buffer-mode shim): the
+    // `MultiBufferDocument` supplies the view buffer, the per-excerpt syntax painter, and undo
+    // (coordinating the touched sources). The editor disposes it on teardown.
+    const painter = new ExcerptSyntaxProjection(() => this.projection, syntaxMap);
+    this.editor = new TextEditor({ source: new MultiBufferDocument(this.projectionView, painter) });
+    if (!this.editable) this.editor.model.setReadOnly(true);
     this.root = this.editor.root;
-    // Scope the expand-context keymap to this surface: `#TextEditor.diff-multibuffer` is more
+    // Scope the expand-context keymap to this surface: `#TextEditor.continuous-diff` is more
     // specific than vim's `#TextEditor`, so `z o`/`z R`/`z m` bind here while `z z` (scroll) etc.
     // still fall through to vim.
-    (this.editor.sourceView as any).addCssClass('diff-multibuffer');
+    (this.editor.sourceView as any).addCssClass('continuous-diff');
 
     if (this.editable) {
       this.editor.model.setEditableCheck((s, e) => this.projection.isViewRangeEditable(s, e));
@@ -236,7 +234,7 @@ export class DiffMultiBufferView {
    *  common case); else extends the window below (a leading gap). Re-diffs to re-flow. */
   private revealChunk(rows: number[], fromTop: boolean): void {
     if (!rows.length) return;
-    const chunk = fromTop ? rows.slice(0, DiffMultiBufferView.CHUNK) : rows.slice(-DiffMultiBufferView.CHUNK);
+    const chunk = fromTop ? rows.slice(0, ContinuousDiffView.CHUNK) : rows.slice(-ContinuousDiffView.CHUNK);
     for (const r of chunk) this.revealedNewRows.add(r);
     this.reDiff();
   }
@@ -414,7 +412,7 @@ export class DiffMultiBufferView {
     this.reconcileOverlays(
       this.headerOverlays,
       dmb.headerAnchors,
-      DiffMultiBufferView.headerKey,
+      ContinuousDiffView.headerKey,
       (h) => h.viewRow,
       (h) => buildHeaderWidget(h.label, h.path, () => this.onActivate?.({ path: h.path, row: 0 }), h.subtitle),
       'above',
@@ -422,7 +420,7 @@ export class DiffMultiBufferView {
     this.reconcileOverlays(
       this.gapOverlays,
       dmb.gapAnchors,
-      DiffMultiBufferView.gapKey,
+      ContinuousDiffView.gapKey,
       (g) => g.viewRow,
       // Clicking the gap reveals a chunk of its elided lines (extends the window above it).
       (g) => buildGapWidget(g.label, () => this.revealChunk(g.revealRows, true)),
@@ -640,7 +638,7 @@ export class DiffMultiBufferView {
     this.headerOverlays = [];
     this.gapOverlays = [];
     this.lineNumbers?.dispose();
-    this.projectionView.dispose();
+    // The editor owns the ProjectionView (via its MultiBufferDocument) and disposes it below.
     for (const entry of this.sources.values()) {
       // Editable new side: drop the shared ref (a file also open in a tab survives + keeps its
       // unsaved edit). Read-only / base blobs: this view owns the parse.

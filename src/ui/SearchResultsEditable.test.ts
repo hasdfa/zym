@@ -1,6 +1,6 @@
 /*
  * Editable project-search multibuffer — SURFACE proof (3d / G6,
- * tasks/code-editing/multibuffer.md). A `MultiBufferView({ editable: true })` backs each
+ * tasks/code-editing/multibuffer.md). A `SearchResultsView({ editable: true })` backs each
  * source with a live `Document` from the registry, so editing a result row writes through to
  * the file's model (visible to any open tab, persisted by save), block (header) rows reject
  * edits, undo routes through the coordinating `ProjectionView`, and a row-count-changing edit
@@ -12,14 +12,14 @@ import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gtk } from '../../gi.ts';
-import { quilx } from '../../quilx.ts';
-import { plugins, registerBuiltinPlugins } from '../../plugin/index.ts';
-import { preloadGrammars, getGrammar, langIdForPath } from '../../syntax/grammar.ts';
-import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
-import { MultiBufferView } from './MultiBufferView.ts';
-import { Range } from '../../text/Range.ts';
-import { Point } from '../../text/Point.ts';
+import { Gtk } from '../gi.ts';
+import { quilx } from '../quilx.ts';
+import { plugins, registerBuiltinPlugins } from '../plugin/index.ts';
+import { preloadGrammars, getGrammar, langIdForPath } from '../syntax/grammar.ts';
+import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
+import { SearchResultsView } from './SearchResultsView.ts';
+import { Range } from '../text/Range.ts';
+import { Point } from '../text/Point.ts';
 
 Gtk.init();
 quilx.lsp.configure({ enable: false }); // no language servers spawned in the headless test
@@ -43,7 +43,7 @@ function tmpFile(name: string, content: string): string {
 const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 
 /** Whether view (row, col) carries the search-highlight decoration tag. */
-function hasSearchTag(mbv: MultiBufferView, row: number, col: number): boolean {
+function hasSearchTag(mbv: SearchResultsView, row: number, col: number): boolean {
   const buffer = (mbv.editor.sourceView as any).getBuffer();
   const tag = buffer.getTagTable().lookup('deco:search:highlight');
   if (!tag) return false;
@@ -57,7 +57,7 @@ function setup() {
   const a = tmpFile('a.ts', 'alpha\nbeta\ngamma\n');
   const b = tmpFile('b.ts', 'one\ntwo\nthree\n');
   const registry = new DocumentRegistry();
-  const mbv = new MultiBufferView({
+  const mbv = new SearchResultsView({
     editable: true,
     documents: registry,
     excerpts: [
@@ -87,7 +87,7 @@ test('headers are widgets, not buffer text (the filename never appears as a buff
 test('search match: the hit span is highlighted at its mapped view position', () => {
   const a = tmpFile('hit.ts', 'const foo = 1;\nbar\n'); // "foo" at source row 0, cols 6..9
   const registry = new DocumentRegistry();
-  const mbv = new MultiBufferView({
+  const mbv = new SearchResultsView({
     editable: true,
     documents: registry,
     excerpts: [{ path: a, regions: [{ startRow: 0, endRow: 1 }], matches: [{ row: 0, startCol: 6, endCol: 9 }] }],
@@ -121,7 +121,7 @@ test('editable search: edits on a synthesized (block) row are rejected', () => {
   // Headers are widgets now, so the remaining block row is the `⋯` gap between two regions.
   const a = tmpFile('big.ts', 'r0\nr1\nr2\nr3\nr4\nr5\nr6\n');
   const registry = new DocumentRegistry();
-  const mbv = new MultiBufferView({
+  const mbv = new SearchResultsView({
     editable: true,
     documents: registry,
     excerpts: [{ path: a, regions: [{ startRow: 0, endRow: 1 }, { startRow: 5, endRow: 6 }] }],
@@ -174,7 +174,7 @@ test('editable search: save() persists every edited file to disk', () => {
 test('editable search: two regions of one file — a multi-line edit in the first shifts the second', () => {
   const a = tmpFile('big.ts', 'r0\nr1\nr2\nr3\nr4\nr5\nr6\nr7\n'); // rows 0..8 (row 8 empty)
   const registry = new DocumentRegistry();
-  const mbv = new MultiBufferView({
+  const mbv = new SearchResultsView({
     editable: true,
     documents: registry,
     excerpts: [{ path: a, regions: [{ startRow: 0, endRow: 1 }, { startRow: 5, endRow: 6 }] }],
@@ -196,7 +196,7 @@ test('editable search: replace-all across files is one undo step (G6)', () => {
   const a = tmpFile('a.ts', 'x foo y\n');
   const b = tmpFile('b.ts', 'foo bar\n');
   const registry = new DocumentRegistry();
-  const mbv = new MultiBufferView({
+  const mbv = new SearchResultsView({
     editable: true,
     documents: registry,
     excerpts: [
@@ -225,7 +225,7 @@ test('editable search: a file already open in the registry is shared (edit reach
   const registry = new DocumentRegistry();
   const { document } = registry.acquire(a); // a "tab" opened it first
   document.loadFile(a);
-  const mbv = new MultiBufferView({
+  const mbv = new SearchResultsView({
     editable: true,
     documents: registry,
     excerpts: [{ path: a, regions: [{ startRow: 0, endRow: 2 }] }],

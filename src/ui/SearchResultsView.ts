@@ -1,5 +1,5 @@
 /*
- * MultiBufferView — ONE editor stitching excerpts from many files, each with a filename
+ * SearchResultsView — ONE editor stitching excerpts from many files, each with a filename
  * header, each highlighted by its own grammar (tasks/code-editing/multibuffer.md). It IS a
  * `TextEditor` (buffer mode) so it gets vim navigation, search, selection, and decorations for
  * free; the per-file highlighting comes from an `ExcerptSyntaxProjection` the editor's painter
@@ -19,19 +19,20 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
-import { TextEditor } from '../TextEditor/TextEditor.ts';
-import { Document } from '../TextEditor/Document.ts';
-import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
-import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
-import { ViewProjection } from '../TextEditor/ViewProjection.ts';
-import { ProjectionView } from '../TextEditor/ProjectionView.ts';
-import { excerptsToItems, type Excerpt, type Segment, type MatchRange } from './MultiBufferModel.ts';
-import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
-import { MultiBufferGutter } from './MultiBufferGutter.ts';
-import { buildHeaderWidget } from './MultiBufferHeader.ts';
-import { Range } from '../../text/Range.ts';
-import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
+import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../gi.ts';
+import { TextEditor } from './TextEditor/TextEditor.ts';
+import { Document } from './TextEditor/Document.ts';
+import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
+import { DocumentSyntax } from '../syntax/DocumentSyntax.ts';
+import { ViewProjection } from './TextEditor/ViewProjection.ts';
+import { ProjectionView } from './TextEditor/ProjectionView.ts';
+import { excerptsToItems, type Excerpt, type Segment, type MatchRange } from './multibuffer/MultiBufferModel.ts';
+import { ExcerptSyntaxProjection } from './multibuffer/ExcerptSyntaxProjection.ts';
+import { MultiBufferDocument } from './multibuffer/MultiBufferDocument.ts';
+import { SourceLineNumberGutter } from './SourceLineNumberGutter.ts';
+import { buildHeaderWidget } from './HeaderBands.ts';
+import { Range } from '../text/Range.ts';
+import type { BlockDecorationHandle } from './TextEditor/BlockDecorations.ts';
 
 /** One file's contribution: the regions (source model row spans) to show. */
 export interface ExcerptInput {
@@ -43,7 +44,7 @@ export interface ExcerptInput {
   matches?: MatchRange[];
 }
 
-export interface MultiBufferOptions {
+export interface SearchResultsOptions {
   excerpts: ExcerptInput[];
   /** Root for relativizing header labels. */
   cwd?: string;
@@ -66,7 +67,7 @@ interface SourceEntry {
 
 const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 
-export class MultiBufferView {
+export class SearchResultsView {
   readonly root: InstanceType<typeof Gtk.Widget>;
   readonly editor: TextEditor;
   private readonly sources = new Map<string, SourceEntry>();
@@ -74,7 +75,7 @@ export class MultiBufferView {
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
-  private readonly gutter: MultiBufferGutter;
+  private readonly gutter: SourceLineNumberGutter;
   private readonly headerHandles: BlockDecorationHandle[] = [];
   private disposed = false;
 
@@ -84,12 +85,12 @@ export class MultiBufferView {
     return this.projectionView.view;
   }
 
-  constructor(options: MultiBufferOptions) {
+  constructor(options: SearchResultsOptions) {
     this.onActivate = options.onActivate;
     this.editable = !!options.editable;
     this.registry = options.documents;
     if (this.editable && !this.registry) {
-      throw new Error('MultiBufferView: editable mode requires a DocumentRegistry');
+      throw new Error('SearchResultsView: editable mode requires a DocumentRegistry');
     }
 
     // Resolve each unique source once (live Document when editable, else a disk snapshot), then
@@ -102,18 +103,13 @@ export class MultiBufferView {
     // item list carries only segments + gaps.
     this.projectionView = new ProjectionView(excerptsToItems(excerpts, { headers: 'widget' }), sourceBuffers);
     const syntaxMap = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
-    const syntaxProjection = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
+    const painter = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
 
-    this.editor = new TextEditor({
-      buffer: {
-        readOnly: !this.editable,
-        folding: false,
-        syntaxProjection,
-        externalBuffer: this.projectionView.buffer,
-        // Editable: route undo through the PV (coordinates the touched sources as one step).
-        undoTarget: this.editable ? this.projectionView : undefined,
-      },
-    });
+    // One editor, natively backed by the multi-source projection (the `MultiBufferDocument` supplies
+    // the view buffer, the per-excerpt painter, and undo coordinating the touched sources). The
+    // editor owns + disposes it.
+    this.editor = new TextEditor({ source: new MultiBufferDocument(this.projectionView, painter) });
+    if (!this.editable) this.editor.model.setReadOnly(true);
     this.root = this.editor.root;
 
     if (this.editable) {
@@ -127,7 +123,7 @@ export class MultiBufferView {
     // source row behind each view row (blank on header/gap/blank). Sized to the widest source.
     let maxLine = 1;
     for (const entry of this.sources.values()) maxLine = Math.max(maxLine, entry.lines.length);
-    this.gutter = new MultiBufferGutter(this.editor.sourceView, () => this.projectionView.view, maxLine);
+    this.gutter = new SourceLineNumberGutter(this.editor.sourceView, () => this.projectionView.view, maxLine);
     this.highlightMatches(options.excerpts);
     this.installHeaderWidgets(excerpts);
     // Materializing the buffer (setText) leaves the caret at the END; start at the top.
@@ -300,7 +296,8 @@ export class MultiBufferView {
     for (const handle of this.headerHandles) handle.remove();
     this.headerHandles.length = 0;
     this.gutter.dispose();
-    this.projectionView.dispose(); // detach the PV's source-buffer signal handlers first
+    // The editor owns the ProjectionView (via its MultiBufferDocument); disposing the editor
+    // detaches the PV's source-buffer signal handlers, before the sources are released below.
     this.editor.dispose();
     for (const entry of this.sources.values()) {
       // Editable: drop the shared ref. A file ALSO open in a tab survives (the tab holds a ref

@@ -1,6 +1,6 @@
 /*
  * Editable diff multibuffer — HUNK STAGING (Phase G5, tasks/code-editing/multibuffer.md, task #17).
- * Over a real temp git repo, `DiffMultiBufferView({ editable, cwd })` reads each file's index blob
+ * Over a real temp git repo, `ContinuousDiffView({ editable, cwd })` reads each file's index blob
  * and classifies every changed row as staged / unstaged (the gutter marker). `stageHunkAtCursor`
  * builds the index→worktree hunk patch and `git apply --cached`s it; `unstageHunkAtCursor` reverses
  * the HEAD→index hunk out of the index. After each op the index is re-read and the markers flip.
@@ -15,11 +15,11 @@ import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Gtk } from '../../gi.ts';
-import { quilx } from '../../quilx.ts';
-import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
-import { DiffMultiBufferView } from './DiffMultiBufferView.ts';
-import { invalidateRepoRoot } from '../../git.ts';
+import { Gtk } from '../gi.ts';
+import { quilx } from '../quilx.ts';
+import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
+import { ContinuousDiffView } from './ContinuousDiffView.ts';
+import { invalidateRepoRoot } from '../git.ts';
 
 Gtk.init();
 quilx.lsp.configure({ enable: false });
@@ -48,16 +48,16 @@ function gitRepo(committed: string, worktree: string): { repo: string; file: str
   return { repo, file };
 }
 
-const stagedState = (mbv: DiffMultiBufferView): (string | null)[] => (mbv as any).dmb.stagedState;
-const rowKinds = (mbv: DiffMultiBufferView): string[] => (mbv as any).dmb.rowKinds;
+const stagedState = (mbv: ContinuousDiffView): (string | null)[] => (mbv as any).dmb.stagedState;
+const rowKinds = (mbv: ContinuousDiffView): string[] => (mbv as any).dmb.rowKinds;
 const indexBlob = (repo: string): string => execFileSync('git', ['show', ':f.ts'], { cwd: repo }).toString('utf8');
-const stateOf = (mbv: DiffMultiBufferView, kind: string): (string | null)[] =>
+const stateOf = (mbv: ContinuousDiffView, kind: string): (string | null)[] =>
   stagedState(mbv).filter((_s, i) => rowKinds(mbv)[i] === kind);
 
 function open(committed: string, worktree: string) {
   const { repo, file } = gitRepo(committed, worktree);
   const registry = new DocumentRegistry();
-  const mbv = new DiffMultiBufferView({
+  const mbv = new ContinuousDiffView({
     editable: true,
     documents: registry,
     cwd: repo,

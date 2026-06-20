@@ -1,5 +1,5 @@
 /*
- * MultiBufferGutter label logic — the pure core of the per-excerpt line-number gutter
+ * SourceLineNumberGutter label logic — the pure core of the per-excerpt line-number gutter
  * (tasks/code-editing/multibuffer.md). A multibuffer view row maps to a SOURCE line (or to a
  * synthesized header/gap/blank row); `lineNumberLabel` must render `sourceRow + 1` for real
  * rows and all-blank for block rows, right-aligned to the column width. The GtkSource renderer
@@ -7,10 +7,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk } from '../../gi.ts';
-import { ViewProjection } from '../TextEditor/ViewProjection.ts';
-import { excerptsToItems, type Excerpt } from './MultiBufferModel.ts';
-import { lineNumberLabel } from './MultiBufferGutter.ts';
+import { Gtk } from '../gi.ts';
+import { ViewProjection } from './TextEditor/ViewProjection.ts';
+import { excerptsToItems, type Excerpt } from './multibuffer/MultiBufferModel.ts';
+import { lineNumberLabel } from './SourceLineNumberGutter.ts';
 
 Gtk.init();
 
