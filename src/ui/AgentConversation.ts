@@ -32,15 +32,14 @@ import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentStatus } from '../agents/types.ts';
 import type { TabState } from '../SessionManager.ts';
 
-const editorFg = theme.ui.editor.foreground;
-const editorBg = theme.ui.editor.background ?? '@theme_base_color';
-
 // Tools whose first input path counts as a "changed file" (mirrors the claude-tui
 // PostToolUse Edit|Write|MultiEdit|NotebookEdit hook).
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
+// Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
+// the font store's --t-font-monospace-family. See tasks/styling.md + theming.md.
 addStyles(`
-  .quilx-conversation { background: ${editorBg}; color: ${editorFg}; }
+  .quilx-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
   .quilx-conversation-transcript { padding: 12px; }
   .quilx-conversation-row { padding: 6px 0; }
   /* User and assistant share the bubble shape; only the background differs. */
@@ -49,48 +48,48 @@ addStyles(`
     margin: 8px 0;
     border-radius: 10px;
   }
-  .quilx-conversation-user { background: ${theme.ui.surface.selected}; }
-  .quilx-conversation-assistant { background: ${theme.ui.surface.popover}; }
+  .quilx-conversation-user { background: var(--t-ui-surface-selected); }
+  .quilx-conversation-assistant { background: var(--t-ui-surface-popover); }
   .quilx-conversation-thinking { opacity: 0.55; font-style: italic; padding-left: 12px; }
   .quilx-conversation-tool { opacity: 0.8; }
   .quilx-conversation-toolrow { opacity: 0.85; }
   .quilx-conversation-result {
     opacity: 0.7;
-    background: ${theme.ui.surface.popover};
+    background: var(--t-ui-surface-popover);
     padding: 4px 8px;
     margin-top: 2px;
     border-radius: 4px;
   }
   /* A Task (subagent) report renders as a fuller markdown card. */
   .quilx-conversation-task-result {
-    background: ${theme.ui.surface.popover};
-    border-left: 3px solid ${theme.ui.surface.selected};
+    background: var(--t-ui-surface-popover);
+    border-left: 3px solid var(--t-ui-surface-selected);
     padding: 6px 10px;
     margin-top: 4px;
     border-radius: 4px;
   }
   .quilx-conversation-tasks {
     padding: 8px 12px;
-    background: ${theme.ui.surface.popover};
-    border-bottom: 1px solid ${theme.ui.border};
+    background: var(--t-ui-surface-popover);
+    border-bottom: 1px solid var(--t-ui-border);
   }
   .quilx-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
   .quilx-conversation-system { opacity: 0.6; font-style: italic; }
-  .quilx-conversation-error { color: ${theme.ui.status.error}; }
+  .quilx-conversation-error { color: var(--t-ui-status-error); }
   /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost. */
   .quilx-conversation-unknown {
-    border-left: 2px solid ${theme.ui.status.warning};
+    border-left: 2px solid var(--t-ui-status-warning);
     padding-left: 8px;
-    background: ${theme.ui.surface.popover};
+    background: var(--t-ui-surface-popover);
     border-radius: 4px;
   }
   .quilx-conversation-unknown-body { opacity: 0.75; }
   /* The input + its status strip, as a bordered rounded card with its own bg. */
   .quilx-conversation-input-card {
     margin: 8px;
-    border: 1px solid ${theme.ui.border};
+    border: 1px solid var(--t-ui-border);
     border-radius: 12px;
-    background: ${theme.ui.surface.popover};
+    background: var(--t-ui-surface-popover);
   }
   /* Let the card's background show through the editor (no separate editor bg). */
   #AgentConversationPrompt,
@@ -101,35 +100,34 @@ addStyles(`
   }
   .quilx-conversation-footer {
     padding: 6px 12px;
-    border-top: 1px solid ${theme.ui.border}; /* divider between the input and the status strip */
+    border-top: 1px solid var(--t-ui-border); /* divider between the input and the status strip */
   }
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
   .quilx-conversation-mode { min-height: 0; }
-  .quilx-cmode-default { color: ${theme.ui.text.muted}; }
-  .quilx-cmode-acceptEdits { color: ${theme.ui.status.success}; }
-  .quilx-cmode-auto { color: ${theme.ui.status.warning}; }
-  .quilx-cmode-plan { color: ${theme.ui.status.info}; }
+  .quilx-cmode-default { color: var(--t-ui-text-muted); }
+  .quilx-cmode-acceptEdits { color: var(--t-ui-status-success); }
+  .quilx-cmode-auto { color: var(--t-ui-status-warning); }
+  .quilx-cmode-plan { color: var(--t-ui-status-info); }
   .quilx-conversation-perm {
     padding: 8px; margin: 6px 0;
-    border: 1px solid ${theme.ui.surface.selected};
+    border: 1px solid var(--t-ui-surface-selected);
     border-radius: 6px;
   }
   /* AskUserQuestion: an interactive choice card (info-tinted, distinct from the
      plain allow/deny permission card). */
   .quilx-conversation-question {
     padding: 10px; margin: 6px 0;
-    border: 1px solid ${theme.ui.status.info};
+    border: 1px solid var(--t-ui-status-info);
     border-radius: 6px;
   }
   .quilx-conversation-question-h { font-weight: bold; opacity: 0.6; }
   .quilx-conversation-question-opt { padding: 6px 8px; }
   #AgentConversationPrompt { padding: 0; }
+  /* The monospace bits (tool rows, JSON dumps) follow the font store. */
+  .quilx-conversation-tool,
+  .quilx-conversation-result,
+  .quilx-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
-// The monospace bits (tool rows, permission detail) use the app's configured
-// monospace font, not a generic family.
-fonts.monospace('.quilx-conversation-tool');
-fonts.monospace('.quilx-conversation-result');
-fonts.monospace('.quilx-conversation-unknown-body');
 
 // Status / checklist glyphs (Nerd Font codepoints).
 const GLYPH = {

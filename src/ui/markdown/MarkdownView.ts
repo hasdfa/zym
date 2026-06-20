@@ -22,15 +22,18 @@ import { parseBlocks, type Block, type ListItem } from './blocks.ts';
 type Widget = InstanceType<typeof Gtk.Widget>;
 const COPY_GLYPH = String.fromCodePoint(0xf0c5); // nf-fa-copy
 
+// Colors as CSS variables (--t-ui-*); code blocks read the font store's monospace
+// family (--t-font-monospace-family). See tasks/styling.md.
 addStyles(`
   .quilx-md { }
   .quilx-md-code {
-    background: ${theme.ui.surface.popover};
+    background: var(--t-ui-surface-popover);
     padding: 8px 10px;
     border-radius: 6px;
+    font-family: var(--t-font-monospace-family);
   }
   .quilx-md-quote {
-    border-left: 3px solid ${theme.ui.border};
+    border-left: 3px solid var(--t-ui-border);
     padding-left: 10px;
     opacity: 0.85;
   }
@@ -47,8 +50,6 @@ addStyles(`
   .quilx-md-list { margin: 2px 0; }
   .quilx-md-quote { margin: 4px 0; }
 `);
-// Code blocks use the app monospace font (not a generic family).
-fonts.monospace('.quilx-md-code');
 
 // Pango named sizes per heading level (1..6).
 const HEADING_SIZE = ['x-large', 'large', 'large', 'medium', 'medium', 'small'];
