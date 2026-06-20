@@ -79,6 +79,8 @@ import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
 import { KeymapPanel } from './KeymapPanel.ts';
 import { DiagnosticsPanel } from '../lsp/diagnostics/DiagnosticsPanel.ts';
+import { PluginManagerPanel } from './PluginManagerPanel.ts';
+import { panelRegistry } from '../plugin/PanelRegistry.ts';
 import { type NavigationKind, type LspConfig, type LspDocument } from '../lsp/LspManager.ts';
 import { normalizeWorkspaceEdit, applyTextEdits } from '../lsp/workspaceEdit.ts';
 import { uriToPath, type PositionEncoding } from '../lsp/position.ts';
@@ -237,6 +239,15 @@ export class AppWindow {
     // across workbenches, so a switch reparents nothing.
     const userWorkbench = this.buildWorkbench('user', process.cwd());
     this.workbench = userWorkbench; // the active workbench until a person is switched
+
+    // When a plugin contributed a panel after workbenches are already built
+    // (future: dynamic plugin loading at runtime), add it to every live workbench.
+    panelRegistry.onRegistered((reg) => {
+      for (const wb of this.workbenches.values()) {
+        if (reg.dock === 'bottom') wb.pluginsDock.add(reg.createWidget(), { title: reg.title });
+        else if (reg.dock === 'left') wb.leftPanel.add(reg.createWidget(), { title: reg.title });
+      }
+    });
 
     // Header-bar git chrome targets the *active* workbench's git/cwd;
     // activateWorkbench re-points it (setRepo/rebind) on a person switch. The
@@ -1285,12 +1296,21 @@ export class AppWindow {
     const keymapDock = new Panel({ onTabCloseRequest: () => this.hideBottomDock('keymap') });
     keymapDock.add(keymapPanel.root, { title: 'Keybindings' });
 
+    const pluginManagerPanel = new PluginManagerPanel();
+    const pluginsDock = new Panel({ onTabCloseRequest: () => this.hideBottomDock('plugins') });
+    pluginsDock.add(pluginManagerPanel.root, { title: 'Plugins' });
+    // Add any plugin-contributed bottom panels already registered.
+    for (const reg of panelRegistry.list()) {
+      if (reg.dock === 'bottom') pluginsDock.add(reg.createWidget(), { title: reg.title });
+      else if (reg.dock === 'left') leftPanel.add(reg.createWidget(), { title: reg.title });
+    }
+
     const workbench = new Workbench<'user' | AgentTerminal>(
       owner,
       {
         cwd, git, center, fileTree, leftPanel, filesTab,
         notificationLog, notificationPanel, diagnosticsPanel, diagnosticsDock,
-        keymapPanel, keymapDock,
+        keymapPanel, keymapDock, pluginsDock,
       },
       { showSideDock: owner === 'user' },
     );
@@ -1405,6 +1425,7 @@ export class AppWindow {
       case 'notifications': return this.workbench.notificationPanel;
       case 'diagnostics': return this.workbench.diagnosticsDock;
       case 'keymap': return this.workbench.keymapDock;
+      case 'plugins': return this.workbench.pluginsDock;
       default: return null;
     }
   }
@@ -1674,6 +1695,7 @@ export class AppWindow {
     if (this.workbench.bottomDock === 'notifications') this.workbench.notificationLog.focus();
     else if (this.workbench.bottomDock === 'diagnostics') this.workbench.diagnosticsPanel.focus();
     else if (this.workbench.bottomDock === 'keymap') this.workbench.keymapPanel.focus();
+    else if (this.workbench.bottomDock === 'plugins') this.workbench.pluginsDock.root.grabFocus();
   }
 
   // --- LSP commands ----------------------------------------------------------
@@ -1696,6 +1718,7 @@ export class AppWindow {
       'lsp:toggle-diagnostics-panel': { didDispatch: () => this.toggleDiagnosticsPanel(), description: 'Toggle the Diagnostics panel' },
       'lsp:install-server': { didDispatch: () => this.installServerPicker(), description: 'Install a language server…' },
       'keymap:show': { didDispatch: () => this.toggleKeymapPanel(), description: 'Show all keybindings and their source' },
+      'plugin:toggle-manager': { didDispatch: () => this.togglePluginManager(), description: 'Toggle the Plugin Manager panel' },
     });
   }
 
@@ -1738,6 +1761,16 @@ export class AppWindow {
     } else {
       this.setBottomDock('keymap');
       this.workbench.keymapPanel.focus();
+    }
+  }
+
+  // Toggle the Plugin Manager in the bottom dock.
+  private togglePluginManager() {
+    if (this.workbench.bottomDock === 'plugins' && this.workbench.isDockVisible('bottom')) {
+      this.setBottomDock(null);
+    } else {
+      this.setBottomDock('plugins');
+      this.workbench.pluginsDock.root.grabFocus();
     }
   }
 
@@ -2629,6 +2662,7 @@ export class AppWindow {
     if (this.workbench.bottomDock === 'notifications') docks.push(this.workbench.notificationPanel);
     else if (this.workbench.bottomDock === 'diagnostics') docks.push(this.workbench.diagnosticsDock);
     else if (this.workbench.bottomDock === 'keymap') docks.push(this.workbench.keymapDock);
+    else if (this.workbench.bottomDock === 'plugins') docks.push(this.workbench.pluginsDock);
     return docks.find((p) => this.isFocusWithin(p.root)) ?? null;
   }
 

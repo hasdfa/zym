@@ -76,7 +76,7 @@ What exists, and whether it reacts to a live change:
   a literal hunt. Known exceptions still holding hardcoded literals:
   `src/ui/TextEditor/buildDefinitionPeek.ts` (`?? '#1e1e1e'` / `?? '#e0e0e0'`
   fallbacks), `src/util/lsColors.ts` (the fixed ANSI terminal palette), and
-  `src/plugins/color-preview/colors.ts` (black/white swatch contrast).
+  `plugins/color-preview/colors.ts` (black/white swatch contrast).
 
 ## Gaps (the "not followed through" list)
 

@@ -11,16 +11,16 @@ grammar + LSP), so that's the spine of this guide, with the other points at the 
 
 ## 1. Pick an id and create the directory
 
-`src/plugins/<id>/` with an `index.ts`. The `id` is stable and unique (e.g. `rust`),
+`plugins/<id>/` with an `index.ts`. The `id` is stable and unique (e.g. `rust`),
 and doubles as the keymap/style source key. Filenames are camelCase; the plugin's
 main export is the manifest object (`<id>Plugin`).
 
 Pick the closest existing plugin as a template:
-- **Language with a bundled grammar + standalone LSP** → `src/plugins/rust/` (simplest).
-- **Two grammars / one server for both** → `src/plugins/cpp/` (C + C++).
-- **Vendored (non-bundled) grammar** → `src/plugins/css/` (has `build-grammars.sh`).
-- **LSP + config, no grammar** → `src/plugins/markdown/`.
-- **Editor decorations, no language layer** → `src/plugins/color-preview/`
+- **Language with a bundled grammar + standalone LSP** → `plugins/rust/` (simplest).
+- **Two grammars / one server for both** → `plugins/cpp/` (C + C++).
+- **Vendored (non-bundled) grammar** → `plugins/css/` (has `build-grammars.sh`).
+- **LSP + config, no grammar** → `plugins/markdown/`.
+- **Editor decorations, no language layer** → `plugins/color-preview/`
   (`observeTextEditors`).
 
 ## 2. Write `index.ts`
@@ -30,8 +30,7 @@ Register everything through `ctx`; each `register*` is disposable-tracked, so
 `deactivate` is rarely needed.
 
 ```ts
-import type { Plugin, PluginContext } from '../../plugin/types.ts';
-import type { ServerDef } from '../../lang/types.ts';
+import type { Plugin, PluginContext, ServerDef } from 'quilx/plugin-api';
 
 export const fooPlugin: Plugin = {
   id: 'foo',
@@ -58,7 +57,7 @@ Notes:
 - A `ServerDef` with no `install` spec is fine for a standalone binary
   (rust-analyzer, clangd) — it's simply skipped, not crash-looped, when absent from
   PATH. Use `roots` for workspace-root markers, `singleFile: true` to let it
-  activate on a loose file. See `src/plugins/cpp/index.ts` and
+  activate on a loose file. See `plugins/cpp/index.ts` and
   [code-editing/language-config.md](code-editing/language-config.md).
 
 ## 3. Vendor the grammar assets
@@ -89,7 +88,7 @@ so those chains read well folded (TS/TSX, Rust, and C/C++ all do). It's a query-
 change — `src/syntax/folds.ts` consumes the capture name generically (a node can match
 both `@fold` and `@fold.keepFooter`; keep-footer wins per start row). The pattern:
 capture the **consequence/body block** of the construct that has a continuation. The
-TypeScript plugin is the reference (`src/plugins/typescript/queries/typescript/folds.scm`):
+TypeScript plugin is the reference (`plugins/typescript/queries/typescript/folds.scm`):
 
 ```scm
 (if_statement
@@ -119,13 +118,13 @@ Two files, both hermetic (mirror an existing plugin):
 - `<id>.test.ts` — activate the plugin against a throwaway `LanguageRegistry` via a
   partial `PluginContext` (so the global singleton isn't touched) and assert the
   contributions: detection (`languageForPath`), `lspLanguageId`, server activation
-  at/without a root, grammar registered. See `src/plugins/rust/rust.test.ts`.
+  at/without a root, grammar registered. See `plugins/rust/rust.test.ts`.
 - `grammar.test.ts` — load the real wasm in the pinned web-tree-sitter, assert the
   highlight/fold queries **compile** (catches node-name drift) and that a sample
   produces the expected captures (including `fold`; add `fold.keepFooter` if the
-  grammar ships it). See `src/plugins/rust/grammar.test.ts`.
+  grammar ships it). See `plugins/rust/grammar.test.ts`.
 
-Run: `node --test 'src/plugins/<id>/**/*.test.ts'` (the glob form — passing a bare
+Run: `node --test 'plugins/<id>/**/*.test.ts'` (the glob form — passing a bare
 directory makes `node --test` try to run it as an entry file and fail with
 `MODULE_NOT_FOUND`).
 
@@ -148,7 +147,8 @@ status list in [index.md](index.md) (the *Plugin system* section).
 
 ## Checklist
 
-- [ ] `src/plugins/<id>/index.ts` exports `<id>Plugin` (`Plugin`).
+- [ ] `plugins/<id>/package.json` with `name: "@quilx/plugin-<id>"`, `version`, `main`, `peerDependencies: { quilx: "^0.1.0" }`.
+- [ ] `plugins/<id>/index.ts` exports `<id>Plugin` (`Plugin`); imports from `quilx/plugin-api`.
 - [ ] Language: `registerLanguage` (+ `lspId` if it differs), `registerGrammar`,
       `registerServer`.
 - [ ] Assets under the plugin dir, referenced via `ctx.resolve`.

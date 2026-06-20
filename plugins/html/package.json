@@ -1,0 +1,10 @@
+{
+  "name": "@quilx/plugin-html",
+  "version": "0.1.0",
+  "description": "HTML support for quilx",
+  "type": "module",
+  "main": "./index.ts",
+  "peerDependencies": {
+    "quilx": "^0.1.0"
+  }
+}

@@ -144,7 +144,7 @@ outer view → its IM releases). See the POC findings above.
 
 ## Consumers (built)
 
-1. **Markdown image preview** (`BlockDecorations`) — `src/plugins/markdown/imagePreview.ts`.
+1. **Markdown image preview** (`BlockDecorations`) — `plugins/markdown/imagePreview.ts`.
    The only `BlockDecorations` consumer. See *Future consumers* for the details.
 2. **See-definition / peek** (`Peek`) — a full-width nested read-only `TextEditor`
    below the symbol's line, height-capped with internal scroll, Escape to close.
@@ -246,7 +246,7 @@ existing infra it would reuse. Only the markdown image preview is built.
 
 **Block (`BlockDecorations` — non-interactive / click):**
 
-- ✅ **Markdown image preview** (built — `src/plugins/markdown/imagePreview.ts`):
+- ✅ **Markdown image preview** (built — `plugins/markdown/imagePreview.ts`):
   `![alt](src)` local images (relative / absolute / `file://`) render as a
   `Gtk.Picture` block below their line. Reconciled on a debounced rescan (blocks
   keep identity across edits and track their anchor mark, so typing doesn't reload);

@@ -37,8 +37,8 @@ Resolution API: `languageForPath`, `lspLanguageId`, `grammarFor`,
 loading but reads its specs from `languages.grammarFor` (public API
 `langIdForPath`/`loadGrammar`/`getGrammar`/`preloadGrammars`/`createParser`).
 
-Built-in languages register via the bundled plugins (`src/plugins/*`); the
-TypeScript plugin (`src/plugins/typescript/index.ts`) is the reference and
+Built-in languages register via the bundled plugins (`plugins/*`); the
+TypeScript plugin (`plugins/typescript/index.ts`) is the reference and
 contributes the whole TS/JS family. See [../plugins.md](../plugins.md). External
 plugin *loading* (manifest + out-of-repo packages) is still ahead.
 
@@ -68,7 +68,7 @@ interface ServerDef {
    ungrouped activated servers all stay.
 4. → `ActiveServer { server, rootDir }[]` to spawn/reuse (keyed by `(name, rootDir)`).
 
-Example — the `tsx` language (`src/plugins/typescript/index.ts`): flow
+Example — the `tsx` language (`plugins/typescript/index.ts`): flow
 (`roots:['.flowconfig']`, group `js-types`, prio 20), tsserver
 (`roots:['tsconfig.json','jsconfig.json','package.json']`, group `js-types`, prio
 10), deno (`roots:['deno.json','deno.jsonc']`, group `js-types`, prio 30), eslint

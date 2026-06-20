@@ -28,6 +28,8 @@ export interface PluginManifest {
   name: string;
   description?: string;
   version?: string;
+  /** Minimum quilx version required. Activation is skipped with a warning if unmet. */
+  minQuilxVersion?: string;
 }
 
 /** Language-layer contributions (detection + tree-sitter grammar + LSP servers). */
@@ -38,6 +40,18 @@ export interface PluginLanguages {
   registerGrammar(langId: string, def: GrammarDef): Disposable;
   /** Add an LSP server candidate for a language id. */
   registerServer(langId: string, def: ServerDef): Disposable;
+}
+
+/** A panel a plugin contributes to one of the editor's docks. */
+export interface PanelRegistration {
+  /** Stable id, unique across all plugin panels (e.g. `my-plugin:my-panel`). */
+  id: string;
+  /** Tab title shown in the dock. */
+  title: string;
+  /** Which dock to place this panel in. */
+  dock: 'bottom' | 'left';
+  /** Called once to build the widget. Only called if/when the dock is first shown. */
+  createWidget(): Widget;
 }
 
 /**
@@ -72,6 +86,10 @@ export interface PluginContext {
    *  plugin deactivate. The per-editor decoration seam (color preview, error lens,
    *  …) — Atom's `observeTextEditors`. */
   observeTextEditors(callback: (editor: TextEditor) => DisposableLike | void): Disposable;
+
+  /** Contribute a panel tab to a dock (bottom or left). The tab is added for
+   *  every workbench (user + agents) that is built while the plugin is active. */
+  registerPanel(registration: PanelRegistration): Disposable;
 
   /** Track an arbitrary Disposable for teardown on deactivate (escape hatch). */
   add(disposable: Disposable): void;
