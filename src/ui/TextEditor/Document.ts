@@ -30,6 +30,8 @@ import type { LspDocument, DocumentEdit } from '../../lsp/LspManager.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import { ProjectionView } from './ProjectionView.ts';
 import type { Item } from './ViewProjection.ts';
+import type { SyntaxProjection } from '../../syntax/SyntaxProjection.ts';
+import type { TextEditorSource } from './TextEditorSource.ts';
 
 // The stable source key for this document's model in each view's ProjectionView. A normal
 // file is single-source, so the key is arbitrary but must match the projection's segment.
@@ -67,7 +69,13 @@ export interface DocumentHost {
   lspCursor(): Point;
 }
 
-export class Document {
+export class Document implements TextEditorSource {
+  // A single file/source — never the multibuffer backing (that's `MultiBufferDocument`).
+  readonly isMultiSource = false;
+  // The painter backing for `TextEditorSource`: a single-source parse, never a projection.
+  get documentSyntax(): DocumentSyntax { return this.syntax; }
+  readonly syntaxProjection: SyntaxProjection | null = null;
+
   // The headless authority: text + the single undo stack. Never attached to a view.
   private readonly model: SourceBuffer;
   // Each open view onto this document, keyed by its view buffer. A ProjectionView owns the
@@ -180,6 +188,7 @@ export class Document {
       this.syncing = false;
     }
     this.model.setModified(false);
+    for (const cb of this.materializeHandlers) cb(); // marks were dropped by the rebuild → re-project
   }
 
   /** Restore *unsaved* content on session restore: replace the buffer like
@@ -361,6 +370,18 @@ export class Document {
   /** VIEW line showing model line `modelLine` (its start) — for diagnostics/decorations. */
   viewLineForModelLine(buffer: SourceBuffer, modelLine: number): number {
     return this.pvFor(buffer)?.viewLineForModelLine(modelLine) ?? modelLine;
+  }
+
+  // --- block-decoration anchoring (single source: the file is the sole source) -
+  /** The view row showing source `row` — `sourceKey` is ignored (one source). Fold-aware. */
+  viewRowForSource(buffer: SourceBuffer, _sourceKey: string | undefined, row: number): number | null {
+    return this.viewLineForModelLine(buffer, row);
+  }
+  /** Fired when a view re-materializes (a file load/reload via `setText`), which drops marks. */
+  private readonly materializeHandlers = new Set<() => void>();
+  onDidMaterialize(cb: () => void): () => void {
+    this.materializeHandlers.add(cb);
+    return () => this.materializeHandlers.delete(cb);
   }
 
   // --- Identity --------------------------------------------------------------

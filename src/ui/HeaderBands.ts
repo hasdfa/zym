@@ -1,18 +1,18 @@
 /*
- * MultiBufferHeader — the filename "header" shown above each excerpt in a multibuffer, as a
+ * HeaderBands — the filename "header" shown above each excerpt in a multibuffer, as a
  * real Gtk widget (icon + dimmed directory + bold basename) rather than a row of buffer text.
- * `MultiBufferView` anchors one above each excerpt's first row via `BlockDecorations` (a
+ * `SearchResultsView` anchors one above each excerpt's first row via `BlockDecorations` (a
  * reserved band, zero buffer footprint), so the filename isn't navigable/selectable text and
  * doesn't occupy a buffer line. Clicking it jumps to the file (the role Enter-on-the-header
  * row used to play).
  */
 import * as Path from 'node:path';
-import { Gtk, Pango } from '../../gi.ts';
-import { ICON_FONT_FAMILY } from '../../fonts.ts';
-import { theme } from '../../theme/theme.ts';
-import { addStyles } from '../../styles.ts';
-import { fileIconGlyph } from '../fileIcons.ts';
-import { escapeMarkup } from '../proseMarkup.ts';
+import { Gtk, Pango } from '../gi.ts';
+import { ICON_FONT_FAMILY } from '../fonts.ts';
+import { theme } from '../theme/theme.ts';
+import { addStyles } from '../styles.ts';
+import { fileIconGlyph } from './fileIcons.ts';
+import { escapeMarkup } from './proseMarkup.ts';
 
 addStyles(`
   .mb-header {

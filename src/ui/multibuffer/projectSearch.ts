@@ -9,7 +9,7 @@
  */
 import { spawn } from 'node:child_process';
 import * as Path from 'node:path';
-import type { ExcerptInput } from './MultiBufferView.ts';
+import type { ExcerptInput } from '../SearchResultsView.ts';
 import type { MatchRange } from './MultiBufferModel.ts';
 
 const MAX_MATCHES = 1000; // cap rows parsed from rg across all files

@@ -31,7 +31,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space f o': 'file:find', // fuzzy file picker
   'space f e': 'file:open-path', // open by path (directory-navigating opener)
   'space /': 'project:search', // full-text search (ripgrep)
-  'space *': 'project:search-multibuffer', // selected text → all matches in a multibuffer
+  'space *': 'project:search-results', // selected text → all matches in a multibuffer
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space p r': 'scripts:run', // "p"ackage "r"un — run a package.json script in a terminal
@@ -60,8 +60,9 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
   'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
-  'space g o': 'git:open-staging', // "o"pen the staging view (status + diff) in a tab
-  'space g D': 'git:diff-multibuffer', // "D"iff all changed files as one continuous diff
+  'space g o': 'git:continuous-diff', // "o"pen the continuous diff (the staging surface)
+  'space g D': 'git:continuous-diff', // "D"iff all changed files as one continuous diff
+  'space g c': 'git:start-commit', // "c"ommit staged changes (edit the message in a tab)
   // Hunk-level staging on the gutter hunk under the cursor (editor only): "s"tage,
   // "u"nstage (a staged/blue hunk), "r"evert (discard the unstaged change).
   'space h s': 'git:stage-hunk',
@@ -184,31 +185,25 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'c c': 'git:commit', // commit: edit the message in a tab, save+close to commit
   },
 
-  // Tab-hosted staging view (git:open-staging): list nav + file-level staging. `o`
-  // expands the file's inline diff (and focuses it); `c c` commits via COMMIT_EDITMSG.
-  '#GitStagingView': {
-    j: 'core:down',
-    k: 'core:up',
-    o: 'core:right', // expand the selected file's inline diff (and focus it)
-    s: 'git:stage', // stage the file under the cursor
-    u: 'git:unstage', // unstage the file under the cursor
-    X: 'git:discard', // restore (tracked) / delete (untracked, no prompt) the file
-    'c c': 'git:commit', // commit: opens .git/COMMIT_EDITMSG in the editor area
-  },
-  // While an inline diff (read-only editor) is focused: close it back to the list.
-  // `q` is pager-style (no editing use in a read-only view); the selector is more
-  // specific than the vim `#TextEditor` bindings, so it wins there.
-  '#GitStagingView #TextEditor': {
-    q: 'git:close-diff',
-    'escape escape': 'git:close-diff',
-  },
-  // Editable diff multibuffer (git:diff-multibuffer): fold-style keys expand the elided `⋯`
+  // Editable diff multibuffer (git:continuous-diff): fold-style keys expand the elided `⋯`
   // unchanged lines. More specific than the vim `#TextEditor` bindings, so these win; `z z`/
   // `z t`/`z b` (scroll) aren't bound here and still fall through to vim.
-  '#TextEditor.diff-multibuffer': {
+  // Project-search results multibuffer: per-file (excerpt) collapse. `z a` toggles the file under
+  // the cursor; `z M`/`z R` collapse/expand all. More specific than vim's `#TextEditor`, so these win.
+  '#TextEditor.search-results': {
+    'z a': 'search:toggle-collapse',
+    'z M': 'search:collapse-all',
+    'z R': 'search:expand-all',
+  },
+  '#TextEditor.continuous-diff': {
     'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
     'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
     'z m': 'diff:collapse-context', // re-collapse expanded context
+    // Hunk staging on the change under the cursor — same `space h …` mnemonic as the editor gutter,
+    // but routed to the continuous diff. Bare `s`/`u` are left to vim (substitute / undo) since this
+    // surface is editable.
+    'space h s': 'diff:stage-hunk',
+    'space h u': 'diff:unstage-hunk',
   },
 
   // Workbench list (the left sidebar): shared list navigation (l reveals the selected

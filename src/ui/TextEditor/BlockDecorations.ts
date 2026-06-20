@@ -43,6 +43,8 @@ export interface BlockDecorationOptions {
 }
 
 export interface BlockDecorationHandle {
+  /** The decoration's current anchor line (its mark's line), tracking edits since placement. */
+  line(): number;
   /** Remove the band + overlay and drop the anchor mark. */
   remove(): void;
   /** Re-measure the widget height and reposition (after the widget's size changes). */
@@ -97,6 +99,13 @@ export class BlockDecorations {
       this.scheduleFlush(0);
       this.hookVadjustment();
     });
+
+    // An edit to (or around) a band's anchor line can drop the reserved-space tag and leave the
+    // overlay stranded — fatal on an EDITABLE surface (the search/diff multibuffers), where you type
+    // on the very rows carrying header/gap bands. Re-reserve + reposition every band after any buffer
+    // mutation (coalesced to one frame), so a band's space survives editing. Tag/overlay ops don't
+    // fire `changed`, so this never re-enters.
+    this.buffer.on('changed', () => this.scheduleReserve());
   }
 
   /** Reposition whenever the content height changes — a fold collapse/expand, an
@@ -141,6 +150,7 @@ export class BlockDecorations {
     this.scheduleFlush(0);
 
     return {
+      line: () => this.markLine(block),
       remove: () => this.removeBlock(block),
       invalidate: () => {
         if (block.placed) this.place(block);
@@ -180,6 +190,30 @@ export class BlockDecorations {
    *  re-validated line geometry yet, so reading get_iter_location now is stale. */
   repositionAll(): void {
     this.scheduleReposition();
+  }
+
+  /** The band placement anchored at view `line` — `'above'` (a header band, taller cell above) or
+   *  `'below'` (a gap/image band, taller cell below), else null. A gutter uses this to align its
+   *  number onto the text rather than floating it into the reserved band. */
+  placementAtLine(line: number): BlockDecorationPlacement | null {
+    for (const block of this.blocks) if (block.placed && this.markLine(block) === line) return block.placement;
+    return null;
+  }
+
+  /** Re-reserve + reposition every placed band after an edit (which can drop the reserved-space tag
+   *  on its anchor line, or — after an undo — leave the band mispositioned until the layout settles).
+   *  Deferred to a tick (a synchronous re-place during the edit's layout-invalidation leaves the
+   *  overlay unallocated), then the geometry is settled over the next few frames via
+   *  `scheduleReposition`. Coalesced. */
+  private reserveTickId = 0;
+  private scheduleReserve(): void {
+    if (this.reserveTickId || this.blocks.size === 0) return;
+    this.reserveTickId = (this.view as any).addTickCallback(() => {
+      this.reserveTickId = 0;
+      for (const block of this.blocks) if (block.placed) this.place(block); // re-apply the tag + reposition
+      this.scheduleReposition(); // settle the position over the next frames (post-undo relayout)
+      return false; // G_SOURCE_REMOVE — run once; the reposition window does the multi-frame settle
+    });
   }
 
   // --- internals -------------------------------------------------------------

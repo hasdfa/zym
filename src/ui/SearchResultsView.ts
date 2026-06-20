@@ -1,5 +1,5 @@
 /*
- * MultiBufferView — ONE editor stitching excerpts from many files, each with a filename
+ * SearchResultsView — ONE editor stitching excerpts from many files, each with a filename
  * header, each highlighted by its own grammar (tasks/code-editing/multibuffer.md). It IS a
  * `TextEditor` (buffer mode) so it gets vim navigation, search, selection, and decorations for
  * free; the per-file highlighting comes from an `ExcerptSyntaxProjection` the editor's painter
@@ -19,19 +19,20 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
-import { TextEditor } from '../TextEditor/TextEditor.ts';
-import { Document } from '../TextEditor/Document.ts';
-import { DocumentRegistry } from '../TextEditor/DocumentRegistry.ts';
-import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
-import { ViewProjection } from '../TextEditor/ViewProjection.ts';
-import { ProjectionView } from '../TextEditor/ProjectionView.ts';
-import { excerptsToItems, type Excerpt, type Segment, type MatchRange } from './MultiBufferModel.ts';
-import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
-import { MultiBufferGutter } from './MultiBufferGutter.ts';
-import { buildHeaderWidget } from './MultiBufferHeader.ts';
-import { Range } from '../../text/Range.ts';
-import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
+import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../gi.ts';
+import { TextEditor } from './TextEditor/TextEditor.ts';
+import { Document } from './TextEditor/Document.ts';
+import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
+import { DocumentSyntax } from '../syntax/DocumentSyntax.ts';
+import { ViewProjection, type Item } from './TextEditor/ViewProjection.ts';
+import { ProjectionView } from './TextEditor/ProjectionView.ts';
+import { excerptsToItems, type Excerpt, type Segment, type MatchRange } from './multibuffer/MultiBufferModel.ts';
+import { ExcerptSyntaxProjection } from './multibuffer/ExcerptSyntaxProjection.ts';
+import { MultiBufferDocument } from './multibuffer/MultiBufferDocument.ts';
+import { SourceLineNumberGutter } from './SourceLineNumberGutter.ts';
+import { buildHeaderWidget, buildGapWidget } from './HeaderBands.ts';
+import { Range } from '../text/Range.ts';
+import type { BlockDecorationSpec, BlockDecorationSet } from './TextEditor/BlockDecorationSet.ts';
 
 /** One file's contribution: the regions (source model row spans) to show. */
 export interface ExcerptInput {
@@ -43,7 +44,7 @@ export interface ExcerptInput {
   matches?: MatchRange[];
 }
 
-export interface MultiBufferOptions {
+export interface SearchResultsOptions {
   excerpts: ExcerptInput[];
   /** Root for relativizing header labels. */
   cwd?: string;
@@ -66,7 +67,7 @@ interface SourceEntry {
 
 const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 
-export class MultiBufferView {
+export class SearchResultsView {
   readonly root: InstanceType<typeof Gtk.Widget>;
   readonly editor: TextEditor;
   private readonly sources = new Map<string, SourceEntry>();
@@ -74,8 +75,17 @@ export class MultiBufferView {
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
-  private readonly gutter: MultiBufferGutter;
-  private readonly headerHandles: BlockDecorationHandle[] = [];
+  private readonly gutter: SourceLineNumberGutter;
+  // Filename-header + `⋯` gap widget bands (not buffer rows), declared as SOURCE-anchored block
+  // decorations — the editor projects + reconciles them; their positions then ride the anchor marks.
+  private bands!: BlockDecorationSet;
+  // Per-excerpt collapse: the full excerpts (re-derived on toggle), the raw inputs (for re-
+  // highlighting), and the set of collapsed excerpt indices. A collapsed excerpt shows only its
+  // first source row (always anchorable — no block rows, no view-fold; the painter stays fold-naive).
+  private excerpts: Excerpt[] = [];
+  private excerptInputs: ExcerptInput[] = [];
+  private readonly collapsed = new Set<number>();
+  private lastLineCount = 0; // view buffer line count, to detect row-count-changing edits
   private disposed = false;
 
   /** The LIVE coordinate map (re-segmentation swaps the underlying projection, so always read
@@ -84,36 +94,36 @@ export class MultiBufferView {
     return this.projectionView.view;
   }
 
-  constructor(options: MultiBufferOptions) {
+  constructor(options: SearchResultsOptions) {
     this.onActivate = options.onActivate;
     this.editable = !!options.editable;
     this.registry = options.documents;
     if (this.editable && !this.registry) {
-      throw new Error('MultiBufferView: editable mode requires a DocumentRegistry');
+      throw new Error('SearchResultsView: editable mode requires a DocumentRegistry');
     }
 
     // Resolve each unique source once (live Document when editable, else a disk snapshot), then
     // back the editor with a ProjectionView over those source buffers — the SAME substrate the
     // single-file editor uses. The painter highlights each excerpt from its source's own parse
     // via the ExcerptSyntaxProjection over the PV's (live) coordinate map.
-    const excerpts = this.buildExcerpts(options.excerpts, options.cwd);
+    this.excerpts = this.buildExcerpts(options.excerpts, options.cwd);
+    this.excerptInputs = options.excerpts;
     const sourceBuffers = new Map([...this.sources].map(([key, entry]) => [key, entry.buffer] as const));
-    // Headers are real widgets anchored above each excerpt (not navigable buffer rows), so the
-    // item list carries only segments + gaps.
-    this.projectionView = new ProjectionView(excerptsToItems(excerpts, { headers: 'widget' }), sourceBuffers);
+    // Headers + gaps are widget bands (not buffer rows), so the item list carries only real source
+    // segments. A collapsed excerpt contributes just its first row (see `currentItems`).
+    this.projectionView = new ProjectionView(this.currentItems(), sourceBuffers);
     const syntaxMap = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
-    const syntaxProjection = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
+    const painter = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
 
-    this.editor = new TextEditor({
-      buffer: {
-        readOnly: !this.editable,
-        folding: false,
-        syntaxProjection,
-        externalBuffer: this.projectionView.buffer,
-        // Editable: route undo through the PV (coordinates the touched sources as one step).
-        undoTarget: this.editable ? this.projectionView : undefined,
-      },
-    });
+    // One editor, natively backed by the multi-source projection (the `MultiBufferDocument` supplies
+    // the view buffer, the per-excerpt painter, and undo coordinating the touched sources). The
+    // editor owns + disposes it.
+    this.editor = new TextEditor({ source: new MultiBufferDocument(this.projectionView, painter) });
+    if (!this.editable) this.editor.model.setReadOnly(true);
+    this.bands = this.editor.blockDecorations();
+    // Scope the per-excerpt collapse keymap (`z a`/`z M`/`z R`) to this surface — more specific than
+    // vim's `#TextEditor`, so it wins while other `z` motions fall through.
+    (this.editor.sourceView as any).addCssClass('search-results');
     this.root = this.editor.root;
 
     if (this.editable) {
@@ -127,28 +137,156 @@ export class MultiBufferView {
     // source row behind each view row (blank on header/gap/blank). Sized to the widest source.
     let maxLine = 1;
     for (const entry of this.sources.values()) maxLine = Math.max(maxLine, entry.lines.length);
-    this.gutter = new MultiBufferGutter(this.editor.sourceView, () => this.projectionView.view, maxLine);
-    this.highlightMatches(options.excerpts);
-    this.installHeaderWidgets(excerpts);
+    this.gutter = new SourceLineNumberGutter(
+      this.editor.sourceView,
+      () => this.projectionView.view,
+      maxLine,
+      (line) => this.editor.inlineBlocks.placementAtLine(line),
+    );
+    this.highlightMatches(this.excerptInputs);
+    this.installBands();
+    if (this.editable) {
+      // The HEADER/GAP bands need no per-edit handling: declared as source anchors (installBands),
+      // their positions ride the BlockDecorations marks through every edit/undo/splice, and the
+      // band SET only changes on collapse (which re-runs installBands). The only remaining per-edit
+      // concern is the stitched SYNTAX highlighting — the painter needs a nudge after a row-count
+      // reflow. Repaint on a row-count change (write-through; the projection is fresh then), and
+      // again after a deferred reverse-sync remap settles (its 'changed' fires on a stale map).
+      this.lastLineCount = (this.editor.sourceView as any).getBuffer().getLineCount();
+      this.editor.model.onDidChangeText(() => {
+        if (this.projectionView.isSyncPending()) return; // stale map — the reflow handler repaints
+        const n = (this.editor.sourceView as any).getBuffer().getLineCount();
+        if (n === this.lastLineCount) return;
+        this.lastLineCount = n;
+        this.editor.repaintSyntax();
+      });
+      this.projectionView.setReflowHandler(() => {
+        this.lastLineCount = (this.editor.sourceView as any).getBuffer().getLineCount();
+        this.editor.repaintSyntax();
+      });
+    }
     // Materializing the buffer (setText) leaves the caret at the END; start at the top.
     this.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
   }
 
-  /** Anchor a filename-header widget above each excerpt's first row (BlockDecorations places it
-   *  in a reserved band, deferring until the view is mapped). The anchor mark tracks edits that
-   *  shift the row; clicking the header jumps to the file. */
-  private installHeaderWidgets(excerpts: Excerpt[]): void {
-    const projection = this.projectionView.view;
-    for (const excerpt of excerpts) {
+  /** Declare the filename-header widget above each excerpt's first source row, and a `⋯` gap band
+   *  below the last row of each non-final segment (separating non-adjacent regions of one file).
+   *  Both are SOURCE-anchored block decorations (the editor projects them to view rows + reconciles
+   *  in place); their positions then ride their anchor marks across edits. Only the band SET changes
+   *  here — on construct and on collapse/expand (the chevron + which gaps exist). */
+  private installBands(): void {
+    const specs: BlockDecorationSpec[] = [];
+    this.excerpts.forEach((excerpt, ei) => {
       const first = excerpt.segments[0];
-      if (!first) continue;
-      const anchor = projection.viewRowForSource(first.sourceKey, first.startRow);
-      if (anchor === null) continue;
-      const widget = buildHeaderWidget(excerpt.header, first.sourceKey, () =>
-        this.onActivate?.({ path: first.sourceKey, row: first.startRow }),
-      );
-      this.headerHandles.push(this.editor.inlineBlocks.add({ line: anchor, widget, placement: 'above' }));
+      if (!first) return;
+      const collapsed = this.collapsed.has(ei);
+      // A `▸` chevron marks a collapsed file; an expanded one keeps the plain filename.
+      const label = collapsed ? `▸ ${excerpt.header}` : excerpt.header;
+      specs.push({
+        id: `header:${ei}`,
+        key: label,
+        anchor: { sourceKey: first.sourceKey, row: first.startRow },
+        placement: 'above',
+        build: () => buildHeaderWidget(label, first.sourceKey, () => this.onActivate?.({ path: first.sourceKey, row: first.startRow })),
+      });
+      // Gaps only when expanded (a collapsed excerpt is a single row — no gaps). Anchor the `⋯`
+      // ABOVE the NEXT segment's first row (a start-anchor), not below the previous segment's last
+      // row: `o` on that last line inserts after a left-gravity start-of-line mark, so a below-anchor
+      // wouldn't ride the growth and the opened line would land below the gap. The next segment's
+      // first row is stable content its mark tracks, keeping the gap between the two regions.
+      if (!collapsed) {
+        for (let i = 1; i < excerpt.segments.length; i++) {
+          const seg = excerpt.segments[i];
+          specs.push({
+            id: `gap:${ei}:${i}`,
+            key: '⋯',
+            anchor: { sourceKey: seg.sourceKey, row: seg.startRow },
+            placement: 'above',
+            build: () => buildGapWidget('⋯'),
+          });
+        }
+      }
+    });
+    this.bands.set(specs);
+  }
+
+  // --- per-excerpt collapse --------------------------------------------------
+
+  /** The projection items for the current collapse state: a collapsed excerpt contributes only its
+   *  first source row (always anchorable for the header band — no block rows, no view-fold). */
+  private currentItems(): Item[] {
+    const shown = this.excerpts.map((excerpt, ei) => {
+      if (!this.collapsed.has(ei)) return excerpt;
+      const first = excerpt.segments[0];
+      return { header: excerpt.header, segments: [{ ...first, endRow: first.startRow }] };
+    });
+    return excerptsToItems(shown, { headers: 'widget' });
+  }
+
+  /** Collapse / expand the excerpt (file) under the cursor. */
+  toggleCollapseAtCursor(): void {
+    const ei = this.excerptAtCursor();
+    if (ei === null) return;
+    if (this.collapsed.has(ei)) this.collapsed.delete(ei);
+    else this.collapsed.add(ei);
+    this.rebuild();
+  }
+
+  /** Collapse every excerpt to its first row. */
+  collapseAll(): void {
+    this.excerpts.forEach((_, ei) => this.collapsed.add(ei));
+    this.rebuild();
+  }
+
+  /** Expand every excerpt back to its full regions. */
+  expandAll(): void {
+    this.collapsed.clear();
+    this.rebuild();
+  }
+
+  /** Re-derive the items for the new collapse state and re-flow the view (minimal-churn splice),
+   *  re-placing the bands, re-painting, re-highlighting matches, and following the caret to its
+   *  source row (or the file's surviving first row if its row was collapsed away). */
+  private rebuild(): void {
+    if (this.disposed) return;
+    const caret = this.editor.model.getCursorBufferPosition();
+    const anchor = this.projection.viewToSource(caret.row, caret.column);
+    this.projectionView.retarget(this.currentItems());
+    this.editor.repaintSyntax();
+    this.installBands();
+    this.highlightMatches(this.excerptInputs);
+    if (anchor.kind === 'source') {
+      const pos =
+        this.projection.sourceToView(anchor.sourceKey, anchor.row, anchor.column) ??
+        this.firstVisibleViewPosition(anchor.sourceKey);
+      if (pos) this.editor.model.setCursorBufferPosition(pos);
     }
+  }
+
+  /** Which excerpt (index) the cursor sits in — the excerpt whose segments contain the cursor's
+   *  source position; null on a row that maps to no source. */
+  private excerptAtCursor(): number | null {
+    const buffer = (this.editor.sourceView as any).getBuffer();
+    const row = asIter(buffer.getIterAtMark(buffer.getInsert())).getLine();
+    const src = this.projection.viewToSource(row, 0);
+    if (src.kind !== 'source') return null;
+    for (let i = 0; i < this.excerpts.length; i++) {
+      for (const seg of this.excerpts[i].segments) {
+        if (seg.sourceKey === src.sourceKey && src.row >= seg.startRow && src.row <= seg.endRow) return i;
+      }
+    }
+    return null;
+  }
+
+  /** The view position of a source's first still-shown row (for caret recovery after a collapse). */
+  private firstVisibleViewPosition(sourceKey: string): { row: number; column: number } | null {
+    for (const excerpt of this.excerpts) {
+      const first = excerpt.segments[0];
+      if (first?.sourceKey !== sourceKey) continue;
+      const pos = this.projection.sourceToView(sourceKey, first.startRow, 0);
+      if (pos) return pos;
+    }
+    return null;
   }
 
   /** Paint the search hits: map each match's SOURCE (row, col) span to view coords through the
@@ -297,10 +435,10 @@ export class MultiBufferView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const handle of this.headerHandles) handle.remove();
-    this.headerHandles.length = 0;
+    this.bands.clear();
     this.gutter.dispose();
-    this.projectionView.dispose(); // detach the PV's source-buffer signal handlers first
+    // The editor owns the ProjectionView (via its MultiBufferDocument); disposing the editor
+    // detaches the PV's source-buffer signal handlers, before the sources are released below.
     this.editor.dispose();
     for (const entry of this.sources.values()) {
       // Editable: drop the shared ref. A file ALSO open in a tab survives (the tab holds a ref
