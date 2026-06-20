@@ -76,15 +76,62 @@ Three layers — all shipped and live:
 - **G11 — Session persistence.** ☐ serialize/restore multibuffer tabs; also a close-confirmation
   for a file edited ONLY in a multibuffer (unsaved edits discarded on close).
 
-## What's left
+## Next pickup (two tasks)
 
-1. **G5 staging ops + retire `GitStagingView`** (task #17, the forcing function). Stage/unstage
-   hunks/lines from the editable diff, then replace `src/ui/GitStagingView.ts`
-   (`AppWindow.openStagingView`, `stagingViews`).
-2. **Gutter band background** (G5 polish, blocked) — `tasks/code-editing/gutter-cell-background.md`.
-3. **G8** copy-strips-headers + per-excerpt collapse; **G9** more diff sources; **G10** viewport
-   virtualization (only if needed); **G11** session persistence + unsaved-close confirmation.
-4. **G1 cleanup** — delete the buffer-mode/`syntaxProjection` duality once nothing needs it.
+### Task A — finish G5: staging ops on the editable diff, then retire `GitStagingView`
+
+The editable continuous diff (`DiffMultiBufferView`, `space g D`) is the replacement surface; it
+just needs staging affordances, then `GitStagingView` (the old file-list accordion) is deleted.
+
+- **Reuse the machinery — it already exists:**
+  - `src/git/cli.ts`: `stage(root, relPath)`, `unstage(root, relPath)`, `stageAll`/`unstageAll`,
+    and **`applyPatch(...)`** (runs `git apply --cached`, with reverse for unstage) — the path for
+    partial/hunk/line staging.
+  - `src/util/hunkPatch.ts`: `computeHunks`, **`formatHunkPatch(relPath, hunk)`**,
+    `hunkContainsBufferRow(hunk, row)`, `buildRowMap` — build the patch to feed `applyPatch`.
+  - `DiffMultiBufferView` already has the windowed diff, per-row `DiffRowKind`, old/new line
+    numbers, caret row, and live re-diff on change.
+- **Wiring:** add commands scoped to `#TextEditor.diff-multibuffer` (e.g. `s`/`u` = stage/unstage
+  the hunk at the caret; a visual range = line-level via a row-subset patch) → build the patch with
+  `formatHunkPatch` → `applyPatch` (`--cached`, `--reverse` for unstage) → refresh git status +
+  re-diff. Commit reuses GitStagingView's `onCommit` (opens `.git/COMMIT_EDITMSG`); add discard.
+- **Decision to make (the real design question):** today the diff is **working-tree vs HEAD** only.
+  Staging introduces the **index** as a third state. Decide how the one continuous surface shows
+  staged vs unstaged — sections (Staged / Unstaged like the old view), a per-file toggle, or two
+  diff bases per file (staged = index↔HEAD, unstaged = worktree↔index). `buildDiffMultiBuffer`
+  takes `files: {path, oldText, newText}[]`; extend it to carry the staged/unstaged dimension.
+- **Retire:** delete `src/ui/GitStagingView.ts`; remove `AppWindow.openStagingView` + `stagingViews`
+  + the `git:open-staging` command and its `space g o` keymap (or repoint them at the diff
+  multibuffer). Read `tasks/git/staging-interface.md` for the original design + decisions to carry
+  over (per-row diff base, discard semantics, untracked = all-added).
+
+### Task B — merge `TextEditor` and `MultiBufferView` into one (the G1 cleanup)
+
+Today `MultiBufferView` / `DiffMultiBufferView` **wrap** a `TextEditor` in a special **buffer mode**
+(`BufferEditorOptions`: `externalBuffer` = the `ProjectionView` buffer, `syntaxProjection`,
+`undoTarget`), and that `TextEditor` still constructs a **throwaway scratch `Document` shim** whose
+translation methods just return identity. That duality (a "normal-file editor" path vs a
+"buffer-mode/external-buffer" path) is the last thing standing between us and full **G1**.
+
+- **Goal:** one editor. Make `TextEditor` natively backed by a `ProjectionView` over N sources as a
+  first-class case (a single file = one full-file excerpt — already true at the substrate level via
+  `ProjectionView`/`ViewProjection`; make it true at the `TextEditor` seam too). Then
+  `MultiBufferView`/`DiffMultiBufferView` shrink to thin orchestrators (build the `Item[]`, apply
+  decorations/overlays/gutter, wire navigation) over a normal editor.
+- **Delete:** the `externalBuffer` / `syntaxProjection` / buffer-mode branches in
+  `TextEditor`/`BufferEditorOptions`, and the scratch-`Document` shim; fold the single-source
+  painter path in `SyntaxController` into the one-segment projection case.
+- **Care:** the single-file editor + the full test suite (~830) are the regression invariant — this
+  is a **seam refactor, not new mechanism** (the projection substrate is already shared), so do it
+  incrementally and keep the suite green at each step. This is hard-problem #7 (`Document` refactor)
+  finishing.
+
+### Backlog (after the two pickups)
+
+- **Gutter band background** (G5 polish, blocked on node-gtk) — `tasks/code-editing/gutter-cell-background.md`.
+- **G8** copy-strips-header/gap rows + per-excerpt collapse; **G9** more diff sources (commit / PR /
+  range); **G10** viewport virtualization (only if profiling demands); **G11** session persistence +
+  a close-confirmation for a file edited ONLY in a multibuffer.
 
 ## Gotchas worth knowing before touching this
 
