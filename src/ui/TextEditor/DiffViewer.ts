@@ -12,6 +12,7 @@
 import { Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { iconLabel } from '../icons.ts';
+import { NERDFONT } from '../nerdfont.ts';
 import { DiffView } from './DiffView.ts';
 import { SideBySideDiffView } from './SideBySideDiffView.ts';
 import type { DiffModel } from '../../util/DiffModel.ts';
@@ -20,10 +21,10 @@ import { theme } from '../../theme/theme.ts';
 const ADDED_COLOR = theme.ui.status.success;
 const REMOVED_COLOR = theme.ui.status.error;
 // Nerd Font glyphs for the header controls.
-const ICON_PREV = String.fromCodePoint(0xf077); // chevron-up
-const ICON_NEXT = String.fromCodePoint(0xf078); // chevron-down
-const ICON_UNIFIED = String.fromCodePoint(0xf039); // align-justify (stacked lines)
-const ICON_SIDE_BY_SIDE = String.fromCodePoint(0xf0db); // columns
+const ICON_PREV = NERDFONT.NAV.CHEVRON_UP;
+const ICON_NEXT = NERDFONT.NAV.CHEVRON_DOWN;
+const ICON_UNIFIED = NERDFONT.DIFF.UNIFIED;
+const ICON_SIDE_BY_SIDE = NERDFONT.DIFF.SIDE_BY_SIDE;
 
 addStyles(`
   .diff-header {

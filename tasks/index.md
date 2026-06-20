@@ -1,30 +1,24 @@
 # Tasks
 
 Each task can have its own page with research, design, and implementation details.
-File names mirror the header structure, e.g. `git.md` for the git section, `code-editing/lsp-integration.md` for the LSP integration section, etc. When a header has more than one subheader, it becomes a directory with an `index.md` file for the main section.
-
-The task documents should be updated as the implementation progresses, with notes on research findings, design decisions, and implementation details. This will help keep track of the progress and provide context for future reference.
+File names mirror the header structure, e.g. 
+ - `git.md` for the git section, 
+ - `code-editing/lsp-integration.md` for the LSP integration section, etc. 
+When a header has more than one subheader, it becomes a directory with an `index.md` file for the main section.
 
 ## Architecture
 
 ### UI
 
-- Components are built using GTK4 and libadwaita via node-gtk (in dev, linked to `../node-gtk`), and are styled using CSS.
+- Components are built using Adwaita and GTK4 via node-gtk (in dev, linked to `../node-gtk`), and are styled using CSS.
 - Components should be one main component per file, in the `src/ui` directory.
-- Icons: use Nerd Font glyphs (bundled "Symbols Nerd Font Mono"), rendered as
-  text — `iconLabel()` / `Icons` in `src/ui/icons.ts`, or `fileIconGlyph()` for
-  file types. Do NOT use `Gio.ThemedIcon` / `Gtk.Image(iconName)`.
+- Icons must use NerdFont icons, see `src/ui/nerdfonts.ts`. Do NOT use `Gio.ThemedIcon` / `Gtk.Image(iconName)`.
 
 ### Commands & keymaps
 
-See [commands-keymaps.md](commands-keymaps.md). Done: commands with
-args/descriptions/`when`, keymaps with sequences/priority/`unset!`, `#id`
-selectors, user `keymap.json` (live-reloaded), command palette (shortcuts,
-name+description search, dim-when-unavailable), which-key hints (currently
-disabled — `WhichKey` constructor skips the `onPendingChanged` subscription;
-re-enable in `src/ui/WhichKey.ts`), conflict detection, keymap reference panel
-(all bindings + source, `space ?`). Remaining: `when` keymap fall-through;
-keybinding editing UI.
+- Keybindings must always use the command/keymap system
+
+See [commands-keymaps.md](commands-keymaps.md).
 
 ### Panels & layout
 
@@ -37,15 +31,22 @@ rules (`requireTabBar`, non-expanding tabs), and the zombie-safe dock-close rule
 ### Styling & theming
 
 See [styling.md](styling.md) for how UI styling works: GTK CSS (`addStyles` /
-`styles.set`) vs. inline Pango markup, the shared `window` CSS custom properties
-(`--popover-radius`, `--font-size-small`, …), the one-secondary-text-size font
-rule, `theme.ui` color tokens, Nerd Font icons, and `.linked` button groups.
+`styles.set`) vs. inline Pango markup, the **selector convention** (`#WidgetName`
++ `tagName` / scoped `.part` / `.is-`/`.has-` state classes — no `quilx-`
+prefixes), the **modern-CSS-variables-only** rule (no legacy `@named` colors /
+`@define-color`), the CSS-variable families (libadwaita's, our shared
+`--popover-radius`/`--font-size-small`, the per-theme-token `--t-ui-<path>` colors,
+and the `--t-font-*` fonts from the `fonts` store), when to use a `var(--t-…)` vs.
+interpolating `theme.ui.*`/`fonts.*`, the **font handling** (root UI-font baseline,
+monospace opt-in, no GTK `.monospace`/`setMonospace`), Nerd Font icons, and `.linked`
+button groups.
 
 See [theming.md](theming.md) for the **owned theme format** (no longer Zed's):
 concern-grouped nested `ui` colors that mirror the in-app model 1:1 (read as
 `theme.ui.editor.background`), per-capture `syntax` tokens, the loader
-(`src/theme/theme.ts`) + JSON Schema (`theme.schema.json`), the `DEFAULT_THEME_UI`
-fallback theme, and diff tints derived from the `status.*` colors.
+(`src/theme/theme.ts`) + JSON Schema (`theme.schema.json`), the `DEFAULT_THEME`
+fallback theme (every `theme.ui.*` field guaranteed filled; `followSystemScheme`
+flag for an omitted editor background), and diff tints derived from the `status.*` colors.
 
 ### Lifecycle & disposal
 
@@ -54,6 +55,10 @@ load-bearing (widgets detach not destroy on close; node-gtk pins GObjects/handle
 the `eventKit.ts` primitives, the disposal rules, the `TextEditor.dispose()`
 reference, and the CDP leak-hunting recipe. Read before adding a component that owns a
 GObject, handler, timer, or child.
+
+### Data & storage
+
+App data follows XDG: config in `$XDG_CONFIG_HOME/quilx`, state (sessions, frecency) in `$XDG_STATE_HOME/quilx`, caches (LSP installs, generated GtkSource schemes) in `$XDG_CACHE_HOME/quilx` — never `/tmp`; tests get throwaway dirs via `src/util/testTmp.ts` (`tmpDir(prefix)`), which removes them on process exit so `/tmp/quilx-*` never accumulates.
 
 ### Plugin system
 
@@ -70,24 +75,25 @@ activation state.
   disposable-aware: `LanguageRegistry.register*` return Disposables,
   `Config.removeSchema`, `styles.addRemovable` (queue-or-install, removable),
   `grammar.clearGrammar`. Keymaps/commands already returned Disposables.
-- [x] **First plugin: TypeScript** — `src/plugins/typescript/` (the former
+- [x] **First plugin: TypeScript** — `plugins/typescript/` (the former
   `src/lang/builtin.ts`). Contributes the TS/JS/TSX detection, tree-sitter
   grammars (queries vendored under `queries/`, `GrammarDef.highlightsPath`), and
   the flow/tsserver/deno/eslint server candidates. Activated at startup
   (`src/index.ts`: `registerBuiltinPlugins()` → `plugins.activateAll()`) before
   `preloadGrammars`, so the registry is populated before anything reads it.
-- [x] **HTML plugin** — `src/plugins/html/`. Detection (`.html`/`.htm`/`.xhtml`),
+- [x] **HTML plugin** — `plugins/html/`. Detection (`.html`/`.htm`/`.xhtml`),
   the bundled `tree-sitter-html` grammar (highlights + folds, palette-adapted),
   and the `vscode-html-language-server` (single-file). Exercises *cross-plugin
   injections*: `<style>` → a CSS grammar this plugin vendors injection-only, and
   `<script>` → the TypeScript plugin's tsx grammar (`js`), each a no-op if its
   guest grammar isn't registered.
 - [x] **More bundled plugins** (`registerBuiltinPlugins()` in `src/plugin/index.ts`
-  registers all 9): **markdown** (LSP + config + vendored block/inline grammars +
+  registers all 10): **markdown** (LSP + config + vendored block/inline grammars +
   image preview), **css** (CSS/SCSS/Sass; bundled + vendored grammars), **json**
   (JSON/JSONC), **cpp** (C/C++; clangd), **rust** (rust-analyzer), **python**
-  (pyright/pylsp/ruff), and **color-preview** (the `observeTextEditors` reference
-  consumer — no language layer). See [plugins.md](plugins.md) → Bundled plugins.
+  (pyright/pylsp/ruff), **bash** (shell; bash-language-server), and **color-preview**
+  (the `observeTextEditors` reference consumer — no language layer). See
+  [plugins.md](plugins.md) → Bundled plugins.
 - [ ] UI-component / panel contributions (register a `Panel`/dock widget).
 - [ ] Snippets, menus, and command-palette categories as contribution points.
 - [ ] Out-of-repo plugin discovery + loading (npm-style packages, a manifest
@@ -101,7 +107,7 @@ desktop's appearance and fonts, with the rule that **OS font/theme changes are
 followed through at runtime** (no restart).
 
 - [x] Editor scheme follows the OS light/dark preference (`notify::dark`), when the theme defines no background; terminal inherits libadwaita colors.
-- [x] **Color palette centralized** — all colors come from `theme.ui.*` (a concern-grouped nested object deep-merged over `DEFAULT_THEME_UI` at load; no inline literals outside `src/theme/`). Tokens: `text.muted`/`shadow`/`flash`/`diff.*` (derived from `status.*`)/`pr.*`; regex highlighting folds into `theme.syntax`. Prereq for live theme-swap; lint guardrail still TODO.
+- [x] **Color palette centralized** — all colors come from `theme.ui.*` (a concern-grouped nested object deep-merged over `DEFAULT_THEME` at load, every field guaranteed filled; no inline literals outside `src/theme/`). Tokens: `text.muted`/`shadow`/`flash`/`diff.*` (derived from `status.*`)/`pr.*`; regex highlighting folds into `theme.syntax`. Prereq for live theme-swap; lint guardrail still TODO.
 - [x] **Own the theme format** — replaced the Zed theme-family adapter with a native loader + `theme.schema.json`; the in-app `theme.ui` model mirrors the JSON 1:1 (`theme.ui.editor.background`). See [theming.md](theming.md).
 - [ ] Follow OS **monospace** font changes live (editor, terminal, pickers — currently read once at startup).
 - [ ] Follow OS **UI** font changes live (proportional text — currently read once).
@@ -157,7 +163,7 @@ shells out reuses the same primitive. Direct-spawn fallback if the child is down
 
 See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the design and decisions.
 
-- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `src/plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
+- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
 - [x] LSP client + per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging. **Incremental** document sync (full-text fallback). Correct LSP `languageId` (`.tsx`→typescriptreact, `.js`→javascript, …). See `src/lsp/`.
 - [x] Server→client requests answered: `workspace/configuration` (from `ServerDef.settings`), `client/(un)registerCapability`, `workDoneProgress/create`; `window/showMessage` surfaced, error `logMessage` to the trace log. File watching: dynamically-registered `workspace/didChangeWatchedFiles` via a per-dir `WorkspaceWatcher` (excludes node_modules/.git).
 - [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, a "Diagnostics" panel (shared `LocationList`). Namespaced by `(server, path)` and merged.

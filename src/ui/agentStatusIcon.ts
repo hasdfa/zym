@@ -14,12 +14,13 @@ import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { Icons } from './icons.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import type { AgentStatus, WorktreeInfo } from './AgentTerminal.ts';
 import type { Agent } from '../agents/types.ts';
 
 export const STATUS_DOT = '●';
-export const WORKING_GLYPH = String.fromCodePoint(0xf1978); // nf-md-cog-sync
+export const WORKING_GLYPH = NERDFONT.STATUS.SYNC;
 
 // Status → indicator color: working (muted cog), waiting on the user (warning/
 // amber), idle/ready (success/green), exited (muted).

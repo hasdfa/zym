@@ -33,11 +33,15 @@ function focusedEditor(text: string) {
     const keyval = Gdk.unicodeToKeyval(char.charCodeAt(0));
     quilx.keymaps.onWindowKeyPressEvent(keyval, 0, 0);
   };
+  const ctrl = (char: string) => {
+    const keyval = Gdk.unicodeToKeyval(char.charCodeAt(0));
+    quilx.keymaps.onWindowKeyPressEvent(keyval, 0, Gdk.ModifierType.CONTROL_MASK);
+  };
   const type = (chars: string) => {
     for (const ch of chars) press(ch);
   };
   const line = (row = 0) => editor.lineTextForBufferRow(row);
-  return { editor, view, press, type, line };
+  return { editor, view, press, ctrl, type, line };
 }
 
 test('ysiw( surrounds the inner word (deferral + input capture)', async () => {
@@ -45,6 +49,28 @@ test('ysiw( surrounds the inner word (deferral + input capture)', async () => {
   type('ysiw(');
   await tick();
   assert.equal(line(), '(hello) world');
+});
+
+test('ysiw reads the pair char without selecting the target first', async () => {
+  const { editor, type, line } = focusedEditor('hello world\n');
+  type('ysiw'); // target motion typed; surround now awaits the pair char
+  await tick();
+  // The word must NOT be visually selected while we wait for the char.
+  assert.equal(editor.getLastSelection().getText(), '');
+  // Finish the surround so the pending focusInput doesn't leak into later tests.
+  type('(');
+  await tick();
+  assert.equal(line(), '(hello) world');
+});
+
+test('ctrl-j splits the line at the cursor (inverse of J)', () => {
+  const { editor, ctrl, line } = focusedEditor('hello world\n');
+  editor.setCursorBufferPosition({ row: 0, column: 6 }); // on 'w'
+  ctrl('j');
+  assert.equal(line(0), 'hello ');
+  assert.equal(line(1), 'world');
+  // cursor rests at the end of the new first line (like i<CR><Esc>)
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 5]);
 });
 
 test('dw still deletes a word (y/d deferral falls back to the operator)', () => {
@@ -158,4 +184,46 @@ test('a count applies through the keymap (3l, 2dw)', () => {
   const d = focusedEditor('one two three four\n');
   d.type('2dw'); // delete two words
   assert.equal(d.line(0), 'three four');
+});
+
+// --- `y d` / `y u` duplicate-line bindings (y-prefix deferral, like `y s`) ---
+//
+// The real wiring lives in TextEditor (registerEditingKeymapsOnce + the
+// `editor:duplicate-line-*` commands). This harness only runs `attachVim`, so we
+// mirror that wiring here against the same view to exercise the deferral against
+// the live Yank operator.
+function withDuplicateLineBindings(m: ReturnType<typeof focusedEditor>) {
+  quilx.keymaps.add('editor-editing-test', {
+    '#TextEditor.normal-mode': {
+      'y d': 'editor:duplicate-line-below',
+      'y u': 'editor:duplicate-line-above',
+    },
+  });
+  quilx.commands.add(m.view, {
+    'editor:duplicate-line-below': { didDispatch: () => m.editor.duplicateLineBelow() },
+    'editor:duplicate-line-above': { didDispatch: () => m.editor.duplicateLineAbove() },
+  });
+  return m;
+}
+
+test('y d duplicates the line below via the keymap (y-prefix deferral)', () => {
+  const m = withDuplicateLineBindings(focusedEditor('one\ntwo\n'));
+  m.editor.setCursorBufferPosition({ row: 0, column: 1 });
+  m.type('yd');
+  assert.equal(m.editor.getText(), 'one\none\ntwo\n');
+  assert.deepEqual(m.editor.getCursorBufferPosition().toArray(), [1, 1]);
+});
+
+test('y u duplicates the line above via the keymap', () => {
+  const m = withDuplicateLineBindings(focusedEditor('one\ntwo\n'));
+  m.editor.setCursorBufferPosition({ row: 1, column: 0 });
+  m.type('yu');
+  assert.equal(m.editor.getText(), 'one\ntwo\ntwo\n');
+  assert.deepEqual(m.editor.getCursorBufferPosition().toArray(), [1, 0]);
+});
+
+test('yw still yanks a word when the duplicate-line bindings are present', () => {
+  const m = withDuplicateLineBindings(focusedEditor('hello world\n'));
+  m.type('yw');
+  assert.equal(clipboard.read(), 'hello ');
 });

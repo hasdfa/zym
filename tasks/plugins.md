@@ -10,7 +10,7 @@ the core, and can be activated/deactivated cleanly at runtime.
 > one is the recipe.
 
 The TypeScript support was the first thing extracted: it used to be the in-process
-"built-in pack" (`src/lang/builtin.ts`); it is now `src/plugins/typescript/`, the
+"built-in pack" (`src/lang/builtin.ts`); it is now `plugins/typescript/`, the
 reference plugin. Several more bundled plugins followed, each exercising a
 different slice of the contribution model (config schema, vendored grammars,
 cross-language injection, per-editor decorations) — see Bundled plugins below.
@@ -112,22 +112,24 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
 - `src/plugin/PluginContext.ts` — `PluginContextImpl` (wraps the singletons, tracks disposables).
 - `src/plugin/PluginRegistry.ts` — `PluginRegistry`, `PluginInfo`.
 - `src/plugin/index.ts` — the `plugins` singleton + `registerBuiltinPlugins()`.
-- `src/plugins/typescript/` — the TypeScript plugin (`index.ts`, `queries/`, `typescript.test.ts`).
-- `src/plugins/markdown/` — the Markdown plugin (`index.ts`, `imagePreview.ts`,
+- `plugins/typescript/` — the TypeScript plugin (`index.ts`, `queries/`, `typescript.test.ts`).
+- `plugins/markdown/` — the Markdown plugin (`index.ts`, `imagePreview.ts`,
   vendored `grammars/`, `build-grammars.sh`, `queries/`, `*.test.ts`).
-- `src/plugins/html/` — the HTML plugin (`index.ts`, `queries/html/`, `queries/css/`,
+- `plugins/html/` — the HTML plugin (`index.ts`, `queries/html/`, `queries/css/`,
   `html.test.ts`, `grammar.test.ts`).
-- `src/plugins/css/` — the CSS plugin (`index.ts`, `queries/`, vendored `grammars/`,
+- `plugins/css/` — the CSS plugin (`index.ts`, `queries/`, vendored `grammars/`,
   `build-grammars.sh`, `css.test.ts`, `grammar.test.ts`).
-- `src/plugins/json/` — the JSON plugin (`index.ts`, `queries/`, `json.test.ts`,
+- `plugins/json/` — the JSON plugin (`index.ts`, `queries/`, `json.test.ts`,
   `grammar.test.ts`).
-- `src/plugins/cpp/` — the C / C++ plugin (`index.ts`, `queries/c/`, `queries/cpp/`,
+- `plugins/cpp/` — the C / C++ plugin (`index.ts`, `queries/c/`, `queries/cpp/`,
   `cpp.test.ts`, `grammar.test.ts`).
-- `src/plugins/rust/` — the Rust plugin (`index.ts`, `queries/rust/`, `rust.test.ts`,
+- `plugins/rust/` — the Rust plugin (`index.ts`, `queries/rust/`, `rust.test.ts`,
   `grammar.test.ts`).
-- `src/plugins/python/` — the Python plugin (`index.ts`, `queries/python/`,
+- `plugins/python/` — the Python plugin (`index.ts`, `queries/python/`,
   `python.test.ts`, `grammar.test.ts`).
-- `src/plugins/color-preview/` — the color-preview plugin (`index.ts` editor wiring +
+- `plugins/bash/` — the Bash plugin (`index.ts`, `queries/bash/`, `bash.test.ts`,
+  `grammar.test.ts`).
+- `plugins/color-preview/` — the color-preview plugin (`index.ts` editor wiring +
   `colors.ts` pure parser/contrast, `colors.test.ts`); the `observeTextEditors`
   reference consumer.
 - `src/Workspace.ts` — the `observeTextEditors`/`addTextEditor` editor registry the
@@ -193,6 +195,14 @@ Keymaps and commands already returned Disposables (`quilx.keymaps.add`,
   venv's console script symlinked into the `node_modules/.bin` the manager searches
   (the only discoverable managed path), so nothing touches the user's global env.
   Needs `python3`; absent servers are skipped gracefully until installed.
+- **bash** — shell detection (`.sh`/`.bash`/`.ksh`/`.zsh`/… plus extension-less
+  config files like `.bashrc`/`.profile`/`PKGBUILD`) and the bundled
+  `tree-sitter-bash` grammar (highlighting + folding, queries under `queries/bash/`),
+  with **bash-language-server** as the LSP (single-file; prefers a `.git` root),
+  installable via a plain `{ via: 'npm' }` spec. The language sets `lspId:
+  'shellscript'` (the protocol's id for shell). The grammar's external scanner imports
+  `isalpha`, which the pinned web-tree-sitter runtime omits — shimmed once in
+  `src/syntax/grammar.ts` alongside the Markdown scanner's `strcmp`/`towlower`.
 - **color-preview** — the first **`observeTextEditors`** consumer (no language layer at
   all). Background-tints color literals — hex (`#rgb`…`#rrggbbaa`), `rgb()/rgba()`,
   `hsl()/hsla()` — with the color they represent, contrast-picking black/white

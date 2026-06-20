@@ -1,6 +1,6 @@
 # Commands & keymaps
 
-The command/keymap layer ported from Atom/xedel and adapted to GTK. Commands are
+The command/keymap layer ported from Atom and adapted to GTK. Commands are
 named behaviors registered against widgets; keymaps bind keystroke sequences to
 command names; both resolve along the focused widget's ancestor chain.
 

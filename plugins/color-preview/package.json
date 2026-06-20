@@ -1,0 +1,10 @@
+{
+  "name": "@quilx/plugin-color-preview",
+  "version": "0.1.0",
+  "description": "Inline color preview for quilx",
+  "type": "module",
+  "main": "./index.ts",
+  "peerDependencies": {
+    "quilx": "^0.1.0"
+  }
+}

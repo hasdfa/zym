@@ -6,26 +6,23 @@
  * diagnostic icons no matter where they appear.
  *
  * Glyphs are Symbols Nerd Font Mono code points (bundled — see `fonts.ts`).
- * Error and warning share the codicon "warning" triangle (nf-cod-warning),
- * distinguished only by color; info and hint use info-circle and a lightbulb.
+ * Error and warning share the warning triangle, distinguished only by color;
+ * info and hint use info-circle and a lightbulb.
  */
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { theme } from '../../theme/theme.ts';
+import { NERDFONT } from '../../ui/nerdfont.ts';
 
 export interface SeverityStyle {
   glyph: string;
   color: string;
 }
 
-const COD_WARNING = String.fromCodePoint(0xea6c); // nf-cod-warning
-const FA_INFO_CIRCLE = String.fromCodePoint(0xf05a);
-const FA_LIGHTBULB = String.fromCodePoint(0xf0eb);
-
 export const SEVERITY_STYLES: Record<number, SeverityStyle> = {
-  [DiagnosticSeverity.Error]: { glyph: COD_WARNING, color: theme.ui.status.error },
-  [DiagnosticSeverity.Warning]: { glyph: COD_WARNING, color: theme.ui.status.warning },
-  [DiagnosticSeverity.Information]: { glyph: FA_INFO_CIRCLE, color: theme.ui.status.info },
-  [DiagnosticSeverity.Hint]: { glyph: FA_LIGHTBULB, color: theme.ui.status.hint },
+  [DiagnosticSeverity.Error]: { glyph: NERDFONT.STATUS.WARNING, color: theme.ui.status.error },
+  [DiagnosticSeverity.Warning]: { glyph: NERDFONT.STATUS.WARNING, color: theme.ui.status.warning },
+  [DiagnosticSeverity.Information]: { glyph: NERDFONT.STATUS.INFO, color: theme.ui.status.info },
+  [DiagnosticSeverity.Hint]: { glyph: NERDFONT.STATUS.HINT, color: theme.ui.status.hint },
 };
 
 /** Presentation for a severity, defaulting to Error for unknown/undefined. */

@@ -5,20 +5,53 @@ reuse so the chrome stays visually consistent.
 
 ## Mechanisms
 
-Styling comes from two places, and which one you use depends on the widget:
+Two mechanisms, picked per widget:
 
-- **GTK CSS** — installed via `addStyles(css)` (static, queued at module-init,
-  flushed once by `installStyles()` after the display exists) or
-  `styles.set(css, { key })` (dynamic/theme-derived, replaceable in place by key)
-  from `src/styles.ts`. Selectors target a widget's `setName(...)` identity
-  (`#WorkbenchStatus`) and CSS classes (`.quilx-status-count`). Default for
-  component look. Plugin stylesheets use `styles.addRemovable(css)`, which returns
-  a `Disposable` for teardown on deactivation.
-- **Pango markup** — inline `<span ...>` runs inside a single `Gtk.Label` with
-  `useMarkup: true`. Used when one label mixes styles across its text — e.g. a
-  full-size branch name with a smaller, coloured count after it
-  (`GitBranchButton`), or an icon-font glyph beside normal text
-  (`WorkbenchStatus`). CSS can't style a sub-run of a label; markup can.
+- **GTK CSS** — the default for component look. Install via `addStyles(css)`
+  (static), `styles.set(css, { key })` (theme-derived, replaceable), or
+  `styles.addRemovable(css)` (plugins; returns a `Disposable`) — all from
+  `src/styles.ts`. Selectors follow the convention below.
+- **Pango markup** — inline `<span ...>` runs in one `Gtk.Label` (`useMarkup:
+  true`), for a single label mixing styles across its text (`GitBranchButton`).
+  CSS can't style a label sub-run; markup can.
+
+## Selectors & classes
+
+A component's styling identity is `setName('WidgetName')` → `#WidgetName`
+(PascalCase, mirrors the file/class name). Everything hangs off that id; **never
+prefix classes with `quilx-`** — the id scope already namespaces them. Four
+patterns, in preference order:
+
+- **`#WidgetName`** — the component's own root; the primary hook for its look.
+- **`#WidgetName tagName`** — a GTK-rendered sub-node by its CSS node name
+  (`label`, `button`, `image`, `tabbar`, …), when the tag uniquely identifies it.
+- **`#WidgetName .part`** — a sub-node a tag *can't* single out (a widget with
+  several `label`s). Give it a short, unprefixed element class, scoped under the
+  id: `#MultiBufferHeader .icon`, `#FileTree .header`.
+- **`.is-…` / `.has-…`** — boolean state classes toggled at runtime, read off any
+  of the above: `#Panel.is-active`, `#Picker.has-prompt`, `#Terminal .view.is-normal`.
+  Adjectives only — no value-bearing classes (`.is-mode-normal`, not `.mode2`).
+
+Reuse GTK/libadwaita's own utility classes directly (`flat`, `linked`, `circular`,
+`dim-label`, `heading`, `activatable`, …); don't reinvent them under our names.
+
+## CSS variables, never legacy named colors
+
+Always use modern CSS variables. Three families, all `var(--…)`:
+
+- **libadwaita's** ([full
+  catalog](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/css-variables.html)) —
+  `--accent-bg-color`, `--window-bg-color`, `--border-color`, …
+- **our shared chrome props** — `--popover-radius`, `--font-size-small`, … (below).
+- **our theme color tokens** — `--t-ui-<dashed-path>`, one per `theme.ui.*` token
+  (`--t-ui-editor-background`, `--t-ui-status-error`, …). See [Colors](#colors).
+- **our font tokens** — `--t-font-monospace`, `--t-font-ui-family`, … from the font
+  store. See [Fonts](#fonts-families).
+
+**Never** the legacy GTK named-color syntax (`@theme_selected_bg_color`,
+`@define-color`): those don't read `var()` and ignore theme overrides. Map legacy →
+modern (`@theme_selected_bg_color` → `var(--accent-bg-color)`) wherever you'd reach
+for one, including string fallbacks you interpolate.
 
 ## Shared CSS custom properties
 
@@ -31,9 +64,34 @@ Prefer these over hard-coded literals so a change lands everywhere:
 | `--popover-radius-small`  | `6px`     | Tighter radius for compact in-text chrome (completion popup). |
 | `--font-size-small`       | `0.85em`  | Secondary text that sits beside full-size text — metadata, counts, list detail columns. |
 
-libadwaita also exposes its own variables (`--border-color`, `--accent-color`,
-`--window-bg-color`, `--popover-bg-color`, …) which we use directly; see
-<https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/css-variables.html>.
+## Fonts (families)
+
+The font store `src/fonts.ts` (`fonts`) is the single source of the app's UI and
+monospace fonts; it follows the GNOME interface fonts live and publishes them as
+**reactive CSS variables on `#AppWindow`** (re-set on every change). A root
+`#AppWindow { font-family: var(--t-font-ui-family) }` baseline makes **all UI text
+follow the UI font by inheritance** — so only monospace surfaces need a rule.
+
+Both roles — `ui` and `monospace` — publish the **same full set**
+(`<role>` = `ui` | `monospace`):
+
+| Variable                                  | Use                                                              |
+| ----------------------------------------- | --------------------------------------------------------------- |
+| `--t-font-<role>`                         | The `font:` shorthand (style + weight + size + family). For surfaces that want the **whole** font: the editor, code, mono inputs. |
+| `--t-font-<role>-family`                  | Family only — when the selector sets its own weight/size (e.g. a bold leap mark that inherits the editor size). The root baseline uses `--t-font-ui-family`. |
+| `--t-font-<role>-{weight,style,size}`     | The individual properties, for finer control. |
+
+Which form:
+
+- **Whole font** (editor, code, mono inputs) → `font: var(--t-font-monospace)`. The
+  shorthand **resets** weight/size/line-height — not where the selector sets its own.
+- **Family only** (keep own weight/size) → `font-family: var(--t-font-monospace-family)`.
+- **Pango markup** (no CSS vars) → `fonts.monospaceFamily` / `fonts.uiFamily` for
+  `face=`/`font_family=`.
+- **Font-description widgets** (VTE) → `fonts.monospaceDescription()` + `fonts.onChange(...)`.
+
+Never use GTK's `.monospace` class or `GtkTextView.setMonospace(true)` — they pull the
+*system* monospace directly, bypassing the store.
 
 ## Font sizes
 
@@ -53,13 +111,31 @@ mechanisms can't share a literal. Don't introduce new ad-hoc sizes (`0.9em`,
 
 ## Colors
 
-Semantic UI colors come from the active theme via `theme.ui` (`src/theme/theme.ts`),
+Semantic UI colors come from the active theme's `theme.ui` (`src/theme/theme.ts`),
 a concern-grouped nested object: `theme.ui.editor.foreground`, `theme.ui.text.muted`,
 `theme.ui.text.accent`, `theme.ui.status.{success,warning,error,info,hint}`,
-`theme.ui.surface.{popover,selected}`, … Interpolate these into CSS/markup rather
-than hard-coding hex. `theme.ui` mirrors the theme JSON's `ui` 1:1; the loader +
-format are documented in [theming.md](theming.md). Severity
-glyph+color pairs (diagnostics) come from `severityStyle()` in
+`theme.ui.surface.{popover,selected}`, … **Every `theme.ui.*` field is guaranteed
+filled** (the loader deep-merges over `DEFAULT_THEME`), so read them directly — no
+`?? fallback`. `theme.ui` mirrors the theme JSON's `ui` 1:1; the loader + format are
+documented in [theming.md](theming.md).
+
+Each `theme.ui.*` token is **also a CSS variable** on the root `#AppWindow`, named
+`--t-ui-<dashed-path>`: `theme.ui.editor.background` → `var(--t-ui-editor-background)`,
+`theme.ui.search.matchCurrent` → `var(--t-ui-search-match-current)` (camelCase keys
+dashed). They're generated by `themeUiCssVariables` (`theme.ts`) and installed in
+`src/styles.ts`, and resolve inside color functions too
+(`alpha(var(--t-ui-surface-selected), 0.4)`, `mix(…)`, `shade(…)`). Which form to use:
+
+- **Static `addStyles` CSS** → `var(--t-ui-…)`. Don't interpolate `theme.ui.*` into a
+  static stylesheet — the variable keeps the value in one place (and, once live
+  theme-switching lands, updates without rebuilding the sheet).
+- **Pango markup** (`<span foreground="…">`) → interpolate `theme.ui.*` directly;
+  markup can't read CSS variables. Same for **GtkTextTag / draw-func colors** — those
+  are JS values, not CSS.
+- **The dynamic theme-chrome / notification keyed sheets** (`styles.set` in
+  `AppWindow.ts`) interpolate concrete `theme.ui.*`; they're rebuilt per theme.
+
+Severity glyph+color pairs (diagnostics) come from `severityStyle()` in
 `src/lsp/diagnostics/severity.ts`, the single source shared by the gutter and
 squiggle (`DiagnosticsView`), the Diagnostics panel (`DiagnosticsPanel`), and the
 status-bar counts (`WorkbenchStatus`).
@@ -71,6 +147,10 @@ text via `iconLabel()` / `Icons` in `src/ui/icons.ts` — never
 `Gio.ThemedIcon` / `Gtk.Image(iconName)`. In Pango markup, set the icon font on
 the span with `font_family="${ICON_FONT_FAMILY}"`. (Adw tab icons are the one
 exception — the glyph is embedded in the tab title text.)
+
+Glyphs live in `src/ui/nerdfont.ts` (`NERDFONT`, a curated catalog grouped by
+purpose); `Icons` are named UI roles aliased onto it. File-tree icons are the
+separate `fileIcons.ts` table.
 
 ## Grouped buttons
 

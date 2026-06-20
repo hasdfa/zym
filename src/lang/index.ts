@@ -1,7 +1,7 @@
 /*
  * The language layer: the `LanguageRegistry` plus the shared `languages`
  * singleton. The registry starts empty; plugins populate it at activation
- * (`src/plugins/*` via the `PluginContext`). Consumers (`grammar.ts`,
+ * (`plugins/*` via the `PluginContext`). Consumers (`grammar.ts`,
  * `LspManager`) import `languages` and read grammar/server contributions off it.
  *
  * Activation order matters: plugins must be activated (see `src/index.ts`,

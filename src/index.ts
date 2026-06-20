@@ -24,7 +24,7 @@
 import * as Path from 'node:path';
 import { Application } from './application.ts';
 import { preloadGrammars } from './syntax/grammar.ts';
-import { plugins, registerBuiltinPlugins } from './plugin/index.ts';
+import { plugins, registerBuiltinPlugins, loadUserPlugins, disabledPluginIds } from './plugin/index.ts';
 
 // node-gtk drains Node's microtask queue inside the GLib main loop, so a stray
 // rejected promise would otherwise terminate the whole editor. The known offender
@@ -50,7 +50,9 @@ const initialFile = arg ? Path.resolve(arg) : undefined;
 // servers (the TypeScript plugin populates the whole TS/JS family). Done before
 // `preloadGrammars` so the grammars to preload are already registered.
 registerBuiltinPlugins();
-await plugins.activateAll();
+await loadUserPlugins();
+const disabled = disabledPluginIds();
+await plugins.activateAll(disabled);
 
 // Load tree-sitter grammars before the GLib main loop starts — emscripten's
 // sync wasm init doesn't resolve once the loop is running.

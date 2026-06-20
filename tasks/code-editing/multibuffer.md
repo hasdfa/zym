@@ -1,142 +1,246 @@
-# Multibuffer (continuous multi-file diff / search, editable)
+# Multibuffer — one editable, excerpt-backed editor substrate
 
-**Goal:** one editor — single cursor, continuous scroll — that shows ranges from
-**many files** stitched together with filename headers, with per-file-correct
-syntax highlighting and (eventually) editing that writes through to the files.
-Like Zed's project-search / project-diff "multibuffer", or GitHub's "Files
-changed". The forcing function is the git changes view (replacing
-`GitStagingView`'s accordion, `src/ui/GitStagingView.ts`).
+**End-state:** every `TextEditor` renders a *projection* over an ordered list of **excerpts**
+(each a source + a range), with one cursor and continuous scroll. A normal file is the
+degenerate case — one full-file excerpt. Stitched ranges from **many files** appear with
+filename headers, each highlighted by its own grammar, editable, writing through to the files.
+The forcing function is the multi-file diff/search surface (replacing `GitStagingView` and
+powering project-wide search-replace) — like Zed's project-search / project-diff multibuffer,
+but editable and per-language-correct.
 
-## Why this shape (and not a stack of editors)
+Built **hard parts first**, on `GtkSourceView` (the view buffer is a *materialized projection*
+of its sources, because GtkTextView needs real text). The editor has no users; the single-file
+editor's behavior + the headless suite are the regression net.
 
-Zed never concatenates text into one real buffer. It keeps N real buffers (each
-with its own language/parse/LSP) and presents **excerpts** (a buffer + a range)
-as one virtual coordinate space; filename headers are non-text **blocks**; the
-renderer paints only the visible rows. Edits write through to the underlying
-buffer. That is the design we want.
+Branch: `feat/multibuffer-staging` (G5 staging + G1 one-editor merge + the block-decoration
+consolidation) — merges to `master`.
 
-We can build the equivalent on GtkSourceView because we already have most of the
-scaffolding — this is a **generalization of patterns already shipped**, not
-greenfield:
+## Architecture (as built)
 
-- **`Document` / `DocumentRegistry`** (`src/ui/TextEditor/Document.ts`,
-  `DocumentRegistry.ts`) = ref-counted real buffers, N views per Document. This is
-  Zed's "real buffer behind excerpts."
-- **Fold projection** (`src/syntax/syntax-controller.ts` `setProvidedFolds`,
-  `TextEditor.modelLineForViewLine` / `viewLineForModelLine`) already proves the
-  view `GtkSource.Buffer` is a **projection** of the model with bidirectional
-  view↔model translation. A fold hides ranges of *one* Document; a multibuffer
-  concatenates slices of *many*.
-- **Synthesized rows** — fold placeholders (`⋯ N unchanged lines`) and
-  side-by-side fillers are already real, styled buffer lines. Filename headers are
-  the same trick (or `Gtk.TextChildAnchor` when they must be interactive).
-- **Virtualization is not a blocker.** GtkTextView validates lines incrementally
-  around the viewport on its own, and `SyntaxController.repaint()` already paints
-  only `visibleRange()`. A single large projection buffer costs no more than
-  opening a big file. (The old open-freeze was a *gutter forcing full validation*
-  by querying every line — see the memory / `lifecycle-and-disposal.md` — already
-  understood and avoidable.)
+Three layers — all shipped and live:
 
-So only **two genuinely new pieces** survive, and both also improve what exists.
+- **Source** — a parsed text unit: a `Document` (live/new side, via `DocumentRegistry`) or a
+  parsed blob (old/base side). Owns its model buffer + shared `DocumentSyntax` parse + LSP doc +
+  file I/O. `Document` no longer owns view/sync/fold logic.
+- **`ViewProjection`** (`src/ui/TextEditor/ViewProjection.ts`) — pure, GTK-free coordinate map
+  over an ordered `Item[]` (`segment`s over sources + synthesized `block` rows). Maps
+  **source `(sourceKey,row,col)` ↔ projection ↔ view**, with **folds composed as a second
+  transform**. `segment = { source, range, editable, kind: 'real' | 'phantom' }`. A single
+  full-file segment with no folds `isIdentity` → every translation short-circuits (zero-cost
+  single-file path). Editability gate (`isViewRangeEditable`) rejects block/phantom/cross-source/
+  folded ranges. No-fold **row-direct** fast path so in-place edits need no remap.
+- **`ProjectionView`** (`src/ui/TextEditor/ProjectionView.ts`) — per-view materialize +
+  bidirectional sync over a `ViewProjection`. Write-through (view→source, clamped to one editable
+  segment), reverse-sync (source→view, incremental mirror; `retarget` = minimal-churn splice
+  re-diff for computed surfaces), incremental re-segmentation (`resegment`/`adjustItems`),
+  `retarget` (re-derive items + splice), and is the **`UndoTarget`** coordinating a multi-file
+  edit as one transaction. `setResyncHandler` lets a computed surface (the diff) re-derive from
+  scratch on a row-count reverse-sync.
+- **Painter** — `SyntaxController` highlights the view buffer two ways (`paintViewLines`):
+  - **single-source** (a normal file): pulls the one `DocumentSyntax`'s captures and maps them
+    **through the fold map** (`viewIterForModel`/`modelLineRange`) — **fold-aware**.
+  - **projection** (a multibuffer): `ExcerptSyntaxProjection.paintSlices` pulls each excerpt's
+    source captures and places them with a **linear** source→view mapping (`sliceIter`) — **NOT
+    fold-aware** (see the invariant below).
 
-## New piece 1 — split SyntaxController (parse on the model)
+**Surfaces** (thin orchestrators over a normal `TextEditor` natively backed by a
+`MultiBufferDocument`, so vim/search/decorations come free — UI classes carry no `MultiBuffer` in
+their name; that's the model layer):
+- `SearchResultsView` (project search) — `src/ui/SearchResultsView.ts` (UI lives in `src/ui/`; the
+  `multibuffer/` dir is the MODEL layer only).
+- `ContinuousDiffView` (git diff) — `src/ui/ContinuousDiffView.ts`;
+  `buildDiffMultiBuffer` (`diffMultiBuffer.ts`, model) windows each file (context ±3, runs ≥2 elided
+  to a `⋯` gap), `diffSegments.ts` does the line-diff → items (eq/ins → editable new-side, del →
+  phantom old-blob rows).
 
-Today `SyntaxController` is created **per view** and parses the **view buffer**
-(`this.cachedText = buffer.getText(...)`), which forces the `include_hidden_chars`
-hack to see folded text. Split it:
+## Status (G1–G11)
 
-- **`DocumentSyntax` (per `Document`, shared by all N views)** — owns the
-  tree-sitter `Tree`, incremental reparse on `Document.onDidChangeText`, captures,
-  injection parses, and fold-region **discovery** (`walkFolds`). Pure **model**
-  coordinates.
-- **syntax painter (per view)** — takes model-coordinate captures and paints
-  highlight tags onto *its* `GtkSource.Buffer`, viewport-bounded, translating
-  model→view through *that view's* projection (folds today, excerpts later). Owns
-  fold **state** (which regions are collapsed) and the provided-vs-discovered fold
-  choice.
+- **G1 — One substrate.** ✅ **Done.** Single-file + both multibuffer surfaces run on
+  `ViewProjection`/`ProjectionView`, and `TextEditor` is now natively backed by a `TextEditorSource`
+  (`src/ui/TextEditor/TextEditorSource.ts`): `Document` (one file/source) or `MultiBufferDocument`
+  (`src/ui/multibuffer/`, N sources over one `ProjectionView`). The buffer-mode duality is gone —
+  the `externalBuffer`/`syntaxProjection`/`undoTarget` injection knobs and the scratch-`Document`
+  shim are deleted; a multi-source backing reports `isMultiSource` and the editor derives `embedded`
+  (no own line numbers / minimap / LSP / git gutter / folding) from it. Buffer-only mode (commit
+  message, diff panes, picker) stays a clean file-less `Document` + `BufferEditorOptions`
+  (`src/ui/TextEditor/BufferEditor.test.ts` pins it). **By design, the one remaining painter branch
+  stays:** `SyntaxController` keeps a fold-aware single-source path and a fold-naive projection
+  path, because **multibuffer is folding-off** (see Invariants). Unifying them = making the
+  projection painter fold-aware, the only thing gating folding-on multibuffers — deliberately
+  deferred, not a loose end.
+- **G2 — Editable everywhere.** ✅ single-file (identity), project search, and diff all write
+  through to live `Document`s; replace-all across files is one transaction.
+- **G3 — Folds are a transform.** ✅ single-file (code folding); per-excerpt collapse done as an
+  item-level re-derive (G8), not a view-fold.
+- **G4 — Per-source-correct.** ✅ highlighting, line-number gutters (project-search
+  `SourceLineNumberGutter`; diff `CombinedDiffLineNumberGutter` — old|new in one renderer), decorations.
+  *Diagnostics / LSP across excerpts = Phase 4.*
+- **G5 — Continuous multi-file editable diff.** ✅ surface built + GUI-verified (write-through,
+  phantom rejection, live re-diff with no flash/caret-jump, gutter alignment, expand-context
+  `zo`/`zR`/`zm`). **Hunk staging ✅** (`feat/multibuffer-staging`): each file's index blob (`git
+  show :p`) is read and every changed row classified staged/unstaged (the same model `GitGutter`
+  uses — staged = HEAD↔index, unstaged = index↔worktree); a gutter marker bar shows it (info/blue =
+  staged, warning/amber = unstaged). `space h s`/`space h u` (scoped to `#TextEditor.continuous-diff`
+  so bare vim `s`/`u` stay substitute/undo) → `diff:stage-hunk`/`diff:unstage-hunk` build the hunk
+  patch (`formatHunkPatch`) and `applyPatch --cached` (`--reverse` for unstage), then re-read the
+  index + repaint markers (no geometry reflow — staging doesn't touch the worktree↔HEAD diff).
+  Partial-file (per-hunk) staging works; external index moves refresh via `git.onChange`. Tested:
+  `ContinuousDiffStaging.test.ts` (real temp-repo round-trip). **Commit ✅** — `space g c` →
+  `git:start-commit` opens `.git/COMMIT_EDITMSG` in a tab (save+close commits). **`GitStagingView`
+  retired ✅** — view + `openStagingView`/`stagingViews` + `git:open-staging` + the `#GitStagingView`
+  keymaps deleted; `space g o` now opens the diff multibuffer (the replacement). *Remaining polish:
+  hunk-level discard on the surface (whole-file discard still lives on `GitPanel`).* Also one
+  deferred polish: the gutter band beside the filename
+  widget can't be painted the header color (node-gtk blocks gutter background drawing) — see
+  `tasks/code-editing/gutter-cell-background.md`.
+- **G6 — Editable project search + replace-all.** ✅ (`space *`; `file:save` routes to the active
+  multibuffer).
+- **G7 — Cross-source undo/redo.** ✅ `ProjectionView` is the `UndoTarget`; re-entrant user
+  actions; multi-file edit = one Ctrl-Z.
+- **G8 — Multibuffer interaction.** ✅ vim works (real editor); expand-context (diff); **copy is
+  clean** — headers AND gaps are now widget bands in BOTH surfaces (no block rows in any buffer; the
+  search `⋯` gap stopped being buffer text), so a yank across excerpts carries only real source
+  lines, with no copy-time filtering; **per-excerpt collapse** (`SearchResultsView`, `z a` toggle /
+  `z M` all / `z R` none) re-derives the items so a collapsed file shows only its first source row
+  (`▸` chevron) — an item-level transform, NOT a view-fold (keeps the painter fold-naive per the
+  Invariant). All three band consumers (diff, search, markdown image preview) declare their header/
+  gap/image bands as SOURCE-anchored block decorations via `editor.blockDecorations()` — see
+  `tasks/code-editing/block-decorations.md` (generic primitive + declarative `BlockDecorationSet`).
+- **G9 — Multiple diff sources.** ☐ only working-tree vs HEAD today; commit / PR / range TODO.
+- **G10 — Performance.** ◐ single-file identity is zero-cost. *Viewport virtualization across many
+  excerpts = TODO if profiling demands.*
+- **G11 — Session persistence.** ☐ serialize/restore multibuffer tabs; also a close-confirmation
+  for a file edited ONLY in a multibuffer (unsaved edits discarded on close).
 
-Effects:
+## Next pickup
 
-- Folding gets **cleaner**: the parse always runs on full Document text, so
-  `include_hidden_chars` goes away. Discovery = model (shared); state = per-view.
-- **Keystone:** one parse, many projections — the same captures serve a full-file
-  view *and* a 5-line excerpt of the same Document, because captures are in model
-  coordinates and each view translates them.
-- **Independently valuable, do it first:** the existing N-views-per-Document
-  feature currently runs N parses + N wasm trees for the same text. The split kills
-  that redundancy before multibuffer exists.
+### ~~Task A — finish G5: staging ops on the editable diff, then retire `GitStagingView`~~ ✅ DONE
 
-## New piece 2 — excerpt model + edit write-through
+Shipped on `feat/multibuffer-staging` (see G5 above). The design question resolved to: **keep the one
+worktree↔HEAD editable surface**, classify each changed row staged/unstaged against the index, and
+show it with a **gutter marker bar** (info/blue = staged, warning/amber = unstaged) — not sections.
+`space h s`/`space h u` stage/unstage the hunk at the caret; `space g c` commits; `GitStagingView`
+is deleted (`space g o` now opens the diff multibuffer). *Only remaining bit: hunk-level discard on
+the surface (whole-file discard still lives on `GitPanel`).*
 
-Model the projection as a list of **excerpts**, each an ordered list of
-**segments**:
+### ~~Task B — merge `TextEditor` and the multibuffer surfaces into one (the G1 cleanup)~~ ✅ DONE
 
-```
-segment = { source, range, editable: boolean, kind: 'real' | 'phantom' }
-```
+`TextEditor` is now backed by a `TextEditorSource` interface (`src/ui/TextEditor/TextEditorSource.ts`)
+with two implementations: `Document` (one file/source) and `MultiBufferDocument`
+(`src/ui/multibuffer/MultiBufferDocument.ts`, N sources over one `ProjectionView`). The surfaces pass
+`source: new MultiBufferDocument(pv, painter)` and shrank to thin orchestrators. **Deleted:** the
+`externalBuffer`/`syntaxProjection`/`undoTarget` knobs on `BufferEditorOptions` and the scratch-
+`Document` shim. A multi-source backing reports `isMultiSource`; the editor derives `embedded`
+(no own line numbers / minimap / LSP / git gutter / folding) from it, while a peek view stays
+file-backed (keeps LSP + the shared parse). Buffer-only mode (commit message, diff panes, picker) is
+unchanged — a file-less `Document` + the `BufferEditorOptions` presentation knobs — and pinned by
+`src/ui/TextEditor/BufferEditor.test.ts`. The naming rule held throughout: UI carries no
+`MultiBuffer` (`SearchResultsView`/`ContinuousDiffView`/`SourceLineNumberGutter`/`HeaderBands`;
+commands `project:search-results`/`git:continuous-diff`); the model keeps it (`MultiBufferModel`,
+`MultiBufferDocument`, `buildDiffMultiBuffer`, `ViewProjection`/`ProjectionView`).
 
-- `source` = a parsed text unit: a `Document` (live/new side) or a parsed blob
-  (old/base side). The **syntax projector** paints each segment from its source's
-  own captures → per-language correct, and (for diffs) the old side parsed with the
-  *same grammar* but separate content. This also fixes the current `DiffView` wart
-  of parsing interleaved `+`/`−` lines as one language.
-- An **excerpt coordinate map** translates view offset ↔ `(segment, sourceOffset)`.
-  A sorted interval array + binary search is enough for hundreds of excerpts; only
-  reach for a sum-tree at thousands.
-- Gutters (line numbers, `+`/`−`) key by source row, translated per segment —
-  generalize the existing `DiffGutter` / `DiffLineNumberGutter` view→model
-  translation (`src/ui/TextEditor/`).
+*Optional remainder (deferred): fold the single-source painter into the one-segment projection case
+in `SyntaxController` — a clean internal `documentSyntax`-vs-`syntaxProjection` branch, not the
+duality, so low-value / high-risk to touch.*
 
-**Editable diff = the new `Document` is the substrate; the diff is a projection
-over it.** Concretely:
+### Backlog (after the two pickups)
 
-- Context + added lines are `editable`, `real`, mapped to the new `Document` →
-  write-through is just normal file editing.
-- **Removed lines are real view rows tagged read-only** (`kind: 'phantom'`, mapped
-  to the old blob, not editable) — *not* EOL `VirtualText` (that can't be a
-  navigable standalone line). Read-only is enforced the same way edits in hidden
-  fold ranges are already intercepted.
-- The diff (phantom rows + backgrounds) is **re-computed on edit-idle** against the
-  base blob, reusing the git gutter's buffer-vs-base `lineDiff`
-  (`src/util/lineDiff.ts`). Editing stays "normal file editing"; the diff is a view
-  that re-segments as you type.
+- **Gutter band background** (G5 polish, blocked on node-gtk) — `tasks/code-editing/gutter-cell-background.md`.
+- **G9** more diff sources (commit / PR / range); **G10** viewport virtualization (only if profiling
+  demands); **G11** session persistence + a close-confirmation for a file edited ONLY in a
+  multibuffer. (G8 — copy + per-excerpt collapse — is done.)
 
-This is why Phase 1 and Phase 2 share **one** substrate (segment list): Phase 1 =
-all segments read-only; Phase 2 = flip new-side segments `editable` + wire
-write-through + live re-diff. Phase 1 therefore does **not** reuse the old
-synthesized-buffer `DiffView` — that buffer construction is what we replace.
+## Invariants
 
-## Phasing
+- **Multibuffer is folding-OFF, by design.** The projection syntax painter
+  (`ExcerptSyntaxProjection`) maps each excerpt's source rows to view rows **linearly** — it does
+  NOT translate through a fold map. So a multibuffer surface MUST keep code folding off, and the
+  editor enforces this: a multi-source backing (`isMultiSource`) sets `folding: false` and the
+  `embedded` flag (see `TextEditor`). Single-file editors fold normally — their *coordinates* go
+  through the same fold-aware `ProjectionView` substrate, but their *highlighting* uses the
+  separate fold-aware single-source painter path. Making the projection painter fold-aware (so a
+  multibuffer could fold) is the one deferred G1 item; until then, **do not enable folding on any
+  multibuffer surface** — captures would land on the wrong rows once a region collapsed.
 
-- **Phase 0 — SyntaxController split.** `DocumentSyntax` (model parse, shared) +
-  view painter (projection-aware paint + fold state). No multibuffer yet; ships as a
-  refactor that also removes redundant per-view parses.
-- **Phase 1a — multibuffer core, validated on project-wide search.** Excerpt map +
-  syntax projector + filename headers + read-only single `GtkSourceView` over N
-  excerpts. Simplest data (all segments `real`, one source each, no phantoms, no
-  old/new) so a coordinate-map / shared-parse bug surfaces in isolation. Design the
-  segment model diff-capable from day one; this just exercises the easy subset.
-  (Shippable later as "editable project search".)
-- **Phase 1b — read-only diff multibuffer (the deliverable).** Add old/new
-  duality, phantom removed rows, diff decorations + `foldUnchanged`, the two line
-  gutters. Replaces `GitStagingView`'s accordion with one continuous read-only diff.
-- **Phase 2 — editable.** Flip new-side segments `editable`, write-through to the
-  `Document`, live re-diff on edit. The same write-through then powers
-  search-replace-all and multi-file refactors.
+## Gotchas worth knowing before touching this
 
-## Correctness notes (bank for Phase 2, not Phase 1)
+- **Scheduling re-flow under the GLib loop.** A re-diff/re-layout that must run *after the current
+  command places the caret but before paint* MUST use a **GTK tick callback** (`addTickCallback`),
+  NOT `queueMicrotask`/`Promise`/`setTimeout(0)` — Node drains microtasks only on a libuv turn,
+  which never happens during the GLib main loop, so a microtask-scheduled re-diff silently never
+  runs in the app. (`ContinuousDiffView.scheduleMicroReDiff`.) Tests must drive a realized view +
+  `GLib.MainContext.iteration(true)`, not `await`. See the `queuemicrotask-dead-under-glib-loop`
+  memory. **Two timings, two tools:** *before-paint* work (a re-diff that must land in the same
+  frame as the caret move) → `addTickCallback`; *after-settle* work where the view buffer is
+  ALREADY correct and only a derived map must catch up (a one-frame lag is invisible) → a
+  macrotask is fine, and `setTimeout` DOES fire under the GLib loop (libuv is pumped every loop
+  iteration — see the `js-timers-refactor` memory). `ProjectionView.scheduleSync` (the multi-source
+  reverse-sync remap/rebuild for undo + cross-view edits) is the latter: it uses `setTimeout`,
+  because the reverse-sync handlers already mirrored the exact edit into the view synchronously;
+  only `this.projection` (the gutter/painter coordinate map) needs to catch up. It MUST NOT be a
+  `queueMicrotask` — that never fires in the app, leaving the map stale until the next edit forces a
+  synchronous resegment (the "corrupts, then a later edit fixes it" symptom). Corollary: anything
+  that reads the coordinate map in reaction to a buffer `changed` (the search results' SYNTAX
+  repaint, which paints each view row from its projected source) must NOT run while a remap is
+  pending — a reverse-sync `changed` fires *during* the mirror, when the map is still stale.
+  `SearchResultsView` skips its repaint when `ProjectionView.isSyncPending()` and re-runs it from
+  `setReflowHandler` (after the deferred rebuild), so the painter always reads the fresh map.
+  (Header/gap *bands* don't need this — they're source-anchored block decorations that ride their
+  marks; see `tasks/code-editing/block-decorations.md`.)
+- **Cross-segment edits must be rejected at the FUNNEL, not in write-through.** A view range can be
+  contiguous yet map to a non-contiguous source range — two regions of one file are the same source
+  in different segments, with hidden rows between them. `EditorModel.setTextInBufferRange`'s
+  `editableAt` gate (→ `ViewProjection.isViewRangeEditable`) requires a SINGLE SEGMENT, so such an
+  edit is refused before GTK mutates the buffer. Rejecting later (in `ProjectionView.writeThrough*`)
+  is too late: the `insert-text`/`delete-range` handlers are *before* handlers, so returning early
+  skips the SOURCE write but GTK still applies the edit to the VIEW — view and source diverge
+  (visible as a visual-`c`/`d` across two regions deleting the wrong lines).
+- **Overlay bands (headers/gaps/images) are SOURCE-anchored block decorations.** Each consumer
+  declares them via `editor.blockDecorations()` (a `BlockDecorationSet`) and calls `set(specs)` only
+  on a logical-model change (collapse, re-diff, image re-scan) — NOT per edit. Positions then ride
+  the decoration's anchor mark across every edit/undo/splice; reconcile matches by `id`, rebuilds a
+  widget only when its `key` changed, and the editor re-projects only on a re-materialize. Full
+  design + the mark-survival proof: `tasks/code-editing/block-decorations.md`. Headers AND gaps are
+  widget bands (never buffer rows).
+- **Per-row gutter alignment.** A row that carries a band ABOVE it (a filename header, or the search
+  `⋯` gap — anchored above the NEXT region's first row, see below) bottom-aligns its gutter number
+  (`yalign=1`) so it sits next to the text under the reserved band; a band BELOW a row top-aligns it
+  (`yalign=0`). Toggled per row inside the renderer's `queryData` (the only gutter vfunc node-gtk
+  invokes), via `BlockDecorations.placementAtLine`.
+- **Anchor a separator band to the STABLE side.** The search `⋯` gap is anchored ABOVE the *next*
+  region's first row, not below the previous region's last row. A below-anchor uses a left-gravity
+  mark at the line *start*, but `o` inserts at the line *end* (after the mark), so the mark wouldn't
+  ride the growth and the opened line would land below the gap. The next region's first row is stable
+  content its mark tracks. (The filename header is naturally a start-anchor, so it never had this.)
+- **Computed surfaces re-derive, they don't row-shift.** The diff's segment structure can't be
+  maintained by row arithmetic through row-count changes that cross fragmented phantom/new
+  segments; it re-derives via `setResyncHandler` → `reDiff` → `retarget`.
 
-- A selection or edit spanning an excerpt boundary, or landing on a phantom/
-  read-only row, must clamp or reject.
-- Copy should strip header rows.
+## Hard problems still open
 
-## Key existing code to reuse
+- **Per-source decorations across excerpts**: diagnostics/inlay/LSP key off one Document today;
+  must place through the unified map for multi-file (G4 remainder). The block-decoration substrate is
+  ready: `editor.blockDecorations()` already projects SOURCE anchors (`{sourceKey,row}`) through the
+  unified map, so inline diagnostics/inlay/code-lens become another channel (see block-decorations.md).
+- **Viewport virtualization** across thousands of excerpts (G10) — a sum-tree coordinate map only
+  if profiling demands it.
+- **Gutter cell background drawing** in node-gtk (G5 polish) — blocked, see its task doc.
 
-- Projection / translation: `src/syntax/syntax-controller.ts`
-  (`setProvidedFolds`, `repaint`/`visibleRange`), `TextEditor.modelLineForViewLine`
-  / `viewLineForModelLine`.
-- Model: `src/ui/TextEditor/Document.ts`, `DocumentRegistry.ts`.
-- Diff: `src/util/DiffModel.ts` (`computeDiff`, `foldUnchanged`,
-  `diffBufferText`), `src/util/lineDiff.ts`, `src/ui/TextEditor/DiffView.ts` /
-  `DiffViewer.ts` / `DiffGutter.ts` / `applyDiffDecorations.ts`.
-- Consumer to replace: `src/ui/GitStagingView.ts`.
+(Resolved, for reference: boundary-edit clamping, cross-source undo, folds-as-transform,
+zero-cost single-file identity, the `Document` view/sync/fold extraction — all done.)
+
+## Key code
+
+- Substrate: `src/ui/TextEditor/ViewProjection.ts`, `ProjectionView.ts`; `src/syntax/
+  DocumentSyntax.ts`, `SyntaxProjection.ts`, `syntax-controller.ts`; `Document.ts`,
+  `DocumentRegistry.ts`.
+- Surfaces (UI, `src/ui/`): `SearchResultsView.ts`, `ContinuousDiffView.ts`,
+  `SourceLineNumberGutter.ts`, `HeaderBands.ts`; plus `src/ui/TextEditor/DiffLineNumberGutter.ts`,
+  `applyDiffDecorations.ts`.
+- Block decorations: `src/ui/TextEditor/BlockDecorations.ts` (generic primitive),
+  `BlockDecorationSet.ts` (declarative source-anchored layer) — full design in `block-decorations.md`.
+- Model (`src/ui/multibuffer/`): `MultiBufferModel.ts`, `MultiBufferDocument.ts`, `diffMultiBuffer.ts`,
+  `diffSegments.ts`, `projectSearch.ts`, `ExcerptSyntaxProjection.ts`.
+- Wiring: `src/ui/AppWindow.ts` (`openSearchResults`/`space *`, `openContinuousDiff`/
+  `space g D`, `file:save` routing, `diff:expand-*`).
+- Reuse: `src/util/lineDiff.ts`, `DiffModel.ts`; `src/lsp/workspaceEdit.ts`.

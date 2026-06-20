@@ -13,28 +13,30 @@
  */
 import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
+import { NERDFONT } from './nerdfont.ts';
 
+// Named UI roles mapped onto the NERDFONT catalog glyphs.
 export const Icons = {
-  info: String.fromCodePoint(0xf05a), // info-circle
-  success: String.fromCodePoint(0xf058), // check-circle
-  warning: String.fromCodePoint(0xf071), // exclamation-triangle
-  error: String.fromCodePoint(0xf06a), // exclamation-circle
-  fatal: String.fromCodePoint(0xf057), // times-circle
-  trace: String.fromCodePoint(0xf188), // bug
-  close: String.fromCodePoint(0xf00d), // times
-  git: String.fromCodePoint(0xf418), // git-branch (matches the header GitBranchButton)
-  gitMerge: String.fromCodePoint(0xf419), // git-merge
-  github: String.fromCodePoint(0xf09b), // nf-fa-github — the GitHub mark
-  modified: String.fromCodePoint(0xf444), // dot-fill — unsaved/modified marker
-  trash: String.fromCodePoint(0xf1f8), // nf-fa-trash — delete
-  pencil: String.fromCodePoint(0xf040), // nf-fa-pencil — rename/edit
-  stash: String.fromCodePoint(0xf187), // nf-fa-archive — git stash
-  search: String.fromCodePoint(0xf002), // nf-fa-search — magnifying glass
-  folder: String.fromCodePoint(0xf07b), // nf-fa-folder — matches the file tree's folder glyph
-  terminal: String.fromCodePoint(0xf120), // nf-fa-terminal — shell / run a script
-  symbol: String.fromCodePoint(0xea8b), // nf-cod-symbol_namespace — "{}" go-to-symbol
-  server: String.fromCodePoint(0xf233), // nf-fa-server — language-server status
-  sidebar: String.fromCodePoint(0xebf5), // nf-cod-layout_sidebar_left — sidebar toggle
+  info: NERDFONT.STATUS.INFO,
+  success: NERDFONT.STATUS.SUCCESS,
+  warning: NERDFONT.STATUS.WARNING,
+  error: NERDFONT.STATUS.ERROR,
+  fatal: NERDFONT.STATUS.FATAL,
+  trace: NERDFONT.STATUS.BUG,
+  close: NERDFONT.ACTION.CLOSE,
+  git: NERDFONT.GIT.BRANCH, // matches the header GitBranchButton
+  gitMerge: NERDFONT.GIT.MERGE,
+  github: NERDFONT.SOCIAL.GITHUB,
+  modified: NERDFONT.STATUS.DOT, // unsaved/modified marker
+  trash: NERDFONT.ACTION.TRASH,
+  pencil: NERDFONT.ACTION.EDIT, // rename/edit
+  stash: NERDFONT.GIT.STASH,
+  search: NERDFONT.EDITOR.SEARCH,
+  folder: NERDFONT.EDITOR.FOLDER, // matches the file tree's folder glyph
+  terminal: NERDFONT.EDITOR.TERMINAL, // shell / run a script
+  symbol: NERDFONT.EDITOR.SYMBOL, // "{}" go-to-symbol
+  server: NERDFONT.EDITOR.SERVER, // language-server status
+  sidebar: NERDFONT.NAV.SIDEBAR, // sidebar toggle
 } as const;
 
 // One shared, immutable attribute list applying the icon font (built lazily so it

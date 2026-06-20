@@ -15,12 +15,13 @@ import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { escapeMarkup } from './proseMarkup.ts';
+import { NERDFONT } from './nerdfont.ts';
 import type { GitRepo } from '../git.ts';
 
-// nf-oct-git_branch from the bundled "Symbols Nerd Font Mono" (see fonts.ts), and
-// nf-fa-warning shown instead while the working tree has merge conflicts.
-const BRANCH_GLYPH = String.fromCodePoint(0xf418);
-const CONFLICT_GLYPH = String.fromCodePoint(0xf071); // nf-fa-exclamation-triangle
+// Branch glyph, with a warning triangle shown instead while the working tree has
+// merge conflicts. Bundled "Symbols Nerd Font Mono" (see fonts.ts).
+const BRANCH_GLYPH = NERDFONT.GIT.BRANCH;
+const CONFLICT_GLYPH = NERDFONT.STATUS.WARNING;
 
 // Count colors in the theme palette (fallbacks are Adwaita's): working-tree
 // insertions/deletions in success/error; upstream ahead in info, behind in
@@ -33,7 +34,7 @@ const COLOR_DANGER = theme.ui.status.error;
 
 // The conflict icon is error-colored.
 addStyles(`
-  .quilx-conflict { color: ${theme.ui.status.error}; }
+  .quilx-conflict { color: var(--t-ui-status-error); }
 `);
 
 // A "+N"/"-M"/"↑N"/"↓M" count, as an inline markup span: a smaller, coloured run

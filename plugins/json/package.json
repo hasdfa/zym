@@ -1,0 +1,10 @@
+{
+  "name": "@quilx/plugin-json",
+  "version": "0.1.0",
+  "description": "JSON / JSONC support for quilx",
+  "type": "module",
+  "main": "./index.ts",
+  "peerDependencies": {
+    "quilx": "^0.1.0"
+  }
+}

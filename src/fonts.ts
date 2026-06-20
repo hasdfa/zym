@@ -7,12 +7,19 @@
  * invalid CSS family, so we parse with Pango and emit each property explicitly.
  *
  * The single source of truth is the `fonts` store (bottom of this file): it owns
- * the app's monospace/UI fonts, follows the GNOME interface fonts live, and lets
- * any consumer attach to it — CSS widgets register a selector (`fonts.monospace`),
- * Pango-markup callers read the live family (`fonts.monospaceFamily`), and
- * widgets taking a font description subscribe (`fonts.onChange`). Change the font
- * in one place and everything re-applies. The bare functions below are its
- * primitives.
+ * the app's monospace/UI fonts and follows the GNOME interface fonts live. It
+ * publishes them three ways, one per consumer kind:
+ *   - **CSS** — reactive custom properties on `#AppWindow` (`--t-font-ui-family`,
+ *     `--t-font-monospace`, …; see `themeFontCssVariables`-style block in `css()`).
+ *     A root `font-family: var(--t-font-ui-family)` baseline makes every widget
+ *     follow the UI font by inheritance; monospace surfaces opt in with
+ *     `font: var(--t-font-monospace)` (or `font-family: var(--t-font-monospace-family)`).
+ *   - **Pango markup** — read the live family (`fonts.monospaceFamily` /
+ *     `fonts.uiFamily`) at render time; markup can't read CSS variables.
+ *   - **Font-description consumers** (e.g. VTE) — `fonts.monospaceDescription()` plus
+ *     `fonts.onChange(...)` to re-apply on change.
+ * Change the font in one place and everything re-applies. The bare functions below
+ * are its primitives.
  */
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,8 +50,6 @@ export interface FontCss {
   weight: number;       // CSS numeric weight (Pango weights are already 100–1000)
   style: string;        // 'normal' | 'italic' | 'oblique'
   sizePt: number | null; // point size, or null when unspecified
-  /** The above as a CSS declaration block (no selector). */
-  declarations: string;
 }
 
 /** Parse a Pango font-description string into CSS font properties. */
@@ -62,14 +67,7 @@ export function fontDescriptionToCss(description: string): FontCss {
   // pixels), which we don't translate to CSS pt; skip the size in that case.
   const sizePt = desc.getSizeIsAbsolute() ? null : desc.getSize() / Pango.SCALE;
 
-  const decls = [
-    `font-family: "${family}";`,
-    `font-weight: ${weight};`,
-    `font-style: ${style};`,
-  ];
-  if (sizePt) decls.push(`font-size: ${sizePt}pt;`);
-
-  return { family: `"${family}"`, weight, style, sizePt, declarations: decls.join(' ') };
+  return { family: `"${family}"`, weight, style, sizePt };
 }
 
 function familyOf(description: string, fallback: string): string {
@@ -78,35 +76,39 @@ function familyOf(description: string, fallback: string): string {
 
 /**
  * The application font store — the single place the app's monospace/UI fonts are
- * defined and kept in sync. Three ways to attach:
+ * defined and kept in sync. It publishes them as reactive CSS variables on the root
+ * `#AppWindow` (plus a UI-font baseline), and exposes live family names + a
+ * font-description for the consumers that can't read CSS:
  *
- *  - CSS widgets: `fonts.monospace('#MyWidget')` registers a selector that gets
- *    the monospace font from one central, reactive stylesheet (no per-component
- *    inlined declarations). `fonts.ui(selector)` does the same with the UI font.
- *  - Pango markup: read `fonts.monospaceFamily` / `fonts.uiFamily` at render time
- *    (live values), so `face="…"`/`font_family="…"` always reflect the current
- *    font.
- *  - Font-description consumers (e.g. VTE): `fonts.monospaceDescription()` plus
+ *  - **CSS** — read `var(--t-font-monospace)` / `var(--t-font-monospace-family)` /
+ *    `var(--t-font-ui-family)` (full list below) in a component's own stylesheet.
+ *    Don't inline a family literal. The root `#AppWindow` baseline applies the UI
+ *    font to everything by inheritance, so only monospace surfaces need a rule.
+ *  - **Pango markup** — read `fonts.monospaceFamily` / `fonts.uiFamily` at render
+ *    time, so `face="…"`/`font_family="…"` reflect the current font.
+ *  - **Font-description consumers** (e.g. VTE) — `fonts.monospaceDescription()` plus
  *    `fonts.onChange(...)` to re-apply when the font changes.
  *
- * It follows the GNOME interface fonts live; `reload()` is public so a future
- * user font setting can drive the same path.
+ * Published CSS variables (on `#AppWindow`, re-set on every change) — the same full
+ * set for each role (`ui`, `monospace`):
+ *  - `--t-font-<role>-family`, `--t-font-<role>-weight`, `--t-font-<role>-style`
+ *  - `--t-font-<role>-size?` and `--t-font-<role>?` (the `font` shorthand)
+ * The `*-size` and shorthand vars are omitted when the font carries no point size
+ * (an absolute/device-pixel description), since a `font` shorthand needs a size.
+ *
+ * It follows the GNOME interface fonts live; `reload()` is public so a future user
+ * font setting can drive the same path. See tasks/styling.md → Fonts.
  */
 class FontStore {
   private readonly settings = new Gio.Settings({ schemaId: 'org.gnome.desktop.interface' });
-  private readonly monoSelectors = new Set<string>();
-  private readonly uiSelectors = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private ready = false; // the display (and so `styles.set`) isn't available until init
 
   private _monoCss: FontCss = fontDescriptionToCss(this.monoName());
+  private _uiCss: FontCss = fontDescriptionToCss(this.uiName());
   private _monoFamily = familyOf(this.monoName(), 'monospace');
   private _uiFamily = familyOf(this.uiName(), 'sans-serif');
 
-  /** The monospace font as parsed CSS (family/weight/size + declaration block). */
-  get monospaceCss(): FontCss {
-    return this._monoCss;
-  }
   /** The monospace family name (unquoted), for Pango `face=`/`font_family=`. */
   get monospaceFamily(): string {
     return this._monoFamily;
@@ -118,17 +120,6 @@ class FontStore {
   /** The monospace font as a Pango.FontDescription (e.g. for VTE). */
   monospaceDescription(): InstanceType<typeof Pango.FontDescription> {
     return Pango.FontDescription.fromString(this.monoName());
-  }
-
-  /** Give `selector` the app monospace font via the central reactive sheet. */
-  monospace(selector: string): void {
-    this.monoSelectors.add(selector);
-    this.apply();
-  }
-  /** Give `selector` the app UI (proportional) font via the central sheet. */
-  ui(selector: string): void {
-    this.uiSelectors.add(selector);
-    this.apply();
   }
 
   /** Subscribe to font changes (system or, later, user config). Returns unsubscribe. */
@@ -150,6 +141,7 @@ class FontStore {
   /** Recompute the fonts, re-apply the sheet, and notify subscribers. */
   reload(): void {
     this._monoCss = fontDescriptionToCss(this.monoName());
+    this._uiCss = fontDescriptionToCss(this.uiName());
     this._monoFamily = familyOf(this.monoName(), 'monospace');
     this._uiFamily = familyOf(this.uiName(), 'sans-serif');
     this.apply();
@@ -157,17 +149,37 @@ class FontStore {
   }
 
   private apply(): void {
-    if (!this.ready) return; // registrations before init() are flushed by init()
+    if (!this.ready) return; // changes before init() are flushed by init()
     styles.set(this.css(), { key: 'app-fonts' });
   }
 
+  /** The reactive font sheet: the `--t-font-*` variables + the UI-font baseline,
+   *  both on `#AppWindow` so every descendant inherits the UI font. */
   private css(): string {
-    const rules: string[] = [];
-    if (this.monoSelectors.size)
-      rules.push(`${[...this.monoSelectors].join(',\n')} { ${this._monoCss.declarations} }`);
-    if (this.uiSelectors.size)
-      rules.push(`${[...this.uiSelectors].join(',\n')} { font-family: "${this._uiFamily}"; }`);
-    return rules.join('\n');
+    return `#AppWindow {\n${this.variables()}\n  font-family: var(--t-font-ui-family);\n}`;
+  }
+
+  private variables(): string {
+    return [...this.fontVars('ui', this._uiCss), ...this.fontVars('monospace', this._monoCss)]
+      .map((l) => `  ${l}`)
+      .join('\n');
+  }
+
+  /** The full set of `--t-font-<role>-*` declarations for one font: family, weight,
+   *  style, and — when the font carries a point size — size plus the `font` shorthand
+   *  (`--t-font-<role>`). The `*-size` and shorthand are omitted for an absolute
+   *  (device-pixel) description, since a `font` shorthand needs a point size. */
+  private fontVars(role: 'ui' | 'monospace', f: FontCss): string[] {
+    const lines = [
+      `--t-font-${role}-family: ${f.family};`,
+      `--t-font-${role}-weight: ${f.weight};`,
+      `--t-font-${role}-style: ${f.style};`,
+    ];
+    if (f.sizePt) {
+      lines.push(`--t-font-${role}-size: ${f.sizePt}pt;`);
+      lines.push(`--t-font-${role}: ${f.style} ${f.weight} ${f.sizePt}pt ${f.family};`);
+    }
+    return lines;
   }
 
   private monoName(): string {

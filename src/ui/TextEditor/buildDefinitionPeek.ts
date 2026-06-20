@@ -11,9 +11,9 @@ import { theme } from '../../theme/theme.ts';
 import { addStyles } from '../../styles.ts';
 import { TextEditor } from './TextEditor.ts';
 
-const PEEK_BG = theme.ui.surface.popover ?? theme.ui.editor.background ?? '#1e1e1e';
-const PEEK_FG = theme.ui.editor.foreground ?? '#e0e0e0';
-const PEEK_MUTED = theme.ui.text.muted ?? theme.ui.editor.lineNumber ?? PEEK_FG;
+const PEEK_BG = theme.ui.surface.popover;
+const PEEK_FG = theme.ui.editor.foreground;
+const PEEK_MUTED = theme.ui.text.muted;
 
 addStyles(`
   .peek-card {

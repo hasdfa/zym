@@ -16,18 +16,19 @@ import { quilx } from '../quilx.ts';
 import { repoRoot } from '../git.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { Icons } from './icons.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { searchPullRequests, type GithubListItem, type PrState } from '../github.ts';
 import type { GitRepo } from '../git.ts';
 import { theme } from '../theme/theme.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-// Octicon glyph + GitHub-style colour for each PR state (open green, merged
-// purple, closed red), rendered in the bundled icon font ahead of the title.
+// Glyph + GitHub-style colour for each PR state (open green, merged purple,
+// closed red), rendered in the bundled icon font ahead of the title.
 const STATE_STYLE: Record<PrState, { glyph: string; color: string }> = {
-  open: { glyph: String.fromCodePoint(0xf407), color: theme.ui.pr.open }, // git-pull-request
-  merged: { glyph: String.fromCodePoint(0xf419), color: theme.ui.pr.merged }, // git-merge
-  closed: { glyph: String.fromCodePoint(0xf407), color: theme.ui.pr.closed }, // git-pull-request
+  open: { glyph: NERDFONT.GIT.PULL_REQUEST, color: theme.ui.pr.open },
+  merged: { glyph: NERDFONT.GIT.MERGE, color: theme.ui.pr.merged },
+  closed: { glyph: NERDFONT.GIT.PULL_REQUEST, color: theme.ui.pr.closed },
 };
 
 export function stateGlyphMarkup(state: PrState): string {

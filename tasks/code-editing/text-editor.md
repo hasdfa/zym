@@ -404,6 +404,38 @@ applicable: the [PCRE2 + JIT](https://blogs.gnome.org/chergert/2020/09/30/gtksou
 work optimizes the `.lang` regex engine we don't use, and nothing in the blog touches the
 open/parse costs (those are our tree-sitter path).
 
+**Findings — snapshot-API gutter explored, NOT a perf win (2026-06-20).** We prototyped the
+base-`GtkSourceGutterRenderer` + manual `snapshot_line` approach the follow-up above proposes
+(branch `feat/gutter-cell-background`, **not merged**) and benchmarked it. Conclusion: **drawing the
+gutter from JS via node-gtk is a net perf _regression_, not the win the follow-up assumed.**
+
+- node-gtk *can* do it now: overriding `snapshot_line` + `measure` on the base renderer fires, and
+  `appendColor` / `appendLayout` / `alignCell` / `getLineYrange` are all reachable. (We also added a
+  `super.<vfunc>()` chain-up to node-gtk — merged to its master, PR romgrk/node-gtk#451 — though the
+  gutter uses only plain overrides. macOS chain-up gap tracked in node-gtk#453.) The old "snapshot
+  vfunc never fires" belief was a module-level-instantiation segfault, not a binding limit.
+- But `GtkSourceGutterRendererText` draws each line **in C** behind a single `queryData` callback,
+  whereas a JS `snapshot_line` crosses JS→C **~6× per line** (`alignCell` + `save` + `translate` +
+  `appendLayout` + `restore`, plus the `Graphene.Point` alloc). Measured: that draw sequence is
+  **~165–210 µs/frame** for the number column alone (~3.7–4.7 µs/line) — which **outweighs** the
+  ~51 µs/frame the markup-free `setText` number *saves* (the markup-parse win is real but small).
+  Net ≈ **246 → ~360–400 µs/frame**, ~+1% of a 60Hz budget at a 45-line viewport, scaling with
+  viewport height. (`gutter-bench.ts` `composite-snap` config + a separate draw-FFI micro-bench; the
+  bench file carries a CAVEAT note recording this.)
+- This also **kills the perf case for the `gsk_text_node` digit-cache follow-up _as a node-gtk JS
+  renderer_**: any per-line drawing from JS pays the same ~6×/line FFI wall. To actually beat the C
+  markup renderer you'd have to draw in C, not JS (out of scope). The per-frame node-gtk FFI *is*
+  the scroll floor (see editor-scroll-perf memory) — moving drawing into JS multiplies it.
+
+**So the snapshot-API gutter is a _control_ feature, not a perf one.** What it buys that the C markup
+renderer can't: arbitrary per-row drawing (backgrounds / content beside **block decorations** via
+`getLineYrange(CELL)`), and a path to a **clickable** gutter. Clicking is separate from drawing —
+either override `activate` / `query_activatable` (line-granular; `activate` carries no pointer-x, so
+one composite renderer can't tell which column was hit), or attach a `GtkGestureClick` to the gutter
+widget and hit-test x→column / y→line yourself (full per-column, recommended). The working prototype
+lives on `feat/gutter-cell-background`; the main editor (which has no block decorations) keeps the C
+markup composite for now, so it pays neither the FFI cost nor gains drawing it doesn't need.
+
 ## Related friction evidence
 
 [inline-widgets.md](inline-widgets.md), [document-registry.md](document-registry.md),

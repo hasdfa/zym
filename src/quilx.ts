@@ -178,6 +178,11 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     description:
       'Automatically install a missing language server (into a quilx-managed dir) when a file needs it — shown as an info notification — instead of prompting with an Install button.',
   },
+  'plugins.disabled': {
+    type: 'array',
+    default: [],
+    description: 'Plugin IDs (e.g. "rust") that are not activated on startup.',
+  },
   'diagnostics.statusSeverities': {
     type: 'array',
     default: ['error', 'warning', 'info', 'hint'],

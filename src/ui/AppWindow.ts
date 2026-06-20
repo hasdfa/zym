@@ -35,9 +35,9 @@ import { listResumableSessions, recordSessionWorktree, relativeTime, type AgentS
 import { WorkbenchList, PROJECT_NAME } from './WorkbenchList.ts';
 import { WorkbenchStatus } from './WorkbenchStatus.ts';
 import { GitPanel } from './GitPanel.ts';
-import { GitStagingView } from './GitStagingView.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons, iconLabel } from './icons.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitRepo, type GitOpResult } from '../git.ts';
@@ -52,6 +52,9 @@ import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
+import { SearchResultsView } from './SearchResultsView.ts';
+import { ContinuousDiffView } from './ContinuousDiffView.ts';
+import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
@@ -79,6 +82,7 @@ import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
 import { KeymapPanel } from './KeymapPanel.ts';
 import { DiagnosticsPanel } from '../lsp/diagnostics/DiagnosticsPanel.ts';
+import { PluginManagerPanel } from './PluginManagerPanel.ts';
 import { type NavigationKind, type LspConfig, type LspDocument } from '../lsp/LspManager.ts';
 import { normalizeWorkspaceEdit, applyTextEdits } from '../lsp/workspaceEdit.ts';
 import { uriToPath, type PositionEncoding } from '../lsp/position.ts';
@@ -158,15 +162,19 @@ export class AppWindow {
   // Maps an editor's root widget to its center tab handle, so a location jump can
   // reveal an already-open file instead of opening a duplicate tab.
   private readonly editorChildren = new Map<Widget, PanelChild>();
-  // Tab-hosted staging views (git:open-staging), keyed by root widget so the view
-  // is disposed (releasing its embedded editor's document ref) when its tab closes.
-  private readonly stagingViews = new Map<Widget, GitStagingView>();
+  // Tab-hosted multibuffers (project:search-results), keyed by root widget so the view
+  // is disposed (freeing its per-source DocumentSyntax parses) when its tab closes.
+  private readonly searchResultsViews = new Map<Widget, SearchResultsView>();
+  // Tab-hosted continuous multi-file diff views (git:continuous-diff), same lifecycle.
+  private readonly continuousDiffViews = new Map<Widget, ContinuousDiffView>();
   // Session modified-status registrations (editors, running agents), keyed by the
   // tab's root widget so the registration is disposed when the tab closes.
   private readonly participants = new Map<Widget, DisposableLike>();
   // Set once the user has confirmed an exit past unsaved work, so the re-entrant
   // close-request doesn't prompt again.
   private quitting = false;
+  // The plugin manager center tab handle; null after it is closed.
+  private pluginManagerTab: { root: Widget; child: PanelChild } | null = null;
   // The most recently focused agent — the default target for send-to-agent.
   private lastAgent: Agent | null = null;
   // The agent the user is currently looking at (its tab is the active one), so its
@@ -1232,8 +1240,10 @@ export class AppWindow {
     this.editorRegistrations.delete(widget);
     this.editors.get(widget)?.dispose(); // explicit teardown, not reliant on the GTK destroy signal
     this.editors.delete(widget);
-    this.stagingViews.get(widget)?.dispose(); // release its embedded editor + git subscription
-    this.stagingViews.delete(widget);
+    this.searchResultsViews.get(widget)?.dispose(); // free its per-source parses
+    this.searchResultsViews.delete(widget);
+    this.continuousDiffViews.get(widget)?.dispose();
+    this.continuousDiffViews.delete(widget);
     this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
@@ -1488,7 +1498,8 @@ export class AppWindow {
   // leave the chrome to the system Adwaita styling.
   private applyChromeStyles() {
     const { editor: { background: bg }, surface: { popover: popoverBg, selected: selectedBg } } = theme.ui;
-    if (!bg) {
+    // A theme that follows the system scheme leaves the chrome to Adwaita.
+    if (theme.followSystemScheme) {
       styles.remove('theme-chrome');
       return;
     }
@@ -1504,6 +1515,7 @@ export class AppWindow {
       `#FileTree, #FileTree listview { background-color: ${bg}; }`,
       `#NotificationLog, #NotificationLog list { background-color: ${bg}; }`,
       `#KeymapPanel, #KeymapPanel viewport { background-color: ${bg}; }`,
+      `#PluginManagerPanel, #PluginManagerPanel viewport { background-color: ${bg}; }`,
       `#LocationList, #LocationList list { background-color: ${bg}; }`,
       `#WorkbenchList, #WorkbenchList list { background-color: ${bg}; }`,
       `#GitPanel, #GitPanel list { background-color: ${bg}; }`,
@@ -1705,6 +1717,7 @@ export class AppWindow {
       'lsp:toggle-diagnostics-panel': { didDispatch: () => this.toggleDiagnosticsPanel(), description: 'Toggle the Diagnostics panel' },
       'lsp:install-server': { didDispatch: () => this.installServerPicker(), description: 'Install a language server…' },
       'keymap:show': { didDispatch: () => this.toggleKeymapPanel(), description: 'Show all keybindings and their source' },
+      'plugin:open-manager': { didDispatch: () => this.openPluginManager(), description: 'Open the Plugin Manager' },
     });
   }
 
@@ -1748,6 +1761,20 @@ export class AppWindow {
       this.setBottomDock('keymap');
       this.workbench.keymapPanel.focus();
     }
+  }
+
+  // Open (or reveal) the Plugin Manager as a center tab. Reveals the existing tab
+  // when it is still hosted in a panel; opens a fresh one otherwise.
+  private openPluginManager() {
+    if (this.pluginManagerTab && Panel.containing(this.pluginManagerTab.root)) {
+      this.pluginManagerTab.child.select();
+      this.pluginManagerTab.root.grabFocus();
+      return;
+    }
+    const manager = new PluginManagerPanel();
+    const child = this.workbench.center.add(manager.root, { title: 'Plugin Manager', requireTabBar: true });
+    this.pluginManagerTab = { root: manager.root, child };
+    manager.root.grabFocus();
   }
 
   // Dock the given panel into the active workbench's bottom slot (or clear it),
@@ -2096,16 +2123,69 @@ export class AppWindow {
         description: 'Search file contents (ripgrep)',
       },
       // Save commands only apply with an editor open.
-      'file:save': { didDispatch: () => this.saveActive(), description: 'Save the current file', when: () => this.activeEditor !== null },
+      'file:save': {
+        didDispatch: () => this.saveActive(),
+        description: 'Save the current file',
+        when: () => this.activeEditor !== null || this.activeSavableSurface() !== null,
+      },
       'file:save-as': { didDispatch: () => this.saveAsDialog(), description: 'Save the current file as…', when: () => this.activeEditor !== null },
       'git:diff-current': {
         didDispatch: () => this.diffActiveAgainstHead(),
         description: 'Diff the current file (working tree vs HEAD)',
         when: () => this.activeEditor?.currentFile != null,
       },
-      'git:open-staging': {
-        didDispatch: () => this.openStagingView(),
-        description: 'Open the staging view (status + diff) in a tab',
+      'git:start-commit': {
+        didDispatch: () => this.startCommit(),
+        description: 'Commit staged changes (edit the message in a tab)',
+      },
+      'project:search-results': {
+        didDispatch: () => this.openSearchResults(),
+        description: 'Search the selected text across the project, shown as a multibuffer',
+        when: () => this.activeEditor !== null,
+      },
+      'git:continuous-diff': {
+        didDispatch: () => void this.openContinuousDiff(),
+        description: 'Show every changed file as one continuous diff (multibuffer)',
+      },
+      'diff:expand-context': {
+        didDispatch: () => this.activeContinuousDiff()?.expandContextAtCursor(),
+        description: 'Reveal more unchanged lines at the nearest gap',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:expand-all': {
+        didDispatch: () => this.activeContinuousDiff()?.expandAll(),
+        description: 'Reveal all unchanged lines (show the full files)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:collapse-context': {
+        didDispatch: () => this.activeContinuousDiff()?.collapseContext(),
+        description: 'Re-collapse expanded context back to the windowed diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'search:toggle-collapse': {
+        didDispatch: () => this.activeSearchResults()?.toggleCollapseAtCursor(),
+        description: 'Collapse / expand the file under the cursor (search results)',
+        when: () => this.activeSearchResults() !== null,
+      },
+      'search:collapse-all': {
+        didDispatch: () => this.activeSearchResults()?.collapseAll(),
+        description: 'Collapse every file (search results)',
+        when: () => this.activeSearchResults() !== null,
+      },
+      'search:expand-all': {
+        didDispatch: () => this.activeSearchResults()?.expandAll(),
+        description: 'Expand every file (search results)',
+        when: () => this.activeSearchResults() !== null,
+      },
+      'diff:stage-hunk': {
+        didDispatch: () => this.activeContinuousDiff()?.stageHunkAtCursor(),
+        description: 'Stage the hunk under the cursor (continuous diff)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:unstage-hunk': {
+        didDispatch: () => this.activeContinuousDiff()?.unstageHunkAtCursor(),
+        description: 'Unstage the hunk under the cursor (continuous diff)',
+        when: () => this.activeContinuousDiff() !== null,
       },
       'app:quit': { didDispatch: () => this.onQuit(), description: 'Quit quilx' },
       'command-palette:toggle': { didDispatch: () => openCommandPicker(this.overlay), description: 'Show all commands' },
@@ -2137,18 +2217,96 @@ export class AppWindow {
     });
   }
 
-  /** Open the tab-hosted staging view (status list + an editable diff pane). */
-  private openStagingView(): void {
-    const view = new GitStagingView({
-      cwd: this.workbench.cwd,
-      git: this.workbench.git,
-      onCommit: () => this.startCommit(), // opens COMMIT_EDITMSG in the editor area
+  /** Search the project for the active editor's selected text and show every match,
+   *  grouped by file with context, in a continuous read-only multibuffer tab. Phase 1a
+   *  of the multibuffer (tasks/code-editing/multibuffer.md). */
+  private openSearchResults(): void {
+    const query = this.activeEditor?.getSelectedText().trim() ?? '';
+    if (query === '') {
+      this.toast('Select text to search for');
+      return;
+    }
+    const cwd = this.workbench.cwd;
+    runProjectSearch(cwd, query, (result) => {
+      if (result.error) {
+        this.toast(result.error);
+        return;
+      }
+      const files = result.files ?? [];
+      if (files.length === 0) {
+        this.toast(`No results for “${query}”`);
+        return;
+      }
+      const excerpts = matchesToExcerptInputs(files, { context: 2 });
+      const view = new SearchResultsView({
+        excerpts,
+        cwd,
+        // Editable results: edit in place (write-through to each file's live Document + save),
+        // and replace across files as undo-coordinated steps (G6). NORMAL-mode Enter still
+        // jumps to the file; INSERT-mode Enter is a newline.
+        editable: true,
+        documents: this.documents,
+        onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+      });
+      const child = this.workbench.center.add(view.root, {
+        title: `${Icons.search}  ${query}`,
+        requireTabBar: true,
+      });
+      this.searchResultsViews.set(view.root, view); // disposeChild tears it down on close
+      child.select();
+      view.focus();
     });
+  }
+
+  /** Show every changed file (working tree vs HEAD) as ONE continuous diff in a tab — the
+   *  multibuffer diff surface (read-only for now; tasks/code-editing/multibuffer.md, G5). */
+  private async openContinuousDiff(): Promise<void> {
+    const cwd = this.workbench.cwd;
+    const root = repoRoot(cwd);
+    if (!root) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const paths = [...this.workbench.git.getFileStatuses().keys()].sort();
+    if (paths.length === 0) {
+      this.toast('No changes against HEAD');
+      return;
+    }
+    const showHead = (rel: string): Promise<string> =>
+      new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
+    // Editable diff: NEW side = the file's current text (an open document's live text, incl.
+    // unsaved edits, else from disk) backed by a live Document (edit in place + save + live
+    // re-diff), OLD side = the HEAD blob. A deleted file → empty new.
+    const files = await Promise.all(
+      paths.map(async (path) => {
+        const oldText = await showHead(Path.relative(root, path));
+        const open = this.documents.find(path);
+        let newText = open ? open.getText() : '';
+        if (!open) {
+          try {
+            newText = Fs.readFileSync(path, 'utf8');
+          } catch {
+            /* deleted on disk */
+          }
+        }
+        return { path, oldText, newText };
+      }),
+    );
+    const view = new ContinuousDiffView({
+      files,
+      cwd,
+      editable: true,
+      documents: this.documents,
+      git: this.workbench.git, // enables the staged/unstaged gutter marker + `space h s`/`space h u`
+      onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+    });
+    const title = () => (view.isModified() ? `${Icons.modified} ${Icons.git}  Diff` : `${Icons.git}  Diff`);
     const child = this.workbench.center.add(view.root, {
-      title: `${Icons.git}  Staging`,
+      title: title(),
       requireTabBar: true,
     });
-    this.stagingViews.set(view.root, view); // disposeChild tears it down on close
+    this.continuousDiffViews.set(view.root, view); // disposeChild tears it down on close
+    view.onModifiedChange(() => child.setTitle(title())); // show the unsaved marker on edit/save
     child.select();
     view.focus();
   }
@@ -2735,10 +2893,49 @@ export class AppWindow {
   // --- File operations (routed to the active editor) -------------------------
 
   private saveActive() {
+    // An editable multibuffer (project search OR diff) saves every file it touched, not one Document.
+    const surface = this.activeSavableSurface();
+    if (surface) {
+      surface.save();
+      return;
+    }
     const editor = this.activeEditor;
     if (!editor) return;
     if (editor.currentFile) editor.save();
     else this.saveAsDialog();
+  }
+
+  /** The active center/focused child resolved to a widget, for surface lookups. */
+  private activeChildWidget(): Widget | null {
+    return Panel.active?.activeChild ?? this.workbench.center.activePanel.activeChild ?? null;
+  }
+
+  /** The project-search multibuffer hosted by the active child, if any. */
+  private activeMultibuffer(): SearchResultsView | null {
+    const focused = Panel.active?.activeChild;
+    const focusedMb = focused ? this.searchResultsViews.get(focused) : undefined;
+    if (focusedMb) return focusedMb;
+    const centerChild = this.workbench.center.activePanel.activeChild;
+    return centerChild ? this.searchResultsViews.get(centerChild) ?? null : null;
+  }
+
+  /** The active editable surface (project-search or diff multibuffer) that owns a `save()`. */
+  private activeSavableSurface(): { save(): void } | null {
+    const widget = this.activeChildWidget();
+    if (!widget) return null;
+    return this.searchResultsViews.get(widget) ?? this.continuousDiffViews.get(widget) ?? null;
+  }
+
+  /** The diff multibuffer hosted by the active child, if any (for the expand-context commands). */
+  private activeContinuousDiff(): ContinuousDiffView | null {
+    const widget = this.activeChildWidget();
+    return widget ? this.continuousDiffViews.get(widget) ?? null : null;
+  }
+
+  /** The search-results multibuffer hosted by the active child, if any (for the collapse commands). */
+  private activeSearchResults(): SearchResultsView | null {
+    const widget = this.activeChildWidget();
+    return widget ? this.searchResultsViews.get(widget) ?? null : null;
   }
 
   private openDialog() {
@@ -2791,7 +2988,7 @@ function span(a0: number, aLen: number, b0: number, bLen: number): number {
 // round dot. Adw tab titles are plain text (no markup, no colour), so the dot
 // can't be colour-coded like the sidebar — the waiting state instead drives Adw's
 // native `needs-attention` tab highlight (see updateAgentTab).
-const AGENT_WORKING_GLYPH = String.fromCodePoint(0xf1978);
+const AGENT_WORKING_GLYPH = NERDFONT.STATUS.SYNC;
 const AGENT_STATUS_DOT = '●';
 
 /** An agent tab's title: the WorkbenchList status glyph prefixed to the agent's name. */

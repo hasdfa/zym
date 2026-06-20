@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "lib": ["ES2020"],
+    "types": ["node"],
+    "allowJs": true,
+    "noEmit": true,
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "paths": {
+      "node-gtk": ["../node_modules/.node-gtk-types/node-gtk.d.ts"],
+      "quilx/plugin-api": ["../src/plugin-api.ts"]
+    }
+  },
+  "include": ["**/*", "../node_modules/.node-gtk-types/node-gtk.d.ts"],
+  "exclude": ["node_modules"]
+}

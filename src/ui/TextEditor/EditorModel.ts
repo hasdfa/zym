@@ -260,7 +260,7 @@ export class EditorModel {
     const tag = new Gtk.TextTag({
       name: 'vim-block-cursor',
       background: theme.ui.editor.foreground,
-      foreground: theme.ui.editor.background ?? theme.ui.surface.popover,
+      foreground: theme.ui.editor.background,
     });
     this.buffer.getTagTable().add(tag);
     return tag;
@@ -414,6 +414,7 @@ export class EditorModel {
     return this.buffer.getText(this.iterAtPoint(r.start), this.iterAtPoint(r.end), true);
   }
 
+
   /** The text of `row`, excluding its trailing newline. */
   lineTextForBufferRow(row: number): string {
     const start = this.iterAtLineStart(clamp(row, 0, this.getLastBufferRow()));
@@ -470,6 +471,20 @@ export class EditorModel {
   private foldAccess: FoldAccess | null = null;
   private lastCursorOffset = 0;
   private snappingCursor = false;
+  // A true read-only viewer (a multibuffer results surface / diff pane): edits are no-ops and
+  // input is never enabled — `view.setEditable(false)` alone doesn't suffice, since vim's
+  // mode handling re-enables it on insert and normal-mode operators (x/dd/p) mutate the
+  // buffer programmatically through `setTextInBufferRange`, bypassing the native editable flag.
+  private readOnly = false;
+  // Per-row editability gate (the editable diff multibuffer): only some view rows accept edits
+  // (new-side real rows), others reject (removed phantom / header / gap). Like `readOnly`,
+  // vim operators bypass the native editable tag, so the model must check.
+  private editableAt: ((startRow: number, endRow: number) => boolean) | null = null;
+
+  /** Restrict edits to rows where `check(startRow, endRow)` holds (view rows). */
+  setEditableCheck(check: ((startRow: number, endRow: number) => boolean) | null): void {
+    this.editableAt = check;
+  }
 
   /** Wire the fold projection (the editor passes its SyntaxController's view). */
   setFoldAccess(access: FoldAccess): void {
@@ -636,7 +651,7 @@ export class EditorModel {
     if (!this.extraSelectionTag) {
       this.extraSelectionTag = new Gtk.TextTag({
         name: 'vim-extra-selection',
-        background: theme.ui.surface.selected ?? theme.ui.editor.foreground,
+        background: theme.ui.surface.selected,
       });
       this.buffer.getTagTable().add(this.extraSelectionTag);
     }
@@ -645,7 +660,7 @@ export class EditorModel {
       this.extraCursorTag = new Gtk.TextTag({
         name: 'vim-extra-cursor',
         background: theme.ui.editor.foreground,
-        foreground: theme.ui.editor.background ?? theme.ui.surface.popover,
+        foreground: theme.ui.editor.background,
       });
       this.buffer.getTagTable().add(this.extraCursorTag);
     }
@@ -742,6 +757,17 @@ export class EditorModel {
    */
   setTextInBufferRange(range: RangeLike, text: string): Range {
     const r = Range.fromObject(range);
+    // A read-only viewer rejects every edit — this is the single funnel all vim operators
+    // (and programmatic edits) route through, so gating it here blocks them all.
+    if (this.readOnly) return new Range(r.start, r.start);
+    // A partially-editable surface (the multibuffers) rejects edits touching non-editable rows.
+    // A range ending at column 0 of `end.row` (a linewise `dd`/`cc`, range `[L,0]–[L+1,0]`) does
+    // NOT modify `end.row` — only `L`'s newline — so don't require `end.row` (which may be the next
+    // excerpt's first row, a different source) to be editable; gate on the last TOUCHED row.
+    if (this.editableAt) {
+      const lastTouched = r.end.column === 0 && r.end.row > r.start.row ? r.end.row - 1 : r.end.row;
+      if (!this.editableAt(r.start.row, lastTouched)) return new Range(r.start, r.start);
+    }
     // An edit spanning a fold placeholder reveals those folds first, then acts on the
     // real (former-folded) text — so deleting/changing a selection that includes a
     // folded region works. Marks keep the edit range across the expansion.
@@ -824,6 +850,26 @@ export class EditorModel {
     this.setCursorBufferPosition(new Point(row, indent.length));
   }
 
+  /** Duplicate the cursor's line, inserting the copy below; the cursor follows
+   *  the copy down (keeping its column). */
+  duplicateLineBelow(): void {
+    const cursor = this.getCursorBufferPosition();
+    const lineText = this.lineTextForBufferRow(cursor.row);
+    const lineEnd = this.bufferRangeForBufferRow(cursor.row).end;
+    this.transact(() => this.setTextInBufferRange(new Range(lineEnd, lineEnd), '\n' + lineText));
+    this.setCursorBufferPosition(new Point(cursor.row + 1, cursor.column));
+  }
+
+  /** Duplicate the cursor's line, inserting the copy above; the cursor stays on
+   *  the upper copy (keeping its column). */
+  duplicateLineAbove(): void {
+    const cursor = this.getCursorBufferPosition();
+    const lineText = this.lineTextForBufferRow(cursor.row);
+    const lineStart = new Point(cursor.row, 0);
+    this.transact(() => this.setTextInBufferRange(new Range(lineStart, lineStart), lineText + '\n'));
+    this.setCursorBufferPosition(new Point(cursor.row, cursor.column));
+  }
+
   /**
    * `o`/`O` carry indentation themselves (`insertNewlineBelow`/`Above`), so the
    * vim layer's separate auto-indent-empty-rows pass is left off — running it
@@ -878,6 +924,21 @@ export class EditorModel {
     } finally {
       this.undoTarget.endUserAction();
     }
+  }
+
+  /**
+   * Open/close an undo group that spans *several* operations, so edits from more
+   * than one command coalesce into a single undo step. GTK user actions nest by
+   * count, so an inner `transact` (or native edit) keeps the group open until the
+   * matching `endUndoGroup`. Use `transact` for a single self-contained edit; use
+   * this only when the group must outlive one operation (paste cycling groups the
+   * initial paste and each subsequent cycle). Callers MUST balance the pair.
+   */
+  beginUndoGroup(): void {
+    this.undoTarget.beginUserAction();
+  }
+  endUndoGroup(): void {
+    this.undoTarget.endUserAction();
   }
 
   /**
@@ -1387,13 +1448,26 @@ export class EditorModel {
     else this.view.removeCssClass(name);
   }
 
-  /** Enable or disable user text input (normal/visual disable it; insert enables). */
+  /** Enable or disable user text input (normal/visual disable it; insert enables). A
+   *  read-only viewer never enables input, whatever the vim mode. */
   setInputEnabled(enabled: boolean): void {
-    this.view.setEditable(enabled);
+    const allow = enabled && !this.readOnly;
+    this.view.setEditable(allow);
     // Mark the view as taking text input while editable, so the keymap releases
     // `space` (the leader prefix) in insert mode but keeps it as a leader in
     // normal/visual mode. See the `.has-text-input` rule in the default keymap.
-    this.toggleCssClass('has-text-input', enabled);
+    this.toggleCssClass('has-text-input', allow);
+  }
+
+  /** Make this a read-only viewer: edits no-op and input stays disabled regardless of mode. */
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
+    if (readOnly) this.setInputEnabled(false);
+  }
+
+  /** Whether this editor rejects edits (a results/diff viewer). */
+  isReadOnly(): boolean {
+    return this.readOnly;
   }
 
   /** Set the cursor shape from a `CursorType` value (vim switches per mode). */

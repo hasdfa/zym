@@ -38,7 +38,7 @@ export type TerminalMode = 'normal' | 'insert';
 // (not `-within`) because normal mode focuses the container itself, not the Vte.
 addStyles(`
   .quilx-terminal.terminal-normal:focus {
-    outline: 1px solid ${theme.ui.surface.selected ?? '@theme_selected_bg_color'};
+    outline: 1px solid var(--t-ui-surface-selected);
     outline-offset: -1px;
   }
 `);

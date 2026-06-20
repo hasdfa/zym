@@ -20,6 +20,7 @@ import { createSourceScheme } from '../../theme/createSourceScheme.ts';
 import { addStyles } from '../../styles.ts';
 import { EditorModel } from './EditorModel.ts';
 import { Document, type DocumentHost } from './Document.ts';
+import type { TextEditorSource } from './TextEditorSource.ts';
 import { InlayHintController } from './InlayHintController.ts';
 import { attachVim } from './vim/index.ts';
 import { quilx } from '../../quilx.ts';
@@ -31,6 +32,7 @@ import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
 import { langIdForPath } from '../../syntax/grammar.ts';
 import { TextDecorations } from './TextDecorations.ts';
 import { BlockDecorations } from './BlockDecorations.ts';
+import { BlockDecorationSet } from './BlockDecorationSet.ts';
 import { OverlayDecoration } from './OverlayDecoration.ts';
 import { Peek, type PeekOptions } from './Peek.ts';
 import { GitGutter } from './GitGutter.ts';
@@ -60,11 +62,16 @@ import {
 } from '../../gi.ts';
 
 addStyles(`
-  .quilx-editor { color: ${theme.ui.editor.foreground}; caret-color: ${theme.ui.editor.foreground}; }
+  .quilx-editor {
+    font: var(--t-font-monospace);
+    color: var(--t-ui-editor-foreground);
+    caret-color: var(--t-ui-editor-foreground);
+  }
   /* Pending-command preview ("showcmd"), floated in the editor's bottom-right. */
   .quilx-showcmd {
-    background-color: ${theme.ui.editor.background ?? theme.ui.surface.popover};
-    color: ${theme.ui.editor.foreground};
+    font: var(--t-font-monospace);
+    background-color: var(--t-ui-editor-background);
+    color: var(--t-ui-editor-foreground);
     opacity: 0.75;
     padding: 1px 6px;
     margin: 4px;
@@ -72,33 +79,34 @@ addStyles(`
   }
   /* Hollow caret shown over the cursor's character while the editor is unfocused. */
   .quilx-unfocused-caret {
-    border: 1.5px solid ${theme.ui.text.muted};
+    border: 1.5px solid var(--t-ui-text-muted);
     border-radius: 1px;
   }
   /* Filled caret block for positions with no glyph to reverse-video (empty line,
      past end-of-line, end-of-buffer). */
   .quilx-block-caret {
-    background-color: ${theme.ui.editor.foreground};
+    background-color: var(--t-ui-editor-foreground);
     border-radius: 1px;
   }
   /* Beam caret for extra (multi-cursor) carets in insert mode — a thin vertical
      bar, like the primary insert-mode caret. */
   .quilx-beam-caret {
-    background-color: ${theme.ui.editor.foreground};
+    background-color: var(--t-ui-editor-foreground);
   }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
   .quilx-placeholder {
-    color: ${theme.ui.text.muted};
+    font: var(--t-font-monospace);
+    color: var(--t-ui-text-muted);
     opacity: 0.6;
   }
   /* LSP hover card: a floating tooltip over the editor. */
   .quilx-hover {
-    background-color: ${theme.ui.surface.popover};
-    color: ${theme.ui.editor.foreground};
-    border: 1px solid alpha(${theme.ui.editor.foreground}, 0.2);
+    background-color: var(--t-ui-surface-popover);
+    color: var(--t-ui-editor-foreground);
+    border: 1px solid alpha(var(--t-ui-editor-foreground), 0.2);
     border-radius: 6px;
     padding: 6px 8px;
-    box-shadow: 0 1px 3px ${theme.ui.shadow};
+    box-shadow: 0 1px 3px var(--t-ui-shadow);
   }
   /* Info banner pinned above the editor content. Color tint is mostly muted into
      the UI background so it isn't garish; text/buttons keep the normal foreground.
@@ -106,16 +114,16 @@ addStyles(`
      error (load/save failure). */
   .quilx-banner-warning,
   .quilx-banner-error {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
     padding: 2px 8px;
   }
-  .quilx-banner-warning { background-color: mix(${theme.ui.editor.background ?? theme.ui.surface.popover}, ${theme.ui.status.warning}, 0.25); }
-  .quilx-banner-error   { background-color: mix(${theme.ui.editor.background ?? theme.ui.surface.popover}, ${theme.ui.status.error},   0.25); }
+  .quilx-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-warning), 0.25); }
+  .quilx-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-error),   0.25); }
   .quilx-banner-warning label,
   .quilx-banner-error   label { font-weight: bold; }
   .quilx-banner-warning button,
   .quilx-banner-error   button {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
     min-height: 0;
     padding: 1px 8px;
   }
@@ -188,6 +196,23 @@ function registerSearchKeymapsOnce(): void {
   });
 }
 
+// Line-editing commands bound in normal mode. `y d`/`y u` (d = down, u = up)
+// duplicate the current line below/above. Their `y` prefix collides with the vim
+// Yank operator; the KeymapManager's longest-match deferral resolves it (it waits
+// to see if `d`/`u` follows, falling back to bare Yank otherwise — exactly like
+// the `y s` surround binding).
+let editingKeymapsRegistered = false;
+function registerEditingKeymapsOnce(): void {
+  if (editingKeymapsRegistered) return;
+  editingKeymapsRegistered = true;
+  quilx.keymaps.add('editor-editing', {
+    '#TextEditor.normal-mode': {
+      'y d': 'editor:duplicate-line-below',
+      'y u': 'editor:duplicate-line-above',
+    },
+  });
+}
+
 export interface TextEditorOptions {
   /**
    * Close request for this editor. Was fired by the `:q`/`:wq`/`:x` ex-commands;
@@ -208,6 +233,10 @@ export interface TextEditorOptions {
    *  this view is one of N onto it and releases its ref on teardown via
    *  `onReleaseDocument`; when omitted, the editor owns a private scratch document. */
   document?: Document;
+  /** A multi-source backing (the search-results / continuous-diff surfaces): a
+   *  `MultiBufferDocument` over one `ProjectionView`. Mutually exclusive with `document`; the
+   *  editor owns it (disposes it on teardown) and renders it as a first-class multi-source case. */
+  source?: TextEditorSource;
   /** Called on teardown for a registry-owned `document` (drop this view's ref). */
   onReleaseDocument?: () => void;
   /** Read-only, compact view onto the given `document` — the live see-definition peek
@@ -322,7 +351,7 @@ export class TextEditor implements DocumentHost {
   // LSP). `this.buffer` is this view's own GtkSource.Buffer, kept in sync by the
   // document — separate from other views' buffers, so cursor/selection/folds/decorations
   // are native and independent per view (the A2 document-model architecture).
-  private readonly document: Document;
+  private readonly document: TextEditorSource;
   private readonly releaseDocument: (() => void) | null;
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
@@ -333,7 +362,10 @@ export class TextEditor implements DocumentHost {
   private readonly editorModel: EditorModel;
   private readonly vimState: VimState;
   private readonly textDecorations: TextDecorations;
-  private readonly blockDecorations: BlockDecorations;
+  private readonly blockDecorationController: BlockDecorations;
+  // Declarative block-decoration sets created via `blockDecorations()`, re-projected on materialize.
+  private readonly decorationSets: BlockDecorationSet[] = [];
+  private decorationMaterializeSub: (() => void) | null = null;
   private readonly search: SearchController;
   private leap!: Leap; // built in buildEditorArea (needs the overlay)
   private completion!: CompletionController; // built in buildEditorArea (needs the overlay)
@@ -348,7 +380,7 @@ export class TextEditor implements DocumentHost {
 
   // LSP: a document adapter the LspManager drives, and the per-editor diagnostics
   // renderer. Wired in `installLsp` once the model and root exist.
-  private lspDocument!: LspDocument;
+  private lspDocument: LspDocument | null = null;
   private diagnostics!: DiagnosticsView;
   private inlayHints!: InlayHintController;
   // Git change bar in the gutter; only present in file mode when a repo is given.
@@ -385,6 +417,12 @@ export class TextEditor implements DocumentHost {
   // Buffer-only mode config (null = a normal file editor), and the placeholder
   // label shown over the empty buffer (only built when a placeholder is given).
   private readonly bufferMode: BufferEditorOptions | null;
+  // The backing stitches N sources through one ProjectionView (a multibuffer surface): the editor
+  // suppresses its own line numbers / minimap / LSP / git gutter / folding and paints via the
+  // source's `syntaxProjection`. `embedded` is the wider "not a normal file editor" flag
+  // (buffer-only OR peek OR multi-source) driving the compact presentation.
+  private readonly multiSource: boolean;
+  private readonly embedded: boolean;
   // A read-only, compact view onto a shared Document — the live see-definition peek (a
   // second view of an open file). File-backed (unlike bufferMode), but not edited.
   private readonly peekMode: boolean;
@@ -425,25 +463,35 @@ export class TextEditor implements DocumentHost {
     this.peekMode = options.peek ?? false;
     this.gitRepo = options.git ?? null;
 
-    // A registry-owned document is shared (this view releases its ref on teardown); a
-    // buffer-only editor owns a private scratch document. Either way this view gets its
-    // OWN buffer from the document, kept in sync with the model and the other views.
-    this.document = options.document ?? new Document();
+    // The backing this editor is a view onto: a multi-source `MultiBufferDocument` (the
+    // search-results / continuous-diff surfaces), a shared registry `Document` (a file open in N
+    // views, released on teardown), or a private scratch `Document` (a file-less buffer-only input).
+    this.document = options.source ?? options.document ?? new Document();
     this.releaseDocument = options.document ? (options.onReleaseDocument ?? null) : null;
+    // The view buffer comes from the backing — a `ProjectionView` over one full-file segment for a
+    // single source, or over N stitched sources for a multibuffer (identical seam either way).
     this.buffer = this.document.createView();
+    // `embedded` = no single-file backing (a buffer-only input OR a multi-source surface): the
+    // editor suppresses its own line numbers / minimap / scroll-past-end / LSP / git gutter / file
+    // I/O. A peek view is file-backed (keeps LSP + the shared parse), only compact in presentation.
+    this.multiSource = this.document.isMultiSource;
+    this.embedded = !!this.bufferMode || this.multiSource;
     this.lspDocument = this.document.lspDocument;
     this.view = this.createView(this.buffer);
-    // Tree-sitter highlighting + folding for this view/buffer. A buffer-only or peek
-    // view is compact: no line-number gutter, folding off.
-    const compact = !!this.bufferMode || this.peekMode;
     this.syntax = new SyntaxController(this.view, this.buffer, {
-      lineNumbers: !compact,
-      folding: this.bufferMode?.folding ?? (this.peekMode ? false : undefined),
+      lineNumbers: !(this.embedded || this.peekMode),
+      folding: this.multiSource ? false : (this.bufferMode?.folding ?? (this.peekMode ? false : undefined)),
       folds: this.document, // folding collapses view ranges through the model projection
+      // File / peek views share the document's ONE parse (model coords) — so a file open in N
+      // views parses once. Buffer-only panes keep a private parse over their own view buffer; a
+      // multibuffer paints its many sources stitched together via the projection instead.
+      documentSyntax: this.embedded ? undefined : (this.document.documentSyntax ?? undefined),
+      projection: this.document.syntaxProjection ?? undefined,
     });
     // The buffer/cursor model the custom vim layer drives.
     this.editorModel = new EditorModel(this.view, this.buffer);
-    // Undo/redo run on the document model (this view's buffer has native undo off).
+    // Undo/redo run on the backing (this view's buffer has native undo off): the document model for
+    // a single source, or — for a multibuffer — its `ProjectionView`, coordinating the sources.
     this.editorModel.setUndoTarget(this.document);
     // The [...] placeholder is atomic + non-editable, and search runs over the whole
     // document — give the model access to the syntax controller's folds.
@@ -477,7 +525,7 @@ export class TextEditor implements DocumentHost {
     // reach it via `editor.decorations`.
     this.textDecorations = new TextDecorations(this.editorModel);
     // Inline block surface (virtual content between lines: the diff fold placeholder).
-    this.blockDecorations = new BlockDecorations(this.view);
+    this.blockDecorationController = new BlockDecorations(this.view);
     // Search/replace engine; its `SearchBar` widget is built in buildEditorArea.
     this.search = new SearchController(this.editorModel, this.textDecorations);
 
@@ -488,6 +536,7 @@ export class TextEditor implements DocumentHost {
     this.root.setName('TextEditorArea');
 
     this.installFoldCommands();
+    this.installEditingCommands();
     this.installAutoPair();
     this.installCursorOverlay();
     this.installShowcmd();
@@ -499,10 +548,14 @@ export class TextEditor implements DocumentHost {
     this.installGitGutter();
     this.installSearch();
     if (this.bufferMode) this.installBufferMode(this.bufferMode);
+    // A multibuffer's sources are already parsed — paint its stitched projection directly (there's
+    // no single-language first-parse step to trigger it). The surface re-materializes + repaints on
+    // re-diff via `repaintSyntax`.
+    if (this.multiSource) this.syntax.paint();
     if (this.peekMode) {
       // Read-only viewer onto the shared buffer; start unfocused so it shows no caret
       // until the user clicks into it.
-      this.view.setEditable(false);
+      this.editorModel.setReadOnly(true);
       this.editorModel.setFocused(false);
     }
     // Fallback teardown: the tab-close path disposes us explicitly, but also tear
@@ -543,18 +596,24 @@ export class TextEditor implements DocumentHost {
     this.syntax.setLanguageForPath(path);
   }
 
+  /** Repaint syntax highlighting (multibuffer/projection mode) — e.g. after the owner
+   *  re-materializes the view buffer, which clears tags the painter must reapply. */
+  repaintSyntax(): void {
+    this.syntax.paint();
+  }
+
   private installBufferMode(mode: BufferEditorOptions): void {
     if (mode.initialText) this.setText(mode.initialText);
     this.placeholderLabel?.setVisible(this.buffer.getCharCount() === 0);
-    // Tree-sitter highlighting from the compared file's type (after the text is set,
-    // so the first parse sees it). Grammars must be preloaded (preloadGrammars).
+    // Tree-sitter highlighting from the compared file's type (after the text is set, so the first
+    // parse sees it). Grammars must be preloaded (preloadGrammars).
     if (mode.languagePath) this.syntax.setLanguageForPath(mode.languagePath);
     // Read-only viewer (e.g. a diff pane): block edits at the view; vim normal-mode
     // navigation still works, and insert-mode keystrokes simply do nothing. Start
     // unfocused so a freshly-shown pane has no caret until it's actually focused
     // (otherwise both side-by-side panes would show one at creation).
     if (mode.readOnly) {
-      this.view.setEditable(false);
+      this.editorModel.setReadOnly(true); // reject vim edits too, not just native input
       this.editorModel.setFocused(false);
     }
 
@@ -648,7 +707,7 @@ export class TextEditor implements DocumentHost {
   // --- LSP integration -------------------------------------------------------
 
   private installLsp() {
-    if (this.bufferMode) return; // no file, no language server
+    if (this.embedded) return; // buffer-only / multibuffer: no single file, no language server
     // The LSP document lives on `this.document` (one per file; didOpen/didChange/
     // didClose are driven there off the model). This view contributes the diagnostics
     // renderer and signature help.
@@ -710,6 +769,8 @@ export class TextEditor implements DocumentHost {
     }
     this.dismissHover();
     this.dismissSignature();
+    this.decorationMaterializeSub?.(); // drop the materialize re-projection subscription
+    this.decorationMaterializeSub = null;
     this.syntax.dispose(); // detach buffer/view signal handlers + free the tree-sitter tree
     this.document.removeHost(this);
     this.document.removeView(this.buffer);
@@ -732,7 +793,7 @@ export class TextEditor implements DocumentHost {
   // autopair's `()` insert + cursor move settle before we ask; the request then
   // uses the settled cursor, and a null result (cursor left the call) hides it.
   private maybeSignatureHelp(event: { changes: { newText: string }[] }) {
-    if (this.vimState.mode !== 'insert') return;
+    if (this.vimState.mode !== 'insert' || !this.lspDocument) return;
     const triggers = quilx.lsp.signatureHelpTriggerCharacters(this.lspDocument);
     const typed = event.changes.map((c) => c.newText).join('');
     const typedTrigger = [...typed].some((ch) => triggers.includes(ch));
@@ -751,6 +812,7 @@ export class TextEditor implements DocumentHost {
   }
 
   private requestSignatureHelp() {
+    if (!this.lspDocument) return;
     const seq = ++this.signatureSeq;
     void quilx.lsp.signatureHelp(this.lspDocument).then((help) => {
       if (seq !== this.signatureSeq) return; // superseded by a newer keystroke
@@ -807,7 +869,7 @@ export class TextEditor implements DocumentHost {
   }
 
   private installGitGutter() {
-    if (this.bufferMode || !this.gitRepo) return; // file mode with a repo only
+    if (this.embedded || !this.gitRepo) return; // file mode with a repo only
     this.gitGutter = new GitGutter(
       this.syntax, // feed the change-bar cell into the editor's single composite gutter
       () => this._currentFile,
@@ -890,9 +952,11 @@ export class TextEditor implements DocumentHost {
     });
   }
 
-  /** The LSP document adapter for this editor (used by `lsp:*` commands). */
+  /** The LSP document adapter for this editor (used by `lsp:*` commands). Only ever read on a
+   *  file editor — buffer-only / multibuffer editors (where it's null) aren't the `activeEditor`
+   *  these commands target, so the non-null contract holds for every caller. */
   get lsp(): LspDocument {
-    return this.lspDocument;
+    return this.lspDocument!;
   }
 
   /**
@@ -950,10 +1014,25 @@ export class TextEditor implements DocumentHost {
     return this.editorModel;
   }
 
-  /** The inline-block surface (virtual content between lines, e.g. the diff fold
-   *  placeholder) — overlay widgets in a reserved gap, zero buffer footprint. */
+  /** The generic block-decoration primitive (virtual content between lines, e.g. the diff fold
+   *  placeholder) — a widget in a reserved gap, zero buffer footprint, anchored by a view line. */
   get inlineBlocks(): BlockDecorations {
-    return this.blockDecorations;
+    return this.blockDecorationController;
+  }
+
+  /** A declarative, SOURCE-anchored block-decoration set over this editor (the search/diff header
+   *  + gap bands, markdown inline images). Declare specs via `set()`; the set reconciles them and
+   *  projects each `{sourceKey?, row}` anchor onto its view line. Positions then ride the
+   *  primitive's marks across edits; the editor re-projects the set only on a re-materialize. */
+  blockDecorations(): BlockDecorationSet {
+    const set = new BlockDecorationSet(this.blockDecorationController, (anchor) =>
+      'viewRow' in anchor ? anchor.viewRow : this.document.viewRowForSource(this.buffer, anchor.sourceKey, anchor.row),
+    );
+    this.decorationSets.push(set);
+    this.decorationMaterializeSub ??= this.document.onDidMaterialize(() => {
+      for (const s of this.decorationSets) s.reproject();
+    });
+    return set;
   }
 
   /** Open a focusable inline peek (e.g. see-definition) below `line` — defaults to
@@ -1028,8 +1107,7 @@ export class TextEditor implements DocumentHost {
 
   private createView(buffer: SourceBuffer): SourceView {
     const view = new GtkSource.View({ buffer });
-    view.addCssClass('quilx-editor');
-    view.setMonospace(true);
+    view.addCssClass('quilx-editor'); // monospace font applied via CSS (font store)
     view.setAutoIndent(true);
     view.setTabWidth(TAB_WIDTH);
     view.setVexpand(true);
@@ -1037,7 +1115,7 @@ export class TextEditor implements DocumentHost {
     // Line numbers are drawn by SyntaxController's fold-aware gutter (not the
     // built-in one, which mashes folded line numbers together), gated on
     // !bufferMode where SyntaxController is given `lineNumbers: true`.
-    if (this.bufferMode) {
+    if (this.embedded) {
       // A plain embedded input: no right margin or current-line highlight; a
       // little padding so the text doesn't hug the edges.
       view.setShowRightMargin(false);
@@ -1077,7 +1155,7 @@ export class TextEditor implements DocumentHost {
     // fires `changed` whenever the viewport (page-size) or content height shifts,
     // which covers resizes, font changes, and edits. Buffer-mode keeps its small
     // fixed margin (set in createView) and opts out.
-    if (!this.bufferMode) {
+    if (!this.embedded) {
       const vadj = scrolled.getVadjustment();
       let pastEndEnabled = quilx.config.get('editor.scrollPastEnd') !== false;
       let lastMargin = -1;
@@ -1158,7 +1236,6 @@ export class TextEditor implements DocumentHost {
     });
 
     this.showcmdLabel.addCssClass('quilx-showcmd');
-    this.showcmdLabel.addCssClass('monospace');
     this.showcmdLabel.setHalign(Gtk.Align.END);
     this.showcmdLabel.setValign(Gtk.Align.END);
     this.showcmdLabel.setVisible(false);
@@ -1204,7 +1281,6 @@ export class TextEditor implements DocumentHost {
     if (this.bufferMode?.placeholder) {
       this.placeholderLabel = new Gtk.Label({ label: this.bufferMode.placeholder });
       this.placeholderLabel.addCssClass('quilx-placeholder');
-      this.placeholderLabel.addCssClass('monospace');
       this.placeholderLabel.setHalign(Gtk.Align.START);
       this.placeholderLabel.setValign(Gtk.Align.START);
       this.placeholderLabel.setMarginStart(8);
@@ -1218,7 +1294,7 @@ export class TextEditor implements DocumentHost {
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
     box.append(overlay);
-    if (!this.bufferMode) {
+    if (!this.embedded) {
       // The minimap mirrors the view and doubles as a scrollbar. Off by default;
       // `editor.minimap` toggles it live.
       const minimap = new GtkSource.Map();
@@ -1381,6 +1457,17 @@ export class TextEditor implements DocumentHost {
     this.showcmdLabel.setVisible(text.length > 0);
   }
 
+  // --- Line-editing commands (vim `y d`/`y u`, via the keymap) ---------------
+
+  private installEditingCommands() {
+    registerEditingKeymapsOnce();
+    // Registered per-view so the keystroke duplicates the focused editor's line.
+    quilx.commands.add(this.view, {
+      'editor:duplicate-line-below': { didDispatch: () => this.editorModel.duplicateLineBelow(), description: 'Duplicate the current line below' },
+      'editor:duplicate-line-above': { didDispatch: () => this.editorModel.duplicateLineAbove(), description: 'Duplicate the current line above' },
+    });
+  }
+
   // --- Folding commands (vim za/zo/zc/zR/zM, via the keymap's z-prefix) -------
 
   private installFoldCommands() {
@@ -1495,8 +1582,8 @@ export class TextEditor implements DocumentHost {
     const schemeManager = GtkSource.StyleSchemeManager.getDefault();
     // A theme that defines its own background owns the whole editor scheme
     // (background + line numbers); built once since it doesn't vary by system
-    // light/dark. Otherwise we follow the Adwaita light/dark scheme.
-    const themeScheme = theme.ui.editor.background ? createSourceScheme(theme) : null;
+    // light/dark. Otherwise (followSystemScheme) we follow the Adwaita light/dark scheme.
+    const themeScheme = theme.followSystemScheme ? null : createSourceScheme(theme);
     const apply = () => {
       const scheme =
         themeScheme ?? schemeManager.getScheme(styleManager.getDark() ? 'Adwaita-dark' : 'Adwaita');
@@ -1528,7 +1615,7 @@ export class TextEditor implements DocumentHost {
   // --- File I/O (delegated to the document) ----------------------------------
 
   loadFile(path: string, opts: { silent?: boolean } = {}) {
-    if (this.bufferMode) return; // buffer-only editors have no file
+    if (this.embedded) return; // buffer-only editors have no file
     this.document.loadFile(path, opts);
   }
 
@@ -1546,7 +1633,7 @@ export class TextEditor implements DocumentHost {
     path: string,
     opts: { cursor?: [number, number]; scroll?: number; unsavedText?: string; onActivate?: () => void } = {},
   ): void {
-    if (this.bufferMode) return;
+    if (this.embedded) return;
     this.document.assignPath(path);
     this.pendingCursor = opts.cursor ?? null;
     this.pendingScroll = opts.scroll ?? null;
@@ -1627,7 +1714,7 @@ export class TextEditor implements DocumentHost {
    *  enter long-line mode (no soft-wrap, no tree-sitter highlighting) so it opens instead
    *  of hanging. Used by both the initial load and a split/peek of an already-open file. */
   private applySyntaxOrLongLineMode(content: string, path: string): void {
-    const longLines = !this.bufferMode && hasLongLine(content, LONG_LINE_THRESHOLD);
+    const longLines = !this.embedded && hasLongLine(content, LONG_LINE_THRESHOLD);
     if (longLines === this.longLineMode && longLines) return; // already degraded (e.g. reload)
     this.longLineMode = longLines;
     this.applyWrap(); // force wrap off (or restore the config value when leaving the mode)
@@ -1764,7 +1851,7 @@ export class TextEditor implements DocumentHost {
    *  restored-unsaved text for a tab restored-but-not-yet-shown; null when there's
    *  nothing unsaved. (Covers the lazy case so a save doesn't prune its cache.) */
   unsavedSnapshot(): string | null {
-    if (this.bufferMode || !this._currentFile) return null;
+    if (this.embedded || !this._currentFile) return null;
     if (this.pendingUnsaved !== null) return this.pendingUnsaved;
     return this.isModified() ? this.getText() : null;
   }
@@ -1772,7 +1859,7 @@ export class TextEditor implements DocumentHost {
   /** Restore a saved scroll offset — put `row` at the top of the viewport. Deferred
    *  to `activate` for a lazily-opened tab whose view isn't realized yet. */
   restoreScroll(row: number): void {
-    if (!this.bufferMode && !this.document.isLoaded) {
+    if (!this.embedded && !this.document.isLoaded) {
       this.pendingScroll = row;
       return;
     }
@@ -1782,7 +1869,7 @@ export class TextEditor implements DocumentHost {
   /** Restore unsaved content (session restore): replace the buffer and keep it
    *  modified. Deferred for a lazily-opened tab. */
   restoreUnsaved(text: string): void {
-    if (!this.bufferMode && !this.document.isLoaded) {
+    if (!this.embedded && !this.document.isLoaded) {
       this.pendingUnsaved = text;
       return;
     }
@@ -1794,7 +1881,7 @@ export class TextEditor implements DocumentHost {
    *  `activate()` applies it once the content loads (otherwise it'd land in an empty buffer
    *  and be reset to 0,0 by the load). */
   restoreCursor(cursor: [number, number]) {
-    if (!this.bufferMode && !this.document.isLoaded) {
+    if (!this.embedded && !this.document.isLoaded) {
       this.pendingCursor = cursor;
       return;
     }
@@ -1822,8 +1909,9 @@ export class TextEditor implements DocumentHost {
     this.document.onTitleChange(callback);
   }
 
-  /** Subscribe to modified-state changes (the document's modified flag toggling). */
+  /** Subscribe to modified-state changes (the document's modified flag toggling). Returns a
+   *  disposer. */
   onModifiedChange(callback: () => void) {
-    this.document.onModifiedChange(callback);
+    return this.document.onModifiedChange(callback);
   }
 }

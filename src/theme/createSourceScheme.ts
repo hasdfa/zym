@@ -4,7 +4,11 @@
  * gutter only from the active style scheme (not CSS), so applying those theme
  * colors requires a real scheme rather than a stylesheet override. We write a
  * small scheme XML into a temp dir on the StyleSchemeManager's search path and
- * load it back by id.
+ * load it back by id. The search dir lives under the XDG cache (reused across launches and
+ * shared by concurrent instances, which write identical content) so it never accumulates.
+ * The result is memoized by Theme identity — every editor open requests the scheme, but only
+ * the first does disk I/O + a manager rescan; a future live theme-swap (a new Theme object)
+ * naturally misses the cache and regenerates.
  *
  * The scheme also maps GtkSourceView's standard `def:` styles onto the theme's
  * syntax palette, so the `.lang` fallback engine (used for languages without a
@@ -40,23 +44,29 @@ const DEF_STYLES: Array<[def: string, capture: string]> = [
 ];
 
 let searchDir: string | null = null;
+let cached: { theme: Theme; scheme: StyleScheme } | null = null;
 
-/** Build and load a GtkSource.StyleScheme for `theme`. Requires `theme.ui.editor.background`. */
+/** Build and load a GtkSource.StyleScheme for `theme` (its concrete editor background +
+ *  syntax colors). Only meaningful when `!theme.followSystemScheme`. Memoized by Theme
+ *  identity, so repeated editor opens are a pointer compare rather than a disk write + rescan. */
 export function createSourceScheme(theme: Theme): StyleScheme {
-  if (!theme.ui.editor.background) throw new Error(`theme "${theme.name}" has no ui.editor.background`);
+  if (cached && cached.theme === theme) return cached.scheme;
 
   const manager = GtkSource.StyleSchemeManager.getDefault();
   if (searchDir === null) {
-    searchDir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-scheme-'));
+    const base = process.env.XDG_CACHE_HOME ?? Path.join(Os.homedir(), '.cache');
+    searchDir = Path.join(base, 'quilx', 'schemes');
     manager.appendSearchPath(searchDir);
   }
 
   const id = `quilx-${theme.name}`;
+  Fs.mkdirSync(searchDir, { recursive: true }); // self-heal if the cache dir was removed mid-session
   Fs.writeFileSync(Path.join(searchDir, `${id}.xml`), schemeXml(id, theme));
   manager.forceRescan();
 
   const scheme = manager.getScheme(id);
   if (!scheme) throw new Error(`failed to load generated scheme "${id}"`);
+  cached = { theme, scheme };
   return scheme;
 }
 
@@ -66,7 +76,7 @@ function schemeXml(id: string, theme: Theme): string {
   const bg = ui.editor.background;
   const styles = [
     `<style name="text" foreground="${fg}" background="${bg}"/>`,
-    `<style name="line-numbers" foreground="${ui.editor.lineNumber ?? fg}" background="${bg}"/>`,
+    `<style name="line-numbers" foreground="${ui.editor.lineNumber}" background="${bg}"/>`,
     // GtkSourceAnnotation colors come from these scheme styles: AnnotationStyle.ERROR
     // uses diff:removed-line fg, WARNING uses diff:changed-line fg, ACCENT uses
     // diff:added-line fg (see GtkSource docs). Define them so error-lens annotations

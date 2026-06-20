@@ -29,7 +29,6 @@
 import { Gdk, Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { fonts } from '../../fonts.ts';
 import { quilx } from '../../quilx.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
@@ -46,16 +45,16 @@ import {
 
 const DOT = '·'; // placeholder mark for targets paged out of the current label set
 
-// The marks' monospace font comes from the central font store (reactive).
-fonts.monospace('.quilx-leap-mark');
 addStyles(`
   /* A mark replaces (conceals) the match's first character: a glyph with no
-     background, so it reads as the character having been swapped for a label. */
-  .quilx-leap-mark { font-weight: bold; }
-  .quilx-leap-label { color: ${theme.ui.status.error}; }
+     background, so it reads as the character having been swapped for a label.
+     Monospace family (from the font store) with its own bold weight + the
+     inherited editor size, so it overlays the concealed character cleanly. */
+  .quilx-leap-mark { font-family: var(--t-font-monospace-family); font-weight: bold; }
+  .quilx-leap-label { color: var(--t-ui-status-error); }
   /* Paged-out placeholders share the label color; the dot glyph (and lighter
      weight) is what marks them as not-yet-labeled. */
-  .quilx-leap-dot { color: ${theme.ui.status.error}; font-weight: normal; }
+  .quilx-leap-dot { color: var(--t-ui-status-error); font-weight: normal; }
 `);
 
 /** Request shape handed over by the vim layer's leap motion via `setLeapInput`. */
@@ -235,7 +234,7 @@ export class Leap {
     if (this.concealTag) return this.concealTag;
     const tag = new Gtk.TextTag({ name: 'leap:conceal' } as any);
     const bg = new Gdk.RGBA();
-    bg.parse(theme.ui.editor.background ?? theme.ui.surface.popover);
+    bg.parse(theme.ui.editor.background);
     (tag as any).foregroundRgba = bg;
     this.buffer.getTagTable().add(tag);
     this.concealTag = tag;

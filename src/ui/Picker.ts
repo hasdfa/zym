@@ -12,18 +12,12 @@
 import { Gtk, Pango } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { addStyles } from '../styles.ts';
-import { fonts } from '../fonts.ts';
 import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
 import { theme } from '../theme/theme.ts';
 import { frecency } from '../util/Frecency.ts';
 import { enableReadline } from './readline.ts';
 
-// The picker card is monospace; the opt-in `.prose-entry` overrides to the UI
-// font. Both are registered with the central font store (so they follow the
-// system / configured font live) rather than baked into the static CSS below.
-fonts.monospace('#Picker');
-fonts.ui('#PickerEntry.prose-entry, #PickerEntry.prose-entry > text');
 
 const PICKER_WIDTH = 640;
 const PICKER_MAX_HEIGHT = 360;
@@ -54,17 +48,21 @@ export const HIGHLIGHT_COLOR = theme.ui.text.accent;
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-// libadwaita's `.card` fill (`@card_bg_color`) is semi-transparent — meant to
+// libadwaita's `.card` fill (`var(--card-bg-color)`) is semi-transparent — meant to
 // sit on a window, not float over editor content. Override it with the opaque
 // popover background so the editor doesn't show through.
 addStyles(/* css */`
+  /* The picker card is monospace; the opt-in .prose-entry overrides to the UI font. */
   #Picker {
+    font: var(--t-font-monospace);
     padding: 0;
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
     background-color: var(--window-bg-color);
-    box-shadow: 0px 10px 33px 28px ${theme.ui.shadow};
+    box-shadow: 0px 10px 33px 28px var(--t-ui-shadow);
   }
+  #PickerEntry.prose-entry,
+  #PickerEntry.prose-entry > text { font-family: var(--t-font-ui-family); }
   #PickerEntry {
     padding: 0.5em 0.5em;
     border-radius: var(--popover-radius);
@@ -81,8 +79,6 @@ addStyles(/* css */`
     padding: 0;
     margin: 0;
   }
-  /* The opt-in prose-entry sans family (resume picker etc.) is applied via the
-     font store — see fonts.ui(...) above. */
   #PickerEntry > text {
     margin: 0;
     padding: 0;
@@ -129,7 +125,7 @@ addStyles(/* css */`
      shown in place of the matches, tinted with the theme's error color. */
   #PickerError {
     padding: 0.5em 1em;
-    color: ${theme.ui.status.error};
+    color: var(--t-ui-status-error);
   }
   /* The action row uses the current prompt; set it apart from the matches with a
      separator and the accent color. */

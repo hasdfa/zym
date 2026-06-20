@@ -65,7 +65,7 @@ injections: [
 
 `@content` (or `@injection.content`) marks the region(s); `@language` (or
 `@injection.language`) names the guest by node text. The Markdown plugin declares
-exactly this (`MD_INJECTIONS` in `src/plugins/markdown/index.ts`, registered only
+exactly this (`MD_INJECTIONS` in `plugins/markdown/index.ts`, registered only
 when the grammar assets are present).
 
 ## Markdown grammars (done — vendored)
@@ -74,20 +74,20 @@ The grammars are built and checked in, so Markdown highlighting (headings, lists
 emphasis, inline + fenced code) works out of the box:
 
 ```
-src/plugins/markdown/grammars/tree-sitter-markdown.wasm          (block,  ABI 14)
-src/plugins/markdown/grammars/tree-sitter-markdown-inline.wasm   (inline, ABI 14)
-src/plugins/markdown/queries/markdown/highlights.scm
-src/plugins/markdown/queries/markdown-inline/highlights.scm
+plugins/markdown/grammars/tree-sitter-markdown.wasm          (block,  ABI 14)
+plugins/markdown/grammars/tree-sitter-markdown-inline.wasm   (inline, ABI 14)
+plugins/markdown/queries/markdown/highlights.scm
+plugins/markdown/queries/markdown-inline/highlights.scm
 ```
 
 The plugin registers them only if those four files exist (else Markdown stays
-LSP-only), so the feature is self-contained. `src/plugins/markdown/grammar.test.ts`
+LSP-only), so the feature is self-contained. `plugins/markdown/grammar.test.ts`
 is the end-to-end check: the wasms load, the queries compile, and a ```` ```ts ````
 fence resolves to TypeScript captures.
 
 ### How the wasm is built (reproducible)
 
-`src/plugins/markdown/build-grammars.sh` (the plugin owns its own build) fetches
+`plugins/markdown/build-grammars.sh` (the plugin owns its own build) fetches
 `@tree-sitter-grammars/tree-sitter-markdown` (MIT; ships C sources, **no wasm**)
 and compiles its committed **ABI-14** `parser.c` for both the block and inline
 grammars into the plugin's `grammars/`. The script `tree-sitter build --wasm`

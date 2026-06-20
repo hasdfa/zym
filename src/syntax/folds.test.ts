@@ -16,7 +16,7 @@ const Parser = require_('web-tree-sitter') as any;
 const wtsDir = Path.dirname(require_.resolve('web-tree-sitter'));
 const tsWasm = require_.resolve('tree-sitter-wasms/out/tree-sitter-typescript.wasm');
 const HERE = Path.dirname(fileURLToPath(import.meta.url));
-const foldsScm = Path.resolve(HERE, '../plugins/typescript/queries/typescript/folds.scm');
+const foldsScm = Path.resolve(HERE, '../../plugins/typescript/queries/typescript/folds.scm');
 
 const FOLD_TYPES = new Set(['statement_block', 'object', 'array', 'class_body']);
 const RUN_RE = /comment|import/;

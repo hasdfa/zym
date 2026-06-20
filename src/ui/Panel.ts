@@ -17,10 +17,7 @@ import { Adw, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { quilx } from '../quilx.ts';
-import { theme } from '../theme/theme.ts';
-
-// The theme's selection color, used to outline an active empty pane.
-const SELECTED_COLOR = theme.ui.surface.selected ?? '@theme_selected_bg_color';
+import { NERDFONT } from './nerdfont.ts';
 
 // Square off the tab buttons (Adwaita rounds them by default) and strip the gaps
 // Adwaita puts around and between them. Structural, not color-derived, so it's
@@ -41,14 +38,14 @@ addStyles(`
      with a thin selection-colored outline. */
   #Panel.active-empty,
   #Panel .active-empty {
-    outline: 1px solid ${SELECTED_COLOR};
+    outline: 1px solid var(--t-ui-surface-selected);
     outline-offset: -1px;
   }
 `);
 
 // Nerd Font emoticon for the empty-state face (bundled icon font); always the
 // neutral face. The active panel is conveyed by the focus outline, not the face.
-const EMOTICON_NEUTRAL = String.fromCodePoint(0xf11a); // nf-fa-meh_o
+const EMOTICON_NEUTRAL = NERDFONT.STATUS.NEUTRAL;
 
 // Empty-state caption — constant.
 const EMPTY_TEXT = 'This panel is empty.';

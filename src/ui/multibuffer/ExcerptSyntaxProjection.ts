@@ -1,0 +1,100 @@
+/*
+ * ExcerptSyntaxProjection — the multibuffer's `SyntaxProjection`. It tells the per-view
+ * painter (`SyntaxController`), for a visible view-row range, which source `DocumentSyntax`
+ * to query and where each source row lands, and styles the filename-header / `⋯` gap rows.
+ * The painter owns the buffer + its `HighlightTags` and does the actual painting, so there's
+ * ONE highlighter on the buffer (no tag collision) and every excerpt is highlighted by its
+ * own grammar — the keystone Phase 0 unlocked (one parse per Document, many projections).
+ *
+ * Coordinates come from the unified `ViewProjection` (the same substrate the single-file
+ * editor uses): `segmentRunsInViewRange` gives the source slices to paint, `blockRows` the
+ * header / gap rows to style.
+ */
+import { Gtk, Pango } from '../../gi.ts';
+import { theme } from '../../theme/theme.ts';
+import type { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
+import type { SyntaxProjection, SyntaxSlice } from '../../syntax/SyntaxProjection.ts';
+import type { ViewProjection } from '../TextEditor/ViewProjection.ts';
+
+const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
+
+export class ExcerptSyntaxProjection implements SyntaxProjection {
+  private headerTag: any = null;
+  private gapTag: any = null;
+  // A GETTER, not a captured instance: a re-diff (`ProjectionView.rebuild`) swaps in a NEW
+  // ViewProjection, so the painter must read the live one each paint or it highlights with
+  // stale coordinates (shifted highlighting after an edit).
+  private readonly getProjection: () => ViewProjection;
+  private readonly sources: Map<string, DocumentSyntax>;
+
+  // Note: explicit field assignment (not constructor parameter properties) — Node runs .ts
+  // in strip-only mode, which rejects parameter properties at runtime.
+  constructor(getProjection: () => ViewProjection, sources: Map<string, DocumentSyntax>) {
+    this.getProjection = getProjection;
+    this.sources = sources;
+  }
+
+  hasContent(): boolean {
+    for (const source of this.sources.values()) if (source.hasTree) return true;
+    return false;
+  }
+
+  paintSlices(viewFrom: number, viewTo: number): SyntaxSlice[] {
+    const slices: SyntaxSlice[] = [];
+    for (const run of this.getProjection().segmentRunsInViewRange(viewFrom, viewTo)) {
+      const syntax = this.sources.get(run.sourceKey);
+      if (!syntax) continue;
+      slices.push({
+        syntax,
+        fromRow: run.fromSourceRow,
+        toRow: run.toSourceRow,
+        sourceStart: run.fromSourceRow,
+        viewStart: run.viewStart,
+      });
+    }
+    return slices;
+  }
+
+  onDidReparse(callback: () => void): () => void {
+    const unsubs = [...new Set(this.sources.values())].map((source) => source.onDidReparse(callback));
+    return () => { for (const unsub of unsubs) unsub(); };
+  }
+
+  /** Style the header / gap rows (created lazily on `buffer`'s tag table — distinct names
+   *  from the painter's highlight tags, so no collision). */
+  decorate(buffer: any): void {
+    if (!this.headerTag) this.buildTags(buffer);
+    for (const { viewRow, kind } of this.getProjection().blockRows()) {
+      if (kind === 'header') this.applyRow(buffer, this.headerTag, viewRow);
+      else if (kind === 'gap') this.applyRow(buffer, this.gapTag, viewRow);
+    }
+  }
+
+  private buildTags(buffer: any): void {
+    const table = buffer.getTagTable();
+    const mk = (props: Record<string, unknown>) => { const t = new Gtk.TextTag(props); table.add(t); return t; };
+    this.headerTag = mk({
+      name: 'mb:header',
+      editable: false,
+      weight: Pango.Weight.BOLD,
+      foreground: theme.ui.text.muted,
+      paragraphBackground: theme.ui.surface.selected,
+    });
+    this.gapTag = mk({ name: 'mb:gap', editable: false, foreground: theme.ui.text.muted });
+  }
+
+  /** Apply `tag` across view row `viewRow`, including its trailing newline so the paragraph
+   *  background spans the full row. */
+  private applyRow(buffer: any, tag: any, viewRow: number): void {
+    const start = asIter(buffer.getIterAtLine(viewRow));
+    const next = asIter(buffer.getIterAtLine(viewRow + 1));
+    const end = next.getLine() === viewRow ? this.endOfLine(buffer, viewRow) : next;
+    buffer.applyTag(tag, start, end);
+  }
+
+  private endOfLine(buffer: any, line: number): any {
+    const iter = asIter(buffer.getIterAtLine(line));
+    if (!iter.endsLine()) iter.forwardToLineEnd();
+    return iter;
+  }
+}
