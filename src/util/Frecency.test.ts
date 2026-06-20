@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { FrecencyStore } from './Frecency.ts';
+import { tmpDir as makeTmpDir } from './testTmp.ts';
 
 function tmpDir(): string {
-  return Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-frecency-'));
+  return makeTmpDir('frecency');
 }
 
 test('unseen keys score zero and contribute no boost', () => {
