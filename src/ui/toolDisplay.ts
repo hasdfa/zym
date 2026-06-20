@@ -11,6 +11,7 @@ import * as Os from 'node:os';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { NERDFONT } from './nerdfont.ts';
+import { truncate } from './conversation/format.ts';
 
 // Tool icons come from the shared Nerd Font catalog (NERDFONT). Most live in the
 // TOOL group; bash/grep reuse the EDITOR terminal/search glyphs.
@@ -206,10 +207,6 @@ function compactJson(input: unknown): string {
     text = String(input);
   }
   return truncate(text, 200);
-}
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? text.slice(0, max) + '…' : text;
 }
 
 function attrEscape(text: string): string {

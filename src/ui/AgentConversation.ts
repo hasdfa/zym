@@ -18,14 +18,17 @@
 import { Gtk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { fonts, ICON_FONT_FAMILY } from '../fonts.ts';
+import { fonts } from '../fonts.ts';
 import { quilx } from '../quilx.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { TextEditor } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
 import { MarkdownView } from './markdown/MarkdownView.ts';
 import { toolMarkup, toolDetailMarkup, toolFilePath, describeTool } from './toolDisplay.ts';
-import { escapeMarkup } from './proseMarkup.ts';
+import { escapeMarkup, setMarkupSafe, clearChildren } from './proseMarkup.ts';
+import { iconSpan } from './icons.ts';
+import { truncateLines, summarizeInput, formatCount, progressLine } from './conversation/format.ts';
+import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
@@ -47,7 +50,7 @@ addStyles(`
   .quilx-conversation-row { padding: 6px 0; }
   /* User and assistant share the bubble shape; only the background differs. */
   .quilx-conversation-user, .quilx-conversation-assistant {
-    padding: 10px 14px;
+    padding: 14px 18px;
     margin: 8px 0;
     border-radius: 10px;
   }
@@ -159,13 +162,6 @@ addStyles(`
   .quilx-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
 
-// A Nerd Font glyph (from the shared NERDFONT catalog) as a Pango span, optionally
-// coloured.
-function iconSpan(glyph: string, color?: string): string {
-  const open = color ? `<span font_family="${ICON_FONT_FAMILY}" foreground="${color}">` : `<span font_family="${ICON_FONT_FAMILY}">`;
-  return `${open}${glyph}</span>`;
-}
-
 // The enter/alt-enter keymap is global (selector-scoped to our prompt), registered
 // once for the whole app — not per conversation instance.
 let promptKeymapRegistered = false;
@@ -234,13 +230,11 @@ export class AgentConversation implements Agent {
   // gives the id. The panel hides once every task is completed.
   private readonly tasks = new Map<string, { subject: string; status: string }>();
   private readonly pendingTaskCreates = new Map<string, string>();
-  private readonly tasksPanel: InstanceType<typeof Gtk.Box>;
-  private readonly tasksList: InstanceType<typeof Gtk.Box>;
+  private readonly tasksPanel = new StickyListPanel('Tasks');
   // Running subagents (Agent tool), keyed by tool_use_id — a sticky panel like the
   // tasks one, shown while any subagent is running. Clicking an entry opens its page.
   private readonly subagents = new Map<string, { agentType: string; description: string; status: 'running' | 'completed' }>();
-  private readonly subagentsPanel: InstanceType<typeof Gtk.Box>;
-  private readonly subagentsList: InstanceType<typeof Gtk.Box>;
+  private readonly subagentsPanel = new StickyListPanel('Subagents', 'quilx-conversation-subagents');
   private _costUsd: number | null = null;
   private _contextTokens: number | null = null;
   private _contextWindow = 1_000_000; // refined from result.modelUsage[model].contextWindow
@@ -340,27 +334,6 @@ export class AgentConversation implements Agent {
     this.footer.append(this.footerLabel);
     this.updateFooter();
 
-    // A sticky tasks panel at the top (TaskCreate/TaskUpdate); hidden until tasks exist.
-    this.tasksPanel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.tasksPanel.addCssClass('quilx-conversation-tasks');
-    this.tasksPanel.setVisible(false);
-    const tasksHeader = new Gtk.Label({ xalign: 0, label: 'Tasks' });
-    tasksHeader.addCssClass('quilx-conversation-tasks-header');
-    this.tasksList = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
-    this.tasksPanel.append(tasksHeader);
-    this.tasksPanel.append(this.tasksList);
-
-    // A sticky panel listing running subagents (Agent tool); hidden when none run.
-    this.subagentsPanel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.subagentsPanel.addCssClass('quilx-conversation-tasks');
-    this.subagentsPanel.addCssClass('quilx-conversation-subagents');
-    this.subagentsPanel.setVisible(false);
-    const subagentsHeader = new Gtk.Label({ xalign: 0, label: 'Subagents' });
-    subagentsHeader.addCssClass('quilx-conversation-tasks-header');
-    this.subagentsList = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
-    this.subagentsPanel.append(subagentsHeader);
-    this.subagentsPanel.append(this.subagentsList);
-
     // The input and its status strip live together in a bordered, rounded card.
     // `overflow: hidden` (the GTK CSS property) doesn't exist — the equivalent is
     // setOverflow(HIDDEN), which clips children to the rounded border so the
@@ -373,11 +346,11 @@ export class AgentConversation implements Agent {
 
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('quilx-conversation');
-    mainBox.append(this.tasksPanel);
+    mainBox.append(this.tasksPanel.root);
     mainBox.append(this.scroller);
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
     mainBox.append(inputCard);
-    mainBox.append(this.subagentsPanel); // running subagents expand below the input card
+    mainBox.append(this.subagentsPanel.root); // running subagents expand below the input card
 
     // A NavigationView so a subagent's transcript can push its own page.
     this.root = new Adw.NavigationView();
@@ -696,20 +669,18 @@ export class AgentConversation implements Agent {
   private renderTasksPanel(): void {
     const visible = [...this.tasks.values()].filter((t) => t.status !== 'deleted');
     if (visible.length === 0 || visible.every((t) => t.status === 'completed')) {
-      this.tasksPanel.setVisible(false);
+      this.tasksPanel.render([]);
       return;
     }
-    clearBox(this.tasksList);
-    for (const task of this.tasks.values()) {
-      if (task.status === 'deleted') continue;
+    const rows = visible.map((task) => {
       const glyph = task.status === 'completed' ? NERDFONT.TASK.DONE : task.status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
       const color = task.status === 'completed' ? theme.ui.status.success : task.status === 'in_progress' ? theme.ui.status.warning : undefined;
       const body = task.status === 'completed' ? `<s>${escapeMarkup(task.subject)}</s>` : escapeMarkup(task.subject);
       const label = new Gtk.Label({ xalign: 0, wrap: true });
       setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, task.subject);
-      this.tasksList.append(label);
-    }
-    this.tasksPanel.setVisible(true);
+      return label;
+    });
+    this.tasksPanel.render(rows);
   }
 
   // --- rows -------------------------------------------------------------------
@@ -877,9 +848,7 @@ export class AgentConversation implements Agent {
 
   // Re-render the running-subagents panel; hide it once none are running.
   private renderSubagentsPanel(): void {
-    const running = [...this.subagents.values()].some((s) => s.status === 'running');
-    if (!running) { this.subagentsPanel.setVisible(false); return; }
-    clearBox(this.subagentsList);
+    const rows: InstanceType<typeof Gtk.Widget>[] = [];
     for (const [id, s] of this.subagents) {
       if (s.status !== 'running') continue;
       const label = new Gtk.Label({ xalign: 0, wrap: true });
@@ -889,9 +858,9 @@ export class AgentConversation implements Agent {
       button.addCssClass('quilx-conversation-subagent-link');
       button.setChild(label);
       button.on('clicked', () => this.pushSubagentPage(id));
-      this.subagentsList.append(button);
+      rows.push(button);
     }
-    this.subagentsPanel.setVisible(true);
+    this.subagentsPanel.render(rows);
   }
 
   // Push a NavigationView page rendering a subagent's captured transcript (assistant
@@ -903,7 +872,7 @@ export class AgentConversation implements Agent {
     scroller.setChild(box);
 
     const render = () => {
-      clearBox(box);
+      clearChildren(box);
       const info = this.session.getSubagent(id);
       if (!info) return;
       // The instruction the main agent gave the subagent, at the top (a user turn).
@@ -1152,7 +1121,7 @@ export class AgentConversation implements Agent {
       // Replace the interactive card with a record of the choice — and drop the
       // active (blue) border. (The AskUserQuestion tool row is suppressed, so this
       // is the transcript trace.)
-      clearBox(card);
+      clearChildren(card);
       card.removeCssClass('quilx-conversation-question');
       card.addCssClass('quilx-conversation-question-answered');
       const picked = answers.filter((a) => a.labels.length > 0);
@@ -1186,15 +1155,6 @@ export class AgentConversation implements Agent {
 }
 
 /** Remove every child of a box (GTK4 has no clear()). */
-function clearBox(box: InstanceType<typeof Gtk.Box>): void {
-  let child = box.getFirstChild();
-  while (child) {
-    const next = child.getNextSibling();
-    box.remove(child);
-    child = next;
-  }
-}
-
 /** Push `cb` onto `list` and return an unsubscribe that splices it out. */
 function push(list: Array<() => void>, cb: () => void): () => void {
   list.push(cb);
@@ -1202,27 +1162,6 @@ function push(list: Array<() => void>, cb: () => void): () => void {
     const i = list.indexOf(cb);
     if (i !== -1) list.splice(i, 1);
   };
-}
-
-/** A compact one-line view of a tool/permission input for a row. */
-function summarizeInput(input: unknown): string {
-  if (input == null) return '';
-  let text: string;
-  try {
-    text = typeof input === 'string' ? input : JSON.stringify(input);
-  } catch {
-    text = String(input);
-  }
-  return text.length > 200 ? text.slice(0, 200) + '…' : text;
-}
-
-/** Set Pango markup, falling back to plain `fallback` if Pango rejects it. */
-function setMarkupSafe(label: InstanceType<typeof Gtk.Label>, markup: string, fallback: string): void {
-  try {
-    label.setMarkup(markup);
-  } catch {
-    label.setText(fallback);
-  }
 }
 
 // A TodoWrite checklist: one glyph-prefixed row per todo (completed struck through).
@@ -1240,30 +1179,4 @@ function renderTodos(todos: unknown[]): InstanceType<typeof Gtk.Box> {
     box.append(label);
   }
   return box;
-}
-
-// First `maxLines` lines of `text`, capped at `maxChars`, with an ellipsis when truncated.
-function truncateLines(text: string, maxLines: number, maxChars: number): string {
-  if (!text) return '';
-  const lines = text.split('\n');
-  let out = lines.slice(0, maxLines).join('\n');
-  const truncated = lines.length > maxLines || out.length > maxChars;
-  if (out.length > maxChars) out = out.slice(0, maxChars);
-  return truncated ? out.replace(/\s+$/, '') + ' …' : out;
-}
-
-// Compact count: 1234 → "1.2k".
-function formatCount(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-}
-
-// One muted progress line for a subagent / background task.
-function progressLine(p: TaskProgress): string {
-  const meta: string[] = [];
-  if (p.lastTool) meta.push(p.lastTool);
-  if (p.tokens) meta.push(`${formatCount(p.tokens)} tokens`);
-  if (p.durationMs) meta.push(`${(p.durationMs / 1000).toFixed(1)}s`);
-  const desc = p.description.length > 70 ? `${p.description.slice(0, 70)}…` : p.description;
-  const head = `${p.done ? '✓' : '⋯'} ${desc}`.trim();
-  return meta.length ? `${head}  ·  ${meta.join('  ·  ')}` : head;
 }

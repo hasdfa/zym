@@ -13,7 +13,7 @@ import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
-import { escapeMarkup } from '../proseMarkup.ts';
+import { escapeMarkup, markupLabel, clearChildren } from '../proseMarkup.ts';
 import { iconLabel } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
 import { clipboard } from '../TextEditor/vim/clipboard.ts';
@@ -71,7 +71,7 @@ export class MarkdownView {
    * their own widgets — they're selection "islands", but each is independently
    * selectable. */
   setMarkdown(md: string): void {
-    clear(this.root);
+    clearChildren(this.root);
     let flow: string[] = [];
     const flush = () => {
       if (flow.length === 0) return;
@@ -90,7 +90,7 @@ export class MarkdownView {
   }
 
   dispose(): void {
-    clear(this.root);
+    clearChildren(this.root);
   }
 }
 
@@ -194,18 +194,6 @@ function cell(text: string, align: 'left' | 'center' | 'right' | null, cssClass:
 
 // --- helpers -----------------------------------------------------------------
 
-// A wrapped, selectable label rendered from Pango markup, falling back to plain
-// text (`fallback`) if Pango rejects the markup.
-function markupLabel(markup: string, fallback: string): InstanceType<typeof Gtk.Label> {
-  const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-  try {
-    label.setMarkup(markup);
-  } catch {
-    label.setText(fallback);
-  }
-  return label;
-}
-
 // Inline markdown → Pango markup, with the app monospace font for inline code.
 function inline(text: string): string {
   return markdownToPango(text, { codeFontFamily: fonts.monospaceFamily });
@@ -225,12 +213,3 @@ function attrEscape(text: string): string {
   return escapeMarkup(text).replace(/"/g, '&quot;');
 }
 
-// Remove every child of a box (GTK4 has no clear()).
-function clear(box: InstanceType<typeof Gtk.Box>): void {
-  let child = box.getFirstChild();
-  while (child) {
-    const next = child.getNextSibling();
-    box.remove(child);
-    child = next;
-  }
-}
