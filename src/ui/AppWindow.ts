@@ -80,6 +80,7 @@ import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
 import { KeymapPanel } from './KeymapPanel.ts';
 import { DiagnosticsPanel } from '../lsp/diagnostics/DiagnosticsPanel.ts';
+import { PluginManagerPanel } from './PluginManagerPanel.ts';
 import { type NavigationKind, type LspConfig, type LspDocument } from '../lsp/LspManager.ts';
 import { normalizeWorkspaceEdit, applyTextEdits } from '../lsp/workspaceEdit.ts';
 import { uriToPath, type PositionEncoding } from '../lsp/position.ts';
@@ -170,6 +171,8 @@ export class AppWindow {
   // Set once the user has confirmed an exit past unsaved work, so the re-entrant
   // close-request doesn't prompt again.
   private quitting = false;
+  // The plugin manager center tab handle; null after it is closed.
+  private pluginManagerTab: { root: Widget; child: PanelChild } | null = null;
   // The most recently focused agent — the default target for send-to-agent.
   private lastAgent: AgentTerminal | null = null;
   // The agent the user is currently looking at (its tab is the active one), so its
@@ -1497,6 +1500,7 @@ export class AppWindow {
       `#FileTree, #FileTree listview { background-color: ${bg}; }`,
       `#NotificationLog, #NotificationLog list { background-color: ${bg}; }`,
       `#KeymapPanel, #KeymapPanel viewport { background-color: ${bg}; }`,
+      `#PluginManagerPanel, #PluginManagerPanel viewport { background-color: ${bg}; }`,
       `#LocationList, #LocationList list { background-color: ${bg}; }`,
       `#WorkbenchList, #WorkbenchList list { background-color: ${bg}; }`,
       `#GitPanel, #GitPanel list { background-color: ${bg}; }`,
@@ -1698,6 +1702,7 @@ export class AppWindow {
       'lsp:toggle-diagnostics-panel': { didDispatch: () => this.toggleDiagnosticsPanel(), description: 'Toggle the Diagnostics panel' },
       'lsp:install-server': { didDispatch: () => this.installServerPicker(), description: 'Install a language server…' },
       'keymap:show': { didDispatch: () => this.toggleKeymapPanel(), description: 'Show all keybindings and their source' },
+      'plugin:open-manager': { didDispatch: () => this.openPluginManager(), description: 'Open the Plugin Manager' },
     });
   }
 
@@ -1741,6 +1746,20 @@ export class AppWindow {
       this.setBottomDock('keymap');
       this.workbench.keymapPanel.focus();
     }
+  }
+
+  // Open (or reveal) the Plugin Manager as a center tab. Reveals the existing tab
+  // when it is still hosted in a panel; opens a fresh one otherwise.
+  private openPluginManager() {
+    if (this.pluginManagerTab && Panel.containing(this.pluginManagerTab.root)) {
+      this.pluginManagerTab.child.select();
+      this.pluginManagerTab.root.grabFocus();
+      return;
+    }
+    const manager = new PluginManagerPanel();
+    const child = this.workbench.center.add(manager.root, { title: 'Plugin Manager', requireTabBar: true });
+    this.pluginManagerTab = { root: manager.root, child };
+    manager.root.grabFocus();
   }
 
   // Dock the given panel into the active workbench's bottom slot (or clear it),

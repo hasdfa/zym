@@ -95,7 +95,7 @@ export interface Grammar {
 // it.
 //
 // The language definitions (extensions, grammar wasm + query + fold types) live
-// in the `LanguageRegistry` (src/lang), contributed by plugins (src/plugins);
+// in the `LanguageRegistry` (src/lang), contributed by plugins (plugins/);
 // this module just loads/caches the wasm and runs the query. Grammar specs come
 // from `languages.grammarFor`.
 

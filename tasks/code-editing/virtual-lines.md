@@ -132,7 +132,7 @@ layer):
      `pixels-above/below` tag, drops a pooled "slot" `Gtk.Box` as an `add_overlay`
      child at the anchor's buffer-Y, and repositions via a tick callback on layout
      changes (`add_overlay` follows scroll for free but not fold-toggle/edit shifts).
-     Consumers: markdown image preview (`src/plugins/markdown/imagePreview.ts`) and
+     Consumers: markdown image preview (`plugins/markdown/imagePreview.ts`) and
      the see-definition peek (`src/ui/TextEditor/Peek.ts`, which uses a focusable
      sibling-overlay variant — `add_overlay` children leak IM input). This is the
      general capability behind code lens, ghost text, inline expanded diagnostics,

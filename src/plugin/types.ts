@@ -24,10 +24,12 @@ type Widget = InstanceType<typeof Gtk.Widget>;
 export interface PluginManifest {
   /** Stable, unique id (e.g. `typescript`); also the keymap/style source key. */
   id: string;
-  /** Human-readable name shown in the (future) plugin manager. */
+  /** Human-readable name shown in the plugin manager. */
   name: string;
   description?: string;
   version?: string;
+  /** Minimum quilx version required. Activation is skipped with a warning if unmet. */
+  minQuilxVersion?: string;
 }
 
 /** Language-layer contributions (detection + tree-sitter grammar + LSP servers). */

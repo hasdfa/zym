@@ -77,13 +77,13 @@ activation state.
   disposable-aware: `LanguageRegistry.register*` return Disposables,
   `Config.removeSchema`, `styles.addRemovable` (queue-or-install, removable),
   `grammar.clearGrammar`. Keymaps/commands already returned Disposables.
-- [x] **First plugin: TypeScript** — `src/plugins/typescript/` (the former
+- [x] **First plugin: TypeScript** — `plugins/typescript/` (the former
   `src/lang/builtin.ts`). Contributes the TS/JS/TSX detection, tree-sitter
   grammars (queries vendored under `queries/`, `GrammarDef.highlightsPath`), and
   the flow/tsserver/deno/eslint server candidates. Activated at startup
   (`src/index.ts`: `registerBuiltinPlugins()` → `plugins.activateAll()`) before
   `preloadGrammars`, so the registry is populated before anything reads it.
-- [x] **HTML plugin** — `src/plugins/html/`. Detection (`.html`/`.htm`/`.xhtml`),
+- [x] **HTML plugin** — `plugins/html/`. Detection (`.html`/`.htm`/`.xhtml`),
   the bundled `tree-sitter-html` grammar (highlights + folds, palette-adapted),
   and the `vscode-html-language-server` (single-file). Exercises *cross-plugin
   injections*: `<style>` → a CSS grammar this plugin vendors injection-only, and
@@ -164,7 +164,7 @@ shells out reuses the same primitive. Direct-spawn fallback if the child is down
 
 See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the design and decisions.
 
-- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `src/plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
+- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
 - [x] LSP client + per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging. **Incremental** document sync (full-text fallback). Correct LSP `languageId` (`.tsx`→typescriptreact, `.js`→javascript, …). See `src/lsp/`.
 - [x] Server→client requests answered: `workspace/configuration` (from `ServerDef.settings`), `client/(un)registerCapability`, `workDoneProgress/create`; `window/showMessage` surfaced, error `logMessage` to the trace log. File watching: dynamically-registered `workspace/didChangeWatchedFiles` via a per-dir `WorkspaceWatcher` (excludes node_modules/.git).
 - [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, a "Diagnostics" panel (shared `LocationList`). Namespaced by `(server, path)` and merged.

@@ -17,7 +17,7 @@ through a small `LspDocument` interface.
   protocol.
 - **Server configs: curated, plugin-contributed.** Servers are hand-authored
   `ServerDef`s registered on the `LanguageRegistry` (`src/lang/`) by plugins
-  (e.g. `src/plugins/typescript/`), not fetched. The earlier runtime-fetch of
+  (e.g. `plugins/typescript/`), not fetched. The earlier runtime-fetch of
   Helix `languages.toml` was dropped — see
   [language-config.md](language-config.md) for the registry design and why.
 - **Server install (optional).** `ServerDef.install` (npm package, or a raw
