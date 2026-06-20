@@ -115,6 +115,7 @@ const TAB_BINDINGS: Record<string, Binding> = {
   'alt->': 'tab:move-forward',
   'alt-9': 'tab:go-to-last',
   'alt-c': 'tab:close', // close the focused panel child
+  'alt-p': 'tab:toggle-pin', // pin/unpin the active tab (pinned tabs group at the front)
 };
 for (let n = 1; n <= 8; n++)
   TAB_BINDINGS[`alt-${n}`] = { command: 'tab:go-to', args: [n - 1] };
