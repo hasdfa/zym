@@ -49,6 +49,9 @@ import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
+import { MultiBufferView } from './multibuffer/MultiBufferView.ts';
+import { DiffMultiBufferView } from './multibuffer/DiffMultiBufferView.ts';
+import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
@@ -155,6 +158,11 @@ export class AppWindow {
   // Tab-hosted staging views (git:open-staging), keyed by root widget so the view
   // is disposed (releasing its embedded editor's document ref) when its tab closes.
   private readonly stagingViews = new Map<Widget, GitStagingView>();
+  // Tab-hosted multibuffers (project:search-multibuffer), keyed by root widget so the view
+  // is disposed (freeing its per-source DocumentSyntax parses) when its tab closes.
+  private readonly multibufferViews = new Map<Widget, MultiBufferView>();
+  // Tab-hosted continuous multi-file diff views (git:diff-multibuffer), same lifecycle.
+  private readonly diffMultibufferViews = new Map<Widget, DiffMultiBufferView>();
   // Session modified-status registrations (editors, running agents), keyed by the
   // tab's root widget so the registration is disposed when the tab closes.
   private readonly participants = new Map<Widget, DisposableLike>();
@@ -1215,6 +1223,10 @@ export class AppWindow {
     this.editors.delete(widget);
     this.stagingViews.get(widget)?.dispose(); // release its embedded editor + git subscription
     this.stagingViews.delete(widget);
+    this.multibufferViews.get(widget)?.dispose(); // free its per-source parses
+    this.multibufferViews.delete(widget);
+    this.diffMultibufferViews.get(widget)?.dispose();
+    this.diffMultibufferViews.delete(widget);
     this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
@@ -2075,7 +2087,11 @@ export class AppWindow {
         description: 'Search file contents (ripgrep)',
       },
       // Save commands only apply with an editor open.
-      'file:save': { didDispatch: () => this.saveActive(), description: 'Save the current file', when: () => this.activeEditor !== null },
+      'file:save': {
+        didDispatch: () => this.saveActive(),
+        description: 'Save the current file',
+        when: () => this.activeEditor !== null || this.activeSavableSurface() !== null,
+      },
       'file:save-as': { didDispatch: () => this.saveAsDialog(), description: 'Save the current file as…', when: () => this.activeEditor !== null },
       'git:diff-current': {
         didDispatch: () => this.diffActiveAgainstHead(),
@@ -2085,6 +2101,30 @@ export class AppWindow {
       'git:open-staging': {
         didDispatch: () => this.openStagingView(),
         description: 'Open the staging view (status + diff) in a tab',
+      },
+      'project:search-multibuffer': {
+        didDispatch: () => this.openSearchMultibuffer(),
+        description: 'Search the selected text across the project, shown as a multibuffer',
+        when: () => this.activeEditor !== null,
+      },
+      'git:diff-multibuffer': {
+        didDispatch: () => void this.openDiffMultibuffer(),
+        description: 'Show every changed file as one continuous diff (multibuffer)',
+      },
+      'diff:expand-context': {
+        didDispatch: () => this.activeDiffMultibuffer()?.expandContextAtCursor(),
+        description: 'Reveal more unchanged lines at the nearest gap',
+        when: () => this.activeDiffMultibuffer() !== null,
+      },
+      'diff:expand-all': {
+        didDispatch: () => this.activeDiffMultibuffer()?.expandAll(),
+        description: 'Reveal all unchanged lines (show the full files)',
+        when: () => this.activeDiffMultibuffer() !== null,
+      },
+      'diff:collapse-context': {
+        didDispatch: () => this.activeDiffMultibuffer()?.collapseContext(),
+        description: 'Re-collapse expanded context back to the windowed diff',
+        when: () => this.activeDiffMultibuffer() !== null,
       },
       'app:quit': { didDispatch: () => this.onQuit(), description: 'Quit quilx' },
       'command-palette:toggle': { didDispatch: () => openCommandPicker(this.overlay), description: 'Show all commands' },
@@ -2114,6 +2154,99 @@ export class AppWindow {
       const viewer = new DiffViewer(model, { title: `${name} (working tree ↔ HEAD)`, languagePath: path });
       this.workbench.center.add(viewer.root, { title: `± ${name}`, requireTabBar: true });
     });
+  }
+
+  /** Search the project for the active editor's selected text and show every match,
+   *  grouped by file with context, in a continuous read-only multibuffer tab. Phase 1a
+   *  of the multibuffer (tasks/code-editing/multibuffer.md). */
+  private openSearchMultibuffer(): void {
+    const query = this.activeEditor?.getSelectedText().trim() ?? '';
+    if (query === '') {
+      this.toast('Select text to search for');
+      return;
+    }
+    const cwd = this.workbench.cwd;
+    runProjectSearch(cwd, query, (result) => {
+      if (result.error) {
+        this.toast(result.error);
+        return;
+      }
+      const files = result.files ?? [];
+      if (files.length === 0) {
+        this.toast(`No results for “${query}”`);
+        return;
+      }
+      const excerpts = matchesToExcerptInputs(files, { context: 2 });
+      const view = new MultiBufferView({
+        excerpts,
+        cwd,
+        // Editable results: edit in place (write-through to each file's live Document + save),
+        // and replace across files as undo-coordinated steps (G6). NORMAL-mode Enter still
+        // jumps to the file; INSERT-mode Enter is a newline.
+        editable: true,
+        documents: this.documents,
+        onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+      });
+      const child = this.workbench.center.add(view.root, {
+        title: `${Icons.search}  ${query}`,
+        requireTabBar: true,
+      });
+      this.multibufferViews.set(view.root, view); // disposeChild tears it down on close
+      child.select();
+      view.focus();
+    });
+  }
+
+  /** Show every changed file (working tree vs HEAD) as ONE continuous diff in a tab — the
+   *  multibuffer diff surface (read-only for now; tasks/code-editing/multibuffer.md, G5). */
+  private async openDiffMultibuffer(): Promise<void> {
+    const cwd = this.workbench.cwd;
+    const root = repoRoot(cwd);
+    if (!root) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const paths = [...this.workbench.git.getFileStatuses().keys()].sort();
+    if (paths.length === 0) {
+      this.toast('No changes against HEAD');
+      return;
+    }
+    const showHead = (rel: string): Promise<string> =>
+      new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
+    // Editable diff: NEW side = the file's current text (an open document's live text, incl.
+    // unsaved edits, else from disk) backed by a live Document (edit in place + save + live
+    // re-diff), OLD side = the HEAD blob. A deleted file → empty new.
+    const files = await Promise.all(
+      paths.map(async (path) => {
+        const oldText = await showHead(Path.relative(root, path));
+        const open = this.documents.find(path);
+        let newText = open ? open.getText() : '';
+        if (!open) {
+          try {
+            newText = Fs.readFileSync(path, 'utf8');
+          } catch {
+            /* deleted on disk */
+          }
+        }
+        return { path, oldText, newText };
+      }),
+    );
+    const view = new DiffMultiBufferView({
+      files,
+      cwd,
+      editable: true,
+      documents: this.documents,
+      onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+    });
+    const title = () => (view.isModified() ? `${Icons.modified} ${Icons.git}  Diff` : `${Icons.git}  Diff`);
+    const child = this.workbench.center.add(view.root, {
+      title: title(),
+      requireTabBar: true,
+    });
+    this.diffMultibufferViews.set(view.root, view); // disposeChild tears it down on close
+    view.onModifiedChange(() => child.setTitle(title())); // show the unsaved marker on edit/save
+    child.select();
+    view.focus();
   }
 
   /** Open the tab-hosted staging view (status list + an editable diff pane). */
@@ -2715,10 +2848,43 @@ export class AppWindow {
   // --- File operations (routed to the active editor) -------------------------
 
   private saveActive() {
+    // An editable multibuffer (project search OR diff) saves every file it touched, not one Document.
+    const surface = this.activeSavableSurface();
+    if (surface) {
+      surface.save();
+      return;
+    }
     const editor = this.activeEditor;
     if (!editor) return;
     if (editor.currentFile) editor.save();
     else this.saveAsDialog();
+  }
+
+  /** The active center/focused child resolved to a widget, for surface lookups. */
+  private activeChildWidget(): Widget | null {
+    return Panel.active?.activeChild ?? this.workbench.center.activePanel.activeChild ?? null;
+  }
+
+  /** The project-search multibuffer hosted by the active child, if any. */
+  private activeMultibuffer(): MultiBufferView | null {
+    const focused = Panel.active?.activeChild;
+    const focusedMb = focused ? this.multibufferViews.get(focused) : undefined;
+    if (focusedMb) return focusedMb;
+    const centerChild = this.workbench.center.activePanel.activeChild;
+    return centerChild ? this.multibufferViews.get(centerChild) ?? null : null;
+  }
+
+  /** The active editable surface (project-search or diff multibuffer) that owns a `save()`. */
+  private activeSavableSurface(): { save(): void } | null {
+    const widget = this.activeChildWidget();
+    if (!widget) return null;
+    return this.multibufferViews.get(widget) ?? this.diffMultibufferViews.get(widget) ?? null;
+  }
+
+  /** The diff multibuffer hosted by the active child, if any (for the expand-context commands). */
+  private activeDiffMultibuffer(): DiffMultiBufferView | null {
+    const widget = this.activeChildWidget();
+    return widget ? this.diffMultibufferViews.get(widget) ?? null : null;
   }
 
   private openDialog() {
