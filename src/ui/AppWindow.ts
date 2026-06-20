@@ -35,6 +35,7 @@ import { GitPanel } from './GitPanel.ts';
 import { GitStagingView } from './GitStagingView.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons, iconLabel } from './icons.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitRepo, type GitOpResult } from '../git.ts';
@@ -2938,7 +2939,7 @@ function span(a0: number, aLen: number, b0: number, bLen: number): number {
 // round dot. Adw tab titles are plain text (no markup, no colour), so the dot
 // can't be colour-coded like the sidebar — the waiting state instead drives Adw's
 // native `needs-attention` tab highlight (see updateAgentTab).
-const AGENT_WORKING_GLYPH = String.fromCodePoint(0xf1978);
+const AGENT_WORKING_GLYPH = NERDFONT.STATUS.SYNC;
 const AGENT_STATUS_DOT = '●';
 
 /** An agent tab's title: the WorkbenchList status glyph prefixed to the agent's name. */

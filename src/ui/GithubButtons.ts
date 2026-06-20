@@ -27,15 +27,16 @@ import { openUrl } from './openUrl.ts';
 import { repoRoot } from '../git.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { stateGlyphMarkup } from './GithubPrPicker.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { repoWebUrl, createPullRequestWeb, type PrState, type CiStatus, type GithubService } from '../github.ts';
 import type { GitRepo } from '../git.ts';
 
-// CI status glyph + colour (bundled icon font): check / dot / times, drawn in
+// CI status glyph + colour (bundled icon font): check / dot / cross, drawn in
 // the theme's success / warning / error.
 const CI_STYLE: Record<CiStatus, { glyph: string; color: string }> = {
-  success: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.status.success }, // check
-  warning: { glyph: String.fromCodePoint(0xf444), color: theme.ui.status.warning }, // dot-fill (smaller)
-  error: { glyph: String.fromCodePoint(0xf467), color: theme.ui.status.error }, // oct-x (smaller)
+  success: { glyph: NERDFONT.STATUS.CHECK, color: theme.ui.status.success },
+  warning: { glyph: NERDFONT.STATUS.DOT, color: theme.ui.status.warning },
+  error: { glyph: NERDFONT.STATUS.CROSS, color: theme.ui.status.error },
 };
 
 // Markup for the PR segment: the state glyph (coloured) then "#1234" in the
@@ -46,7 +47,7 @@ function prMarkup(state: PrState, number: number): string {
 
 // Markup for the PR segment when there's no PR yet on a non-default branch: the
 // PR glyph in the theme foreground — clicking opens the create-PR web page.
-const CREATE_PR_GLYPH = String.fromCodePoint(0xf407); // git-pull-request
+const CREATE_PR_GLYPH = NERDFONT.GIT.PULL_REQUEST;
 function createPrMarkup(): string {
   return `<span face="${ICON_FONT_FAMILY}" foreground="${theme.ui.editor.foreground}">${escapeMarkup(CREATE_PR_GLYPH)}</span>`;
 }

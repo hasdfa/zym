@@ -15,18 +15,19 @@ import { quilx } from '../quilx.ts';
 import { repoRoot } from '../git.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { Icons } from './icons.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { fetchChecks, type CiCheck, type CheckState } from '../github.ts';
 import { theme } from '../theme/theme.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-// Glyph + colour per check state — the same check / dot / times icons (in
+// Glyph + colour per check state — the same check / dot / cross icons (in
 // success / warning / error) the header CI button uses.
 const CHECK_STYLE: Record<CheckState, { glyph: string; color: string }> = {
-  pass: { glyph: String.fromCodePoint(0xf00c), color: theme.ui.status.success }, // check
-  pending: { glyph: String.fromCodePoint(0xf444), color: theme.ui.status.warning }, // dot-fill (smaller)
-  fail: { glyph: String.fromCodePoint(0xf467), color: theme.ui.status.error }, // oct-x (smaller)
+  pass: { glyph: NERDFONT.STATUS.CHECK, color: theme.ui.status.success },
+  pending: { glyph: NERDFONT.STATUS.DOT, color: theme.ui.status.warning },
+  fail: { glyph: NERDFONT.STATUS.CROSS, color: theme.ui.status.error },
 };
 
 // Sort/weight key: failed first, then pending, then passed.

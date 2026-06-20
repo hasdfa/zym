@@ -148,6 +148,10 @@ text via `iconLabel()` / `Icons` in `src/ui/icons.ts` — never
 the span with `font_family="${ICON_FONT_FAMILY}"`. (Adw tab icons are the one
 exception — the glyph is embedded in the tab title text.)
 
+Glyphs live in `src/ui/nerdfont.ts` (`NERDFONT`, a curated catalog grouped by
+purpose); `Icons` are named UI roles aliased onto it. File-tree icons are the
+separate `fileIcons.ts` table.
+
 ## Grouped buttons
 
 Adjacent header controls that form one logical control are joined with the GTK

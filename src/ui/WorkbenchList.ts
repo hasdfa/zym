@@ -26,11 +26,12 @@ import { theme } from '../theme/theme.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { createAgentStatusIcon, agentBranchMarkup } from './agentStatusIcon.ts';
 import { Icons, iconLabel } from './icons.ts';
+import { NERDFONT } from './nerdfont.ts';
 import type { GitRepo } from '../git.ts';
 import type { AgentTerminal } from './AgentTerminal.ts';
 
-const USER_GLYPH = String.fromCodePoint(0xf007); // nf-fa-user (the default/user entry)
-const CHANGED_GLYPH = String.fromCodePoint(0xf040); // nf-fa-pencil (changed-files badge)
+const USER_GLYPH = NERDFONT.SOCIAL.USER; // the default/user entry
+const CHANGED_GLYPH = NERDFONT.ACTION.EDIT; // changed-files badge
 // Project name shown in the sidebar header: the last path component of the cwd.
 export const PROJECT_NAME = Path.basename(process.cwd());
 // Add/remove animation duration: each row rides in/out inside a Gtk.Revealer that
