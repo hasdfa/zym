@@ -76,6 +76,9 @@ export class SdkSession {
   // Whether an assistant row is open for the current turn (so the first assistant
   // event of a turn emits `assistant-start` before its content deltas).
   private assistantOpen = false;
+  // Set while an interrupt is in flight, so the `error_during_execution` result it
+  // produces is treated as an intentional stop rather than surfaced as an error.
+  private interrupting = false;
   // The permission request/response file pair + its watcher. The server writes the
   // request atomically; we answer by writing the response atomically.
   private readonly permRequestFile: string;
@@ -141,6 +144,7 @@ export class SdkSession {
     if (!this.transport?.writable) return;
     this.emitter.emit('user-message', { text });
     this.assistantOpen = false;
+    this.interrupting = false;
     const turn = userTurn(text);
     logSend(turn);
     this.transport.send(turn);
@@ -159,11 +163,18 @@ export class SdkSession {
     this.setStatus('working'); // claude resumes once it reads the decision
   }
 
-  /** Interrupt the current turn (best-effort: a fresh user turn after a stop is
-   *  the supported steering; a hard interrupt kills + would need a respawn). */
-  interrupt(): void {
-    // The stream-json protocol has no soft-interrupt we rely on here yet; left as
-    // a seam. For now this is a no-op rather than a surprising kill.
+  /** Interrupt the in-flight turn via a control_request. claude stops the turn and
+   *  emits an `error_during_execution` result, which we treat as an intentional
+   *  stop (not a failure — see `onResultEvent`). Returns whether an interrupt was
+   *  actually sent (false = nothing was running, so the caller can fall back). */
+  interrupt(): boolean {
+    if (!this.transport?.writable) return false;
+    if (this._status !== 'working' && this._status !== 'waiting') return false;
+    this.interrupting = true;
+    const message = { type: 'control_request', request_id: `quilx-${++this.controlReqId}`, request: { subtype: 'interrupt' } };
+    logSend(message);
+    this.transport.send(message);
+    return true;
   }
 
   get status(): AgentStatus { return this._status; }
@@ -193,6 +204,7 @@ export class SdkSession {
   onContext(cb: (m: { tokens: number }) => void): Disposable { return this.emitter.on('context', cb as (v?: unknown) => void); }
   onInit(cb: (m: { model: string; slashCommands: string[] }) => void): Disposable { return this.emitter.on('init', cb as (v?: unknown) => void); }
   onError(cb: (m: { message: string }) => void): Disposable { return this.emitter.on('error', cb as (v?: unknown) => void); }
+  onInterrupted(cb: () => void): Disposable { return this.emitter.on('interrupted', cb as (v?: unknown) => void); }
   onPermission(cb: (r: PermissionRequest) => void): Disposable { return this.emitter.on('permission', cb as (v?: unknown) => void); }
   onExit(cb: (code: number | null) => void): Disposable { return this.emitter.on('exit', cb as (v?: unknown) => void); }
 
@@ -279,6 +291,11 @@ export class SdkSession {
     };
     const window = this._model ? r.modelUsage?.[this._model]?.contextWindow : undefined;
     this.emitter.emit('result', { costUsd: r.total_cost_usd, contextWindow: window });
+    // An interrupt we sent ends the turn with `error_during_execution` — that's the
+    // intended outcome, not a failure to surface.
+    const interrupted = this.interrupting;
+    this.interrupting = false;
+    if (interrupted) { this.emitter.emit('interrupted'); return; }
     const failed = r.is_error === true || !!r.api_error_status || r.stop_reason === 'refusal'
       || (!!r.terminal_reason && r.terminal_reason !== 'completed')
       || (typeof r.subtype === 'string' && r.subtype.startsWith('error'));

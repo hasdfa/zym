@@ -118,6 +118,7 @@ const GLYPH = {
   pending: 0xf252, // hourglass
   done: 0xf00c, // check
   error: 0xf00d, // times
+  interrupted: 0xf28d, // stop (filled square)
   todoDone: 0xf046, // check-square
   todoActive: 0xf138, // caret-right
   todoOpen: 0xf096, // square-o
@@ -140,9 +141,12 @@ function registerPromptKeymapOnce(): void {
       enter: 'conversation:submit-prompt',
       'alt-enter': 'conversation:prompt-newline',
     },
-    // shift-tab cycles the permission mode anywhere in the conversation.
+    // shift-tab cycles the permission mode; ctrl-c interrupts the running turn —
+    // both anywhere in the conversation. ctrl-c falls through to its default (copy)
+    // when nothing is running (the command aborts the binding).
     '#AgentConversation': {
       'shift-tab': 'conversation:cycle-permission-mode',
+      'ctrl-c': 'conversation:interrupt',
     },
   });
 }
@@ -410,6 +414,12 @@ export class AgentConversation implements Agent {
           didDispatch: () => this.cyclePermissionMode(),
           description: 'Cycle the agent permission mode (default / acceptEdits / plan)',
         },
+        'conversation:interrupt': {
+          // Interrupt the running turn; if nothing is running, abort so ctrl-c
+          // keeps its default behaviour (copy a transcript selection).
+          didDispatch: (event) => { if (!this.session.interrupt()) event.abortKeyBinding(); },
+          description: 'Interrupt the running agent turn',
+        },
       }),
     );
   }
@@ -481,6 +491,7 @@ export class AgentConversation implements Agent {
         this.updateFooter();
       }),
       this.session.onError(({ message }) => this.addErrorRow(message)),
+      this.session.onInterrupted(() => this.addInterruptedRow()),
       this.session.onPermission((req) => this.addPermissionCard(req)),
       this.session.onExit(() => {
         this.endTurn();
@@ -604,6 +615,12 @@ export class AgentConversation implements Agent {
   private addErrorRow(message: string): void {
     const label = this.addRow('quilx-conversation-error');
     setMarkupSafe(label, `${iconSpan(GLYPH.error, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
+  }
+
+  // A muted notice that the user interrupted the turn (ctrl-c).
+  private addInterruptedRow(): void {
+    const label = this.addRow('quilx-conversation-system');
+    setMarkupSafe(label, `${iconSpan(GLYPH.interrupted)}  Interrupted`, 'Interrupted');
   }
 
   // A tool-use row: a status slot (red ✗ only on failure) + the formatted tool, a

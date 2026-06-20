@@ -102,6 +102,42 @@ test('does not double-render text that already streamed', () => {
   session.dispose();
 });
 
+test('interrupt sends a control_request and the resulting error is treated as an intentional stop', () => {
+  const { session, fake } = makeSession();
+  const events: string[] = [];
+  session.onError(({ message }) => events.push(`error:${message}`));
+  session.onInterrupted(() => events.push('interrupted'));
+  session.onStatus(() => events.push(`status:${session.status}`));
+  session.start();
+
+  session.prompt('do something long');
+  fake.emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'working' } } } as unknown as StreamEvent);
+
+  // Interrupt mid-turn: returns true and writes a control_request.
+  const sent = session.interrupt();
+  assert.equal(sent, true);
+  const ctrl = fake.sent[fake.sent.length - 1] as { type: string; request: { subtype: string } };
+  assert.equal(ctrl.type, 'control_request');
+  assert.equal(ctrl.request.subtype, 'interrupt');
+
+  // The interrupt produces an error_during_execution result — surfaced as an
+  // intentional stop (onInterrupted), NOT an error row, and the turn goes idle.
+  fake.emit({ type: 'result', subtype: 'error_during_execution', is_error: true } as StreamEvent);
+
+  assert.ok(events.includes('interrupted'), 'fired onInterrupted');
+  assert.ok(!events.some((e) => e.startsWith('error:')), 'no error surfaced');
+  assert.equal(session.status, 'idle');
+  session.dispose();
+});
+
+test('interrupt is a no-op when nothing is running', () => {
+  const { session, fake } = makeSession();
+  session.start();
+  assert.equal(session.interrupt(), false); // idle → caller can fall back (ctrl-c copies)
+  assert.equal(fake.sent.length, 0);
+  session.dispose();
+});
+
 test('process exit flips to exited and fires onExit', () => {
   const { session, fake } = makeSession();
   let exitCode: number | null | undefined;
