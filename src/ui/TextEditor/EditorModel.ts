@@ -843,6 +843,26 @@ export class EditorModel {
     this.setCursorBufferPosition(new Point(row, indent.length));
   }
 
+  /** Duplicate the cursor's line, inserting the copy below; the cursor follows
+   *  the copy down (keeping its column). */
+  duplicateLineBelow(): void {
+    const cursor = this.getCursorBufferPosition();
+    const lineText = this.lineTextForBufferRow(cursor.row);
+    const lineEnd = this.bufferRangeForBufferRow(cursor.row).end;
+    this.transact(() => this.setTextInBufferRange(new Range(lineEnd, lineEnd), '\n' + lineText));
+    this.setCursorBufferPosition(new Point(cursor.row + 1, cursor.column));
+  }
+
+  /** Duplicate the cursor's line, inserting the copy above; the cursor stays on
+   *  the upper copy (keeping its column). */
+  duplicateLineAbove(): void {
+    const cursor = this.getCursorBufferPosition();
+    const lineText = this.lineTextForBufferRow(cursor.row);
+    const lineStart = new Point(cursor.row, 0);
+    this.transact(() => this.setTextInBufferRange(new Range(lineStart, lineStart), lineText + '\n'));
+    this.setCursorBufferPosition(new Point(cursor.row, cursor.column));
+  }
+
   /**
    * `o`/`O` carry indentation themselves (`insertNewlineBelow`/`Above`), so the
    * vim layer's separate auto-indent-empty-rows pass is left off — running it
