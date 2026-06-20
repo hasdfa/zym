@@ -1442,9 +1442,12 @@ export class TextEditor implements DocumentHost {
       };
       const [winX, winY] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
       const beam = carets[i].beam;
-      const width = beam ? 2 : cell.width > 1 ? cell.width : Math.max(2, Math.round(cell.height * 0.5));
+      // Secondary insert-mode carets render as a 1px beam (thinner than the main
+      // caret) so they read as subordinate, nudged 1px left to sit on the gap
+      // between glyphs rather than the cell's left edge.
+      const width = beam ? 1 : cell.width > 1 ? cell.width : Math.max(2, Math.round(cell.height * 0.5));
       widget.setSizeRequest(width, cell.height);
-      this.caretLayer.move(widget, winX, winY);
+      this.caretLayer.move(widget, beam ? winX - 1 : winX, winY);
       widget.removeCssClass(beam ? 'quilx-block-caret' : 'quilx-beam-caret');
       widget.addCssClass(beam ? 'quilx-beam-caret' : 'quilx-block-caret');
       widget.setVisible(true);

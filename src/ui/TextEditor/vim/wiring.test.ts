@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../../gi.ts';
 import { quilx } from '../../../quilx.ts';
 import { EditorModel } from '../EditorModel.ts';
+import { Point } from '../../../text/Point.ts';
 import { attachVim } from './index.ts';
 
 Gtk.init();
@@ -29,6 +30,31 @@ test('attachVim registers per-view commands that dispatch to its VimState', () =
   quilx.commands.dispatch(view, 'vim-mode-plus:activate-normal-mode');
   assert.equal(vimState.mode, 'normal');
   assert.equal(view.getEditable(), false);
+});
+
+test('visual-block I/A are registered commands that column-insert', () => {
+  const { editor, view } = makeEditor('abcde\nfghij\nklmno\n');
+  const vimState = attachVim(editor);
+  editor.setCursorBufferPosition(new Point(0, 1));
+  vimState.operationStack.run('ActivateBlockwiseVisualMode');
+  vimState.operationStack.run('MoveDown'); // block over rows 0-1, column 1
+  // `I` in visual mode dispatches this command (registered for visual:I). Before
+  // the fix it was unregistered, so `I` fell through to the normal-mode binding.
+  assert.ok(quilx.commands.dispatch(view, 'vim-mode-plus:insert-at-start-of-target'));
+  assert.equal(vimState.mode, 'insert');
+  editor.insertText('X');
+  vimState.operationStack.run('ActivateNormalMode');
+  assert.equal(editor.getText(), 'aXbcde\nfXghij\nklmno\n'); // inserted before the block on each row
+
+  // `A` appends after the block on each row.
+  editor.setCursorBufferPosition(new Point(0, 2));
+  vimState.operationStack.run('ActivateBlockwiseVisualMode');
+  vimState.operationStack.run('MoveDown');
+  assert.ok(quilx.commands.dispatch(view, 'vim-mode-plus:insert-at-end-of-target'));
+  assert.equal(vimState.mode, 'insert');
+  editor.insertText('Y');
+  vimState.operationStack.run('ActivateNormalMode');
+  assert.equal(editor.getText(), 'aXbYcde\nfXgYhij\nklmno\n');
 });
 
 test('commands are isolated per editor instance', () => {
