@@ -338,6 +338,9 @@ export class Panel {
       'tab:move-backward': { didDispatch: () => this.moveTabBackward(), description: 'Move tab before' },
       'tab:move-forward': { didDispatch: () => this.moveTabForward(), description: 'Move tab after' },
       'tab:close': { didDispatch: () => this.closeActiveTab(), description: 'Close the active tab' },
+      'tab:pin': { didDispatch: () => this.setActiveTabPinned(true), description: 'Pin the active tab' },
+      'tab:unpin': { didDispatch: () => this.setActiveTabPinned(false), description: 'Unpin the active tab' },
+      'tab:toggle-pin': { didDispatch: () => this.toggleActiveTabPinned(), description: 'Toggle the active tab pinned' },
     });
   }
 
@@ -372,6 +375,20 @@ export class Panel {
     const out: Widget[] = [];
     for (let i = 0; i < this.view.getNPages(); i++) out.push(this.view.getNthPage(i).getChild());
     return out;
+  }
+
+  /** Pin or unpin the active tab. Adw keeps pinned tabs grouped at the front
+   *  (shrunk to their icon/title, with no close button) and reorders as needed.
+   *  A no-op when the panel is empty or the tab is already in that state. */
+  setActiveTabPinned(pinned: boolean): void {
+    const page = this.view.getSelectedPage();
+    if (page && page.getPinned() !== pinned) this.view.setPagePinned(page, pinned);
+  }
+
+  /** Toggle whether the active tab is pinned; a no-op when the panel is empty. */
+  toggleActiveTabPinned(): void {
+    const page = this.view.getSelectedPage();
+    if (page) this.view.setPagePinned(page, !page.getPinned());
   }
 
   /** Close the selected tab (the active panel child); a no-op when empty. */
