@@ -1,7 +1,14 @@
-# Per-row gutter cell background (diff filename-header band) — blocked on node-gtk
+# Per-row gutter cell background (diff filename-header band)
 
-**Status:** blocked / needs node-gtk investigation. Pickup task. (Filed from work on
-`feat/multibuffer-phase0`, in the worktree `~/tmp/quilx-syntax-split`.)
+**Status (2026-06-20): UNBLOCKED — node-gtk part solved; band drawing proven on branch
+`feat/gutter-cell-background` (not merged).** The "blocked on node-gtk" diagnosis below was stale:
+the `snapshot_line` override DOES fire (the old "never fires" was a module-level-init segfault), and
+an arbitrary per-row background is drawable via `snapshot.appendColor` + `lines.getLineYrange(line,
+CELL)`. We also added a `super.<vfunc>()` chain-up to node-gtk (merged to its master, PR
+romgrk/node-gtk#451) so a `GutterRendererText` subclass can add a band AND keep the parent's text
+drawing. A working band + the broader snapshot-gutter perf finding (drawing from JS is a control
+feature, not a speed win) are written up in `text-editor.md` → "Gutter rendering". The original
+analysis below is kept for history. (Filed from `feat/multibuffer-phase0`.)
 
 ## Goal
 
