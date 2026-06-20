@@ -122,3 +122,32 @@ test('linewise visual caret stays on the cursor line, not the next line', () => 
   run('MoveDown');
   assert.equal(caretRow(), 3); // back down past the anchor: caret on line 3
 });
+
+test('vip caret lands on the first char of the paragraph last line', () => {
+  const { editor, vimState, run, at } = setup('l0\nl1\nl2\n\nl4\n');
+  at(0, 0);
+  editor.setCursorType(CursorType.BLOCK);
+  run('ActivateCharacterwiseVisualMode');
+  run('InnerParagraph');
+  // Selection covers the whole paragraph (rows 0..2) linewise.
+  assert.ok(vimState.isMode('visual', 'linewise'));
+  assert.deepEqual(editor.getLastSelection().getBufferRowRange(), [0, 3]);
+  // Caret (the visual head) sits on the first char of the last line, not the
+  // blank line after the paragraph.
+  const head = vimState
+    .swrap(editor.getLastSelection())
+    .getBufferPositionFor('head', { from: ['property', 'selection'] });
+  assert.deepEqual([head!.row, head!.column], [2, 0]);
+});
+
+test('vip caret honors first non-blank (^) on an indented last line', () => {
+  const { editor, vimState, run, at } = setup('a\n  bar\n\nc\n');
+  at(0, 0);
+  editor.setCursorType(CursorType.BLOCK);
+  run('ActivateCharacterwiseVisualMode');
+  run('InnerParagraph');
+  const head = vimState
+    .swrap(editor.getLastSelection())
+    .getBufferPositionFor('head', { from: ['property', 'selection'] });
+  assert.deepEqual([head!.row, head!.column], [1, 2]); // ^ skips the indent
+});

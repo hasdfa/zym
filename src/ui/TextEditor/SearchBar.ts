@@ -109,6 +109,10 @@ export class SearchBar {
   private historyIndex = -1;
   private historyStash = '';
   private applyingHistory = false;
+  // Guards the `changed` handler while we set the entry text programmatically to
+  // mirror an already-run search (vim `*`/`#`), so we don't re-search and clobber
+  // its result (e.g. drop the whole-word constraint).
+  private suppressChange = false;
 
   constructor(host: Overlay, controller: SearchController, view: SourceView) {
     this.host = host;
@@ -117,6 +121,7 @@ export class SearchBar {
 
     this.searchEntry = this.makeEntry('Search');
     this.searchEntry.on('changed', () => {
+      if (this.suppressChange) return; // programmatic mirror of an external search — don't re-run it
       if (!this.applyingHistory) this.historyIndex = -1; // manual edit leaves history recall
       this.render(this.controller.setQuery(this.searchEntry.getText()));
       this.refreshHighlight();
@@ -181,6 +186,20 @@ export class SearchBar {
     this.searchEntry.selectRegion(0, -1); // select any prior query so typing replaces it
     this.render(this.controller.setQuery(this.searchEntry.getText()));
     this.refreshHighlight();
+  }
+
+  /** Mirror an externally-run search (vim `*`/`#`) into the bar without opening it:
+   *  set the entry to `query` so the widget holds the active term like vim's `/`
+   *  register (recall it with `/` then Ctrl+P), and record it in the history. The
+   *  controller has already run the search — this does not re-search. */
+  reflectQuery(query: string): void {
+    this.suppressChange = true;
+    this.searchEntry.setText(query);
+    this.suppressChange = false;
+    this.historyIndex = -1;
+    this.render(this.controller.state);
+    this.refreshHighlight();
+    recordSearchHistory(query);
   }
 
   /** Color regex/replacement syntax in the inputs while in regex mode (else plain). */

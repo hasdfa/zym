@@ -691,6 +691,9 @@ export class TextEditor implements DocumentHost {
       const wordEndColumn = [...line.slice(0, match.index + match[0].length)].length;
       if (wordEndColumn > pos.column) {
         this.search.searchWord(match[0], reverse, wholeWord);
+        // Mirror the searched word into the search bar so its value tracks the
+        // active search, like vim setting the `/` register on `*`/`#`.
+        this.searchBar.reflectQuery(match[0]);
         return;
       }
     }
