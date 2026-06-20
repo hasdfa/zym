@@ -67,6 +67,11 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: false,
     description: 'Show the source-map minimap gutter on the right of the editor.',
   },
+  'editor.locationBar': {
+    type: 'boolean',
+    default: true,
+    description: 'Show a location bar atop the editor with the file path and the tree-sitter scope breadcrumb.',
+  },
   'editor.softWrap': {
     type: 'boolean',
     default: true,

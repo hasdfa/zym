@@ -32,3 +32,15 @@ export function isFunctionNodeType(type: string): boolean {
 export function isClassNodeType(type: string): boolean {
   return /class|interface|enum|struct|trait|impl/.test(type) && !/_body$/.test(type);
 }
+
+/** Structural *definition* nodes worth showing in the breadcrumb — functions/methods,
+ *  class-likes, and namespaces/modules. Excludes control flow (if/for/while) so the bar
+ *  tracks the symbol scope, not block nesting. Grammar-agnostic; the `*_body` guards keep
+ *  the declaration node (whose `name` field we can read), not its body. */
+export function isStructuralNodeType(type: string): boolean {
+  return (
+    isFunctionNodeType(type) ||
+    isClassNodeType(type) ||
+    (/namespace|module/.test(type) && !/_body$/.test(type))
+  );
+}

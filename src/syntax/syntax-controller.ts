@@ -26,6 +26,7 @@ import { theme } from '../theme/theme.ts';
 import { findBracketPair } from './bracketMatch.ts';
 import { type NodeRowRange } from './indent.ts';
 import { type TagName } from './tags.ts';
+import { type Crumb } from './breadcrumb.ts';
 import { DocumentSyntax } from './DocumentSyntax.ts';
 import type { SyntaxProjection, SyntaxSlice } from './SyntaxProjection.ts';
 import { rangeGaps, mergeRange, type LineRange } from './paintRegions.ts';
@@ -1073,6 +1074,13 @@ export class SyntaxController {
   classRangeAt(row: number, column: number): NodeRowRange | null {
     const [mRow, mCol] = this.modelPos(row, column);
     return this.toViewRowRange(this.docSyntax.classRangeAt(mRow, mCol));
+  }
+
+  /** Structural scopes (class/function/…) enclosing view `(row, column)`, outermost first,
+   *  for the editor info-bar breadcrumb. Names only — no view-range round-trip needed. */
+  breadcrumbAt(row: number, column: number): Crumb[] {
+    const [mRow, mCol] = this.modelPos(row, column);
+    return this.docSyntax.breadcrumbAt(mRow, mCol);
   }
 
   /** The JSX/HTML tag-name ranges (opening + closing, or one self-closing) of the

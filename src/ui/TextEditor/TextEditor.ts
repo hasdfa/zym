@@ -39,6 +39,7 @@ import { GitGutter } from './GitGutter.ts';
 import { IndentGuides } from './IndentGuides.ts';
 import { SearchController } from './SearchController.ts';
 import { SearchBar } from './SearchBar.ts';
+import { LocationBar } from './LocationBar.ts';
 import { Leap, type LeapRequest } from './Leap.ts';
 import { CompletionController } from './CompletionController.ts';
 import { createBufferWordsSource } from './createBufferWordsSource.ts';
@@ -358,6 +359,10 @@ export class TextEditor implements DocumentHost {
   // supplies its own fold ranges (unchanged-run folds) via `setProvidedFolds`,
   // which suppresses tree-sitter fold discovery — same machinery either way.
   private readonly syntax: SyntaxController;
+  // Top-of-editor location bar (file path + tree-sitter breadcrumb). Main editors only —
+  // embedded/multibuffer surfaces keep their per-excerpt HeaderBands. Null when embedded.
+  private locationBar: LocationBar | null = null;
+  private locationBarTimer: NodeJS.Timeout | null = null;
   private readonly editorModel: EditorModel;
   private readonly vimState: VimState;
   private readonly textDecorations: TextDecorations;
@@ -724,6 +729,7 @@ export class TextEditor implements DocumentHost {
     this.connect(this.buffer, 'notify::cursor-position', () => {
       this.dismissHover();
       if (this.signatureOverlay.visible) this.scheduleSignatureRequest();
+      this.scheduleLocationBarUpdate();
     });
     const hoverVadj = this.view.getVadjustment();
     if (hoverVadj)
@@ -1311,8 +1317,51 @@ export class TextEditor implements DocumentHost {
     box.setHexpand(true);
     const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     outer.append(this.banner);
+    // Location bar (file path + breadcrumb), pinned above the content. Main editors only;
+    // it hides itself until a file is loaded and refreshes on cursor move / reparse.
+    if (!this.embedded) {
+      this.locationBar = new LocationBar();
+      this.locationBar.widget.setVisible(false);
+      outer.append(this.locationBar.widget);
+      this.subs.add(
+        quilx.config.observe('editor.locationBar', (v) => this.applyLocationBarConfig(v !== false)),
+      );
+      const reparseUnsub = this.document.documentSyntax?.onDidReparse(() => this.scheduleLocationBarUpdate());
+      if (reparseUnsub) this.subs.add(new Disposable(reparseUnsub));
+      this.subs.add(new Disposable(() => {
+        if (this.locationBarTimer) clearTimeout(this.locationBarTimer);
+        this.locationBarTimer = null;
+      }));
+      this.scheduleLocationBarUpdate();
+    }
     outer.append(box);
     return outer;
+  }
+
+  // Whether the user has the location bar enabled; gates visibility on top of the
+  // "hide while fileless" rule the bar applies itself.
+  private locationBarEnabled = true;
+
+  private applyLocationBarConfig(enabled: boolean): void {
+    this.locationBarEnabled = enabled;
+    this.scheduleLocationBarUpdate();
+  }
+
+  /** Coalesce the (high-frequency) cursor-move / reparse refreshes into one pass before the
+   *  next paint. Recomputes the path and the breadcrumb from the current cursor scope. */
+  private scheduleLocationBarUpdate(): void {
+    if (!this.locationBar || this.locationBarTimer) return;
+    this.locationBarTimer = setTimeout(() => {
+      this.locationBarTimer = null;
+      if (this.disposed || !this.locationBar) return;
+      if (!this.locationBarEnabled) {
+        this.locationBar.widget.setVisible(false);
+        return;
+      }
+      this.locationBar.setFile(this.currentFile);
+      const { row, column } = this.editorModel.getCursorBufferPosition();
+      this.locationBar.setBreadcrumb(this.syntax.breadcrumbAt(row, column));
+    }, 0);
   }
 
   // --- Cursor overlay (hollow caret while unfocused) -------------------------
