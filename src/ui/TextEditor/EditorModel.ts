@@ -920,6 +920,21 @@ export class EditorModel {
   }
 
   /**
+   * Open/close an undo group that spans *several* operations, so edits from more
+   * than one command coalesce into a single undo step. GTK user actions nest by
+   * count, so an inner `transact` (or native edit) keeps the group open until the
+   * matching `endUndoGroup`. Use `transact` for a single self-contained edit; use
+   * this only when the group must outlive one operation (paste cycling groups the
+   * initial paste and each subsequent cycle). Callers MUST balance the pair.
+   */
+  beginUndoGroup(): void {
+    this.undoTarget.beginUserAction();
+  }
+  endUndoGroup(): void {
+    this.undoTarget.endUserAction();
+  }
+
+  /**
    * An opaque handle marking "now" in the edit history. Change coalescing is
    * done by `transact` (GTK user actions), so this pairs with
    * `groupChangesSinceCheckpoint` only to satisfy the ported call sites.
