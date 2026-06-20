@@ -15,7 +15,7 @@
  * first-class workbench owner registered in `quilx.agents` — the chrome reads
  * `status` / `changedFiles` / etc., never the concrete class.
  */
-import { Gtk } from '../gi.ts';
+import { Gtk, Adw } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { fonts, ICON_FONT_FAMILY } from '../fonts.ts';
@@ -27,6 +27,7 @@ import { MarkdownView } from './markdown/MarkdownView.ts';
 import { toolMarkup, toolFilePath } from './toolDisplay.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
+import { NERDFONT } from './nerdfont.ts';
 import { SdkSession, type PermissionRequest, type QuestionRequest } from '../agents/claude-sdk/SdkSession.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentStatus } from '../agents/types.ts';
@@ -34,6 +35,7 @@ import type { TabState } from '../SessionManager.ts';
 
 // Tools whose first input path counts as a "changed file" (mirrors the claude-tui
 // PostToolUse Edit|Write|MultiEdit|NotebookEdit hook).
+
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
@@ -53,6 +55,7 @@ addStyles(`
   .quilx-conversation-thinking { opacity: 0.55; font-style: italic; padding-left: 12px; }
   .quilx-conversation-tool { opacity: 0.8; }
   .quilx-conversation-toolrow { opacity: 0.85; }
+  .quilx-conversation-thinking-row { padding: 6px 12px; }
   .quilx-conversation-result {
     opacity: 0.7;
     background: var(--t-ui-surface-popover);
@@ -113,15 +116,23 @@ addStyles(`
     border: 1px solid var(--t-ui-surface-selected);
     border-radius: 6px;
   }
-  /* AskUserQuestion: an interactive choice card (info-tinted, distinct from the
-     plain allow/deny permission card). */
+  /* AskUserQuestion: an interactive choice card (info-tinted while open). Split
+     into a choice list (left) + a detail pane (right) for the focused choice. */
   .quilx-conversation-question {
     padding: 10px; margin: 6px 0;
     border: 1px solid var(--t-ui-status-info);
     border-radius: 6px;
   }
+  /* Once answered the border is dropped — it's just a record of the choice. */
+  .quilx-conversation-question-answered { padding: 6px 0; margin: 6px 0; }
   .quilx-conversation-question-h { font-weight: bold; opacity: 0.6; }
-  .quilx-conversation-question-opt { padding: 6px 8px; }
+  .quilx-conversation-question-split { }
+  .quilx-conversation-question-list { background: transparent; min-width: 150px; }
+  .quilx-conversation-question-opt { padding: 2px 4px; }
+  .quilx-conversation-question-detail {
+    padding: 2px 12px; opacity: 0.8;
+    border-left: 1px solid var(--t-ui-border);
+  }
   #AgentConversationPrompt { padding: 0; }
   /* The monospace bits (tool rows, JSON dumps) follow the font store. */
   .quilx-conversation-tool,
@@ -129,22 +140,11 @@ addStyles(`
   .quilx-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
 
-// Status / checklist glyphs (Nerd Font codepoints).
-const GLYPH = {
-  pending: 0xf252, // hourglass
-  done: 0xf00c, // check
-  error: 0xf00d, // times
-  warning: 0xf071, // triangle-exclamation
-  interrupted: 0xf28d, // stop (filled square)
-  todoDone: 0xf046, // check-square
-  todoActive: 0xf138, // caret-right
-  todoOpen: 0xf096, // square-o
-};
-
-// An icon-font span, optionally coloured.
-function iconSpan(cp: number, color?: string): string {
+// A Nerd Font glyph (from the shared NERDFONT catalog) as a Pango span, optionally
+// coloured.
+function iconSpan(glyph: string, color?: string): string {
   const open = color ? `<span font_family="${ICON_FONT_FAMILY}" foreground="${color}">` : `<span font_family="${ICON_FONT_FAMILY}">`;
-  return `${open}${String.fromCodePoint(cp)}</span>`;
+  return `${open}${glyph}</span>`;
 }
 
 // The enter/alt-enter keymap is global (selector-scoped to our prompt), registered
@@ -188,6 +188,7 @@ export class AgentConversation implements Agent {
   private readonly cwd: string;
   private readonly messages: InstanceType<typeof Gtk.Box>;
   private readonly scroller: InstanceType<typeof Gtk.ScrolledWindow>;
+  private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // spinner above the prompt, fading while working
   private readonly input: TextEditor;
   private readonly promptContainer: InstanceType<typeof Gtk.Box>;
   private readonly footer: InstanceType<typeof Gtk.Box>;
@@ -250,6 +251,21 @@ export class AgentConversation implements Agent {
     this.scroller = new Gtk.ScrolledWindow({ vexpand: true });
     this.scroller.setChild(this.messages);
 
+    // A "thinking" spinner shown just above the prompt while the agent is working,
+    // fading in/out via a Revealer crossfade.
+    const thinkingRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
+    thinkingRow.addCssClass('quilx-conversation-thinking-row');
+    const spinner = new Adw.Spinner();
+    spinner.setSizeRequest(16, 16); // Adw.Spinner fills its allocation otherwise
+    thinkingRow.append(spinner);
+    const thinkingLabel = new Gtk.Label({ label: 'Thinking…' });
+    thinkingLabel.addCssClass('quilx-conversation-system');
+    thinkingRow.append(thinkingLabel);
+    this.thinkingReveal = new Gtk.Revealer();
+    this.thinkingReveal.setTransitionType(Gtk.RevealerTransitionType.CROSSFADE);
+    this.thinkingReveal.setChild(thinkingRow);
+    this.thinkingReveal.setRevealChild(false);
+
     // A buffer-only editor (full vim editing) as the prompt input, wrapped in a
     // named container so the enter/alt-enter keymap can scope to it.
     this.input = new TextEditor({ buffer: { placeholder: 'Message claude…' } });
@@ -305,6 +321,7 @@ export class AgentConversation implements Agent {
     this.root.addCssClass('quilx-conversation');
     this.root.append(this.tasksPanel);
     this.root.append(this.scroller);
+    this.root.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
     this.root.append(inputCard);
 
     this.installCommands(); // after this.root exists (commands register on it)
@@ -526,6 +543,8 @@ export class AgentConversation implements Agent {
     const wasAttention = this.needsAttention;
     this._status = status;
     this._acknowledged = this._viewed;
+    // Fade the thinking spinner in/out as the agent starts/stops producing a turn.
+    this.thinkingReveal.setRevealChild(status === 'working');
     this.updateFooter();
     for (const handler of this.statusHandlers) handler();
     if (this.needsAttention !== wasAttention) this.emitAttention();
@@ -588,11 +607,11 @@ export class AgentConversation implements Agent {
     clearBox(this.tasksList);
     for (const task of this.tasks.values()) {
       if (task.status === 'deleted') continue;
-      const cp = task.status === 'completed' ? GLYPH.todoDone : task.status === 'in_progress' ? GLYPH.todoActive : GLYPH.todoOpen;
+      const glyph = task.status === 'completed' ? NERDFONT.TASK.DONE : task.status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
       const color = task.status === 'completed' ? theme.ui.status.success : task.status === 'in_progress' ? theme.ui.status.warning : undefined;
       const body = task.status === 'completed' ? `<s>${escapeMarkup(task.subject)}</s>` : escapeMarkup(task.subject);
       const label = new Gtk.Label({ xalign: 0, wrap: true });
-      setMarkupSafe(label, `${iconSpan(cp, color)}  ${body}`, task.subject);
+      setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, task.subject);
       this.tasksList.append(label);
     }
     this.tasksPanel.setVisible(true);
@@ -634,13 +653,13 @@ export class AgentConversation implements Agent {
   // An error notice in the conversation flow (refusal / max-turns / API error).
   private addErrorRow(message: string): void {
     const label = this.addRow('quilx-conversation-error');
-    setMarkupSafe(label, `${iconSpan(GLYPH.error, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
+    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
   }
 
   // A muted notice that the user interrupted the turn (ctrl-c).
   private addInterruptedRow(): void {
     const label = this.addRow('quilx-conversation-system');
-    setMarkupSafe(label, `${iconSpan(GLYPH.interrupted)}  Interrupted`, 'Interrupted');
+    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.STOP)}  Interrupted`, 'Interrupted');
   }
 
   // An unrecognised stream event: a warning header + the raw JSON (monospace,
@@ -656,7 +675,7 @@ export class AgentConversation implements Agent {
     row.addCssClass('quilx-conversation-unknown');
 
     const header = new Gtk.Label({ xalign: 0, wrap: true });
-    setMarkupSafe(header, `${iconSpan(GLYPH.warning, theme.ui.status.warning)}  unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
+    setMarkupSafe(header, `${iconSpan(NERDFONT.STATUS.WARNING, theme.ui.status.warning)}  unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
     const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
     body.addCssClass('quilx-conversation-unknown-body');
     body.setText(json);
@@ -750,7 +769,10 @@ export class AgentConversation implements Agent {
     isError: boolean,
     text: string,
   ): void {
-    if (isError) setMarkupSafe(status, iconSpan(GLYPH.error, theme.ui.status.error), '✗');
+    if (isError) setMarkupSafe(status, iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error), '✗');
+    // Read: the file is opened on the side via the clickable path — don't dump its
+    // content into the conversation (only a failed Read still shows its error text).
+    if (name === 'Read' && !isError) return;
     const trimmed = text.trim();
     if (!trimmed) return;
     if (name === 'Task') {
@@ -796,9 +818,10 @@ export class AgentConversation implements Agent {
     this.scrollToBottom();
   }
 
-  // AskUserQuestion: render each question's options as selectable toggles (radio
-  // group for single-select, independent for multi), with Submit / Skip. The
-  // chosen labels are sent back as the tool result (see SdkSession.answerQuestion).
+  // AskUserQuestion: each question is a split — a choice list (left) and a detail
+  // pane (right) that shows the focused choice's description. Single-select uses a
+  // browse list (first preselected); multi-select toggles rows. Submit / Skip send
+  // the chosen labels back as the tool result (see SdkSession.answerQuestion).
   private addQuestionCard(req: QuestionRequest): void {
     const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 10 });
     card.addCssClass('quilx-conversation-question');
@@ -812,22 +835,47 @@ export class AgentConversation implements Agent {
       }
       if (q.question) card.append(new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: q.question }));
 
-      const optsBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 4 });
-      const toggles: Array<{ btn: InstanceType<typeof Gtk.ToggleButton>; label: string }> = [];
-      let group: InstanceType<typeof Gtk.ToggleButton> | null = null;
-      for (const opt of q.options) {
-        const btn = new Gtk.ToggleButton();
-        btn.addCssClass('quilx-conversation-question-opt');
-        const inner = new Gtk.Label({ xalign: 0, wrap: true });
-        const desc = opt.description ? `  <span foreground="${theme.ui.text.muted}">${escapeMarkup(opt.description)}</span>` : '';
-        setMarkupSafe(inner, `<b>${escapeMarkup(opt.label)}</b>${desc}`, opt.description ? `${opt.label} — ${opt.description}` : opt.label);
-        btn.setChild(inner);
-        if (!q.multiSelect) { if (group) btn.setGroup(group); else group = btn; } // radio for single-select
-        optsBox.append(btn);
-        toggles.push({ btn, label: opt.label });
+      const list = new Gtk.ListBox();
+      list.addCssClass('quilx-conversation-question-list');
+      list.setSelectionMode(q.multiSelect ? Gtk.SelectionMode.MULTIPLE : Gtk.SelectionMode.SINGLE);
+
+      const hasDetails = q.options.some((o) => !!o.description);
+      const detail = new Gtk.Label({ xalign: 0, yalign: 0, wrap: true, selectable: true, hexpand: true });
+      detail.addCssClass('quilx-conversation-question-detail');
+
+      const rows: Array<{ row: InstanceType<typeof Gtk.ListBoxRow>; label: string }> = [];
+      q.options.forEach((opt) => {
+        const row = new Gtk.ListBoxRow();
+        const rl = new Gtk.Label({ xalign: 0, label: opt.label });
+        rl.addCssClass('quilx-conversation-question-opt');
+        row.setChild(rl);
+        list.append(row);
+        rows.push({ row, label: opt.label });
+        if (hasDetails) {
+          // Focusing a choice (keyboard nav or click) shows its details on the right.
+          const focus = new Gtk.EventControllerFocus();
+          focus.on('enter', () => detail.setText(opt.description ?? ''));
+          row.addController(focus);
+        }
+      });
+
+      // Single-select: preselect the first choice (a sensible default); show its detail.
+      if (!q.multiSelect && rows.length > 0) list.selectRow(rows[0].row);
+      if (hasDetails) detail.setText(q.options[0]?.description ?? '');
+
+      if (hasDetails) {
+        const split = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 12 });
+        split.addCssClass('quilx-conversation-question-split');
+        list.setHexpand(false);
+        list.setValign(Gtk.Align.START);
+        split.append(list);
+        split.append(detail);
+        card.append(split);
+      } else {
+        card.append(list);
       }
-      card.append(optsBox);
-      getters.push(() => toggles.filter((t) => t.btn.getActive()).map((t) => t.label));
+
+      getters.push(() => rows.filter((r) => r.row.isSelected()).map((r) => r.label));
     }
 
     const buttons = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
@@ -837,15 +885,18 @@ export class AgentConversation implements Agent {
     const answer = (skipped: boolean) => {
       const answers = req.questions.map((q, i) => ({ header: q.header || q.question, labels: skipped ? [] : getters[i]() }));
       this.session.answerQuestion(req.id, answers);
-      // Replace the interactive card with a compact record of what was answered
-      // (the AskUserQuestion tool row is suppressed, so this is the transcript trace).
+      // Replace the interactive card with a record of the choice — and drop the
+      // active (blue) border. (The AskUserQuestion tool row is suppressed, so this
+      // is the transcript trace.)
       clearBox(card);
+      card.removeCssClass('quilx-conversation-question');
+      card.addCssClass('quilx-conversation-question-answered');
       const picked = answers.filter((a) => a.labels.length > 0);
-      const summary = skipped || picked.length === 0
-        ? 'Skipped'
-        : picked.map((a) => `${a.header}: ${a.labels.join(', ')}`).join('   ·   ');
+      const text = picked.length > 0
+        ? picked.map((a) => `${a.header}: ${a.labels.join(', ')}`).join('   ·   ')
+        : 'No answer selected';
       const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-      setMarkupSafe(label, `${iconSpan(GLYPH.done, theme.ui.status.success)}  ${escapeMarkup(summary)}`, summary);
+      setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CHECK, theme.ui.status.success)}  ${escapeMarkup(text)}`, text);
       card.append(label);
     };
     submit.on('clicked', () => answer(false));
@@ -917,11 +968,11 @@ function renderTodos(todos: unknown[]): InstanceType<typeof Gtk.Box> {
     const todo = (raw && typeof raw === 'object' ? raw : {}) as { content?: unknown; status?: unknown };
     const content = typeof todo.content === 'string' ? todo.content : '';
     const status = todo.status;
-    const cp = status === 'completed' ? GLYPH.todoDone : status === 'in_progress' ? GLYPH.todoActive : GLYPH.todoOpen;
+    const glyph = status === 'completed' ? NERDFONT.TASK.DONE : status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
     const color = status === 'completed' ? theme.ui.status.success : status === 'in_progress' ? theme.ui.status.warning : undefined;
     const body = status === 'completed' ? `<s>${escapeMarkup(content)}</s>` : escapeMarkup(content);
     const label = new Gtk.Label({ xalign: 0, wrap: true });
-    setMarkupSafe(label, `${iconSpan(cp, color)}  ${body}`, content);
+    setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, content);
     box.append(label);
   }
   return box;

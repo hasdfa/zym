@@ -15,12 +15,13 @@ import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
 import { escapeMarkup } from '../proseMarkup.ts';
 import { iconLabel } from '../icons.ts';
+import { NERDFONT } from '../nerdfont.ts';
 import { clipboard } from '../TextEditor/vim/clipboard.ts';
 import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
 import { parseBlocks, type Block, type ListItem } from './blocks.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
-const COPY_GLYPH = String.fromCodePoint(0xf0c5); // nf-fa-copy
+const COPY_GLYPH = NERDFONT.ACTION.COPY;
 
 // Colors as CSS variables (--t-ui-*); code blocks read the font store's monospace
 // family (--t-font-monospace-family). See tasks/styling.md.

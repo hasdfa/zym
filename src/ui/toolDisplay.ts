@@ -10,37 +10,37 @@
 import * as Os from 'node:os';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { escapeMarkup } from './proseMarkup.ts';
+import { NERDFONT } from './nerdfont.ts';
 
-// Nerd Font (FontAwesome) codepoints, matching the Icons convention in icons.ts.
+// Tool icons come from the shared Nerd Font catalog (NERDFONT). Most live in the
+// TOOL group; bash/grep reuse the EDITOR terminal/search glyphs.
 const G = {
-  bash: 0xf120, // terminal
-  read: 0xf15c, // file-text
-  write: 0xf0c7, // floppy / save
-  edit: 0xf044, // pencil-square
-  glob: 0xf07c, // folder-open
-  grep: 0xf002, // search
-  web: 0xf0ac, // globe
-  task: 0xf0c0, // users (subagent)
-  todo: 0xf0ae, // tasks (checklist)
-  notebook: 0xf02d, // book
-  mcp: 0xf1e6, // plug (MCP tool)
-  tool: 0xf013, // cog (default)
-  skill: 0xf12e, // puzzle-piece (Skill)
-  question: 0xf059, // question-circle (AskUserQuestion)
-  workflow: 0xf0e8, // sitemap (Workflow)
-  clock: 0xf017, // clock (ScheduleWakeup)
-  calendar: 0xf073, // calendar (Cron*)
-  eye: 0xf06e, // eye (Monitor)
-  bolt: 0xf0e7, // bolt (RemoteTrigger)
-  bell: 0xf0f3, // bell (PushNotification)
-  process: 0xf085, // cogs (background task I/O)
-  stop: 0xf04d, // stop (TaskStop)
-  design: 0xf1fc, // paint-brush (DesignSync)
-  plan: 0xf022, // list-alt (plan mode)
-  worktree: 0xf126, // code-branch (worktree)
+  bash: NERDFONT.EDITOR.TERMINAL,
+  read: NERDFONT.TOOL.READ,
+  write: NERDFONT.TOOL.WRITE,
+  edit: NERDFONT.TOOL.EDIT,
+  glob: NERDFONT.TOOL.GLOB,
+  grep: NERDFONT.EDITOR.SEARCH,
+  web: NERDFONT.TOOL.WEB,
+  task: NERDFONT.TOOL.SUBAGENT,
+  todo: NERDFONT.TOOL.TODO,
+  notebook: NERDFONT.TOOL.NOTEBOOK,
+  mcp: NERDFONT.TOOL.MCP,
+  tool: NERDFONT.TOOL.GENERIC,
+  skill: NERDFONT.TOOL.SKILL,
+  question: NERDFONT.TOOL.QUESTION,
+  workflow: NERDFONT.TOOL.WORKFLOW,
+  clock: NERDFONT.TOOL.CLOCK,
+  calendar: NERDFONT.TOOL.CALENDAR,
+  eye: NERDFONT.TOOL.MONITOR,
+  bolt: NERDFONT.TOOL.TRIGGER,
+  bell: NERDFONT.TOOL.BELL,
+  process: NERDFONT.TOOL.COGS,
+  stop: NERDFONT.TOOL.STOP,
+  design: NERDFONT.TOOL.DESIGN,
+  plan: NERDFONT.TOOL.PLAN,
+  worktree: NERDFONT.TOOL.WORKTREE,
 } as const;
-
-const glyph = (cp: number) => String.fromCodePoint(cp);
 
 export interface ToolView {
   /** Nerd Font glyph (render with ICON_FONT_FAMILY). */
@@ -60,93 +60,93 @@ export function describeTool(name: string, input: unknown, cwd?: string): ToolVi
   switch (name) {
     case 'Bash':
       // No label for Bash — the terminal icon + the command read clearly on their own.
-      return { icon: glyph(G.bash), title: '', detail: s(i.command) || s(i.description) };
+      return { icon: G.bash, title: '', detail: s(i.command) || s(i.description) };
     case 'Read':
-      return { icon: glyph(G.read), title: 'Read', detail: p(i.file_path) };
+      return { icon: G.read, title: 'Read', detail: p(i.file_path) };
     case 'Write':
-      return { icon: glyph(G.write), title: 'Write', detail: p(i.file_path) };
+      return { icon: G.write, title: 'Write', detail: p(i.file_path) };
     case 'Edit':
-      return { icon: glyph(G.edit), title: 'Edit', detail: p(i.file_path) };
+      return { icon: G.edit, title: 'Edit', detail: p(i.file_path) };
     case 'MultiEdit':
-      return { icon: glyph(G.edit), title: 'MultiEdit', detail: p(i.file_path) + (Array.isArray(i.edits) ? `  (${i.edits.length} edits)` : '') };
+      return { icon: G.edit, title: 'MultiEdit', detail: p(i.file_path) + (Array.isArray(i.edits) ? `  (${i.edits.length} edits)` : '') };
     case 'NotebookEdit':
-      return { icon: glyph(G.notebook), title: 'NotebookEdit', detail: p(i.notebook_path) };
+      return { icon: G.notebook, title: 'NotebookEdit', detail: p(i.notebook_path) };
     case 'Glob':
-      return { icon: glyph(G.glob), title: 'Glob', detail: s(i.pattern) + (i.path ? `  in ${p(i.path)}` : '') };
+      return { icon: G.glob, title: 'Glob', detail: s(i.pattern) + (i.path ? `  in ${p(i.path)}` : '') };
     case 'Grep':
-      return { icon: glyph(G.grep), title: 'Grep', detail: s(i.pattern) + (i.path ? `  in ${p(i.path)}` : '') };
+      return { icon: G.grep, title: 'Grep', detail: s(i.pattern) + (i.path ? `  in ${p(i.path)}` : '') };
     case 'WebFetch':
-      return { icon: glyph(G.web), title: 'WebFetch', detail: s(i.url) };
+      return { icon: G.web, title: 'WebFetch', detail: s(i.url) };
     case 'WebSearch':
-      return { icon: glyph(G.grep), title: 'WebSearch', detail: s(i.query) };
+      return { icon: G.grep, title: 'WebSearch', detail: s(i.query) };
     case 'Task':
-      return { icon: glyph(G.task), title: i.subagent_type ? `Task · ${s(i.subagent_type)}` : 'Task', detail: s(i.description) || truncate(s(i.prompt), 120) };
+      return { icon: G.task, title: i.subagent_type ? `Task · ${s(i.subagent_type)}` : 'Task', detail: s(i.description) || truncate(s(i.prompt), 120) };
     case 'TodoWrite':
-      return { icon: glyph(G.todo), title: 'TodoWrite', detail: Array.isArray(i.todos) ? `${i.todos.length} item${i.todos.length === 1 ? '' : 's'}` : '' };
+      return { icon: G.todo, title: 'TodoWrite', detail: Array.isArray(i.todos) ? `${i.todos.length} item${i.todos.length === 1 ? '' : 's'}` : '' };
 
     // Skill / agent meta-tools.
     case 'Skill':
-      return { icon: glyph(G.skill), title: 'Skill', detail: s(i.skill) + (i.args ? `  ${truncate(s(i.args), 80)}` : '') };
+      return { icon: G.skill, title: 'Skill', detail: s(i.skill) + (i.args ? `  ${truncate(s(i.args), 80)}` : '') };
     case 'ToolSearch':
-      return { icon: glyph(G.grep), title: 'ToolSearch', detail: s(i.query) };
+      return { icon: G.grep, title: 'ToolSearch', detail: s(i.query) };
     case 'AskUserQuestion': {
       const first = (Array.isArray(i.questions) ? i.questions[0] : undefined) as Record<string, unknown> | undefined;
-      return { icon: glyph(G.question), title: 'AskUserQuestion', detail: first ? (s(first.header) || s(first.question)) : '' };
+      return { icon: G.question, title: 'AskUserQuestion', detail: first ? (s(first.header) || s(first.question)) : '' };
     }
     case 'Workflow':
-      return { icon: glyph(G.workflow), title: 'Workflow', detail: s(i.name) || s(i.scriptPath) || '(inline script)' };
+      return { icon: G.workflow, title: 'Workflow', detail: s(i.name) || s(i.scriptPath) || '(inline script)' };
 
     // Task tracking (subjects/ids).
     case 'TaskCreate':
-      return { icon: glyph(G.todo), title: 'TaskCreate', detail: s(i.subject) };
+      return { icon: G.todo, title: 'TaskCreate', detail: s(i.subject) };
     case 'TaskUpdate':
-      return { icon: glyph(G.todo), title: 'TaskUpdate', detail: (i.taskId ? `#${s(i.taskId)}` : '') + (i.status ? `  → ${s(i.status)}` : '') };
+      return { icon: G.todo, title: 'TaskUpdate', detail: (i.taskId ? `#${s(i.taskId)}` : '') + (i.status ? `  → ${s(i.status)}` : '') };
     case 'TaskGet':
-      return { icon: glyph(G.todo), title: 'TaskGet', detail: i.taskId ? `#${s(i.taskId)}` : '' };
+      return { icon: G.todo, title: 'TaskGet', detail: i.taskId ? `#${s(i.taskId)}` : '' };
     case 'TaskList':
-      return { icon: glyph(G.todo), title: 'TaskList', detail: '' };
+      return { icon: G.todo, title: 'TaskList', detail: '' };
 
     // Background-task I/O (bash/agent processes).
     case 'TaskOutput':
-      return { icon: glyph(G.process), title: 'TaskOutput', detail: s(i.task_id) };
+      return { icon: G.process, title: 'TaskOutput', detail: s(i.task_id) };
     case 'TaskStop':
-      return { icon: glyph(G.stop), title: 'TaskStop', detail: s(i.task_id) || s(i.shell_id) };
+      return { icon: G.stop, title: 'TaskStop', detail: s(i.task_id) || s(i.shell_id) };
 
     // Scheduling / monitoring / notifications.
     case 'ScheduleWakeup':
-      return { icon: glyph(G.clock), title: 'ScheduleWakeup', detail: (typeof i.delaySeconds === 'number' ? `${i.delaySeconds}s` : '') + (i.reason ? `  ${s(i.reason)}` : '') };
+      return { icon: G.clock, title: 'ScheduleWakeup', detail: (typeof i.delaySeconds === 'number' ? `${i.delaySeconds}s` : '') + (i.reason ? `  ${s(i.reason)}` : '') };
     case 'CronCreate':
-      return { icon: glyph(G.calendar), title: 'CronCreate', detail: s(i.cron) + (i.recurring === false ? '  (once)' : '') };
+      return { icon: G.calendar, title: 'CronCreate', detail: s(i.cron) + (i.recurring === false ? '  (once)' : '') };
     case 'CronDelete':
-      return { icon: glyph(G.calendar), title: 'CronDelete', detail: s(i.id) };
+      return { icon: G.calendar, title: 'CronDelete', detail: s(i.id) };
     case 'CronList':
-      return { icon: glyph(G.calendar), title: 'CronList', detail: '' };
+      return { icon: G.calendar, title: 'CronList', detail: '' };
     case 'Monitor':
-      return { icon: glyph(G.eye), title: 'Monitor', detail: s(i.description) || s(i.command) };
+      return { icon: G.eye, title: 'Monitor', detail: s(i.description) || s(i.command) };
     case 'RemoteTrigger':
-      return { icon: glyph(G.bolt), title: 'RemoteTrigger', detail: s(i.action) + (i.trigger_id ? `  ${s(i.trigger_id)}` : '') };
+      return { icon: G.bolt, title: 'RemoteTrigger', detail: s(i.action) + (i.trigger_id ? `  ${s(i.trigger_id)}` : '') };
     case 'PushNotification':
-      return { icon: glyph(G.bell), title: 'PushNotification', detail: truncate(s(i.message), 120) };
+      return { icon: G.bell, title: 'PushNotification', detail: truncate(s(i.message), 120) };
 
     // Design sync / plan mode / worktrees.
     case 'DesignSync':
-      return { icon: glyph(G.design), title: 'DesignSync', detail: s(i.method) + (i.projectId ? `  ${s(i.projectId)}` : '') };
+      return { icon: G.design, title: 'DesignSync', detail: s(i.method) + (i.projectId ? `  ${s(i.projectId)}` : '') };
     case 'EnterPlanMode':
-      return { icon: glyph(G.plan), title: 'EnterPlanMode', detail: '' };
+      return { icon: G.plan, title: 'EnterPlanMode', detail: '' };
     case 'ExitPlanMode':
-      return { icon: glyph(G.plan), title: 'ExitPlanMode', detail: '' };
+      return { icon: G.plan, title: 'ExitPlanMode', detail: '' };
     case 'EnterWorktree':
-      return { icon: glyph(G.worktree), title: 'EnterWorktree', detail: s(i.name) || s(i.path) };
+      return { icon: G.worktree, title: 'EnterWorktree', detail: s(i.name) || s(i.path) };
     case 'ExitWorktree':
-      return { icon: glyph(G.worktree), title: 'ExitWorktree', detail: s(i.action) };
+      return { icon: G.worktree, title: 'ExitWorktree', detail: s(i.action) };
 
     default:
       // MCP tools arrive as mcp__<server>__<tool>; show "server · tool".
       if (name.startsWith('mcp__')) {
         const parts = name.slice(5).split('__');
-        return { icon: glyph(G.mcp), title: parts.join(' · '), detail: compactJson(input) };
+        return { icon: G.mcp, title: parts.join(' · '), detail: compactJson(input) };
       }
-      return { icon: glyph(G.tool), title: name, detail: compactJson(input) };
+      return { icon: G.tool, title: name, detail: compactJson(input) };
   }
 }
 
