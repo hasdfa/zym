@@ -10,9 +10,9 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Gtk } from '../gi.ts';
+import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
 import { quilx } from '../quilx.ts';
 import { plugins, registerBuiltinPlugins } from '../plugin/index.ts';
 import { preloadGrammars, getGrammar, langIdForPath } from '../syntax/grammar.ts';
@@ -32,9 +32,8 @@ before(async () => {
   hasJs = !!getGrammar(langIdForPath('/x.ts') ?? '');
 });
 
-let tmpSeq = 0;
 function tmpFile(name: string, content: string): string {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), `quilx-mbedit-${tmpSeq++}-`));
+  const dir = makeTmpDir('mbedit');
   const p = Path.join(dir, name);
   Fs.writeFileSync(p, content);
   return p;

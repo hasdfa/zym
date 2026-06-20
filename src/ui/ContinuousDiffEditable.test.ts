@@ -9,9 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Gtk, Gdk, GLib } from '../gi.ts';
+import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
 import { quilx } from '../quilx.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
 import { ContinuousDiffView } from './ContinuousDiffView.ts';
@@ -31,9 +31,8 @@ const pumpUntil = (done: () => boolean, maxFrames = 90) => {
   for (let i = 0; i < maxFrames && !done(); i++) ctx.iteration(true);
 };
 
-let tmpSeq = 0;
 function tmpFile(content: string): string {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), `quilx-diffedit-${tmpSeq++}-`));
+  const dir = makeTmpDir('diffedit');
   const p = Path.join(dir, 'f.ts');
   Fs.writeFileSync(p, content);
   return p;

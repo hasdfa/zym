@@ -12,9 +12,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
 import { Gtk } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
@@ -30,10 +30,9 @@ async function waitFor(cond: () => boolean, tries = 150, ms = 20): Promise<boole
   return cond();
 }
 
-let seq = 0;
 /** A fresh git repo with one committed file, then `worktree` written over it (the unstaged edit). */
 function gitRepo(committed: string, worktree: string): { repo: string; file: string } {
-  const repo = Fs.realpathSync(Fs.mkdtempSync(Path.join(Os.tmpdir(), `quilx-stage-${seq++}-`)));
+  const repo = makeTmpDir('stage');
   const run = (...args: string[]) => execFileSync('git', args, { cwd: repo });
   run('init', '-q');
   run('config', 'user.email', 't@t');

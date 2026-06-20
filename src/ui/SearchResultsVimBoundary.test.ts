@@ -9,9 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Gtk } from '../gi.ts';
+import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
 import { quilx } from '../quilx.ts';
 import { plugins, registerBuiltinPlugins } from '../plugin/index.ts';
 import { preloadGrammars } from '../syntax/grammar.ts';
@@ -29,9 +29,8 @@ before(async () => {
   await preloadGrammars();
 });
 
-let tmpSeq = 0;
 function tmpFile(name: string, content: string): string {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), `quilx-mbvim-${tmpSeq++}-`));
+  const dir = makeTmpDir('mbvim');
   const p = Path.join(dir, name);
   Fs.writeFileSync(p, content);
   return p;

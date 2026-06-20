@@ -4,7 +4,8 @@
  * gutter only from the active style scheme (not CSS), so applying those theme
  * colors requires a real scheme rather than a stylesheet override. We write a
  * small scheme XML into a temp dir on the StyleSchemeManager's search path and
- * load it back by id.
+ * load it back by id. The search dir lives under the XDG cache (reused across launches and
+ * shared by concurrent instances, which write identical content) so it never accumulates.
  *
  * The scheme also maps GtkSourceView's standard `def:` styles onto the theme's
  * syntax palette, so the `.lang` fallback engine (used for languages without a
@@ -46,11 +47,13 @@ let searchDir: string | null = null;
 export function createSourceScheme(theme: Theme): StyleScheme {
   const manager = GtkSource.StyleSchemeManager.getDefault();
   if (searchDir === null) {
-    searchDir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-scheme-'));
+    const base = process.env.XDG_CACHE_HOME ?? Path.join(Os.homedir(), '.cache');
+    searchDir = Path.join(base, 'quilx', 'schemes');
     manager.appendSearchPath(searchDir);
   }
 
   const id = `quilx-${theme.name}`;
+  Fs.mkdirSync(searchDir, { recursive: true }); // self-heal if the cache dir was removed mid-session
   Fs.writeFileSync(Path.join(searchDir, `${id}.xml`), schemeXml(id, theme));
   manager.forceRescan();
 
