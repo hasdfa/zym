@@ -30,6 +30,7 @@ import { iconSpan } from './icons.ts';
 import { truncateLines, summarizeInput, formatCount, progressLine } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { permissionCard, questionCard } from './conversation/cards.ts';
+import { SubagentView } from './conversation/SubagentView.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
@@ -232,10 +233,8 @@ export class AgentConversation implements Agent {
   private readonly tasks = new Map<string, { subject: string; status: string }>();
   private readonly pendingTaskCreates = new Map<string, string>();
   private readonly tasksPanel = new StickyListPanel('Tasks');
-  // Running subagents (Agent tool), keyed by tool_use_id — a sticky panel like the
-  // tasks one, shown while any subagent is running. Clicking an entry opens its page.
-  private readonly subagents = new Map<string, { agentType: string; description: string; status: 'running' | 'completed' }>();
-  private readonly subagentsPanel = new StickyListPanel('Subagents', 'quilx-conversation-subagents');
+  // Spawned subagents (the `Agent` tool): inline button + running panel + page.
+  private readonly subagentView: SubagentView;
   private _costUsd: number | null = null;
   private _contextTokens: number | null = null;
   private _contextWindow = 1_000_000; // refined from result.modelUsage[model].contextWindow
@@ -345,13 +344,21 @@ export class AgentConversation implements Agent {
     inputCard.append(this.promptContainer);
     inputCard.append(this.footer);
 
+    // Subagents push pages onto this.root (the NavigationView, assigned next); the
+    // push/pop arrows defer that lookup until a click.
+    this.subagentView = new SubagentView(
+      this.session,
+      { push: (page) => this.root.push(page), pop: () => this.root.pop() },
+      this.cwd,
+    );
+
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('quilx-conversation');
     mainBox.append(this.tasksPanel.root);
     mainBox.append(this.scroller);
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
     mainBox.append(inputCard);
-    mainBox.append(this.subagentsPanel.root); // running subagents expand below the input card
+    mainBox.append(this.subagentView.panel.root); // running subagents expand below the input card
 
     // A NavigationView so a subagent's transcript can push its own page.
     this.root = new Adw.NavigationView();
@@ -529,13 +536,8 @@ export class AgentConversation implements Agent {
       }),
       // Subagent / background-task live progress → the originating tool row.
       this.session.onTaskProgress((p) => this.toolRows.get(p.id)?.onProgress?.(p)),
-      // The sticky subagents panel is shown by addAgentButton (on the spawn) and
-      // hidden here once the subagent completes.
-      this.session.onSubagentDone(({ id }) => {
-        const s = this.subagents.get(id);
-        if (s) s.status = 'completed';
-        this.renderSubagentsPanel();
-      }),
+      // Shown by subagentView.spawn (on the Agent tool call); hidden on completion.
+      this.session.onSubagentDone(({ id }) => this.subagentView.done(id)),
       this.session.onAssistantStart(() => {
         this.assistantRaw = '';
         this.assistantView = this.addMarkdownBlock('quilx-conversation-assistant', Gtk.Align.START);
@@ -561,7 +563,7 @@ export class AgentConversation implements Agent {
       this.session.onToolUse(({ id, name, input }) => {
         if (this.handleTaskTool(id, name, input)) return; // TaskCreate/TaskUpdate → tasks panel, no row
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
-        if (name === 'Agent') { this.endTurn(); this.addAgentButton(id, input); return; } // subagent → button + panel
+        if (name === 'Agent') { this.endTurn(); this.messages.append(this.subagentView.spawn(id, input)); this.scrollToBottom(); return; }
         this.recordChangedFile(name, input);
         this.endTurn(); // close the current message; post-tool text opens a fresh bubble
         this.addToolRow(id, name, input);
@@ -821,110 +823,6 @@ export class AgentConversation implements Agent {
     this.scrollToBottom();
   }
 
-  // The `Agent` tool: a single inline button (agent type + description) that opens
-  // the subagent's transcript page. Nothing else of the subagent conversation
-  // appears in the main thread (its activity is captured on its own page).
-  private addAgentButton(id: string, input: unknown): void {
-    const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
-    const type = typeof i.subagent_type === 'string' ? i.subagent_type : 'agent';
-    const desc = typeof i.description === 'string' ? i.description : '';
-    const label = new Gtk.Label({ xalign: 0, wrap: true });
-    setMarkupSafe(label, `${iconSpan(NERDFONT.TOOL.SUBAGENT)}  <b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
-    const button = new Gtk.Button({ halign: Gtk.Align.START });
-    button.addCssClass('flat');
-    button.addCssClass('quilx-conversation-subagent-link');
-    button.setChild(label);
-    button.on('clicked', () => this.pushSubagentPage(id));
-    const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    row.addCssClass('quilx-conversation-row');
-    row.append(button);
-    this.messages.append(row);
-
-    // Show it in the running-subagents panel right away (driven by the spawn, not
-    // by the later task_started, so it's robust); hidden again on completion.
-    this.subagents.set(id, { agentType: type, description: desc, status: 'running' });
-    this.renderSubagentsPanel();
-    this.scrollToBottom();
-  }
-
-  // Re-render the running-subagents panel; hide it once none are running.
-  private renderSubagentsPanel(): void {
-    const rows: InstanceType<typeof Gtk.Widget>[] = [];
-    for (const [id, s] of this.subagents) {
-      if (s.status !== 'running') continue;
-      const label = new Gtk.Label({ xalign: 0, wrap: true });
-      setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.SYNC, theme.ui.status.warning)}  <b>${escapeMarkup(s.agentType)}</b>${s.description ? `  ${escapeMarkup(s.description)}` : ''}`, `${s.agentType} ${s.description}`);
-      const button = new Gtk.Button({ halign: Gtk.Align.START });
-      button.addCssClass('flat');
-      button.addCssClass('quilx-conversation-subagent-link');
-      button.setChild(label);
-      button.on('clicked', () => this.pushSubagentPage(id));
-      rows.push(button);
-    }
-    this.subagentsPanel.render(rows);
-  }
-
-  // Push a NavigationView page rendering a subagent's captured transcript (assistant
-  // text + its tool uses/results). Live-updates while the subagent is still running.
-  private pushSubagentPage(id: string): void {
-    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-    box.addCssClass('quilx-conversation-transcript');
-    const scroller = new Gtk.ScrolledWindow({ vexpand: true });
-    scroller.setChild(box);
-
-    const render = () => {
-      clearChildren(box);
-      const info = this.session.getSubagent(id);
-      if (!info) return;
-      // The instruction the main agent gave the subagent, at the top (a user turn).
-      if (info.prompt) {
-        const promptView = new MarkdownView();
-        promptView.root.addCssClass('quilx-conversation-user');
-        box.append(promptView.root);
-        promptView.setMarkdown(info.prompt);
-      }
-      for (const m of info.messages) {
-        if (m.kind === 'text') {
-          const view = new MarkdownView();
-          view.root.addCssClass('quilx-conversation-assistant');
-          box.append(view.root);
-          view.setMarkdown(m.text);
-        } else {
-          const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-          label.addCssClass('quilx-conversation-toolrow');
-          setMarkupSafe(label, toolMarkup(m.name, m.input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${m.name} ${summarizeInput(m.input)}`);
-          box.append(label);
-          if (m.result && m.result.text.trim()) {
-            const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(m.result.text.trim(), 12, 1200) });
-            out.addCssClass('quilx-conversation-result');
-            out.setMarginStart(22);
-            box.append(out);
-          }
-        }
-      }
-    };
-    render();
-    // Refresh while the subagent is still streaming into its transcript.
-    const sub = this.session.onSubagentUpdate(({ id: uid }) => { if (uid === id) render(); });
-
-    const info = this.session.getSubagent(id);
-    const title = info ? `${info.agentType}${info.status === 'running' ? ' (running)' : ''}` : 'Subagent';
-    const back = new Gtk.Button({ label: '‹ Back', halign: Gtk.Align.START });
-    back.addCssClass('flat');
-    back.on('clicked', () => this.root.pop());
-    const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    header.addCssClass('quilx-conversation-subagent-header');
-    header.append(back);
-    header.append(new Gtk.Label({ label: title }));
-    const page = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    page.addCssClass('quilx-conversation');
-    page.append(header);
-    page.append(scroller);
-
-    const navPage = Adw.NavigationPage.new(page, title);
-    navPage.on('hidden', () => sub.dispose()); // stop refreshing once popped
-    this.root.push(navPage);
-  }
 
   // Bash: no icon — the command (monospace) is itself the toggle that reveals the
   // output (collapsed by default, expanded on error, where the command also gets a ✗).
