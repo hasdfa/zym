@@ -49,11 +49,11 @@ export function createSourceScheme(theme: Theme): StyleScheme {
   if (searchDir === null) {
     const base = process.env.XDG_CACHE_HOME ?? Path.join(Os.homedir(), '.cache');
     searchDir = Path.join(base, 'quilx', 'schemes');
-    Fs.mkdirSync(searchDir, { recursive: true });
     manager.appendSearchPath(searchDir);
   }
 
   const id = `quilx-${theme.name}`;
+  Fs.mkdirSync(searchDir, { recursive: true }); // self-heal if the cache dir was removed mid-session
   Fs.writeFileSync(Path.join(searchDir, `${id}.xml`), schemeXml(id, theme));
   manager.forceRescan();
 

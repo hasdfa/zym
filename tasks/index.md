@@ -56,6 +56,10 @@ the `eventKit.ts` primitives, the disposal rules, the `TextEditor.dispose()`
 reference, and the CDP leak-hunting recipe. Read before adding a component that owns a
 GObject, handler, timer, or child.
 
+### Data & storage
+
+App data follows XDG: config in `$XDG_CONFIG_HOME/quilx`, state (sessions, frecency) in `$XDG_STATE_HOME/quilx`, caches (LSP installs, generated GtkSource schemes) in `$XDG_CACHE_HOME/quilx` — never `/tmp`; tests get throwaway dirs via `src/util/testTmp.ts` (`tmpDir(prefix)`), which removes them on process exit so `/tmp/quilx-*` never accumulates.
+
 ### Plugin system
 
 See [plugins.md](plugins.md) for the architecture (Atom-inspired) and
