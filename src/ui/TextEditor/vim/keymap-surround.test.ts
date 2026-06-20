@@ -33,11 +33,15 @@ function focusedEditor(text: string) {
     const keyval = Gdk.unicodeToKeyval(char.charCodeAt(0));
     quilx.keymaps.onWindowKeyPressEvent(keyval, 0, 0);
   };
+  const ctrl = (char: string) => {
+    const keyval = Gdk.unicodeToKeyval(char.charCodeAt(0));
+    quilx.keymaps.onWindowKeyPressEvent(keyval, 0, Gdk.ModifierType.CONTROL_MASK);
+  };
   const type = (chars: string) => {
     for (const ch of chars) press(ch);
   };
   const line = (row = 0) => editor.lineTextForBufferRow(row);
-  return { editor, view, press, type, line };
+  return { editor, view, press, ctrl, type, line };
 }
 
 test('ysiw( surrounds the inner word (deferral + input capture)', async () => {
@@ -45,6 +49,28 @@ test('ysiw( surrounds the inner word (deferral + input capture)', async () => {
   type('ysiw(');
   await tick();
   assert.equal(line(), '(hello) world');
+});
+
+test('ysiw reads the pair char without selecting the target first', async () => {
+  const { editor, type, line } = focusedEditor('hello world\n');
+  type('ysiw'); // target motion typed; surround now awaits the pair char
+  await tick();
+  // The word must NOT be visually selected while we wait for the char.
+  assert.equal(editor.getLastSelection().getText(), '');
+  // Finish the surround so the pending focusInput doesn't leak into later tests.
+  type('(');
+  await tick();
+  assert.equal(line(), '(hello) world');
+});
+
+test('ctrl-j splits the line at the cursor (inverse of J)', () => {
+  const { editor, ctrl, line } = focusedEditor('hello world\n');
+  editor.setCursorBufferPosition({ row: 0, column: 6 }); // on 'w'
+  ctrl('j');
+  assert.equal(line(0), 'hello ');
+  assert.equal(line(1), 'world');
+  // cursor rests at the end of the new first line (like i<CR><Esc>)
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 5]);
 });
 
 test('dw still deletes a word (y/d deferral falls back to the operator)', () => {
