@@ -178,7 +178,10 @@ class SurroundBase extends TransformString {
 
 class Surround extends SurroundBase {
   surroundAction: SurroundAction = 'surround'
-  readInputAfterSelect = true
+  // Read the pair char up front so `ys{motion}` never leaves the target visually
+  // selected while waiting for the key. (ChangeSurround still reads after select:
+  // it needs the target's existing pair to drive its hover.)
+  readInputBeforeSelect = true
 }
 
 class SurroundWord extends Surround {

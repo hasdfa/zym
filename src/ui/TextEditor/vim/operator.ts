@@ -67,6 +67,7 @@ class Operator extends Base {
   // TODO(vim-ts): align with Base.input once the input flow is fully typed.
   input: any = null
   readInputAfterSelect = false
+  readInputBeforeSelect = false
   bufferCheckpointByPurpose: Record<string, any> = {}
 
   // Accumulator used by setTextToRegister for blockwise yank/delete.
@@ -370,10 +371,27 @@ class Operator extends Base {
   execute (): void | Promise<void> {
     this.preSelect()
 
+    // Read the operator's input (e.g. the surround pair char) BEFORE selecting
+    // the target, so the target is never highlighted while we wait for the key.
+    if (this.readInputBeforeSelect && !this.repeated) {
+      return this.executeAsyncToReadInputBeforeSelect()
+    }
+
     if (this.readInputAfterSelect && !this.repeated) {
       return this.executeAsyncToReadInputAfterSelect()
     }
 
+    if (this.selectTarget()) this.mutateSelections()
+    this.postMutate()
+  }
+
+  async executeAsyncToReadInputBeforeSelect (): Promise<void> {
+    this.input = await this.focusInputPromised(this.focusInputOptions)
+    if (this.input == null) {
+      // Nothing was mutated yet (target not selected), so just leave the mode.
+      if (this.mode !== 'visual') this.activateMode('normal')
+      return
+    }
     if (this.selectTarget()) this.mutateSelections()
     this.postMutate()
   }
@@ -993,6 +1011,23 @@ class AddBlankLineAbove extends AddBlankLineBelow {
   where = 'above'
 }
 
+// SplitLine — inverse of `J` (Join). Breaks the line at each cursor by inserting
+// a newline, dropping the text from the cursor onward to a new line. The cursor
+// stays at the end of the resulting first line (like `i<CR><Esc>`). Bound to
+// ctrl-j. We position cursors explicitly, so restorePositions is disabled.
+class SplitLine extends Operator {
+  flashTarget = false
+  target: any = 'Empty'
+  restorePositions = false
+
+  mutateSelection (selection: Selection): void {
+    const point = selection.getHeadBufferPosition()
+    this.editor.setTextInBufferRange([point, point], '\n')
+    const column = point.column > 0 ? point.column - 1 : 0
+    selection.cursor.setBufferPosition([point.row, column])
+  }
+}
+
 class ResolveGitConflict extends Operator {
   target: any = 'Empty'
   restorePositions = false // do manually
@@ -1093,6 +1128,7 @@ const __operations = {
   PutAfterWithAutoIndent,
   AddBlankLineBelow,
   AddBlankLineAbove,
+  SplitLine,
   ResolveGitConflict
 }
 

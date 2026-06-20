@@ -364,6 +364,13 @@ const INDENT_JOIN_BINDINGS: Record<string, string> = {
   J: 'Join',
 };
 
+// Normal-mode-only editing commands. `ctrl-j` splits the line at the cursor —
+// the inverse of `J` (Join). Normal-only so it doesn't collide with the visual
+// `CurrentSelection` target the Operator base would otherwise impose.
+const EDIT_BINDINGS: Record<string, string> = {
+  'ctrl-j': 'SplitLine',
+};
+
 // Misc commands (undo/redo), available while NOT in insert mode.
 const MISC_BINDINGS: Record<string, string> = {
   u: 'Undo',
@@ -479,6 +486,7 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   ...MODE_BINDINGS,
   ...VISUAL_BINDINGS,
   ...NON_INSERT_BINDINGS,
+  ...EDIT_BINDINGS,
   ...TEXT_OBJECT_BINDINGS,
   ...SURROUND_BINDINGS,
   ...Z_SCROLL_BINDINGS,
@@ -523,6 +531,8 @@ function registerKeymapsOnce(): void {
       ...toKeymap(MODE_BINDINGS),
       ...toKeymap(VISUAL_BINDINGS),
       ...toKeymap(SURROUND_BINDINGS),
+      // ctrl-j splits the line at the cursor (inverse of J), normal-mode only.
+      ...toKeymap(EDIT_BINDINGS),
       // z-prefix: folds (→ editor `fold:*` commands) + zz/zt/zb cursor-line redraw.
       ...FOLD_KEYMAP,
       ...toKeymap(Z_SCROLL_BINDINGS),
