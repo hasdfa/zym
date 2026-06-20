@@ -1,30 +1,24 @@
 # Tasks
 
 Each task can have its own page with research, design, and implementation details.
-File names mirror the header structure, e.g. `git.md` for the git section, `code-editing/lsp-integration.md` for the LSP integration section, etc. When a header has more than one subheader, it becomes a directory with an `index.md` file for the main section.
-
-The task documents should be updated as the implementation progresses, with notes on research findings, design decisions, and implementation details. This will help keep track of the progress and provide context for future reference.
+File names mirror the header structure, e.g. 
+ - `git.md` for the git section, 
+ - `code-editing/lsp-integration.md` for the LSP integration section, etc. 
+When a header has more than one subheader, it becomes a directory with an `index.md` file for the main section.
 
 ## Architecture
 
 ### UI
 
-- Components are built using GTK4 and libadwaita via node-gtk (in dev, linked to `../node-gtk`), and are styled using CSS.
+- Components are built using Adwaita and GTK4 via node-gtk (in dev, linked to `../node-gtk`), and are styled using CSS.
 - Components should be one main component per file, in the `src/ui` directory.
-- Icons: use Nerd Font glyphs (bundled "Symbols Nerd Font Mono"), rendered as
-  text — `iconLabel()` / `Icons` in `src/ui/icons.ts`, or `fileIconGlyph()` for
-  file types. Do NOT use `Gio.ThemedIcon` / `Gtk.Image(iconName)`.
+- Icons must use NerdFont icons, see `src/ui/nerdfonts.ts`. Do NOT use `Gio.ThemedIcon` / `Gtk.Image(iconName)`.
 
 ### Commands & keymaps
 
-See [commands-keymaps.md](commands-keymaps.md). Done: commands with
-args/descriptions/`when`, keymaps with sequences/priority/`unset!`, `#id`
-selectors, user `keymap.json` (live-reloaded), command palette (shortcuts,
-name+description search, dim-when-unavailable), which-key hints (currently
-disabled — `WhichKey` constructor skips the `onPendingChanged` subscription;
-re-enable in `src/ui/WhichKey.ts`), conflict detection, keymap reference panel
-(all bindings + source, `space ?`). Remaining: `when` keymap fall-through;
-keybinding editing UI.
+- Keybindings must always use the command/keymap system
+
+See [commands-keymaps.md](commands-keymaps.md).
 
 ### Panels & layout
 
