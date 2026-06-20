@@ -47,7 +47,7 @@ addStyles(`
   .quilx-conversation-row { padding: 6px 0; }
   /* User and assistant share the bubble shape; only the background differs. */
   .quilx-conversation-user, .quilx-conversation-assistant {
-    padding: 8px 12px;
+    padding: 10px 14px;
     margin: 8px 0;
     border-radius: 10px;
   }
@@ -92,6 +92,8 @@ addStyles(`
     border-bottom: 1px solid var(--t-ui-border);
   }
   .quilx-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
+  /* The running-subagents panel sits below the input card → divider on top, not bottom. */
+  .quilx-conversation-subagents { border-top: 1px solid var(--t-ui-border); border-bottom: none; }
   .quilx-conversation-system { opacity: 0.6; font-style: italic; }
   .quilx-conversation-error { color: var(--t-ui-status-error); }
   /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost. */
@@ -351,6 +353,7 @@ export class AgentConversation implements Agent {
     // A sticky panel listing running subagents (Agent tool); hidden when none run.
     this.subagentsPanel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.subagentsPanel.addCssClass('quilx-conversation-tasks');
+    this.subagentsPanel.addCssClass('quilx-conversation-subagents');
     this.subagentsPanel.setVisible(false);
     const subagentsHeader = new Gtk.Label({ xalign: 0, label: 'Subagents' });
     subagentsHeader.addCssClass('quilx-conversation-tasks-header');
@@ -371,10 +374,10 @@ export class AgentConversation implements Agent {
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('quilx-conversation');
     mainBox.append(this.tasksPanel);
-    mainBox.append(this.subagentsPanel);
     mainBox.append(this.scroller);
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
     mainBox.append(inputCard);
+    mainBox.append(this.subagentsPanel); // running subagents expand below the input card
 
     // A NavigationView so a subagent's transcript can push its own page.
     this.root = new Adw.NavigationView();
