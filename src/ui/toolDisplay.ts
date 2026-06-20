@@ -25,6 +25,19 @@ const G = {
   notebook: 0xf02d, // book
   mcp: 0xf1e6, // plug (MCP tool)
   tool: 0xf013, // cog (default)
+  skill: 0xf12e, // puzzle-piece (Skill)
+  question: 0xf059, // question-circle (AskUserQuestion)
+  workflow: 0xf0e8, // sitemap (Workflow)
+  clock: 0xf017, // clock (ScheduleWakeup)
+  calendar: 0xf073, // calendar (Cron*)
+  eye: 0xf06e, // eye (Monitor)
+  bolt: 0xf0e7, // bolt (RemoteTrigger)
+  bell: 0xf0f3, // bell (PushNotification)
+  process: 0xf085, // cogs (background task I/O)
+  stop: 0xf04d, // stop (TaskStop)
+  design: 0xf1fc, // paint-brush (DesignSync)
+  plan: 0xf022, // list-alt (plan mode)
+  worktree: 0xf126, // code-branch (worktree)
 } as const;
 
 const glyph = (cp: number) => String.fromCodePoint(cp);
@@ -70,6 +83,63 @@ export function describeTool(name: string, input: unknown, cwd?: string): ToolVi
       return { icon: glyph(G.task), title: i.subagent_type ? `Task · ${s(i.subagent_type)}` : 'Task', detail: s(i.description) || truncate(s(i.prompt), 120) };
     case 'TodoWrite':
       return { icon: glyph(G.todo), title: 'TodoWrite', detail: Array.isArray(i.todos) ? `${i.todos.length} item${i.todos.length === 1 ? '' : 's'}` : '' };
+
+    // Skill / agent meta-tools.
+    case 'Skill':
+      return { icon: glyph(G.skill), title: 'Skill', detail: s(i.skill) + (i.args ? `  ${truncate(s(i.args), 80)}` : '') };
+    case 'ToolSearch':
+      return { icon: glyph(G.grep), title: 'ToolSearch', detail: s(i.query) };
+    case 'AskUserQuestion': {
+      const first = (Array.isArray(i.questions) ? i.questions[0] : undefined) as Record<string, unknown> | undefined;
+      return { icon: glyph(G.question), title: 'AskUserQuestion', detail: first ? (s(first.header) || s(first.question)) : '' };
+    }
+    case 'Workflow':
+      return { icon: glyph(G.workflow), title: 'Workflow', detail: s(i.name) || s(i.scriptPath) || '(inline script)' };
+
+    // Task tracking (subjects/ids).
+    case 'TaskCreate':
+      return { icon: glyph(G.todo), title: 'TaskCreate', detail: s(i.subject) };
+    case 'TaskUpdate':
+      return { icon: glyph(G.todo), title: 'TaskUpdate', detail: (i.taskId ? `#${s(i.taskId)}` : '') + (i.status ? `  → ${s(i.status)}` : '') };
+    case 'TaskGet':
+      return { icon: glyph(G.todo), title: 'TaskGet', detail: i.taskId ? `#${s(i.taskId)}` : '' };
+    case 'TaskList':
+      return { icon: glyph(G.todo), title: 'TaskList', detail: '' };
+
+    // Background-task I/O (bash/agent processes).
+    case 'TaskOutput':
+      return { icon: glyph(G.process), title: 'TaskOutput', detail: s(i.task_id) };
+    case 'TaskStop':
+      return { icon: glyph(G.stop), title: 'TaskStop', detail: s(i.task_id) || s(i.shell_id) };
+
+    // Scheduling / monitoring / notifications.
+    case 'ScheduleWakeup':
+      return { icon: glyph(G.clock), title: 'ScheduleWakeup', detail: (typeof i.delaySeconds === 'number' ? `${i.delaySeconds}s` : '') + (i.reason ? `  ${s(i.reason)}` : '') };
+    case 'CronCreate':
+      return { icon: glyph(G.calendar), title: 'CronCreate', detail: s(i.cron) + (i.recurring === false ? '  (once)' : '') };
+    case 'CronDelete':
+      return { icon: glyph(G.calendar), title: 'CronDelete', detail: s(i.id) };
+    case 'CronList':
+      return { icon: glyph(G.calendar), title: 'CronList', detail: '' };
+    case 'Monitor':
+      return { icon: glyph(G.eye), title: 'Monitor', detail: s(i.description) || s(i.command) };
+    case 'RemoteTrigger':
+      return { icon: glyph(G.bolt), title: 'RemoteTrigger', detail: s(i.action) + (i.trigger_id ? `  ${s(i.trigger_id)}` : '') };
+    case 'PushNotification':
+      return { icon: glyph(G.bell), title: 'PushNotification', detail: truncate(s(i.message), 120) };
+
+    // Design sync / plan mode / worktrees.
+    case 'DesignSync':
+      return { icon: glyph(G.design), title: 'DesignSync', detail: s(i.method) + (i.projectId ? `  ${s(i.projectId)}` : '') };
+    case 'EnterPlanMode':
+      return { icon: glyph(G.plan), title: 'EnterPlanMode', detail: '' };
+    case 'ExitPlanMode':
+      return { icon: glyph(G.plan), title: 'ExitPlanMode', detail: '' };
+    case 'EnterWorktree':
+      return { icon: glyph(G.worktree), title: 'EnterWorktree', detail: s(i.name) || s(i.path) };
+    case 'ExitWorktree':
+      return { icon: glyph(G.worktree), title: 'ExitWorktree', detail: s(i.action) };
+
     default:
       // MCP tools arrive as mcp__<server>__<tool>; show "server · tool".
       if (name.startsWith('mcp__')) {

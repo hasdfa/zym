@@ -168,3 +168,13 @@ observable surface, so they don't branch on kind.
   emitter subs; tear all down in `dispose()` (memory `disposal-discipline`).
 - **One main component per `src/ui` file**, camelCased — but the transport/session
   live under `src/agents/claude-sdk/` (non-UI plumbing), UI host under `src/ui/`.
+
+## Control surfaces (as-built; empirically verified — don't "fix" these blindly)
+
+Flow: `transport` (spawn + NDJSON) → `SdkSession.dispatch` (events→domain) → `AgentConversation` (widgets). One persistent `claude -p` process per agent; turns are `{type:'user',...}` lines on stdin.
+
+- **Permission gating = `--permission-prompt-tool` (required, not optional).** Without it claude runs every tool unattended. claude calls our stdio MCP (`assets/mcp/quilxPermission.mjs`); it bridges to `SdkSession` over an atomic file pair; the native card returns `{behavior:'allow'|'deny',...}`. This is exactly how the Agent SDK's `canUseTool` works internally.
+- **Interrupt = control_request `{subtype:'interrupt'}`** on stdin → `control_response` success (flip to idle now) → `result` `error_during_execution` (suppress as intentional, see `interrupting`).
+- **AskUserQuestion has NO clean headless answer channel.** It self-executes inside claude; with no TTY it returns "did not answer". Verified dead-ends: `allow`+any `updatedInput` shape, and client-sent `tool_result` (claude self-resolves first). **Only** working path: route it as an interactive question card and return the selection as the permission **`deny` message** (lands as the tool_result, flagged `is_error:true` — unavoidable; claude reads it fine).
+- **Unknown event types** (`dispatch`→false, e.g. an inbound `control_request`) are surfaced as a raw-JSON row, never dropped.
+- **Debug log** is opt-in via `QUILX_SDK_DEBUG` (off in tests).

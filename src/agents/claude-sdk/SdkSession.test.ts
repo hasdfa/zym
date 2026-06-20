@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SdkSession } from './SdkSession.ts';
+import { SdkSession, parseQuestions } from './SdkSession.ts';
 import { Disposable } from '../../util/eventKit.ts';
 import type { Transport, TransportOptions } from './transport.ts';
 import type { StreamEvent } from './protocol.ts';
@@ -116,12 +116,16 @@ test('interrupt sends a control_request and the resulting error is treated as an
   // Interrupt mid-turn: returns true and writes a control_request.
   const sent = session.interrupt();
   assert.equal(sent, true);
-  const ctrl = fake.sent[fake.sent.length - 1] as { type: string; request: { subtype: string } };
+  const ctrl = fake.sent[fake.sent.length - 1] as { type: string; request_id: string; request: { subtype: string } };
   assert.equal(ctrl.type, 'control_request');
   assert.equal(ctrl.request.subtype, 'interrupt');
 
+  // The success ack flips the status to idle immediately, before the result.
+  fake.emit({ type: 'control_response', response: { subtype: 'success', request_id: ctrl.request_id } } as unknown as StreamEvent);
+  assert.equal(session.status, 'idle', 'status updated on interrupt ack');
+
   // The interrupt produces an error_during_execution result — surfaced as an
-  // intentional stop (onInterrupted), NOT an error row, and the turn goes idle.
+  // intentional stop (onInterrupted), NOT an error row.
   fake.emit({ type: 'result', subtype: 'error_during_execution', is_error: true } as StreamEvent);
 
   assert.ok(events.includes('interrupted'), 'fired onInterrupted');
@@ -136,6 +140,45 @@ test('interrupt is a no-op when nothing is running', () => {
   assert.equal(session.interrupt(), false); // idle → caller can fall back (ctrl-c copies)
   assert.equal(fake.sent.length, 0);
   session.dispose();
+});
+
+test('an unrecognised event type is surfaced via onUnhandled (not silently dropped)', () => {
+  const { session, fake } = makeSession();
+  const seen: unknown[] = [];
+  session.onUnhandled(({ event }) => seen.push(event));
+  session.start();
+
+  // A known type is handled (no unhandled emission)...
+  fake.emit({ type: 'result', subtype: 'success' } as StreamEvent);
+  // ...an unmodeled top-level type (e.g. an incoming control_request) is surfaced.
+  const mystery = { type: 'control_request', request: { subtype: 'mcp_message' } } as unknown as StreamEvent;
+  fake.emit(mystery);
+
+  assert.deepEqual(seen, [mystery]);
+  session.dispose();
+});
+
+test('parseQuestions normalizes AskUserQuestion input and drops malformed questions', () => {
+  const qs = parseQuestions({
+    questions: [
+      { question: 'Tabs or spaces?', header: 'Indentation', multiSelect: false,
+        options: [{ label: 'Tabs', description: 'tab chars' }, { label: 'Spaces' }] },
+      { question: 'no options here', options: [] }, // dropped (no options)
+      { question: 'multi', multiSelect: true, options: [{ label: 'A' }, { label: 'B' }] },
+    ],
+  });
+  assert.equal(qs.length, 2);
+  assert.deepEqual(qs[0], {
+    question: 'Tabs or spaces?', header: 'Indentation', multiSelect: false,
+    options: [{ label: 'Tabs', description: 'tab chars' }, { label: 'Spaces', description: undefined }],
+  });
+  assert.equal(qs[1].multiSelect, true);
+  assert.equal(qs[1].header, 'multi'); // falls back to the question text
+});
+
+test('parseQuestions returns [] for non-AskUserQuestion shapes', () => {
+  assert.deepEqual(parseQuestions({ command: 'ls' }), []);
+  assert.deepEqual(parseQuestions(null), []);
 });
 
 test('process exit flips to exited and fires onExit', () => {

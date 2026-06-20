@@ -55,6 +55,26 @@ export interface PermissionDecision {
   message?: string;
 }
 
+/** One question from an `AskUserQuestion` tool call. */
+export interface AgentQuestion {
+  /** The question prompt shown to the user. */
+  question: string;
+  /** A short label/category for the question (defaults to the question text). */
+  header: string;
+  /** Whether multiple options may be chosen. */
+  multiSelect: boolean;
+  /** The offered choices. */
+  options: Array<{ label: string; description?: string }>;
+}
+
+/** An `AskUserQuestion` request surfaced from claude (status `waiting` until
+ *  answered via `answerQuestion`). It rides the same permission channel as a
+ *  normal approval, but is interactive — the user picks options, not allow/deny. */
+export interface QuestionRequest {
+  id: string;
+  questions: AgentQuestion[];
+}
+
 export interface SdkSessionOptions {
   /** Base argv (default `['claude']`); the stream-json/permission flags are added. */
   command?: string[];
@@ -79,6 +99,9 @@ export class SdkSession {
   // Set while an interrupt is in flight, so the `error_during_execution` result it
   // produces is treated as an intentional stop rather than surfaced as an error.
   private interrupting = false;
+  // The request_id of an in-flight interrupt; its `control_response` success flips
+  // the status to idle immediately, ahead of the trailing `result` event.
+  private interruptReqId: string | null = null;
   // The permission request/response file pair + its watcher. The server writes the
   // request atomically; we answer by writing the response atomically.
   private readonly permRequestFile: string;
@@ -145,6 +168,7 @@ export class SdkSession {
     this.emitter.emit('user-message', { text });
     this.assistantOpen = false;
     this.interrupting = false;
+    this.interruptReqId = null;
     const turn = userTurn(text);
     logSend(turn);
     this.transport.send(turn);
@@ -163,6 +187,24 @@ export class SdkSession {
     this.setStatus('working'); // claude resumes once it reads the decision
   }
 
+  /** Answer an `AskUserQuestion` request. The selection is delivered as the tool
+   *  result through the permission channel's `deny` message — the only path that
+   *  carries text back to claude. (An `allow` just runs the tool, which has no
+   *  interactive client in headless mode and returns "did not answer"; the
+   *  permission `updatedInput` cannot carry the answer either — both verified.)
+   *  An empty selection mirrors the native "user did not answer" outcome. */
+  answerQuestion(id: string, answers: Array<{ header: string; labels: string[] }>): void {
+    if (id !== this.lastPermId) return; // stale / already answered
+    const answered = answers.filter((a) => a.labels.length > 0);
+    const message = answered.length === 0
+      ? 'The user did not answer the questions.'
+      : `The user answered:\n${answered.map((a) => `- ${a.header}: ${a.labels.join(', ')}`).join('\n')}`;
+    const body = { id, behavior: 'deny', message };
+    logPerm('←', body);
+    writeAtomic(this.permResponseFile, JSON.stringify(body));
+    this.setStatus('working');
+  }
+
   /** Interrupt the in-flight turn via a control_request. claude stops the turn and
    *  emits an `error_during_execution` result, which we treat as an intentional
    *  stop (not a failure — see `onResultEvent`). Returns whether an interrupt was
@@ -171,7 +213,9 @@ export class SdkSession {
     if (!this.transport?.writable) return false;
     if (this._status !== 'working' && this._status !== 'waiting') return false;
     this.interrupting = true;
-    const message = { type: 'control_request', request_id: `quilx-${++this.controlReqId}`, request: { subtype: 'interrupt' } };
+    const requestId = `quilx-${++this.controlReqId}`;
+    this.interruptReqId = requestId;
+    const message = { type: 'control_request', request_id: requestId, request: { subtype: 'interrupt' } };
     logSend(message);
     this.transport.send(message);
     return true;
@@ -205,7 +249,9 @@ export class SdkSession {
   onInit(cb: (m: { model: string; slashCommands: string[] }) => void): Disposable { return this.emitter.on('init', cb as (v?: unknown) => void); }
   onError(cb: (m: { message: string }) => void): Disposable { return this.emitter.on('error', cb as (v?: unknown) => void); }
   onInterrupted(cb: () => void): Disposable { return this.emitter.on('interrupted', cb as (v?: unknown) => void); }
+  onUnhandled(cb: (m: { event: unknown }) => void): Disposable { return this.emitter.on('unhandled', cb as (v?: unknown) => void); }
   onPermission(cb: (r: PermissionRequest) => void): Disposable { return this.emitter.on('permission', cb as (v?: unknown) => void); }
+  onQuestion(cb: (r: QuestionRequest) => void): Disposable { return this.emitter.on('question', cb as (v?: unknown) => void); }
   onExit(cb: (code: number | null) => void): Disposable { return this.emitter.on('exit', cb as (v?: unknown) => void); }
 
   /** Stop the claude process but keep the session object (status → `exited`),
@@ -229,9 +275,11 @@ export class SdkSession {
   // --- event mapping ----------------------------------------------------------
 
   private handleEvent(event: StreamEvent): void {
-    // Log every interaction; an event we don't recognise is logged in red.
-    if (this.dispatch(event)) logRecv(event);
-    else logUnhandled(event);
+    // Log every interaction; an event we don't recognise is logged in red AND
+    // surfaced in the conversation (raw JSON) so nothing is silently dropped.
+    if (this.dispatch(event)) { logRecv(event); return; }
+    logUnhandled(event);
+    this.emitter.emit('unhandled', { event });
   }
 
   // Returns whether the event was recognised (handled or knowingly ignored).
@@ -252,7 +300,16 @@ export class SdkSession {
       if (s.status === 'requesting') this.setStatus('working');
       return true;
     }
-    if (event.type === 'control_response') return true; // ack of a control_request we sent
+    if (event.type === 'control_response') {
+      // Ack of a control_request we sent. When it's our interrupt's success, drop
+      // out of `working` right away — feedback ahead of the trailing `result`.
+      const resp = (event as { response?: { request_id?: string; subtype?: string } }).response;
+      if (resp?.subtype === 'success' && resp.request_id && resp.request_id === this.interruptReqId) {
+        this.interruptReqId = null;
+        this.setStatus('idle');
+      }
+      return true;
+    }
     if (isThinkingTokens(event)) return true; // known; not surfaced in the UI yet
     if (event.type === 'stream_event') { this.onStreamEvent(event); return true; }
     if (event.type === 'assistant') {
@@ -394,12 +451,42 @@ export class SdkSession {
     this.lastPermId = req.id;
     logPerm('→', req);
     this.setStatus('waiting');
-    this.emitter.emit('permission', {
-      id: req.id,
-      toolName: req.tool_name ?? req.toolName ?? 'tool',
-      input: req.input,
+    const toolName = req.tool_name ?? req.toolName ?? 'tool';
+    // AskUserQuestion is interactive, not an approval: surface its questions/options
+    // so the user picks an answer (delivered via `answerQuestion`), not allow/deny.
+    if (toolName === 'AskUserQuestion') {
+      const questions = parseQuestions(req.input);
+      if (questions.length > 0) { this.emitter.emit('question', { id: req.id, questions }); return; }
+    }
+    this.emitter.emit('permission', { id: req.id, toolName, input: req.input });
+  }
+}
+
+/** Parse an `AskUserQuestion` tool input into the questions we render. Drops any
+ *  malformed question (no usable options). Exported for testing. */
+export function parseQuestions(input: unknown): AgentQuestion[] {
+  const raw = input && typeof input === 'object' ? (input as { questions?: unknown }).questions : undefined;
+  if (!Array.isArray(raw)) return [];
+  const out: AgentQuestion[] = [];
+  for (const q of raw) {
+    if (!q || typeof q !== 'object') continue;
+    const qq = q as Record<string, unknown>;
+    const options = Array.isArray(qq.options)
+      ? qq.options
+          .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+          .map((o) => ({ label: typeof o.label === 'string' ? o.label : '', description: typeof o.description === 'string' ? o.description : undefined }))
+          .filter((o) => o.label !== '')
+      : [];
+    if (options.length === 0) continue;
+    const question = typeof qq.question === 'string' ? qq.question : '';
+    out.push({
+      question,
+      header: typeof qq.header === 'string' && qq.header ? qq.header : (question || 'Question'),
+      multiSelect: qq.multiSelect === true,
+      options,
     });
   }
+  return out;
 }
 
 /** Flatten a tool_result's `content` (a string, or an array of text blocks) to text. */

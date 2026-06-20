@@ -27,7 +27,7 @@ import { MarkdownView } from './markdown/MarkdownView.ts';
 import { toolMarkup, toolFilePath } from './toolDisplay.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
-import { SdkSession, type PermissionRequest } from '../agents/claude-sdk/SdkSession.ts';
+import { SdkSession, type PermissionRequest, type QuestionRequest } from '../agents/claude-sdk/SdkSession.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentStatus } from '../agents/types.ts';
 import type { TabState } from '../SessionManager.ts';
@@ -77,6 +77,14 @@ addStyles(`
   .quilx-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
   .quilx-conversation-system { opacity: 0.6; font-style: italic; }
   .quilx-conversation-error { color: ${theme.ui.status.error}; }
+  /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost. */
+  .quilx-conversation-unknown {
+    border-left: 2px solid ${theme.ui.status.warning};
+    padding-left: 8px;
+    background: ${theme.ui.surface.popover};
+    border-radius: 4px;
+  }
+  .quilx-conversation-unknown-body { opacity: 0.75; }
   /* The input + its status strip, as a bordered rounded card with its own bg. */
   .quilx-conversation-input-card {
     margin: 8px;
@@ -106,18 +114,29 @@ addStyles(`
     border: 1px solid ${theme.ui.surface.selected};
     border-radius: 6px;
   }
+  /* AskUserQuestion: an interactive choice card (info-tinted, distinct from the
+     plain allow/deny permission card). */
+  .quilx-conversation-question {
+    padding: 10px; margin: 6px 0;
+    border: 1px solid ${theme.ui.status.info};
+    border-radius: 6px;
+  }
+  .quilx-conversation-question-h { font-weight: bold; opacity: 0.6; }
+  .quilx-conversation-question-opt { padding: 6px 8px; }
   #AgentConversationPrompt { padding: 0; }
 `);
 // The monospace bits (tool rows, permission detail) use the app's configured
 // monospace font, not a generic family.
 fonts.monospace('.quilx-conversation-tool');
 fonts.monospace('.quilx-conversation-result');
+fonts.monospace('.quilx-conversation-unknown-body');
 
 // Status / checklist glyphs (Nerd Font codepoints).
 const GLYPH = {
   pending: 0xf252, // hourglass
   done: 0xf00c, // check
   error: 0xf00d, // times
+  warning: 0xf071, // triangle-exclamation
   interrupted: 0xf28d, // stop (filled square)
   todoDone: 0xf046, // check-square
   todoActive: 0xf138, // caret-right
@@ -283,7 +302,7 @@ export class AgentConversation implements Agent {
     inputCard.append(this.promptContainer);
     inputCard.append(this.footer);
 
-    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     this.root.setName('AgentConversation');
     this.root.addCssClass('quilx-conversation');
     this.root.append(this.tasksPanel);
@@ -475,6 +494,7 @@ export class AgentConversation implements Agent {
       }),
       this.session.onToolUse(({ id, name, input }) => {
         if (this.handleTaskTool(id, name, input)) return; // TaskCreate/TaskUpdate → tasks panel, no row
+        if (name === 'AskUserQuestion') return; // handled by the interactive question card
         this.recordChangedFile(name, input);
         this.endTurn(); // close the current message; post-tool text opens a fresh bubble
         this.addToolRow(id, name, input);
@@ -492,7 +512,9 @@ export class AgentConversation implements Agent {
       }),
       this.session.onError(({ message }) => this.addErrorRow(message)),
       this.session.onInterrupted(() => this.addInterruptedRow()),
+      this.session.onUnhandled(({ event }) => this.addUnknownRow(event)),
       this.session.onPermission((req) => this.addPermissionCard(req)),
+      this.session.onQuestion((req) => this.addQuestionCard(req)),
       this.session.onExit(() => {
         this.endTurn();
         this.addRow('quilx-conversation-system').setText('── process exited ──');
@@ -623,6 +645,30 @@ export class AgentConversation implements Agent {
     setMarkupSafe(label, `${iconSpan(GLYPH.interrupted)}  Interrupted`, 'Interrupted');
   }
 
+  // An unrecognised stream event: a warning header + the raw JSON (monospace,
+  // selectable) so an unmodeled payload is visible rather than silently dropped.
+  private addUnknownRow(event: unknown): void {
+    const type = event && typeof event === 'object' && typeof (event as { type?: unknown }).type === 'string'
+      ? (event as { type: string }).type : 'unknown';
+    let json: string;
+    try { json = JSON.stringify(event, null, 2); } catch { json = String(event); }
+
+    const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
+    row.addCssClass('quilx-conversation-row');
+    row.addCssClass('quilx-conversation-unknown');
+
+    const header = new Gtk.Label({ xalign: 0, wrap: true });
+    setMarkupSafe(header, `${iconSpan(GLYPH.warning, theme.ui.status.warning)}  unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
+    const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
+    body.addCssClass('quilx-conversation-unknown-body');
+    body.setText(json);
+
+    row.append(header);
+    row.append(body);
+    this.messages.append(row);
+    this.scrollToBottom();
+  }
+
   // A tool-use row: a status slot (red ✗ only on failure) + the formatted tool, a
   // result area filled when the result lands, and the TodoWrite checklist inline.
   // Bash gets a bespoke row (the command itself is the output toggle).
@@ -748,6 +794,68 @@ export class AgentConversation implements Agent {
     card.append(title);
     card.append(detail);
     card.append(buttons);
+    this.messages.append(card);
+    this.scrollToBottom();
+  }
+
+  // AskUserQuestion: render each question's options as selectable toggles (radio
+  // group for single-select, independent for multi), with Submit / Skip. The
+  // chosen labels are sent back as the tool result (see SdkSession.answerQuestion).
+  private addQuestionCard(req: QuestionRequest): void {
+    const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 10 });
+    card.addCssClass('quilx-conversation-question');
+
+    const getters: Array<() => string[]> = []; // per-question selected labels
+    for (const q of req.questions) {
+      if (q.header) {
+        const h = new Gtk.Label({ xalign: 0, label: q.header });
+        h.addCssClass('quilx-conversation-question-h');
+        card.append(h);
+      }
+      if (q.question) card.append(new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: q.question }));
+
+      const optsBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 4 });
+      const toggles: Array<{ btn: InstanceType<typeof Gtk.ToggleButton>; label: string }> = [];
+      let group: InstanceType<typeof Gtk.ToggleButton> | null = null;
+      for (const opt of q.options) {
+        const btn = new Gtk.ToggleButton();
+        btn.addCssClass('quilx-conversation-question-opt');
+        const inner = new Gtk.Label({ xalign: 0, wrap: true });
+        const desc = opt.description ? `  <span foreground="${theme.ui.text.muted}">${escapeMarkup(opt.description)}</span>` : '';
+        setMarkupSafe(inner, `<b>${escapeMarkup(opt.label)}</b>${desc}`, opt.description ? `${opt.label} — ${opt.description}` : opt.label);
+        btn.setChild(inner);
+        if (!q.multiSelect) { if (group) btn.setGroup(group); else group = btn; } // radio for single-select
+        optsBox.append(btn);
+        toggles.push({ btn, label: opt.label });
+      }
+      card.append(optsBox);
+      getters.push(() => toggles.filter((t) => t.btn.getActive()).map((t) => t.label));
+    }
+
+    const buttons = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
+    const submit = new Gtk.Button({ label: 'Submit' });
+    submit.addCssClass('suggested-action');
+    const skip = new Gtk.Button({ label: 'Skip' });
+    const answer = (skipped: boolean) => {
+      const answers = req.questions.map((q, i) => ({ header: q.header || q.question, labels: skipped ? [] : getters[i]() }));
+      this.session.answerQuestion(req.id, answers);
+      // Replace the interactive card with a compact record of what was answered
+      // (the AskUserQuestion tool row is suppressed, so this is the transcript trace).
+      clearBox(card);
+      const picked = answers.filter((a) => a.labels.length > 0);
+      const summary = skipped || picked.length === 0
+        ? 'Skipped'
+        : picked.map((a) => `${a.header}: ${a.labels.join(', ')}`).join('   ·   ');
+      const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
+      setMarkupSafe(label, `${iconSpan(GLYPH.done, theme.ui.status.success)}  ${escapeMarkup(summary)}`, summary);
+      card.append(label);
+    };
+    submit.on('clicked', () => answer(false));
+    skip.on('clicked', () => answer(true));
+    buttons.append(submit);
+    buttons.append(skip);
+    card.append(buttons);
+
     this.messages.append(card);
     this.scrollToBottom();
   }
