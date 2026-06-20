@@ -29,11 +29,15 @@ export class SubagentView {
   readonly panel = new StickyListPanel('Subagents', 'quilx-conversation-subagents');
   private readonly running = new Map<string, { agentType: string; description: string; status: 'running' | 'completed' }>();
 
-  constructor(
-    private readonly session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>,
-    private readonly nav: PageNav,
-    private readonly cwd: string,
-  ) {}
+  private readonly session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>;
+  private readonly nav: PageNav;
+  private readonly cwd: string;
+
+  constructor(session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>, nav: PageNav, cwd: string) {
+    this.session = session;
+    this.nav = nav;
+    this.cwd = cwd;
+  }
 
   /** The `Agent` spawn → an inline button (returned, to append to the transcript)
    *  plus an entry in the running panel. */
