@@ -22,6 +22,7 @@ import { collectCaptures, type RawCapture, type VisibleRange } from './injection
 import { computeFoldRanges, type FoldRange } from './folds.ts';
 import { indentLevelAt, enclosingTypeMatches, enclosingNodeRange, type NodeRowRange } from './indent.ts';
 import { tagNamesAt, type TagName } from './tags.ts';
+import { breadcrumbAt, type Crumb } from './breadcrumb.ts';
 import { isFunctionNodeType, isClassNodeType, STRING_COMMENT_RE, RUN_FOLD_RE } from './nodeTypes.ts';
 
 // Reparse this long after the last edit. One debounce per document (was per view).
@@ -293,6 +294,12 @@ export class DocumentSyntax {
   /** JSX/HTML tag-name ranges of the element at model `(row, column)`, or null. */
   tagNamesAt(row: number, column: number): TagName[] | null {
     return this.tree ? tagNamesAt(this.tree.rootNode, row, column) : null;
+  }
+
+  /** Structural scopes (class/function/…) enclosing model `(row, column)`, outermost
+   *  first, for the editor info-bar breadcrumb. Empty with no tree. */
+  breadcrumbAt(row: number, column: number): Crumb[] {
+    return this.tree ? breadcrumbAt(this.tree.rootNode, row, column) : [];
   }
 
   private nodeRangeAt(row: number, column: number, matches: (type: string) => boolean): NodeRowRange | null {
