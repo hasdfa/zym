@@ -78,7 +78,7 @@ export class ExcerptSyntaxProjection implements SyntaxProjection {
       editable: false,
       weight: Pango.Weight.BOLD,
       foreground: theme.ui.text.muted,
-      paragraphBackground: theme.ui.surface.selected ?? theme.ui.surface.popover,
+      paragraphBackground: theme.ui.surface.selected,
     });
     this.gapTag = mk({ name: 'mb:gap', editable: false, foreground: theme.ui.text.muted });
   }

@@ -70,18 +70,18 @@ function statusMarkup(status: FileGitStatus | undefined): string {
 // keeps its own contrast.
 addStyles(`
   #FileTree .filetree-header {
-    color: ${theme.ui.text.muted};
+    color: var(--t-ui-text-muted);
     font-weight: bold;
     padding: 6px 8px;
   }
   #FileTree row:not(:selected) label {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
   }
   #FileTree row:not(:selected) .filetree-icon {
-    color: ${theme.ui.text.muted}; /* mute the file-type icon */
+    color: var(--t-ui-text-muted); /* mute the file-type icon */
   }
   #FileTree expander {
-    color: alpha(${theme.ui.editor.foreground}, 0.45); /* mute the disclosure chevron */
+    color: alpha(var(--t-ui-editor-foreground), 0.45); /* mute the disclosure chevron */
   }
   /* When the tree isn't focused, drop the accent selection background (and
      restore normal text) so the selected row reads as inactive; it regains the
@@ -90,7 +90,7 @@ addStyles(`
     background: none;
   }
   #FileTree:not(:focus-within) row:selected label {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
   }
 `);
 

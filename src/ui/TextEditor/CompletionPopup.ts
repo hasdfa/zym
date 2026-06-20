@@ -21,10 +21,9 @@ import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-const POPUP_BG = theme.ui.editor.background ?? theme.ui.surface.popover;
+const POPUP_BG = theme.ui.editor.background;
 const SELECTED_BG = theme.ui.surface.selected;
 const DETAIL_COLOR = theme.ui.text.muted;
-fonts.monospace('#CompletionPopup .completion-label'); // labels in the app monospace (reactive)
 const LIST_WIDTH_PX = 420;
 const DOC_WIDTH_PX = 440;
 const MAX_HEIGHT_PX = 240;
@@ -44,7 +43,7 @@ addStyles(`
     background-color: ${POPUP_BG};
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius-small);
-    box-shadow: 0px 6px 20px 8px ${theme.ui.shadow};
+    box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
   }
   /* Inner widgets paint nothing — the card's background shows through, and rows
      get no min-height so a single match is exactly one row tall. */
@@ -57,7 +56,7 @@ addStyles(`
   #CompletionPopup row { padding: 1px ${ROW_PADDING_PX}px; }
   #CompletionPopup row:selected { background-color: ${SELECTED_BG}; border-radius: 0; }
   #CompletionPopup .completion-icon { margin-right: ${ICON_MARGIN_PX}px; color: ${DETAIL_COLOR}; opacity: 0.8; }
-  /* .completion-label font comes from the font store — see fonts.monospace(...) above. */
+  #CompletionPopup .completion-label { font: var(--t-font-monospace); }
   #CompletionPopup .completion-detail { opacity: 0.55; margin-left: 0.5em; }
   #CompletionPopup .completion-description { opacity: 0.45; margin-left: 0.75em; font-size: 0.9em; }
   #CompletionPopup separator.completion-divider { background-color: var(--border-color); }

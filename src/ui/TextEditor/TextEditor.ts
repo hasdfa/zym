@@ -60,11 +60,16 @@ import {
 } from '../../gi.ts';
 
 addStyles(`
-  .quilx-editor { color: ${theme.ui.editor.foreground}; caret-color: ${theme.ui.editor.foreground}; }
+  .quilx-editor {
+    font: var(--t-font-monospace);
+    color: var(--t-ui-editor-foreground);
+    caret-color: var(--t-ui-editor-foreground);
+  }
   /* Pending-command preview ("showcmd"), floated in the editor's bottom-right. */
   .quilx-showcmd {
-    background-color: ${theme.ui.editor.background ?? theme.ui.surface.popover};
-    color: ${theme.ui.editor.foreground};
+    font: var(--t-font-monospace);
+    background-color: var(--t-ui-editor-background);
+    color: var(--t-ui-editor-foreground);
     opacity: 0.75;
     padding: 1px 6px;
     margin: 4px;
@@ -72,33 +77,34 @@ addStyles(`
   }
   /* Hollow caret shown over the cursor's character while the editor is unfocused. */
   .quilx-unfocused-caret {
-    border: 1.5px solid ${theme.ui.text.muted};
+    border: 1.5px solid var(--t-ui-text-muted);
     border-radius: 1px;
   }
   /* Filled caret block for positions with no glyph to reverse-video (empty line,
      past end-of-line, end-of-buffer). */
   .quilx-block-caret {
-    background-color: ${theme.ui.editor.foreground};
+    background-color: var(--t-ui-editor-foreground);
     border-radius: 1px;
   }
   /* Beam caret for extra (multi-cursor) carets in insert mode — a thin vertical
      bar, like the primary insert-mode caret. */
   .quilx-beam-caret {
-    background-color: ${theme.ui.editor.foreground};
+    background-color: var(--t-ui-editor-foreground);
   }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
   .quilx-placeholder {
-    color: ${theme.ui.text.muted};
+    font: var(--t-font-monospace);
+    color: var(--t-ui-text-muted);
     opacity: 0.6;
   }
   /* LSP hover card: a floating tooltip over the editor. */
   .quilx-hover {
-    background-color: ${theme.ui.surface.popover};
-    color: ${theme.ui.editor.foreground};
-    border: 1px solid alpha(${theme.ui.editor.foreground}, 0.2);
+    background-color: var(--t-ui-surface-popover);
+    color: var(--t-ui-editor-foreground);
+    border: 1px solid alpha(var(--t-ui-editor-foreground), 0.2);
     border-radius: 6px;
     padding: 6px 8px;
-    box-shadow: 0 1px 3px ${theme.ui.shadow};
+    box-shadow: 0 1px 3px var(--t-ui-shadow);
   }
   /* Info banner pinned above the editor content. Color tint is mostly muted into
      the UI background so it isn't garish; text/buttons keep the normal foreground.
@@ -106,16 +112,16 @@ addStyles(`
      error (load/save failure). */
   .quilx-banner-warning,
   .quilx-banner-error {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
     padding: 2px 8px;
   }
-  .quilx-banner-warning { background-color: mix(${theme.ui.editor.background ?? theme.ui.surface.popover}, ${theme.ui.status.warning}, 0.25); }
-  .quilx-banner-error   { background-color: mix(${theme.ui.editor.background ?? theme.ui.surface.popover}, ${theme.ui.status.error},   0.25); }
+  .quilx-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-warning), 0.25); }
+  .quilx-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-error),   0.25); }
   .quilx-banner-warning label,
   .quilx-banner-error   label { font-weight: bold; }
   .quilx-banner-warning button,
   .quilx-banner-error   button {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
     min-height: 0;
     padding: 1px 8px;
   }
@@ -1051,8 +1057,7 @@ export class TextEditor implements DocumentHost {
 
   private createView(buffer: SourceBuffer): SourceView {
     const view = new GtkSource.View({ buffer });
-    view.addCssClass('quilx-editor');
-    view.setMonospace(true);
+    view.addCssClass('quilx-editor'); // monospace font applied via CSS (font store)
     view.setAutoIndent(true);
     view.setTabWidth(TAB_WIDTH);
     view.setVexpand(true);
@@ -1181,7 +1186,6 @@ export class TextEditor implements DocumentHost {
     });
 
     this.showcmdLabel.addCssClass('quilx-showcmd');
-    this.showcmdLabel.addCssClass('monospace');
     this.showcmdLabel.setHalign(Gtk.Align.END);
     this.showcmdLabel.setValign(Gtk.Align.END);
     this.showcmdLabel.setVisible(false);
@@ -1227,7 +1231,6 @@ export class TextEditor implements DocumentHost {
     if (this.bufferMode?.placeholder) {
       this.placeholderLabel = new Gtk.Label({ label: this.bufferMode.placeholder });
       this.placeholderLabel.addCssClass('quilx-placeholder');
-      this.placeholderLabel.addCssClass('monospace');
       this.placeholderLabel.setHalign(Gtk.Align.START);
       this.placeholderLabel.setValign(Gtk.Align.START);
       this.placeholderLabel.setMarginStart(8);
@@ -1518,8 +1521,8 @@ export class TextEditor implements DocumentHost {
     const schemeManager = GtkSource.StyleSchemeManager.getDefault();
     // A theme that defines its own background owns the whole editor scheme
     // (background + line numbers); built once since it doesn't vary by system
-    // light/dark. Otherwise we follow the Adwaita light/dark scheme.
-    const themeScheme = theme.ui.editor.background ? createSourceScheme(theme) : null;
+    // light/dark. Otherwise (followSystemScheme) we follow the Adwaita light/dark scheme.
+    const themeScheme = theme.followSystemScheme ? null : createSourceScheme(theme);
     const apply = () => {
       const scheme =
         themeScheme ?? schemeManager.getScheme(styleManager.getDark() ? 'Adwaita-dark' : 'Adwaita');

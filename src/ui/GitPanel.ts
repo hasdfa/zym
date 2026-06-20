@@ -73,12 +73,12 @@ addStyles(`
   /* No font-size override: section headers inherit the default label size, the
      same size every other label (file rows, file-tree headers) uses. */
   #GitPanel .git-header {
-    color: ${theme.ui.text.muted};
+    color: var(--t-ui-text-muted);
     font-weight: bold;
     padding: 6px 8px 3px 8px;
   }
-  #GitPanel #GitRow label { color: ${theme.ui.editor.foreground}; }
-  #GitPanel #GitRow .git-icon { color: ${theme.ui.text.muted}; }
+  #GitPanel #GitRow label { color: var(--t-ui-editor-foreground); }
+  #GitPanel #GitRow .git-icon { color: var(--t-ui-text-muted); }
   #GitPanel row { min-height: 0; }
   #GitPanel #GitRow { padding: 0 8px 0 16px; } /* indent entries under the section header */
   #GitPanel .git-badge { font-weight: bold; font-feature-settings: "tnum" 1; }
@@ -86,7 +86,7 @@ addStyles(`
      only while the panel is focused — an unfocused panel shows no highlight. */
   #GitPanel row:selected { background-color: transparent; }
   #GitPanel:focus-within row:selected {
-    background-color: ${theme.ui.surface.selected};
+    background-color: var(--t-ui-surface-selected);
   }
 `);
 

@@ -1479,7 +1479,8 @@ export class AppWindow {
   // leave the chrome to the system Adwaita styling.
   private applyChromeStyles() {
     const { editor: { background: bg }, surface: { popover: popoverBg, selected: selectedBg } } = theme.ui;
-    if (!bg) {
+    // A theme that follows the system scheme leaves the chrome to Adwaita.
+    if (theme.followSystemScheme) {
       styles.remove('theme-chrome');
       return;
     }

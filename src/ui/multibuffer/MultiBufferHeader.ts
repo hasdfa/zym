@@ -17,15 +17,15 @@ import { escapeMarkup } from '../proseMarkup.ts';
 addStyles(`
   .mb-header {
     padding: 2px 8px 2px 6px;
-    background-color: ${theme.ui.surface.selected ?? theme.ui.surface.popover};
+    background-color: var(--t-ui-surface-selected);
   }
-  .mb-header-icon { color: ${theme.ui.text.muted}; }
-  .mb-header-label { color: ${theme.ui.editor.foreground}; }
-  .mb-gap { color: ${theme.ui.text.muted}; padding: 1px 8px 1px 6px; }
+  .mb-header-icon { color: var(--t-ui-text-muted); }
+  .mb-header-label { color: var(--t-ui-editor-foreground); }
+  .mb-gap { color: var(--t-ui-text-muted); padding: 1px 8px 1px 6px; }
   /* The standalone fold-marker band gets a grey fill (distinct from the header's color); the
      leading-gap line inside the header keeps the header background (only the muted text color). */
   .mb-gap-band { background-color: rgba(128, 128, 128, 0.15); }
-  .mb-gap-clickable:hover { color: ${theme.ui.text.accent}; }
+  .mb-gap-clickable:hover { color: var(--t-ui-text-accent); }
 `);
 
 /** The header widget for one excerpt: `label` is the display path (dir dimmed, basename bold),

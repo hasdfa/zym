@@ -10,6 +10,13 @@ See also [styling.md](styling.md) (how components consume `theme.ui` tokens) and
 [system-integration.md](system-integration.md) (following the OS light/dark
 preference — the remaining gap).
 
+Every `theme.ui.*` token is also exported as a CSS variable
+(`themeUiCssVariables` in `theme.ts` → `--t-ui-<dashed-path>`, installed on
+`#AppWindow` by `src/styles.ts`), so CSS reads a theme color as
+`var(--t-ui-editor-background)` rather than interpolating the literal. The
+when-to-use-which rule (CSS variable vs. `theme.ui.*` in markup / tags / keyed
+sheets) lives in [styling.md](styling.md) → Colors.
+
 ## The file format
 
 One theme per file, `src/theme/<name>.json`, loaded by name
@@ -44,7 +51,7 @@ theme JSON's `ui.editor.background` is read in code as exactly
   `diffTones`) and, for a theme that omits `editor.background`, which system scheme
   the editor follows.
 - **`ui`** — concern-grouped nested objects. Every field is optional and
-  deep-merged over `DEFAULT_THEME_UI`. Values are CSS colors
+  deep-merged over `DEFAULT_THEME.ui`. Values are CSS colors
   (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` or `rgb()/rgba()`); `#rrggbbaa` for tints
   that compose over text (search/diff/flash). The dual cases use a camelCase
   sibling rather than a node that's both a leaf and a branch: `search.matchCurrent`
@@ -57,13 +64,21 @@ theme JSON's `ui.editor.background` is read in code as exactly
 The JSON Schema gives editors autocomplete + validation; it enumerates the `ui`
 concern groups with descriptions and the syntax-token shape.
 
-## How defaults work (`DEFAULT_THEME_UI` + deep-merge)
+## How defaults work (`DEFAULT_THEME` + deep-merge)
 
-`DEFAULT_THEME_UI` (in `theme.ts`) is a **complete dark `ThemeUi`** structured exactly
-like a theme file's `ui` — the built-in fallback theme. The loader deep-merges a
-theme file's `ui` over it, concern by concern, so a theme only states what it
-overrides (a sibling left out keeps its default). `editor.background` is the one
-field with no default — its absence is the signal to follow the system scheme.
+`DEFAULT_THEME` (exported from `theme.ts`) is a **complete dark `Theme`** of concrete
+RGB colors — no CSS variables, so any value is safe to interpolate into Pango markup
+as well as CSS. Its `ui` is the merge base: the loader deep-merges a theme file's `ui`
+over `DEFAULT_THEME.ui`, concern by concern, so a theme only states what it overrides
+(a sibling left out keeps its default). **The guarantee: every `theme.ui.*` field is
+always filled** — consumers read them directly, never `?? fallback`.
+
+`editor.background` is the one field a theme may omit. Its absence does **not** leave
+it undefined — the loader fills it (with `surface.popover`) and records the omission
+as **`theme.followSystemScheme: true`**, the signal that the editor should follow the
+system light/dark Adwaita scheme instead of a theme-owned GtkSourceView scheme (read by
+`TextEditor.followSystemColorScheme` / `createSourceScheme`). `DEFAULT_THEME` itself is
+exported as a ready-to-use last-resort theme.
 
 Two within-concern fallbacks are kept explicitly (they're genuinely useful): set
 only `search.match` and `matchCurrent` inherits it; set only `diff.added` and
@@ -75,9 +90,9 @@ longest-prefix `resolveByCaptureName` — that's unchanged.)
 `loadTheme(name)` → `adaptTheme(file)` does, in order:
 
 1. **Validate** `appearance` ∈ {light, dark} (throws otherwise).
-2. **Deep-merge** each `ui` concern over `DEFAULT_THEME_UI` (`{ ...DEFAULT_THEME_UI.status,
-   ...file.ui.status }`, etc.). `editor.background` absent ⇒ undefined ⇒ follow the
-   system scheme.
+2. **Deep-merge** each `ui` concern over `DEFAULT_THEME.ui` (`{ ...DEFAULT_THEME.ui.status,
+   ...file.ui.status }`, etc.). `editor.background` absent ⇒ filled with `surface.popover`
+   and `followSystemScheme = true` (follow the system scheme).
 3. **Derive the diff tints** from the resolved `status.success` / `status.error`
    per `appearance` (`diffTones`, using `color-bits`). An explicit `diff.*` value
    wins; `diff.addedWord`/`diff.removedWord` fall back to their line value.
@@ -117,8 +132,9 @@ owning the theme format.
   Loader unit-tested (`theme.test.ts`).
 - [x] **Model mirrors the JSON** — `ThemeUi` is concern-grouped nested objects
   (`theme.ui.editor.background`, `theme.ui.status.error`, `theme.ui.diff.addedWord`)
-  identical to the theme file's `ui`; `DEFAULT_THEME_UI` is a complete nested fallback
-  theme the file deep-merges over.
+  identical to the theme file's `ui`; `DEFAULT_THEME` is a complete fallback theme the
+  file deep-merges over, so **every `theme.ui.*` field is guaranteed filled** (the
+  omittable `editor.background` is filled + flagged via `followSystemScheme`).
 - [ ] **A light theme** — author `quilx-light.json` (`appearance: "light"`) to
   exercise the lighten path and unblock OS light/dark following (see
   [system-integration.md](system-integration.md) → "Theme follows appearance").

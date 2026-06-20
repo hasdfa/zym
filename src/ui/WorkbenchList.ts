@@ -39,7 +39,7 @@ const ROW_TRANSITION_MS = 250;
 
 addStyles(`
   /* The unsaved-changes marker (a small dot) next to the project title — warning-colored. */
-  .quilx-modified-dot { color: ${theme.ui.status.warning}; }
+  .quilx-modified-dot { color: var(--t-ui-status-warning); }
   /* A transparent left border keeps the row content from shifting when the active
      row gains its accent indicator; a subtle bottom border separates the rows.
      The row height itself lives on the content box (#WorkbenchRow) rather than the
@@ -47,7 +47,7 @@ addStyles(`
      without min-height pinning it open. */
   #WorkbenchList list row {
     border-left: 3px solid transparent;
-    border-bottom: 1px solid ${theme.ui.border};
+    border-bottom: 1px solid var(--t-ui-border);
   }
   /* Each row is as tall as the header bar (an Adw.HeaderBar is 47px), so the list
      reads as a column of header-height entries. */
@@ -57,9 +57,9 @@ addStyles(`
   /* The active row is marked by an accent left-border indicator rather than a
      filled background. */
   #WorkbenchList list row:selected {
-    color: ${theme.ui.editor.foreground};
-    background-color: ${theme.ui.editor.background};
-    border-left-color: ${theme.ui.status.info};
+    color: var(--t-ui-editor-foreground);
+    background-color: var(--t-ui-editor-background);
+    border-left-color: var(--t-ui-status-info);
   }
   /* Per-row edited-files count — a flat, muted button (click opens the files). */
   #WorkbenchRow .workbenchrow-files {
@@ -74,13 +74,13 @@ addStyles(`
      foreground dimmed via opacity rather than the theme's muted gray, which sat
      too dark to read on the sidebar. Hover brightens the files button fully. */
   #WorkbenchRow .workbenchrow-files label {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
     opacity: 0.75;
     font-size: var(--font-size-small);
   }
   #WorkbenchRow .workbenchrow-files:hover label { opacity: 1; }
   #WorkbenchRow .workbenchrow-branch {
-    color: ${theme.ui.editor.foreground};
+    color: var(--t-ui-editor-foreground);
     opacity: 0.75;
     font-size: var(--font-size-small);
   }

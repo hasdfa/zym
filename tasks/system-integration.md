@@ -62,9 +62,10 @@ What exists, and whether it reacts to a live change:
 - **Color palette is centralized** — ✅ chrome/syntax/picker colors come from
   `theme.ui.*` / `theme.syntax.*`. The loader resolves every `ThemeUi` field at
   load (`adaptTheme` in `src/theme/theme.ts` deep-merges the file's nested `ui`
-  over `DEFAULT_THEME_UI`), so most consumers read `theme.ui.editor.background`-style
-  paths that mirror the theme JSON 1:1. `editor.background` stays optional (its
-  absence is the "follow the system scheme" signal). Semantic tokens carry what used
+  over `DEFAULT_THEME.ui`), so consumers read `theme.ui.editor.background`-style
+  paths that mirror the theme JSON 1:1, every field guaranteed filled. A theme may
+  omit `editor.background`; the loader fills it and records the omission as
+  `followSystemScheme` (the "follow the system scheme" signal). Semantic tokens carry what used
   to be hardcoded: `shadow`, `flash`, the diff tints `diff.added`/`diff.removed`/
   `diff.addedWord`/`diff.removedWord` (derived from `status.success`/`status.error`
   per appearance) + `diff.filler`/`diff.fold`, and `pr.open`/`pr.merged`/

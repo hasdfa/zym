@@ -260,7 +260,7 @@ export class EditorModel {
     const tag = new Gtk.TextTag({
       name: 'vim-block-cursor',
       background: theme.ui.editor.foreground,
-      foreground: theme.ui.editor.background ?? theme.ui.surface.popover,
+      foreground: theme.ui.editor.background,
     });
     this.buffer.getTagTable().add(tag);
     return tag;
@@ -650,7 +650,7 @@ export class EditorModel {
     if (!this.extraSelectionTag) {
       this.extraSelectionTag = new Gtk.TextTag({
         name: 'vim-extra-selection',
-        background: theme.ui.surface.selected ?? theme.ui.editor.foreground,
+        background: theme.ui.surface.selected,
       });
       this.buffer.getTagTable().add(this.extraSelectionTag);
     }
@@ -659,7 +659,7 @@ export class EditorModel {
       this.extraCursorTag = new Gtk.TextTag({
         name: 'vim-extra-cursor',
         background: theme.ui.editor.foreground,
-        foreground: theme.ui.editor.background ?? theme.ui.surface.popover,
+        foreground: theme.ui.editor.background,
       });
       this.buffer.getTagTable().add(this.extraCursorTag);
     }
