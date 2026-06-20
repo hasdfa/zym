@@ -12,7 +12,7 @@
  * `rowKinds`. Eliding here keeps the diff readable without needing live folds.
  */
 import type { Item } from '../TextEditor/ViewProjection.ts';
-import { diffRows, rowsToItems } from './diffSegments.ts';
+import { diffRows, rowsToItems, type DiffRow } from './diffSegments.ts';
 import * as Path from 'node:path';
 
 /** One changed file: its base (old / HEAD) and current (new / working) content. */
@@ -44,10 +44,18 @@ export interface DiffMultiBuffer {
   /** Widget mode only: where each file's header widget anchors (the view row its content starts
    *  on, since no header/blank rows are emitted). `subtitle` carries a LEADING `⋯` gap (elided
    *  rows above the first shown row) folded into the header, as it shares the anchor row. */
-  headerAnchors: Array<{ path: string; label: string; viewRow: number; subtitle?: string }>;
+  headerAnchors: Array<{
+    path: string;
+    label: string;
+    viewRow: number;
+    subtitle?: string;
+    /** New-side rows elided by a LEADING gap (for expand-context — reveal a chunk on demand). */
+    leadingRevealRows?: number[];
+  }>;
   /** Widget mode only: each between/trailing `⋯` gap, anchored BELOW `viewRow` (the last shown
-   *  row before the elision) — a decoration band, not a navigable buffer row. */
-  gapAnchors: Array<{ viewRow: number; label: string }>;
+   *  row before the elision) — a decoration band, not a navigable buffer row. `revealRows` are
+   *  the new-side rows it elides (expand-context reveals a chunk of them). */
+  gapAnchors: Array<{ viewRow: number; label: string; revealRows: number[] }>;
 }
 
 export interface DiffLayoutOptions {
@@ -55,6 +63,9 @@ export interface DiffLayoutOptions {
    *  `'widget'` emits neither (the surface draws a header widget above each file via
    *  `headerAnchors`), so the filename isn't navigable buffer text. */
   headers?: 'block' | 'widget';
+  /** Expand-context: force these (otherwise-elided) NEW-side rows visible. Returns true for a
+   *  new-side row the user has revealed, so it shows as context instead of folding into a gap. */
+  reveal?: (newRow: number) => boolean;
 }
 
 const newKey = (path: string): string => `new:${path}`;
@@ -96,8 +107,14 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
     language.set(nKey, file.path);
     language.set(oKey, file.path);
 
+    const recs = diffRows(oldLines, newLines);
+    // Skip files with no text change — a "changed files" diff shouldn't list them, and showing
+    // a bare `⋯ N unchanged lines` for them (e.g. a mode-only change, or the node_modules
+    // symlink whose blob round-trips equal) is just a non-expandable dead entry.
+    if (!recs.some((r) => r.op !== 'eq')) return;
+
     const label = file.label ?? (cwd ? Path.relative(cwd, file.path) : Path.basename(file.path));
-    let header: { path: string; label: string; viewRow: number; subtitle?: string } | null = null;
+    let header: DiffMultiBuffer['headerAnchors'][number] | null = null;
     if (widgetHeaders) {
       // No header/blank rows in the buffer — the surface anchors a header widget above the row
       // the file's content starts on (recorded now, before its first row is emitted).
@@ -115,27 +132,28 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
     // Emit an elided `⋯` gap: a block row (block mode), or — in widget mode — a LEADING gap folds
     // into the header subtitle (it shares the header's anchor row), any other anchors a band
     // below the last shown row (`rowKinds.length - 1`). Never a navigable buffer row in widget mode.
-    const emitGap = (count: number, leading: boolean): void => {
+    const emitGap = (rows: DiffRow[], leading: boolean): void => {
+      const count = rows.length;
+      const revealRows = rows.map((r) => r.newRow); // the elided new-side rows (expand-context)
       if (!widgetHeaders) {
         items.push({ type: 'block', block: { kind: 'gap', text: gapLabel(count) } });
         block('gap');
       } else if (leading && header) {
         header.subtitle = gapLabel(count);
+        header.leadingRevealRows = revealRows;
       } else {
-        gapAnchors.push({ viewRow: rowKinds.length - 1, label: gapLabel(count) });
+        gapAnchors.push({ viewRow: rowKinds.length - 1, label: gapLabel(count), revealRows });
       }
     };
 
-    const recs = diffRows(oldLines, newLines);
-
     // Mark every row within CONTEXT of a change as visible; the rest are elided gaps.
     const visible = new Array(recs.length).fill(false);
-    let anyChange = false;
     recs.forEach((r, i) => {
       if (r.op === 'eq') return;
-      anyChange = true;
       for (let k = Math.max(0, i - CONTEXT); k <= Math.min(recs.length - 1, i + CONTEXT); k++) visible[k] = true;
     });
+    // Force user-revealed rows visible (expand-context) — they show as context, not a gap.
+    if (opts.reveal) for (let i = 0; i < recs.length; i++) if (recs[i].op === 'eq' && opts.reveal(recs[i].newRow)) visible[i] = true;
     // Show, don't elide, gaps shorter than MIN_ELIDE.
     for (let i = 0; i < recs.length; ) {
       if (visible[i]) { i++; continue; }
@@ -143,12 +161,6 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
       while (j < recs.length && !visible[j]) j++;
       if (j - i < MIN_ELIDE) for (let k = i; k < j; k++) visible[k] = true;
       i = j;
-    }
-
-    if (!anyChange) {
-      // No changes (a changed-file list wouldn't include this, but stay total): elide all.
-      if (recs.length > 0) emitGap(recs.length, /* leading */ true);
-      return;
     }
 
     let firstItem = true; // a gap before the first window is LEADING (no content row above it)
@@ -168,7 +180,7 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
       } else {
         let j = i;
         while (j < recs.length && !visible[j]) j++;
-        emitGap(j - i, firstItem);
+        emitGap(recs.slice(i, j), firstItem);
         firstItem = false;
         i = j;
       }

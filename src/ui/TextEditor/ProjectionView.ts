@@ -289,6 +289,9 @@ export class ProjectionView {
   private onSourceInsert(key: string, iter: any, text: string): void {
     if (!this.projection.isSingleSource) {
       if (this.sourceSuppress.has(key)) return;
+      // A COMPUTED surface (a diff) can't be re-flowed by window arithmetic — the row's
+      // classification (added/context) + the elision can change — so always re-derive it.
+      if (text.includes('\n') && this.resyncHandler) return this.scheduleRebuild();
       const sr = iter.getLine();
       const pos = this.projection.sourceToView(key, sr, iter.getLineOffset());
       if (text.includes('\n')) {
@@ -318,6 +321,8 @@ export class ProjectionView {
   private onSourceDelete(key: string, startIter: any, endIter: any): void {
     if (!this.projection.isSingleSource) {
       if (this.sourceSuppress.has(key)) return;
+      // A COMPUTED surface (a diff) always re-derives on a row-count change (see onSourceInsert).
+      if (startIter.getLine() !== endIter.getLine() && this.resyncHandler) return this.scheduleRebuild();
       const a = this.projection.sourceToView(key, startIter.getLine(), startIter.getLineOffset());
       const b = this.projection.sourceToView(key, endIter.getLine(), endIter.getLineOffset());
       if (startIter.getLine() !== endIter.getLine()) {

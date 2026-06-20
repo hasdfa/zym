@@ -2139,6 +2139,21 @@ export class AppWindow {
         didDispatch: () => void this.openDiffMultibuffer(),
         description: 'Show every changed file as one continuous diff (multibuffer)',
       },
+      'diff:expand-context': {
+        didDispatch: () => this.activeDiffMultibuffer()?.expandContextAtCursor(),
+        description: 'Reveal more unchanged lines at the nearest gap',
+        when: () => this.activeDiffMultibuffer() !== null,
+      },
+      'diff:expand-all': {
+        didDispatch: () => this.activeDiffMultibuffer()?.expandAll(),
+        description: 'Reveal all unchanged lines (show the full files)',
+        when: () => this.activeDiffMultibuffer() !== null,
+      },
+      'diff:collapse-context': {
+        didDispatch: () => this.activeDiffMultibuffer()?.collapseContext(),
+        description: 'Re-collapse expanded context back to the windowed diff',
+        when: () => this.activeDiffMultibuffer() !== null,
+      },
       'app:quit': () => this.onQuit(),
       'command-palette:toggle': () => openCommandPicker(this.overlay),
     });
@@ -2855,6 +2870,12 @@ export class AppWindow {
     const widget = this.activeChildWidget();
     if (!widget) return null;
     return this.multibufferViews.get(widget) ?? this.diffMultibufferViews.get(widget) ?? null;
+  }
+
+  /** The diff multibuffer hosted by the active child, if any (for the expand-context commands). */
+  private activeDiffMultibuffer(): DiffMultiBufferView | null {
+    const widget = this.activeChildWidget();
+    return widget ? this.diffMultibufferViews.get(widget) ?? null : null;
   }
 
   private openDialog() {

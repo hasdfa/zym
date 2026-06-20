@@ -92,6 +92,78 @@ export class DiffLineNumberGutter {
   }
 }
 
+/** Markup for one number cell — its label tinted (background_alpha) when the row is added/removed. */
+function cellMarkup(label: string, bg: string | null): string {
+  if (!bg) return `<span foreground="${COLOR}">${label || ' '}</span>`;
+  const { rgb, alphaPct } = pangoBackground(bg);
+  return `<span background="${rgb}" background_alpha="${alphaPct}%" foreground="${COLOR}">${label || ' '}</span>`;
+}
+
+class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
+  // Assigned after construction; read on every draw. Per-row old/new labels + cell backgrounds.
+  oldLabels!: string[];
+  newLabels!: string[];
+  oldBg: (string | null)[] | null = null;
+  newBg: (string | null)[] | null = null;
+
+  queryData(_lines: any, line: number) {
+    const oldCell = cellMarkup(this.oldLabels?.[line] ?? '', this.oldBg?.[line] ?? null);
+    const newCell = cellMarkup(this.newLabels?.[line] ?? '', this.newBg?.[line] ?? null);
+    this.setMarkup(`${oldCell} ${newCell}`, -1);
+  }
+}
+registerClass(CombinedDiffLineNumberRenderer);
+
+/**
+ * A SINGLE gutter renderer drawing BOTH the old and new file line numbers per row (one
+ * PangoLayout/line, like the main editor's composite gutter) — vs. two separate renderers, for
+ * the diff multibuffer where every visible line pays the per-line gutter cost. Each column tints
+ * its added/removed rows (red old / green new). View == model (the diff has no folds).
+ */
+export class CombinedDiffLineNumberGutter {
+  private readonly view: SourceView;
+  private readonly renderer: CombinedDiffLineNumberRenderer;
+
+  constructor(
+    view: SourceView,
+    oldLabels: string[],
+    newLabels: string[],
+    oldBg: (string | null)[],
+    newBg: (string | null)[],
+  ) {
+    this.view = view;
+    this.renderer = new CombinedDiffLineNumberRenderer();
+    this.renderer.oldLabels = oldLabels;
+    this.renderer.newLabels = newLabels;
+    this.renderer.oldBg = oldBg;
+    this.renderer.newBg = newBg;
+    this.renderer.setXpad(4);
+    (this.view.getGutter(Gtk.TextWindowType.LEFT) as any).insert(this.renderer, 1);
+    this.primeWidth(oldLabels, newLabels);
+  }
+
+  /** Swap the per-row labels + backgrounds (after a re-diff re-flows the rows) and repaint. */
+  setData(oldLabels: string[], newLabels: string[], oldBg: (string | null)[], newBg: (string | null)[]): void {
+    this.renderer.oldLabels = oldLabels;
+    this.renderer.newLabels = newLabels;
+    this.renderer.oldBg = oldBg;
+    this.renderer.newBg = newBg;
+    this.primeWidth(oldLabels, newLabels);
+    (this.renderer as any).queueDraw?.();
+  }
+
+  /** Reserve width for the widest old + new columns (a number measured on a short line crops). */
+  private primeWidth(oldLabels: string[], newLabels: string[]): void {
+    const w = (labels: string[]) => labels.reduce((max, l) => Math.max(max, l.length), 1);
+    this.renderer.setText(`${'0'.repeat(w(oldLabels))} ${'0'.repeat(w(newLabels))}`, -1);
+    this.renderer.queueResize();
+  }
+
+  dispose(): void {
+    (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.renderer);
+  }
+}
+
 // Right-align `n+1` (or blank) in a column sized to the widest number.
 function column(rows: readonly (number | null)[]): string[] {
   let max = 0;

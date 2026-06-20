@@ -158,6 +158,59 @@ test('editable diff: undo of an insert before removed lines splices (no whole-bu
   mbv.dispose();
 });
 
+test('editable diff: expand-context reveals elided lines; expand-all / collapse toggle', () => {
+  // Two changes far apart so the unchanged middle (u0..u19) elides to a gap.
+  const mid = Array.from({ length: 20 }, (_, i) => `u${i}`).join('\n');
+  const oldText = `t0\nXXX\nt2\n${mid}\nb0\nYYY\nb2\n`;
+  const newText = `t0\nAAA\nt2\n${mid}\nb0\nBBB\nb2\n`;
+  const path = tmpFile(newText);
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
+  const windowed = linesOf(mbv).length;
+  assert.ok(!linesOf(mbv).includes('u10'), 'the middle is elided initially');
+
+  mbv.expandAll();
+  const full = linesOf(mbv).length;
+  assert.ok(linesOf(mbv).includes('u10') && full > windowed, 'expand-all reveals the whole file');
+
+  mbv.collapseContext();
+  assert.equal(linesOf(mbv).length, windowed, 'collapse returns to the windowed diff');
+  assert.ok(!linesOf(mbv).includes('u10'));
+
+  // From ABOVE the fold (caret on the last row of the upper window): reveal its top rows.
+  mbv.editor.model.setCursorBufferPosition({ row: linesOf(mbv).indexOf('u1'), column: 0 });
+  mbv.expandContextAtCursor();
+  assert.ok(linesOf(mbv).includes('u2') && linesOf(mbv).length < full, 'revealed the next chunk from the top');
+
+  // From BELOW the fold (caret on the first row of the lower window): reveal its BOTTOM rows.
+  mbv.collapseContext();
+  mbv.editor.model.setCursorBufferPosition({ row: linesOf(mbv).indexOf('u18'), column: 0 });
+  mbv.expandContextAtCursor();
+  assert.ok(linesOf(mbv).includes('u17') && !linesOf(mbv).includes('u2'), 'revealed the chunk above the caret (fold above)');
+  mbv.dispose();
+});
+
+test('editable diff: undo of an `o` just before a trailing fold reverts the view', async () => {
+  // bbbb is the last shown block before a trailing `⋯` fold (the elided tail).
+  const oldText = 'a0\na1\na2\nx\na4\na5\na6\nb0\nb1\nb2\nb3\nb4\n';
+  const newText = 'a0\na1\na2\ny\na4\na5\na6\nb0\nb1\nb2\nb3\nb4\n';
+  const path = tmpFile(newText);
+  const registry = new DocumentRegistry();
+  const mbv = new DiffMultiBufferView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
+  const before = linesOf(mbv);
+  // Open a line after the last shown content row (just before the trailing fold).
+  const last = before.length - 1;
+  mbv.editor.model.setTextInBufferRange(new Range(new Point(last, before[last].length), new Point(last, before[last].length)), '\n');
+  await flushReDiff();
+  assert.notDeepEqual(linesOf(mbv), before, 'the inserted line shows');
+
+  mbv.editor.model.undo();
+  await flushReDiff();
+  assert.deepEqual(linesOf(mbv), before, 'undo reverted the view');
+  assert.equal(registry.find(path)!.getText(), newText, 'and the document');
+  mbv.dispose();
+});
+
 test('editable diff: save() persists the edited new-side file', () => {
   const { path, mbv } = setup();
   const changedRow = linesOf(mbv).indexOf('CHANGED');

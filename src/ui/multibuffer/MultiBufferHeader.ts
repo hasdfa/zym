@@ -22,6 +22,10 @@ addStyles(`
   .mb-header-icon { color: ${theme.ui.text.muted}; }
   .mb-header-label { color: ${theme.ui.editor.foreground}; }
   .mb-gap { color: ${theme.ui.text.muted}; padding: 1px 8px 1px 6px; }
+  /* The standalone fold-marker band gets a grey fill (distinct from the header's color); the
+     leading-gap line inside the header keeps the header background (only the muted text color). */
+  .mb-gap-band { background-color: rgba(128, 128, 128, 0.15); }
+  .mb-gap-clickable:hover { color: ${theme.ui.text.accent}; }
 `);
 
 /** The header widget for one excerpt: `label` is the display path (dir dimmed, basename bold),
@@ -65,10 +69,17 @@ export function buildHeaderWidget(
   return outer;
 }
 
-/** A `⋯ N unchanged lines` gap band — a dim, non-interactive label (not a navigable buffer row).
- *  Anchored between two diff windows of a file via `BlockDecorations`. */
-export function buildGapWidget(label: string): InstanceType<typeof Gtk.Widget> {
+/** A `⋯ N unchanged lines` gap band — a dim label (not a navigable buffer row), anchored between
+ *  two diff windows via `BlockDecorations`. `onActivate` (click) expands more context. */
+export function buildGapWidget(label: string, onActivate?: () => void): InstanceType<typeof Gtk.Widget> {
   const widget = new Gtk.Label({ label, xalign: 0 });
   widget.addCssClass('mb-gap');
+  widget.addCssClass('mb-gap-band'); // grey fill (the standalone band, vs the in-header subtitle)
+  if (onActivate) {
+    widget.addCssClass('mb-gap-clickable');
+    const click = new Gtk.GestureClick();
+    click.on('released', () => onActivate());
+    widget.addController(click);
+  }
   return widget;
 }

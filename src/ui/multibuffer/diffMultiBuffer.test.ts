@@ -29,6 +29,17 @@ test('widget mode: no header/blank/gap block rows — headers + gaps are anchors
   assert.ok(dmb.gapAnchors[0].label.includes('unchanged'), 'gap carries its `⋯ N unchanged lines` label');
 });
 
+test('reveal forces elided rows visible (expand-context)', () => {
+  const mid = Array.from({ length: 12 }, (_, i) => `u${i}`).join('\n');
+  const file = { path: '/a.ts', oldText: `X\n${mid}\nY\n`, newText: `A\n${mid}\nB\n` };
+  const collapsed = buildDiffMultiBuffer([file], undefined, { headers: 'widget' });
+  const gapRows = collapsed.gapAnchors[0].revealRows;
+  assert.ok(gapRows.length > 0, 'the unchanged middle elides to a gap');
+  const expanded = buildDiffMultiBuffer([file], undefined, { headers: 'widget', reveal: (r) => gapRows.slice(0, 3).includes(r) });
+  assert.ok(project(expanded).viewText.length > project(collapsed).viewText.length, 'revealing rows grows the view');
+  assert.ok(expanded.gapAnchors[0].revealRows.length < gapRows.length, 'and shrinks the remaining gap');
+});
+
 test('single-file diff: header + context/added/removed rows, kinds aligned', () => {
   const dmb = buildDiffMultiBuffer([{ path: '/a.ts', oldText: 'a\nb\nc\n', newText: 'a\nX\nc\n' }]);
   const p = project(dmb);
@@ -72,9 +83,10 @@ test('header label is relative to cwd when given', () => {
   assert.equal((dmb.items[0] as any).block.text, 'src/a.ts');
 });
 
-test('an unchanged file elides to a single gap row', () => {
+test('a file with no text change is skipped entirely (no dead `⋯ unchanged` entry)', () => {
   const dmb = buildDiffMultiBuffer([{ path: '/a.ts', oldText: 'a\nb\n', newText: 'a\nb\n' }]);
-  assert.deepEqual(dmb.rowKinds, ['header', 'gap']);
+  assert.deepEqual(dmb.items, [], 'no header, no gap — the unchanged file produces nothing');
+  assert.deepEqual(dmb.rowKinds, []);
 });
 
 test('long unchanged runs are elided to a ⋯ gap; the change + context stay', () => {

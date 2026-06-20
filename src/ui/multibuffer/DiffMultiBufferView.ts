@@ -25,7 +25,7 @@ import { ProjectionView } from '../TextEditor/ProjectionView.ts';
 import { ViewProjection } from '../TextEditor/ViewProjection.ts';
 import { ExcerptSyntaxProjection } from './ExcerptSyntaxProjection.ts';
 import { applyDiffDecorations } from '../TextEditor/applyDiffDecorations.ts';
-import { DiffLineNumberGutter } from '../TextEditor/DiffLineNumberGutter.ts';
+import { CombinedDiffLineNumberGutter } from '../TextEditor/DiffLineNumberGutter.ts';
 import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './diffMultiBuffer.ts';
 import { buildHeaderWidget, buildGapWidget } from './MultiBufferHeader.ts';
 import type { BlockDecorationHandle } from '../TextEditor/BlockDecorations.ts';
@@ -77,15 +77,22 @@ export class DiffMultiBufferView {
   private readonly cwd?: string;
   private readonly sources = new Map<string, SourceEntry>();
   private readonly projectionView: ProjectionView;
-  private readonly lineNumbers: DiffLineNumberGutter[] = [];
+  private lineNumbers: CombinedDiffLineNumberGutter | null = null;
   // Header + `⋯` gap widgets (BlockDecoration bands). Re-placed on each re-diff: their text
   // (gap counts, leading-gap subtitle) and positions change as the diff re-flows.
   private overlayHandles: BlockDecorationHandle[] = [];
+  // Expand-context state: NEW-side rows the user forced visible, and a reveal-everything flag.
+  // The current diff's anchors, kept for the keyboard `expandContextAtCursor`.
+  private revealAll = false;
+  private readonly revealedNewRows = new Set<number>();
+  private gapAnchors: DiffMultiBuffer['gapAnchors'] = [];
+  private headerAnchors: DiffMultiBuffer['headerAnchors'] = [];
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
   private reDiffTimer: NodeJS.Timeout | null = null;
   private suppressReDiff = false;
+  private lastLineCount = 0; // view buffer line count, to detect line-count-changing edits
   private readonly modifiedHandlers: Array<() => void> = [];
   private readonly modifiedUnsubs: Array<() => void> = [];
   private disposed = false;
@@ -123,6 +130,10 @@ export class DiffMultiBufferView {
       },
     });
     this.root = this.editor.root;
+    // Scope the expand-context keymap to this surface: `#TextEditor.diff-multibuffer` is more
+    // specific than vim's `#TextEditor`, so `z o`/`z R`/`z m` bind here while `z z` (scroll) etc.
+    // still fall through to vim.
+    (this.editor.sourceView as any).addCssClass('diff-multibuffer');
 
     if (this.editable) {
       this.editor.model.setEditableCheck((s, e) => this.projection.isViewRangeEditable(s, e));
@@ -133,18 +144,34 @@ export class DiffMultiBufferView {
 
     this.applyDecorations(dmb);
 
-    const view = this.editor.sourceView;
-    this.lineNumbers = [
-      new DiffLineNumberGutter(view, lineLabels(dmb.oldNums), undefined, 1, gutterBg(dmb, 'old')),
-      new DiffLineNumberGutter(view, lineLabels(dmb.newNums), undefined, 2, gutterBg(dmb, 'new')),
-    ];
+    // ONE gutter renderer drawing both old + new columns (one PangoLayout/line, for perf).
+    this.lineNumbers = new CombinedDiffLineNumberGutter(
+      this.editor.sourceView,
+      lineLabels(dmb.oldNums),
+      lineLabels(dmb.newNums),
+      gutterBg(dmb, 'old'),
+      gutterBg(dmb, 'new'),
+    );
 
     this.installOverlays(dmb);
     this.installNavigation();
     if (this.editable) {
-      // Re-diff after the new side settles: the live Document already has the edit (write-through),
-      // so recompute the windowed diff and re-flow the view with a minimal splice.
-      this.editor.model.onDidChangeText(() => this.scheduleReDiff());
+      // Re-diff after an edit. A LINE-COUNT change (Enter / `o` / dd) reflows the diff and moves
+      // the caret relative to the gaps, so re-diff IMMEDIATELY — debouncing it leaves the caret
+      // briefly stranded next to a gap widget before the deferred reflow corrects it. A within-line
+      // edit doesn't move gaps, so it stays debounced (the common per-keystroke case).
+      this.lastLineCount = (this.projectionView.buffer as any).getLineCount();
+      this.editor.model.onDidChangeText(() => {
+        if (this.suppressReDiff) return; // our own retarget edits
+        const n = (this.projectionView.buffer as any).getLineCount();
+        const lineCountChanged = n !== this.lastLineCount;
+        this.lastLineCount = n;
+        // A line-count change reflows the diff; re-diff on a MICROTASK (after the full edit
+        // command finishes placing the caret, but before the next paint) so the caret follows
+        // with no visible flash — yet not synchronously, which would race vim's own cursor move.
+        if (lineCountChanged) this.scheduleMicroReDiff();
+        else this.scheduleReDiff();
+      });
       // Surface each new-side file's modified state as one event (for the tab's unsaved marker).
       for (const entry of this.sources.values()) {
         if (entry.document) this.modifiedUnsubs.push(entry.document.onModifiedChange(() => this.emitModified()));
@@ -159,7 +186,55 @@ export class DiffMultiBufferView {
   private buildDiff(): DiffMultiBuffer {
     const files = this.files.map((f) => ({ ...f, newText: this.currentNewText(f) }));
     // Filename headers are widgets (not navigable buffer text), anchored above each file's rows.
-    return buildDiffMultiBuffer(files, this.cwd, { headers: 'widget' });
+    // `reveal` forces user-expanded (otherwise-elided) new-side rows visible (expand-context).
+    const reveal = this.revealAll ? () => true : (r: number) => this.revealedNewRows.has(r);
+    return buildDiffMultiBuffer(files, this.cwd, { headers: 'widget', reveal });
+  }
+
+  // --- expand context (reveal elided unchanged lines) ------------------------
+  private static readonly CHUNK = 10; // lines revealed per click / `zo`
+
+  /** Reveal a chunk of a gap's elided rows. `fromTop` extends the window above the gap (the
+   *  common case); else extends the window below (a leading gap). Re-diffs to re-flow. */
+  private revealChunk(rows: number[], fromTop: boolean): void {
+    if (!rows.length) return;
+    const chunk = fromTop ? rows.slice(0, DiffMultiBufferView.CHUNK) : rows.slice(-DiffMultiBufferView.CHUNK);
+    for (const r of chunk) this.revealedNewRows.add(r);
+    this.reDiff();
+  }
+
+  /** Expand the gap nearest the caret, revealing TOWARD the caret: a gap below the caret reveals
+   *  from its top (extends the caret's window down), a gap above reveals from its bottom (extends
+   *  it up). Leading gaps (above a file's first row) join the same candidate set. So `zo` works
+   *  whether the caret sits above or below the fold. */
+  expandContextAtCursor(): void {
+    const row = this.cursorRow();
+    // Each gap sits just below `viewRow` (the last shown row before it); a leading gap sits above
+    // the file's first content row (`header.viewRow`), i.e. just below `header.viewRow - 1`.
+    const gaps: Array<{ rows: number[]; viewRow: number }> = [
+      ...this.gapAnchors.map((g) => ({ rows: g.revealRows, viewRow: g.viewRow })),
+      ...this.headerAnchors.flatMap((h) => (h.leadingRevealRows?.length ? [{ rows: h.leadingRevealRows, viewRow: h.viewRow - 1 }] : [])),
+    ];
+    let best: { rows: number[]; fromTop: boolean; dist: number } | null = null;
+    for (const g of gaps) {
+      const above = row <= g.viewRow; // is the caret above this gap?
+      const dist = above ? g.viewRow - row : row - (g.viewRow + 1);
+      if (!best || dist < best.dist) best = { rows: g.rows, fromTop: above, dist };
+    }
+    if (best) this.revealChunk(best.rows, best.fromTop);
+  }
+
+  /** Reveal every elided line (show the full files). */
+  expandAll(): void {
+    this.revealAll = true;
+    this.reDiff();
+  }
+
+  /** Re-collapse all expanded context back to the windowed diff. */
+  collapseContext(): void {
+    this.revealAll = false;
+    this.revealedNewRows.clear();
+    this.reDiff();
   }
 
   /** (Re)place the header widgets (above each file's first row) + the `⋯` gap bands (below the
@@ -171,6 +246,8 @@ export class DiffMultiBufferView {
    *  only a line add/remove (which shifts rows or gap counts) actually re-places. */
   private lastOverlayKey = '';
   private installOverlays(dmb: DiffMultiBuffer): void {
+    this.gapAnchors = dmb.gapAnchors; // kept for the keyboard expand (`expandContextAtCursor`)
+    this.headerAnchors = dmb.headerAnchors;
     const key = JSON.stringify([dmb.headerAnchors, dmb.gapAnchors]);
     if (key === this.lastOverlayKey && this.overlayHandles.length) return;
     this.lastOverlayKey = key;
@@ -181,7 +258,9 @@ export class DiffMultiBufferView {
       this.overlayHandles.push(this.editor.inlineBlocks.add({ line: h.viewRow, widget, placement: 'above' }));
     }
     for (const g of dmb.gapAnchors) {
-      this.overlayHandles.push(this.editor.inlineBlocks.add({ line: g.viewRow, widget: buildGapWidget(g.label), placement: 'below' }));
+      // Clicking the gap reveals a chunk of its elided lines (extends the window above it).
+      const widget = buildGapWidget(g.label, () => this.revealChunk(g.revealRows, true));
+      this.overlayHandles.push(this.editor.inlineBlocks.add({ line: g.viewRow, widget, placement: 'below' }));
     }
   }
 
@@ -226,6 +305,20 @@ export class DiffMultiBufferView {
     }, REDIFF_DEBOUNCE_MS);
   }
 
+  // Re-diff on a microtask (a line-count-changing edit): runs after the edit command settles but
+  // before the next paint, so the reflow + caret-follow happen with no visible flash. Supersedes
+  // a pending debounce.
+  private microReDiffScheduled = false;
+  private scheduleMicroReDiff(): void {
+    if (this.microReDiffScheduled || this.disposed) return;
+    this.microReDiffScheduled = true;
+    if (this.reDiffTimer) { clearTimeout(this.reDiffTimer); this.reDiffTimer = null; }
+    queueMicrotask(() => {
+      this.microReDiffScheduled = false;
+      if (!this.disposed && !this.suppressReDiff) this.reDiff();
+    });
+  }
+
   /** Recompute the windowed diff from the (edited) live new side and re-flow the view with a
    *  minimal splice — phantom/removed rows appear/disappear without a whole-buffer flash. */
   private reDiff(): void {
@@ -243,8 +336,7 @@ export class DiffMultiBufferView {
       this.suppressReDiff = false;
     }
     this.applyDecorations(dmb);
-    this.lineNumbers[0]?.setData(lineLabels(dmb.oldNums), gutterBg(dmb, 'old'));
-    this.lineNumbers[1]?.setData(lineLabels(dmb.newNums), gutterBg(dmb, 'new'));
+    this.lineNumbers?.setData(lineLabels(dmb.oldNums), lineLabels(dmb.newNums), gutterBg(dmb, 'old'), gutterBg(dmb, 'new'));
     this.installOverlays(dmb); // re-place header + gap widgets (counts/positions re-flowed)
     // retarget swapped rows but didn't repaint — re-highlight the spliced sections.
     this.editor.repaintSyntax();
@@ -253,6 +345,7 @@ export class DiffMultiBufferView {
       const pos = this.projection.sourceToView(anchor.sourceKey, anchor.row, anchor.column);
       if (pos) this.editor.model.setCursorBufferPosition(pos);
     }
+    this.lastLineCount = (this.projectionView.buffer as any).getLineCount(); // reflow changed it
   }
 
   /** Added/removed line backgrounds from the per-row diff kinds (header/blank/gap/context get
@@ -343,7 +436,7 @@ export class DiffMultiBufferView {
     this.modifiedUnsubs.length = 0;
     for (const handle of this.overlayHandles) handle.remove();
     this.overlayHandles = [];
-    for (const gutter of this.lineNumbers) gutter.dispose();
+    this.lineNumbers?.dispose();
     this.projectionView.dispose();
     for (const entry of this.sources.values()) {
       // Editable new side: drop the shared ref (a file also open in a tab survives + keeps its

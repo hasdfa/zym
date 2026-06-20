@@ -195,6 +195,14 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     q: 'git:close-diff',
     'escape escape': 'git:close-diff',
   },
+  // Editable diff multibuffer (git:diff-multibuffer): fold-style keys expand the elided `⋯`
+  // unchanged lines. More specific than the vim `#TextEditor` bindings, so these win; `z z`/
+  // `z t`/`z b` (scroll) aren't bound here and still fall through to vim.
+  '#TextEditor.diff-multibuffer': {
+    'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
+    'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
+    'z m': 'diff:collapse-context', // re-collapse expanded context
+  },
 
   // Workbench list (the left sidebar): shared list navigation (l reveals the selected
   // agent's terminal) plus lifecycle keys acting on the selected agent.
@@ -208,6 +216,7 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     o: 'agent:open-changes', // open the files the selected agent has edited
   },
 
+  // Location lists (LSP diagnostics, project-wide search, …): shared navigation
   // Location lists (LSP diagnostics, project-wide search, …): shared navigation
   // (l opens the location under the cursor).
   '#LocationList': LIST_NAV,
