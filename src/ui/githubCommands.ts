@@ -2,8 +2,8 @@
  * GithubCommands — the window-level `github:*` commands (the pickers and the open-on-web
  * actions), split out of AppWindow so GitHub-specific orchestration isn't tangled into the
  * shell. The header-button commands stay in `GithubButtons` (they render from that widget's
- * state); these need the overlay, the active editor, and the active workbench's cwd/git —
- * injected as getters since the active workbench switches under them.
+ * state); the active editor comes from `zym.workspace.getActiveTextEditor()`, and the
+ * overlay + active workbench's cwd/git are injected as getters (the workbench switches).
  */
 import * as Path from 'node:path';
 import { Gtk } from '../gi.ts';
@@ -16,13 +16,11 @@ import { openGithubFailedCIPicker } from './GithubFailedCIPicker.ts';
 import { openGithubCIChecksPicker } from './GithubCIChecksPicker.ts';
 import { switchToGithubPrPicker } from './GithubPrPicker.ts';
 import { blameCommitAtCursor, isUncommitted } from './TextEditor/GitBlameController.ts';
-import type { TextEditor } from './TextEditor/TextEditor.ts';
 import type { Disposable } from '../util/eventKit.ts';
 
 export interface GithubCommandsDeps {
   overlay: InstanceType<typeof Gtk.Overlay>;
   github: GithubService;
-  activeEditor: () => TextEditor | null;
   cwd: () => string;
   git: () => GitRepo;
   toast: (message: string) => void;
@@ -31,7 +29,8 @@ export interface GithubCommandsDeps {
 /** Register the window-level `github:*` commands on `#AppWindow`. */
 export function registerGithubCommands(d: GithubCommandsDeps): Disposable {
   const inRepo = () => d.git().getBranch() !== null;
-  const onEditorInRepo = () => d.activeEditor()?.currentFile != null && d.github.getRepo() !== null;
+  const onEditorInRepo = () =>
+    zym.workspace.getActiveTextEditor()?.currentFile != null && d.github.getRepo() !== null;
   return zym.commands.add('#AppWindow', {
     'github:issue-picker': { didDispatch: () => openGithubIssuePicker(d.overlay, d.cwd()), description: 'Open a GitHub issue…', when: inRepo },
     'github:failed-ci-picker': { didDispatch: () => openGithubFailedCIPicker(d.overlay, d.cwd()), description: 'Open a failed CI check…', when: inRepo },
@@ -46,7 +45,7 @@ export function registerGithubCommands(d: GithubCommandsDeps): Disposable {
 // stays valid even if the line later moves (falling back to the branch name when HEAD is
 // unborn). 404s if HEAD isn't pushed yet — inherent to a local-first link.
 function openLine(d: GithubCommandsDeps): void {
-  const editor = d.activeEditor();
+  const editor = zym.workspace.getActiveTextEditor();
   const path = editor?.currentFile;
   if (!editor || !path) return;
   const repo = d.github.getRepo();
@@ -63,7 +62,7 @@ function openLine(d: GithubCommandsDeps): void {
 // GitHub which PR carried that commit. Toasts when the line is uncommitted or the commit
 // reached the branch outside a PR (a direct push).
 function openPrForLine(d: GithubCommandsDeps): void {
-  const editor = d.activeEditor();
+  const editor = zym.workspace.getActiveTextEditor();
   if (!editor?.currentFile) return;
   if (!d.github.getRepo()) return d.toast('No GitHub remote for this repository');
   blameCommitAtCursor(editor, (info) => {

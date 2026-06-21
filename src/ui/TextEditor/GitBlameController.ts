@@ -18,6 +18,7 @@ import { VirtualText } from './VirtualText.ts';
 import { escapeMarkup } from '../Picker.ts';
 import { blame, blameLine, git, repoRoot } from '../../git.ts';
 import { relativeTime } from '../../core/relativeTime.ts';
+import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
 import type { TextEditor } from './TextEditor.ts';
 
 export interface BlameLine {
@@ -59,7 +60,7 @@ export function blameCommitAtCursor(editor: TextEditor, onDone: (info: BlameLine
   if (!file) return onDone(null);
   const root = repoRoot(Path.dirname(file));
   if (!root) return onDone(null);
-  blameCommitForLine(root, Path.relative(root, file), editor.lspCursor().row, editor.documentText, onDone);
+  blameCommitForLine(root, Path.relative(root, file), editor.lspCursor().row, editor.sourceText, onDone);
 }
 
 /** Pop the full message of the commit that last touched the cursor line, above the cursor
@@ -198,6 +199,41 @@ export class GitBlameController {
     this.timer = null;
     this.annotations.dispose();
   }
+}
+
+/** Install current-line git blame across every text editor — a built-in conceived like a
+ *  plugin: it plugs into the same `observeTextEditors` seam as decoration plugins rather
+ *  than being wired into the editor itself. For each editor it owns a `GitBlameController`
+ *  + the `git:show-commit` command, all torn down when that editor closes. Call once at
+ *  startup; the returned Disposable removes the whole feature. */
+export function installGitBlame(): Disposable {
+  return zym.workspace.observeTextEditors((editor) => {
+    const controller = new GitBlameController(
+      editor.sourceView,
+      () => editor.currentFile,
+      () => editor.sourceText, // the canonical source text — folds don't substitute file lines
+      () => editor.model.getCursorBufferPosition().row,
+      (viewRow) => editor.modelLineForViewLine(viewRow),
+    );
+    const subs = new CompositeDisposable(
+      editor.onDidChangeCursorPosition(() => controller.onCursorMoved()),
+      editor.onDidChangeFolds(() => controller.rerender()),
+      editor.model.onDidChangeText(() => controller.invalidate()),
+      zym.config.observe('editor.lineBlame', () => controller.refresh()),
+      zym.config.observe('editor.lineBlameFormat', () => controller.refresh()),
+      zym.commands.add(editor.sourceView, {
+        'git:show-commit': {
+          didDispatch: () => showCommitAtCursor(editor),
+          description: 'Show the commit that last touched this line',
+          when: () => editor.currentFile != null,
+        },
+      }),
+    );
+    return new Disposable(() => {
+      subs.dispose();
+      controller.dispose();
+    });
+  });
 }
 
 /** Parse `git blame --line-porcelain` into a map of MODEL line (0-based) → blame.

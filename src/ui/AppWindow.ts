@@ -397,6 +397,7 @@ export class AppWindow {
       const editor = this.openFile(path);
       if (options?.cursor) editor.restoreCursor(options.cursor);
     });
+    zym.workspace.setActiveEditorProvider(() => this.activeEditor);
     zym.keymaps.initialize();
     // which-key hint: shows the continuations after a queued prefix (e.g. Space).
     this.whichKey = new WhichKey(this.contentOverlay);
@@ -2614,7 +2615,6 @@ export class AppWindow {
     registerGithubCommands({
       overlay: this.overlay,
       github: this.github,
-      activeEditor: () => this.activeEditor,
       cwd: () => this.workbench.cwd,
       git: () => this.workbench.git,
       toast: (message) => this.toast(message),
