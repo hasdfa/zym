@@ -120,8 +120,8 @@ export interface GitRepo {
   pull(): Promise<GitOpResult>;
   /** `git push`. */
   push(): Promise<GitOpResult>;
-  /** Commit the message in `messageFile` (`git commit -F`). */
-  commit(messageFile: string): Promise<GitOpResult>;
+  /** Commit the message in `messageFile` (`git commit -F`); `amend` rewrites HEAD. */
+  commit(messageFile: string, amend?: boolean): Promise<GitOpResult>;
   /** Stash the working-tree changes (`git stash push`). */
   stash(): Promise<GitOpResult>;
   /** Pop / apply / drop a stash by ref ("stash@{N}"). */
@@ -286,8 +286,8 @@ class CliGitRepo implements GitRepo {
   push(): Promise<GitOpResult> {
     return this.mutate((root, done) => cli.git(root, ['push'], done));
   }
-  commit(messageFile: string): Promise<GitOpResult> {
-    return this.mutate((root, done) => cli.commit(root, messageFile, done));
+  commit(messageFile: string, amend = false): Promise<GitOpResult> {
+    return this.mutate((root, done) => cli.commit(root, messageFile, done, amend));
   }
   stash(): Promise<GitOpResult> {
     return this.mutate((root, done) => cli.stashPush(root, done));

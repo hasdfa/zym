@@ -99,10 +99,12 @@ Single-file editing plus both multibuffer surfaces run on the
     and every changed row classified staged/unstaged against the index
     (staged = HEAD↔index, unstaged = index↔worktree, the same model
     `GitGutter` uses). A gutter marker bar shows it (info/blue = staged,
-    warning/amber = unstaged). `space h s`/`space h u` (scoped to
-    `#TextEditor.continuous-diff` so bare vim `s`/`u` stay
-    substitute/undo) → `diff:stage-hunk`/`diff:unstage-hunk` build the
-    hunk patch (`formatHunkPatch`) and `applyPatch --cached` (`--reverse`
+    warning/amber = unstaged). `space h s`/`space h u` →
+    `git:stage-hunk`/`git:unstage-hunk` (the unified hunk commands, shared
+    with the editor gutter; routed here via the focus chain since this
+    embedded editor registers no gutter variant, and bare vim `s`/`u` stay
+    substitute/undo) build the hunk patch (`formatHunkPatch`) and
+    `applyPatch --cached` (`--reverse`
     for unstage), then re-read the index + repaint markers (no geometry
     reflow — staging doesn't touch the worktree↔HEAD diff). Partial-file
     (per-hunk) staging works; external index moves refresh via

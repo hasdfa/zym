@@ -327,9 +327,33 @@ export function unstageAll(root: string, onDone: GitDone): void {
   git(root, ['reset', '-q'], onDone);
 }
 
-/** Commit using a message file (`git commit -F`). */
-export function commit(root: string, messageFile: string, onDone: GitDone): void {
-  git(root, ['commit', '-F', messageFile], onDone);
+/** Commit using a message file (`git commit -F`); `amend` rewrites HEAD. */
+export function commit(root: string, messageFile: string, onDone: GitDone, amend = false): void {
+  const args = ['commit', '-F', messageFile];
+  if (amend) args.push('--amend');
+  git(root, args, onDone);
+}
+
+/** Full message of HEAD (`git log -1 --format=%B`); empty string on an unborn
+ *  branch or outside a repo. Used to prefill an amend's message. */
+export function lastCommitMessage(root: string, onDone: (message: string) => void): void {
+  git(root, ['log', '-1', '--format=%B'], (ok, stdout) => onDone(ok ? stdout : ''));
+}
+
+/** `git blame --line-porcelain` for `relPath`, blaming `contents` (the live buffer,
+ *  fed on stdin via `--contents -`) so line numbers and uncommitted lines match what
+ *  the user sees rather than the on-disk file. */
+export function blame(root: string, relPath: string, contents: string, onDone: GitDone): void {
+  const args = ['blame', '--line-porcelain', '--contents', '-', '--', relPath];
+  runProcess({ file: 'git', args, cwd: root, input: contents }, (r) => decode(r, onDone));
+}
+
+/** `git blame` for a single 1-based `line` of `relPath` (blaming the live `contents`).
+ *  The cheap path for "what commit touched this one line" — used by the commit popover
+ *  and PR-for-line lookup, independent of whether inline blame is on. */
+export function blameLine(root: string, relPath: string, line: number, contents: string, onDone: GitDone): void {
+  const args = ['blame', '-L', `${line},${line}`, '--line-porcelain', '--contents', '-', '--', relPath];
+  runProcess({ file: 'git', args, cwd: root, input: contents }, (r) => decode(r, onDone));
 }
 
 // --- branches ----------------------------------------------------------------

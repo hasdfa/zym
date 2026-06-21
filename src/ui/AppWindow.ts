@@ -44,8 +44,10 @@ import { NERDFONT } from './nerdfont.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
-import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees } from '../git.ts';
+import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
+import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
 import { openGithubService, type GithubService } from '../github.ts';
+import { registerGithubCommands } from './githubCommands.ts';
 import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
@@ -71,10 +73,7 @@ import {
   openRenameBranchPicker,
 } from './BranchPicker.ts';
 import { openStashPicker } from './StashPicker.ts';
-import { openGithubFailedCIPicker } from './GithubFailedCIPicker.ts';
 import { openGithubCIChecksPicker } from './GithubCIChecksPicker.ts';
-import { switchToGithubPrPicker } from './GithubPrPicker.ts';
-import { openGithubIssuePicker } from './GithubIssuePicker.ts';
 import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
@@ -163,7 +162,7 @@ export class AppWindow {
   private sidebarSplit!: InstanceType<typeof Gtk.Paned>;
   // Commit-message editor tabs: the message file each is bound to, so closing the
   // tab can commit (git-style: write the message, save, close to commit).
-  private readonly commitEditors = new Map<Widget, { repo: string; msgPath: string }>();
+  private readonly commitEditors = new Map<Widget, { repo: string; msgPath: string; amend: boolean }>();
   // Maps an agent's root widget to its center tab handle, so the agent list can
   // reveal (select) the agent's tab on activation.
   private readonly agentChildren = new Map<Widget, PanelChild>();
@@ -399,6 +398,7 @@ export class AppWindow {
       const editor = this.openFile(path);
       if (options?.cursor) editor.restoreCursor(options.cursor);
     });
+    zym.workspace.setActiveEditorProvider(() => this.activeEditor);
     zym.keymaps.initialize();
     // which-key hint: shows the continuations after a queued prefix (e.g. Space).
     this.whichKey = new WhichKey(this.contentOverlay);
@@ -1321,7 +1321,7 @@ export class AppWindow {
     const commitInfo = this.commitEditors.get(widget);
     if (commitInfo) {
       this.commitEditors.delete(widget);
-      this.finishCommit(commitInfo.repo, commitInfo.msgPath);
+      this.finishCommit(commitInfo.repo, commitInfo.msgPath, commitInfo.amend);
     }
   }
 
@@ -2206,6 +2206,11 @@ export class AppWindow {
         didDispatch: () => this.startCommit(),
         description: 'Commit staged changes (edit the message in a tab)',
       },
+      'git:commit-amend': {
+        didDispatch: () => this.startCommit(true),
+        description: 'Amend the last commit (edit the message in a tab)',
+        when: () => this.workbench.git.getHead() !== null,
+      },
       'project:search-results': {
         didDispatch: () => this.openSearchResults(),
         description: 'Search the selected text across the project, shown as a multibuffer',
@@ -2245,12 +2250,16 @@ export class AppWindow {
         description: 'Expand every file (search results)',
         when: () => this.activeSearchResults() !== null,
       },
-      'diff:stage-hunk': {
+      // Unified hunk commands: the same `git:stage-hunk`/`git:unstage-hunk` (`space h s`/`u`)
+      // as the editor gutter, routed here for the continuous diff. The continuous-diff editor
+      // is embedded (no gutter), so it never registers the editor's variant — these AppWindow
+      // registrations are what the focus chain resolves while it's focused.
+      'git:stage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.stageHunkAtCursor(),
         description: 'Stage the hunk under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff() !== null,
       },
-      'diff:unstage-hunk': {
+      'git:unstage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.unstageHunkAtCursor(),
         description: 'Unstage the hunk under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff() !== null,
@@ -2308,6 +2317,44 @@ export class AppWindow {
       const viewer = new DiffViewer(model, { title: `${name} (working tree ↔ HEAD)`, languagePath: path });
       this.workbench.center.add(viewer.root, { title: `± ${name}`, requireTabBar: true });
     });
+  }
+
+  // Stage / unstage the active editor's file. `git add -- <path>` when staging,
+  // `git restore --staged -- <path>` when unstaging; the repo root is resolved
+  // from the file itself (the active editor may belong to a nested repo).
+  private stageCurrentFile(staging: boolean): void {
+    const path = this.activeEditor?.currentFile;
+    if (!path) return;
+    const root = repoRoot(Path.dirname(path));
+    if (!root) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const rel = Path.relative(root, path);
+    const name = Path.basename(path);
+    const verb = staging ? 'Stage' : 'Unstage';
+    const op = staging ? stage : unstage;
+    op(root, rel, this.gitStageDone(`${verb} ${name}`));
+  }
+
+  // Stage / unstage the whole working tree: `git add -A` / `git reset -q`.
+  private stageEverything(staging: boolean): void {
+    const root = repoRoot(this.workbench.cwd);
+    if (!root) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const op = staging ? stageAll : unstageAll;
+    op(root, this.gitStageDone(staging ? 'Stage all' : 'Unstage all'));
+  }
+
+  // Refresh the cached repo so the gutter, Source Control panel, and branch
+  // indicator update immediately; report only failures (success is silent).
+  private gitStageDone(label: string): GitDone {
+    return (ok, _out, err) => {
+      if (!ok) zym.notifications.addError(`${label} failed`, { detail: err.trim() });
+      this.workbench.git.refresh();
+    };
   }
 
   /** Search the project for the active editor's selected text and show every match,
@@ -2518,6 +2565,30 @@ export class AppWindow {
   // the result is surfaced as a toast.
   private registerGitCommands() {
     zym.commands.add('#AppWindow', {
+      // Staging from anywhere (not just the Source Control panel): the current
+      // editor file, or the whole tree. These shell out to git directly — like the
+      // panel's row actions — then refresh the cached repo so the gutter and branch
+      // indicator update at once.
+      'git:stage-current': {
+        didDispatch: () => this.stageCurrentFile(true),
+        description: 'Stage the current file (git add)',
+        when: () => this.activeEditor?.currentFile != null,
+      },
+      'git:unstage-current': {
+        didDispatch: () => this.stageCurrentFile(false),
+        description: 'Unstage the current file',
+        when: () => this.activeEditor?.currentFile != null,
+      },
+      'git:stage-all': {
+        didDispatch: () => this.stageEverything(true),
+        description: 'Stage all changes (git add -A)',
+        when: () => this.workbench.git.getBranch() !== null,
+      },
+      'git:unstage-all': {
+        didDispatch: () => this.stageEverything(false),
+        description: 'Unstage all changes',
+        when: () => this.workbench.git.getBranch() !== null,
+      },
       // Git commands only apply inside a repository (a resolvable branch).
       'git:fetch': { didDispatch: () => this.runGit(() => this.workbench.git.fetch(), 'Fetch'), description: 'Fetch from the remote', when: () => this.workbench.git.getBranch() !== null },
       'git:pull': { didDispatch: () => this.runGit(() => this.workbench.git.pull(), 'Pull'), description: 'Pull from upstream (fast-forward)', when: () => this.workbench.git.getBranch() !== null },
@@ -2570,26 +2641,14 @@ export class AppWindow {
         description: 'Drop a stash…',
         when: () => this.workbench.git.getBranch() !== null,
       },
-      'github:issue-picker': {
-        didDispatch: () => openGithubIssuePicker(this.overlay, this.workbench.cwd),
-        description: 'Open a GitHub issue…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
-      'github:failed-ci-picker': {
-        didDispatch: () => openGithubFailedCIPicker(this.overlay, this.workbench.cwd),
-        description: 'Open a failed CI check…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
-      'github:ci-checks': {
-        didDispatch: () => openGithubCIChecksPicker(this.overlay, this.workbench.cwd),
-        description: 'Show CI checks for this branch…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
-      'github:pull-request-checkout': {
-        didDispatch: () => switchToGithubPrPicker(this.overlay, this.workbench.cwd, this.workbench.git),
-        description: 'Check out a pull request…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
+    });
+    // GitHub-specific commands (pickers + open-on-web) live in their own module.
+    registerGithubCommands({
+      overlay: this.overlay,
+      github: this.github,
+      cwd: () => this.workbench.cwd,
+      git: () => this.workbench.git,
+      toast: (message) => this.toast(message),
     });
   }
 
@@ -2628,24 +2687,31 @@ export class AppWindow {
   // Start a commit: open the message file (`.git/COMMIT_EDITMSG`) in an editor
   // tab. Closing the tab finalizes it — git-style: write the message, save, close
   // to commit (close without a saved message aborts). Reuses the normal editor.
-  private startCommit() {
+  // `amend` rewrites HEAD and prefills the tab with the last commit's message.
+  private startCommit(amend = false) {
     const repo = repoRoot(this.workbench.cwd);
     if (!repo) return;
     commitMsgPath(repo, (msgPath) => {
-      try {
-        Fs.writeFileSync(msgPath, ''); // fresh, empty message
-      } catch (error) {
-        zym.notifications.addError('Could not start commit', { detail: (error as Error).message });
-        return;
-      }
-      const editor = this.openFile(msgPath);
-      this.commitEditors.set(editor.root, { repo, msgPath });
+      const open = (initial: string) => {
+        try {
+          Fs.writeFileSync(msgPath, initial);
+        } catch (error) {
+          zym.notifications.addError('Could not start commit', { detail: (error as Error).message });
+          return;
+        }
+        const editor = this.openFile(msgPath);
+        this.commitEditors.set(editor.root, { repo, msgPath, amend });
+      };
+      // Amend prefills the existing message so the user can edit it; a plain
+      // commit starts blank.
+      if (amend) lastCommitMessage(repo, open);
+      else open('');
     });
   }
 
   // Finalize a commit when its message tab closes: commit the saved message, or
   // abort if it is empty. Routed through zym.notifications.
-  private finishCommit(repo: string, msgPath: string) {
+  private finishCommit(repo: string, msgPath: string, amend: boolean) {
     let message = '';
     try {
       message = Fs.readFileSync(msgPath, 'utf8');
@@ -2656,9 +2722,9 @@ export class AppWindow {
       zym.notifications.addInfo('Commit aborted (empty message)');
       return;
     }
-    void this.workbench.git.commit(msgPath).then((result) => {
-      if (result.isOk()) zym.notifications.addSuccess('Committed');
-      else zym.notifications.addError('Commit failed', { detail: result.unwrapErr().message.trim() });
+    void this.workbench.git.commit(msgPath, amend).then((result) => {
+      if (result.isOk()) zym.notifications.addSuccess(amend ? 'Amended HEAD' : 'Committed');
+      else zym.notifications.addError(amend ? 'Amend failed' : 'Commit failed', { detail: result.unwrapErr().message.trim() });
     });
   }
 

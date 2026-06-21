@@ -24,14 +24,14 @@ import { attachVim } from './vim/index.ts';
 import { zym } from '../../zym.ts';
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
 import { DiagnosticsView } from '../../lsp/diagnostics/DiagnosticsView.ts';
-import { markdownToPango } from '../markdownMarkup.ts';
+import { MarkupCard } from './MarkupCard.ts';
 import { fonts } from '../../fonts.ts';
 import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
 import { langIdForPath } from '../../syntax/grammar.ts';
 import { TextDecorations } from './TextDecorations.ts';
 import { BlockDecorations } from './BlockDecorations.ts';
 import { BlockDecorationSet } from './BlockDecorationSet.ts';
-import { OverlayDecoration } from './OverlayDecoration.ts';
+import { EditorPopover } from './EditorPopover.ts';
 import { Peek, type PeekOptions } from './Peek.ts';
 import { GitGutter } from './GitGutter.ts';
 import { IndentGuides } from './IndentGuides.ts';
@@ -98,15 +98,6 @@ addStyles(`
     color: var(--t-ui-text-muted);
     opacity: 0.6;
   }
-  /* LSP hover card: a floating tooltip over the editor. */
-  .zym-hover {
-    background-color: var(--t-ui-surface-popover);
-    color: var(--t-ui-editor-foreground);
-    border: 1px solid alpha(var(--t-ui-editor-foreground), 0.2);
-    border-radius: 6px;
-    padding: 6px 8px;
-    box-shadow: 0 1px 3px var(--t-ui-shadow);
-  }
   /* Info banner pinned above the editor content. Color tint is mostly muted into
      the UI background so it isn't garish; text/buttons keep the normal foreground.
      Compact buttons keep the bar slim. Two variants: warning (disk change) and
@@ -152,13 +143,10 @@ function hasLongLine(text: string, threshold: number): boolean {
     start = nl + 1;
   }
 }
-// LSP hover card width (px) — set as a size request, since GtkFixed sizes its
-// children to their *minimum* width (it ignores GtkLabel max-width-chars). The
-// label fills this width and wraps. HOVER_GAP keeps the card clear of the cursor.
+// LSP hover / signature card min width (px) — a size request the label wraps to.
 const HOVER_WIDTH_PX = 300;
-const HOVER_GAP = 4;
-// Left inset of a `.zym-hover` card's text (1px border + 8px padding); the
-// signature card shifts left by this so its text lines up with the code column.
+// The card's horizontal chrome (1px popover border + 8px contents padding). EditorPopover
+// shifts the card left by this so its text lines up with the code column, not the edge.
 const CARD_CONTENT_INSET_PX = 9;
 // Settle the autopair `()` insert + cursor move before requesting signature help.
 const SIGNATURE_DEBOUNCE_MS = 40;
@@ -436,19 +424,21 @@ export class TextEditor implements DocumentHost {
   private lspDocument: LspDocument | null = null;
   private diagnostics!: DiagnosticsView;
   private inlayHints!: InlayHintController;
+  // External subscribers to fold open/close (e.g. git blame), fanned out from the
+  // single `syntax.onFoldsChanged` so they get a real unsubscribe (`onDidChangeFolds`).
+  private readonly foldsChangedHandlers = new Set<() => void>();
   // Git change bar in the gutter; only present in file mode when a repo is given.
   private gitGutter: GitGutter | null = null;
-  // The LSP hover card: a non-interactive overlay floated in `caretLayer` at the
-  // cursor (the proven Fixed-overlay pattern, not a GtkPopover). Hidden until shown.
-  private readonly hoverLabel = new Gtk.Label({ useMarkup: true, wrap: true, xalign: 0 });
-  // The floating card holding hoverLabel; built in buildEditorArea (needs the overlay).
-  private hoverOverlay!: OverlayDecoration;
+  // The LSP hover card: a MarkupCard in an EditorPopover anchored at the cursor cell (also
+  // reused for the git-blame commit message via `showHoverMarkup`). Built in buildEditorArea.
+  private hoverCard!: MarkupCard;
+  private hoverPopover!: EditorPopover;
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the floating cards
   private inlinePeek!: Peek; // focusable inline peek (see-definition); built in buildEditorArea
   // The signature-help card: shown live while typing a call's arguments. Same
-  // floating-card pattern as hover; `signatureSeq` drops stale async responses.
-  private readonly signatureLabel = new Gtk.Label({ useMarkup: true, wrap: true, xalign: 0 });
-  private signatureOverlay!: OverlayDecoration;
+  // MarkupCard/EditorPopover as hover; `signatureSeq` drops stale async responses.
+  private signatureCard!: MarkupCard;
+  private signaturePopover!: EditorPopover;
   private signatureSeq = 0;
   private signatureTimer: NodeJS.Timeout | null = null;
   // Whether the signature card's position is fixed for the current call (set on
@@ -800,10 +790,12 @@ export class TextEditor implements DocumentHost {
     this.subs.add(zym.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
     // A fold open/close shifts the view lines under the model-positioned decorations
     // (diagnostic squiggles + gutter + error lens, inlay hints) — re-place them at the
-    // new view positions (cached, no LSP round-trip).
+    // new view positions (cached, no LSP round-trip). External fold-dependent features
+    // (git blame, via `onDidChangeFolds`) re-place themselves the same way.
     this.syntax.onFoldsChanged(() => {
       this.diagnostics?.render();
       this.inlayHints?.rerender();
+      this.foldsChangedHandlers.forEach((h) => h());
     });
     // Signature help is a per-view concern (the active view shows the card while
     // typing); the document drives didChange, so this only triggers signature help.
@@ -815,7 +807,7 @@ export class TextEditor implements DocumentHost {
     // the cursor moves or the view scrolls (both no-ops when nothing is showing).
     this.connect(this.buffer, 'notify::cursor-position', () => {
       this.dismissHover();
-      if (this.signatureOverlay.visible) this.scheduleSignatureRequest();
+      if (this.signaturePopover.visible) this.scheduleSignatureRequest();
       this.scheduleLocationBarUpdate();
     });
     const hoverVadj = this.view.getVadjustment();
@@ -847,8 +839,10 @@ export class TextEditor implements DocumentHost {
       (this.view as any).off('map', this.mapHandler);
       this.mapHandler = null;
     }
-    this.dismissHover();
     this.dismissSignature();
+    this.hoverPopover.dispose(); // hide + unparent (a setParent'd popover must be unparented)
+    this.signaturePopover.dispose();
+    this.completion?.dispose(); // unparents the completion popover from the view
     this.decorationMaterializeSub?.(); // drop the materialize re-projection subscription
     this.decorationMaterializeSub = null;
     this.syntax.dispose(); // detach buffer/view signal handlers + free the tree-sitter tree
@@ -877,7 +871,7 @@ export class TextEditor implements DocumentHost {
     const triggers = zym.lsp.signatureHelpTriggerCharacters(this.lspDocument);
     const typed = event.changes.map((c) => c.newText).join('');
     const typedTrigger = [...typed].some((ch) => triggers.includes(ch));
-    if (!this.signatureOverlay.visible && !typedTrigger) return;
+    if (!this.signaturePopover.visible && !typedTrigger) return;
     this.scheduleSignatureRequest();
   }
 
@@ -911,7 +905,7 @@ export class TextEditor implements DocumentHost {
     if (!sig) return;
     const activeParam = sig.activeParameter ?? help.activeParameter ?? undefined;
     const lang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
-    this.signatureLabel.setMarkup(
+    this.signatureCard.setMarkup(
       `<span face="${fonts.monospaceFamily}">${signatureMarkup(sig.label, sig.parameters, activeParam, lang)}</span>`,
     );
     if (!this.signatureAnchored) {
@@ -922,10 +916,10 @@ export class TextEditor implements DocumentHost {
       const line = [...this.editorModel.lineTextForBufferRow(cursor.row)];
       const nameCol = callNameStartColumn(line, cursor.column);
       const anchor = nameCol !== null ? { row: cursor.row, column: nameCol } : cursor;
-      if (!this.signatureOverlay.anchorAbove(anchor, CARD_CONTENT_INSET_PX)) return; // off-screen → retry
+      if (!this.signaturePopover.showAt(anchor)) return; // off-screen → retry
       this.signatureAnchored = true;
     } else {
-      this.signatureOverlay.show();
+      this.signaturePopover.show();
     }
   }
 
@@ -936,7 +930,7 @@ export class TextEditor implements DocumentHost {
     }
     this.signatureSeq++; // invalidate any in-flight request
     this.signatureAnchored = false; // the next call re-anchors at its own site
-    this.signatureOverlay.hide();
+    this.signaturePopover.hide();
   }
 
   // --- Git gutter ------------------------------------------------------------
@@ -1063,25 +1057,48 @@ export class TextEditor implements DocumentHost {
     const markdown = await zym.lsp.hover(this.lspDocument);
     this.dismissHover();
     if (!markdown) return;
-    const rect = this.editorModel.pixelRectForBufferPosition(this.editorModel.getCursorBufferPosition());
-    if (!rect) return;
-
-    // Code spans use the editor's monospace font (prose stays proportional) and
-    // are tree-sitter highlighted; unlabeled fences fall back to this file's
-    // language so same-language signatures still get colors.
-    const fallbackLang = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
-    this.hoverLabel.setMarkup(
-      markdownToPango(markdown, {
-        codeFontFamily: fonts.monospaceFamily,
-        highlightCode: (code, lang) => highlightToMarkup(code, lang ?? fallbackLang),
-      }),
-    );
-    // Float the card just above the cursor; it follows scroll via the overlay.
-    this.hoverOverlay.anchorAbove(this.editorModel.getCursorBufferPosition());
+    this.hoverCard.setMarkdown(markdown);
+    this.hoverPopover.showAt(this.editorModel.getCursorBufferPosition());
   }
 
   private dismissHover() {
-    this.hoverOverlay.hide();
+    this.hoverPopover.hide();
+  }
+
+  /** Syntax-highlight a card's fenced code block (hover / signature / completion doc): the
+   *  fence's language, falling back to this file's so same-language code still gets colors. */
+  private cardHighlight(code: string, lang: string | undefined): string | null {
+    const fallback = this._currentFile ? langIdForPath(this._currentFile) ?? undefined : undefined;
+    return highlightToMarkup(code, lang ?? fallback);
+  }
+
+  /** The canonical `TextEditorSource` text (the whole file, or the multibuffer's text) —
+   *  distinct from `getText()`, which returns the view buffer where an inline fold has
+   *  swapped its range for a `[N]` placeholder. File-line-coordinate features (git blame)
+   *  need the source so a folded line isn't misread as changed. */
+  get sourceText(): string {
+    return this.document.getText();
+  }
+
+  /** Show arbitrary Pango markup in the hover popover, left-aligned at the cursor (the LSP
+   *  hover card, reused for non-LSP popups like the git-blame commit message). */
+  showHoverMarkup(markup: string): void {
+    this.hoverCard.setMarkup(markup);
+    this.hoverPopover.showAt(this.editorModel.getCursorBufferPosition());
+  }
+
+  /** Subscribe to cursor-position changes (Atom `onDidChangeCursorPosition` shape). For
+   *  editor-observing features that follow the caret, e.g. current-line git blame. */
+  onDidChangeCursorPosition(callback: () => void): Disposable {
+    this.buffer.on('notify::cursor-position', callback);
+    return new Disposable(() => this.buffer.off('notify::cursor-position', callback));
+  }
+
+  /** Subscribe to fold open/close — view rows shift under model-positioned decorations,
+   *  so fold-aware features re-place themselves (no model round-trip). */
+  onDidChangeFolds(callback: () => void): Disposable {
+    this.foldsChangedHandlers.add(callback);
+    return new Disposable(() => this.foldsChangedHandlers.delete(callback));
   }
 
   /** The inline decoration surface (search highlights, inline diff). */
@@ -1390,7 +1407,7 @@ export class TextEditor implements DocumentHost {
     // multi-cursor carets.
     this.completion = new CompletionController(
       this.editorModel,
-      overlay,
+      this.view,
       () => this.vimState.mode === 'insert',
       // Tree-sitter highlight code blocks in completion docs, like the hover card;
       // unlabeled fences fall back to this file's language.
@@ -1407,19 +1424,14 @@ export class TextEditor implements DocumentHost {
       if (mode !== 'insert') this.completion.dismiss();
     });
 
-    // LSP hover card: a non-interactive overlay positioned by margins +
-    // bottom-left alignment, so the overlay bottom-aligns it (bottom edge at the
-    // cursor, growing upward) without us needing to read its height. Prose stays
-    // in the proportional UI font; only code spans are monospace (<tt>). Fixed
-    // width (the label fills + wraps to it).
-    this.hoverOverlay = new OverlayDecoration(this.editorModel, { cssClass: 'zym-hover', widthPx: HOVER_WIDTH_PX, gapPx: HOVER_GAP });
-    this.hoverOverlay.content.append(this.hoverLabel);
-    this.hoverOverlay.attach(overlay);
+    // LSP hover + signature help: MarkupCards in EditorPopovers pointed at the cursor cell.
+    // Prose stays in the proportional UI font; only code spans are monospace; the card has a
+    // fixed min width and left-aligns (see showHoverMarkup).
+    this.hoverCard = new MarkupCard({ widthPx: HOVER_WIDTH_PX, highlight: (c, l) => this.cardHighlight(c, l) });
+    this.hoverPopover = new EditorPopover(this.editorModel, this.view, this.hoverCard.label, { chrome: CARD_CONTENT_INSET_PX });
 
-    // The signature-help card reuses the hover card's look (floated above the cursor).
-    this.signatureOverlay = new OverlayDecoration(this.editorModel, { cssClass: 'zym-hover', widthPx: HOVER_WIDTH_PX, gapPx: HOVER_GAP });
-    this.signatureOverlay.content.append(this.signatureLabel);
-    this.signatureOverlay.attach(overlay);
+    this.signatureCard = new MarkupCard({ widthPx: HOVER_WIDTH_PX, highlight: (c, l) => this.cardHighlight(c, l) });
+    this.signaturePopover = new EditorPopover(this.editorModel, this.view, this.signatureCard.label, { chrome: CARD_CONTENT_INSET_PX });
 
     // Buffer-only mode: a greyed placeholder over the empty buffer, and no minimap.
     if (this.bufferMode?.placeholder) {

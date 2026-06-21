@@ -19,6 +19,7 @@ export interface OpenFileOptions {
 }
 
 type Opener = (path: string, options?: OpenFileOptions) => void;
+type ActiveEditorProvider = () => TextEditor | null;
 
 /** A subscriber registered through `observeTextEditors`, plus the per-editor
  *  Disposables its callback returned (torn down on editor close / unobserve). */
@@ -29,12 +30,25 @@ interface EditorObserver {
 
 export class Workspace {
   private opener: Opener | null = null;
+  private activeEditorProvider: ActiveEditorProvider | null = null;
   private readonly editors = new Set<TextEditor>();
   private readonly observers = new Set<EditorObserver>();
 
   /** Wire the concrete file opener (the AppWindow does this on construction). */
   setOpener(opener: Opener): void {
     this.opener = opener;
+  }
+
+  /** Wire the active-editor provider — which editor currently has focus depends on the
+   *  panel/focus tree the AppWindow owns, so it injects this (like `setOpener`). */
+  setActiveEditorProvider(provider: ActiveEditorProvider): void {
+    this.activeEditorProvider = provider;
+  }
+
+  /** The text editor with focus, or null (nothing focused, or before the AppWindow has
+   *  wired the provider). The app-wide counterpart to AppWindow's private `activeEditor`. */
+  getActiveTextEditor(): TextEditor | null {
+    return this.activeEditorProvider?.() ?? null;
   }
 
   // --- text-editor registry --------------------------------------------------

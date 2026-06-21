@@ -25,6 +25,7 @@ import * as Path from 'node:path';
 import { Application } from './application.ts';
 import { preloadGrammars } from './syntax/grammar.ts';
 import { plugins, registerBuiltinPlugins, loadUserPlugins, disabledPluginIds } from './plugin/index.ts';
+import { installGitBlame } from './ui/TextEditor/GitBlameController.ts';
 
 // node-gtk drains Node's microtask queue inside the GLib main loop, so a stray
 // rejected promise would otherwise terminate the whole editor. The known offender
@@ -53,6 +54,10 @@ registerBuiltinPlugins();
 await loadUserPlugins();
 const disabled = disabledPluginIds();
 await plugins.activateAll(disabled);
+
+// Current-line git blame is a built-in that plugs into the editor-observer seam (like the
+// decoration plugins) rather than being wired into TextEditor — install it once here.
+installGitBlame();
 
 // Load tree-sitter grammars before the GLib main loop starts — emscripten's
 // sync wasm init doesn't resolve once the loop is running.

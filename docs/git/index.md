@@ -229,6 +229,14 @@ commit — mirroring FileTree's bare-key bindings. Clicking/`o` opens the
 file. In-panel diffs are not shown here; the diff surfaces are the editor
 tab and the gutter.
 
+The same staging is reachable **from anywhere** (no need to focus the panel)
+via the `space g` leader, registered on `#AppWindow`. The `a`dd / `u`nstage
+sub-leaders take `a` (all) or `.` (current file): `space g a a`
+(`git:stage-all`, `git add -A`) and `space g a .` (`git:stage-current`, `git
+add <file>`); `space g u a` (`git:unstage-all`, `git reset`) and `space g u .`
+(`git:unstage-current`). They shell out via `git/cli.ts` and then call
+`workbench.git.refresh()` so the gutter and branch indicator update at once.
+
 ### Commit interface — edit-in-tab
 
 `c c` (`git:commit`) calls `onCommit` → `AppWindow.startCommit()`, which
@@ -238,8 +246,13 @@ full editor (vim, chrome) with zero `TextEditor` changes and keeps the
 message git-native. Result/failures surface through `zym.notifications`;
 on success the lists refresh.
 
-Not done: amend, sign-off, amend-prefill from `git log -1 --format=%B`,
-commit-message length ruler, branch-name placeholder.
+**Amend** (`space g C`, `git:commit-amend`) uses the same edit-in-tab flow
+but prefills the message with the last commit's (`lastCommitMessage` →
+`git log -1 --format=%B`) and finalizes with `git commit --amend`. The
+`amend` flag rides through `commitEditors` → `finishCommit` →
+`GitRepo.commit(messageFile, amend)`.
+
+Not done: sign-off, commit-message length ruler, branch-name placeholder.
 
 ### Branch / stash pickers
 
@@ -269,6 +282,32 @@ s` / `space h u`) synthesize a unified diff for the hunk under the cursor
 and `git apply --cached` it (via `applyPatch`); `revert-hunk` (`space h
 r`) is done in the buffer by the editor. Hunk helpers live in
 `util/hunkPatch.ts`.
+
+### Inline blame — `src/ui/TextEditor/GitBlameController.ts`
+
+Current-line blame (GitLens-style), gated by the **`editor.lineBlame`**
+config flag (off by default). While on, the line under the cursor trails the
+blame for the commit that last touched it (or `You • Uncommitted changes` for
+the zero-sha working-tree line). The fields and their order come from
+**`editor.lineBlameFormat`** (default `[message, time, author]`; tokens
+`message`/`time`/`author`/`date`/`sha`, joined by ` • `, parsed by
+`formatBlame`).
+
+Built on `VirtualText` (the native `GtkSourceAnnotations` API, `NONE` style —
+plain trailing text, no background), like `InlayHintController`. Blame is
+fetched per file with `git blame --line-porcelain --contents -`, feeding the
+**live buffer** on stdin so line numbers and uncommitted lines match what the
+user sees (not the on-disk file); the result is parsed by `parseBlame` and
+cached. Cursor moves and fold toggles re-place the single annotation from the
+cache with no new git call (mapping VIEW→MODEL lines through the document, for
+folds); an edit invalidates the cache so the next render re-blames (debounced).
+
+Independent of the inline annotation, **`git:show-commit`** (`space g m`) pops
+the **full message** of the commit that last touched the cursor line above the
+cursor, reusing the LSP hover card. It blames just that line
+(`blameCommitForLine` → `git blame -L n,n --contents -`) for the sha, then
+`git show -s` for the message; `blameCommitAtCursor` is the shared entry point
+(also used by `github:open-pr-for-line`).
 
 ### Continuous editable diff
 
@@ -308,12 +347,12 @@ if/when GitLab lands).
 - **Pickers** — `GithubPrPicker` (checkout), `GithubIssuePicker`,
   `GithubCIChecksPicker`, `GithubFailedCIPicker`.
 - **Commands / keymaps** (`space g h …`) — `r` repo, `a` actions, `i`
-  issues, `p`/`c` PR checkout, `n` new PR, `o` open this branch's PR, `f`
-  failed CI.
+  issues, `p`/`c` PR checkout, `n` new PR, `o` open this branch's PR, `l`
+  open the current line (`github:open-line`), `L` open the PR that introduced
+  the current line (`github:open-pr-for-line`), `f` failed CI.
 
 Not done: `#123`-in-text / branch-name / selection detection (offer *Open
-#123*); *open file/line on web* (`blameUrl`/`compareUrl`); GitLab and
-other providers.
+#123*); `compareUrl`; GitLab and other providers.
 
 ## Config: default git workflow
 
