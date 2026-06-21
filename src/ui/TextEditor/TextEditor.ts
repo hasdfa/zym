@@ -1316,7 +1316,9 @@ export class TextEditor implements DocumentHost {
         return highlightToMarkup(code, lang ?? fallbackLang);
       },
     );
-    this.completion.addSource(createBufferWordsSource(() => this.editorModel.getText()));
+    // Buffer-words completion is disabled for now (kept for reference / quick re-enable):
+    // this.completion.addSource(createBufferWordsSource(() => this.editorModel.getText()));
+    void createBufferWordsSource; // keep the import live while the source is disabled
     this.completion.addSource(createLspCompletionSource(quilx.lsp, () => this.lspDocument ?? null));
     this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {
       if (mode !== 'insert') this.completion.dismiss();
