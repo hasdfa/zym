@@ -141,6 +141,8 @@ buffer (the A2 design); a custom/Rust widget stays a perf-gated escape hatch.
 Multi-cursor, vim, diff, folding, and inline widgets have shipped; scroll/open
 cost is bounded to the viewport. See [text-editor/index.md](text-editor/index.md).
 
+- "input" mode for temporary text editors via `createInput()`
+
 Per-feature detail:
 
 - [Diff](text-editor/diff.md) — synthesized read-only buffers + decorations
@@ -201,6 +203,10 @@ change attribution within a shared tree. See [agents.md](agents.md),
 Open, cross-kind: agent profiles/customization, richer management UX, reviewing an
 agent's diff (needs the editor Diff renderer first), and worktree lifecycle
 (keep/merge/discard).
+
+## TypeScript
+
+- Parameter properties (`constructor(private foo: T)`) are forbidden — declare fields explicitly.
 
 ## Notes
 

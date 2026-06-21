@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Gio } from '../../gi.ts';
 import type { AgentDriver, AgentHost, AgentMode, AgentResume } from '../types.ts';
+import { parseActions } from '../actions.ts';
+import { AGENT_SYSTEM_PROMPT } from '../prompts.ts';
 
 const AGENT_MODES = new Set<AgentMode>([
   'default', 'plan', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions',
@@ -40,22 +42,11 @@ const HOOK_SCRIPT = Path.join(
 );
 
 // The bundled agent↔editor MCP bridge (assets/mcp/quilxBridge.mjs), exposing the
-// `set_worktree` tool the agent calls to re-root the editor (Phase 4 in
-// docs/agents.md). Run by claude as an MCP stdio server via --mcp-config.
+// `set_worktree` / `set_actions` tools the agent calls to talk to the editor. Run
+// by claude as an MCP stdio server via --mcp-config.
 const BRIDGE_SCRIPT = Path.join(
   Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxBridge.mjs',
 );
-
-// Appended to claude's system prompt so it announces worktree moves through the
-// bridge tool (cooperative detection — the editor also validates via a hook).
-const WORKTREE_SYSTEM_PROMPT =
-  'You are running inside the quilx editor. Whenever you create or switch into a ' +
-  'different git worktree (e.g. after `git worktree add` then `cd`), immediately ' +
-  "call the `set_worktree` tool with the worktree root's absolute path so the " +
-  'editor re-roots its file tree and Source Control to match. After calling it, ' +
-  'keep your accompanying message to a single concise pre-formatted line and ' +
-  'nothing else — exactly `\u{1F4C1} worktree: <branch>` (the branch you switched ' +
-  'to) — and never explain the editor integration or the tool call.';
 
 export class ClaudeSession implements AgentDriver {
   /** The augmented argv to spawn (base argv + resume flags + `--settings`). */
@@ -68,6 +59,7 @@ export class ClaudeSession implements AgentDriver {
   private nameMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   private cwdMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   private wtcreateMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  private actionsMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   // Last values emitted, so a re-read that changed nothing stays silent (the
   // session file in particular is rewritten on every status tick).
   private files: string[] = [];
@@ -75,6 +67,7 @@ export class ClaudeSession implements AgentDriver {
   private lastMode: AgentMode | null = null;
   private lastCwd: string | null = null;
   private lastWtCreate: string | null = null;
+  private lastActions: string | null = null;
   // The claude session id, captured from the hooks (via `<statusFile>.session`).
   private _sessionId: string | null = null;
 
@@ -102,6 +95,7 @@ export class ClaudeSession implements AgentDriver {
       Fs.writeFileSync(`${statusFile}.mode`, ''); // permission mode (plan/acceptEdits/…)
       Fs.writeFileSync(`${statusFile}.cwd`, ''); // worktree the agent reports (set_worktree)
       Fs.writeFileSync(`${statusFile}.wtcreate`, ''); // worktree the Bash validator spotted
+      Fs.writeFileSync(`${statusFile}.actions`, ''); // runnable actions the agent registers (set_actions)
     } catch {
       return null; // can't set up IPC — run plain
     }
@@ -109,8 +103,9 @@ export class ClaudeSession implements AgentDriver {
     const run = (state: string) => `sh ${shellQuote(HOOK_SCRIPT)} ${state}`;
     const settings = {
       env: { QUILX_AGENT_ID: id, QUILX_STATUS_FILE: statusFile },
-      // Pre-allow the bridge tool so announcing a worktree never prompts the user.
-      permissions: { allow: ['mcp__quilx__set_worktree'] },
+      // Pre-allow the bridge tools so announcing a worktree / registering actions
+      // never prompts the user.
+      permissions: { allow: ['mcp__quilx__set_worktree', 'mcp__quilx__set_actions'] },
       hooks: {
         SessionStart: [{ hooks: [{ type: 'command', command: run('idle') }] }],
         UserPromptSubmit: [{ hooks: [{ type: 'command', command: run('working') }] }],
@@ -130,14 +125,14 @@ export class ClaudeSession implements AgentDriver {
       },
     };
     // The agent↔editor bridge as an MCP stdio server: claude spawns it (node +
-    // the bundled script), and it inherits QUILX_STATUS_FILE so its set_worktree
-    // tool writes to this session's IPC file.
+    // the bundled script), and it inherits QUILX_STATUS_FILE / QUILX_ACTIONS_FILE
+    // so its set_worktree / set_actions tools write to this session's IPC files.
     const mcpConfig = {
       mcpServers: {
         quilx: {
           command: process.execPath, // the node running quilx — a known-good node
           args: [BRIDGE_SCRIPT],
-          env: { QUILX_STATUS_FILE: statusFile },
+          env: { QUILX_STATUS_FILE: statusFile, QUILX_ACTIONS_FILE: `${statusFile}.actions` },
         },
       },
     };
@@ -149,7 +144,7 @@ export class ClaudeSession implements AgentDriver {
       ...resumeFlags(resume),
       '--settings', JSON.stringify(settings),
       '--mcp-config', JSON.stringify(mcpConfig),
-      '--append-system-prompt', WORKTREE_SYSTEM_PROMPT,
+      '--append-system-prompt', AGENT_SYSTEM_PROMPT,
       ...baseCommand.slice(1),
     ];
     return new ClaudeSession(command, statusFile);
@@ -169,6 +164,8 @@ export class ClaudeSession implements AgentDriver {
       () => this.readCwd());
     this.wtcreateMonitor = this.monitor(`${this.statusFile}.wtcreate`, Gio.FileMonitorFlags.WATCH_MOVES,
       () => this.readWtCreate());
+    this.actionsMonitor = this.monitor(`${this.statusFile}.actions`, Gio.FileMonitorFlags.WATCH_MOVES,
+      () => this.readActions());
   }
 
   /** The claude session id once a hook has reported it (null until then). */
@@ -198,6 +195,8 @@ export class ClaudeSession implements AgentDriver {
     this.cwdMonitor = null;
     this.wtcreateMonitor?.cancel();
     this.wtcreateMonitor = null;
+    this.actionsMonitor?.cancel();
+    this.actionsMonitor = null;
     this.host = null;
     try { Fs.rmSync(this.statusFile, { force: true }); } catch { /* best effort */ }
     try { Fs.rmSync(`${this.statusFile}.session`, { force: true }); } catch { /* best effort */ }
@@ -205,6 +204,7 @@ export class ClaudeSession implements AgentDriver {
     try { Fs.rmSync(`${this.statusFile}.mode`, { force: true }); } catch { /* best effort */ }
     try { Fs.rmSync(`${this.statusFile}.cwd`, { force: true }); } catch { /* best effort */ }
     try { Fs.rmSync(`${this.statusFile}.wtcreate`, { force: true }); } catch { /* best effort */ }
+    try { Fs.rmSync(`${this.statusFile}.actions`, { force: true }); } catch { /* best effort */ }
   }
 
   // --- Watchers ---------------------------------------------------------------
@@ -288,6 +288,26 @@ export class ClaudeSession implements AgentDriver {
     if (!raw || raw === this.lastWtCreate) return;
     this.lastWtCreate = raw;
     this.host?.onWorktreeCreated(raw);
+  }
+
+  // The `set_actions` bridge tool writes the registered actions (a JSON array)
+  // atomically to `<statusFile>.actions`. Empty until the agent first registers any.
+  private readActions(): void {
+    let raw: string;
+    try {
+      raw = Fs.readFileSync(`${this.statusFile}.actions`, 'utf8').trim();
+    } catch {
+      return; // mid-rename / removed
+    }
+    if (!raw || raw === this.lastActions) return; // empty (pre-report) or unchanged
+    this.lastActions = raw;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return; // mid-write / malformed
+    }
+    this.host?.onActions(parseActions(parsed));
   }
 
   // Watch `~/.claude/sessions/<pid>.json`, whose `.name` Claude (re)writes on

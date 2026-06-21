@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';
-import { TextEditor } from './TextEditor.ts';
+import { TextEditor, createInput } from './TextEditor.ts';
 import { Range } from '../../text/Range.ts';
 import { Point } from '../../text/Point.ts';
 
@@ -52,4 +52,32 @@ test('buffer-only: disposes cleanly (idempotent) with no file/LSP teardown', () 
   editor.dispose();
   editor.dispose(); // idempotent
   assert.ok(true);
+});
+
+test('softWrap: an embedded editor defaults to no wrap, but the option forces it on', () => {
+  const off = new TextEditor({ buffer: { initialText: 'x' } });
+  assert.equal((off as any).view.getWrapMode(), Gtk.WrapMode.NONE, 'embedded editors default off');
+  off.dispose();
+
+  const on = new TextEditor({ buffer: { initialText: 'x' }, softWrap: true });
+  assert.equal((on as any).view.getWrapMode(), Gtk.WrapMode.WORD_CHAR, 'the softWrap option wins');
+  on.dispose();
+});
+
+test('createInput: buffer-only, soft-wrapped, tagged with the quilx-input class', () => {
+  const editor = createInput({ placeholder: 'Message…' });
+  assert.equal(editor.currentFile, null, 'an input is buffer-only (no file)');
+  const view = (editor as any).view as InstanceType<typeof Gtk.Widget>;
+  assert.ok(view.hasCssClass('quilx-input'), 'tagged with the quilx-input class');
+  assert.equal((editor as any).view.getWrapMode(), Gtk.WrapMode.WORD_CHAR, 'inputs soft-wrap by default');
+  editor.dispose();
+});
+
+test('createInput: a custom cssClass joins quilx-input; softWrap can be turned off', () => {
+  const editor = createInput({ cssClass: 'agent-prompt', softWrap: false });
+  const view = (editor as any).view as InstanceType<typeof Gtk.Widget>;
+  assert.ok(view.hasCssClass('quilx-input'), 'still carries the shared class');
+  assert.ok(view.hasCssClass('agent-prompt'), 'plus the caller-specific class');
+  assert.equal((editor as any).view.getWrapMode(), Gtk.WrapMode.NONE, 'softWrap:false opts back out');
+  editor.dispose();
 });

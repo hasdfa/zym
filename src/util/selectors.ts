@@ -48,6 +48,14 @@ export interface Rule {
    */
   key: string;
   description: RuleNode[];
+  /**
+   * CSS-style specificity of the whole selector, encoded as one comparable
+   * number so a more specific rule outranks a less specific one. Used as the
+   * tiebreaker when two matching bindings share the same priority — the more
+   * specific selector wins (e.g. `#Panel .foo` beats `.foo`). See
+   * `computeSpecificity`.
+   */
+  specificity: number;
   important?: boolean;
   platform?: string;
 }
@@ -142,7 +150,26 @@ function parseRule(selector: any): Rule {
     id: subject.id,
     key,
     description: elements,
+    specificity: computeSpecificity(elements),
   };
+}
+
+// CSS specificity of a selector's compound chain, encoded as one comparable
+// integer `a·1_000_000 + b·1_000 + c` (the classic `(ids, classes, tags)`
+// triple). `#id` counts as an id, each class / `:not(.x)` argument as a class,
+// each tag as a type — matching CSS, where `:not()` adds nothing itself but its
+// argument's specificity counts. Combinators contribute nothing. The base of
+// 1_000 leaves ample room for any realistic count without one column carrying
+// into the next.
+function computeSpecificity(description: RuleNode[]): number {
+  let ids = 0, classes = 0, tags = 0;
+  for (const node of description) {
+    if (node.combinator) continue;
+    if (node.id) ids += 1;
+    if (node.element) tags += 1;
+    classes += node.has.length + node.not.length;
+  }
+  return ids * 1_000_000 + classes * 1_000 + tags;
 }
 
 /**

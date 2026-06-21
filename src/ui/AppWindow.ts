@@ -29,6 +29,8 @@ import { buildDefinitionPeek, wrapPeekBody, LIVE_PEEK_HEIGHT } from './TextEdito
 import { Terminal } from './Terminal.ts';
 import { AgentTerminal, type AgentStatus, type AgentResume } from './AgentTerminal.ts';
 import type { Agent } from '../agents/types.ts';
+import { defaultAction, type AgentAction } from '../agents/actions.ts';
+import { openActionRunner } from './ActionPicker.ts';
 import { AgentConversation } from './AgentConversation.ts';
 import { AGENT_CONFIGS, resolveAgentKind, type AgentKind } from '../agents/configs.ts';
 import { listResumableSessions, recordSessionWorktree, relativeTime, type AgentSession } from '../agentSessions.ts';
@@ -713,6 +715,22 @@ export class AppWindow {
     this.terminals.get(built.widget)!.focus();
   }
 
+  // Open a `terminal` agent action (set_actions) in a terminal tab in the agent's
+  // own workbench, so its output lands beside the agent. Like runScript, the shell
+  // runs the command then execs a login shell, keeping the tab open on the output.
+  // (Terminal-less actions run as background processes inside the host, not here.)
+  private runAgentActionInTerminal(agent: Agent, action: AgentAction): void {
+    this.showAgent(agent); // activate the agent's workbench — the action runs beside it
+    const shell = process.env.SHELL || '/bin/bash';
+    const built = this.createTerminalTab(agent.effectiveCwd, {
+      command: [shell, '-l', '-c', `${action.command}; exec ${shell} -l`],
+      title: action.label,
+    });
+    const child = this.workbench.center.add(built.widget, { title: built.title });
+    built.onAttached?.(child);
+    this.terminals.get(built.widget)!.focus();
+  }
+
   // Construct + wire a terminal tab WITHOUT attaching it to a panel. Shared by
   // openTerminal, the script runner, and session restore (a restored terminal is
   // a fresh shell in cwd). `command`/`title` let a caller run something other than
@@ -771,6 +789,7 @@ export class AppWindow {
     const agent = AGENT_CONFIGS[kind].create({
       cwd, command: options.command, prompt: options.prompt, resume: options.resume, title: options.title,
       onOpenFile: (path) => this.openFile(path),
+      onRunInTerminal: (action) => this.runAgentActionInTerminal(agent, action),
     });
     // Track in the kind's map (terminal focus-routing / headless disposal key off these).
     if (agent instanceof AgentTerminal) this.terminals.set(agent.root, agent);
@@ -2430,6 +2449,26 @@ export class AppWindow {
       // workbench and retire it from the list (unlike tab:close, which only backgrounds).
       'agent:close': { didDispatch: () => this.closeCurrentAgent(), description: 'Close the agent (terminate it and remove it from the list)', when: () => this.currentAgent() !== null },
       'agent:open-changes': { didDispatch: () => this.openChangesOfCurrentAgent(), description: "Open the agent's edited files", when: () => this.currentAgent() !== null },
+      // Run an action the agent registered (set_actions) — the default one, or one
+      // chosen from a picker. The agent routes it: a `terminal` action opens a
+      // terminal tab, a terminal-less one (re)starts its background process.
+      'agent:action-run-default': {
+        didDispatch: () => {
+          const agent = this.currentAgent();
+          const action = defaultAction(agent?.actions);
+          if (agent && action) agent.runAction(action);
+        },
+        description: "Run the agent's default action",
+        when: () => (this.currentAgent()?.actions.length ?? 0) > 0,
+      },
+      'agent:action-picker': {
+        didDispatch: () => {
+          const agent = this.currentAgent();
+          if (agent) openActionRunner(this.overlay, agent.actions, (action) => agent.runAction(action));
+        },
+        description: "Run one of the agent's actions…",
+        when: () => (this.currentAgent()?.actions.length ?? 0) > 0,
+      },
       'agent:focus-next': { didDispatch: () => this.focusAdjacentAgent(1), description: 'Focus the next agent' },
       'agent:focus-prev': { didDispatch: () => this.focusAdjacentAgent(-1), description: 'Focus the previous agent' },
       // Push the active editor's context into an agent's prompt — the current

@@ -29,6 +29,7 @@
     "diff": "^9.0.0",
     "native-keymap": "^3.3.9",
     "node-gtk": "^2.1.0",
+    "outdent": "^0.8.0",
     "postcss-selector-parser": "^7.1.4",
     "vscode-jsonrpc": "^9.0.0",
     "vscode-languageserver-protocol": "^3.18.0"

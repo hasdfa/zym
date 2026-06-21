@@ -42,6 +42,8 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space a R': 'agent:resume-conversation', // resume a past conversation (picker)
   'space a c': 'agent:continue', // continue the latest conversation in this folder
   'space a b': 'agent:branch', // branch the current agent into a new forked agent
+  'space a x': 'agent:action-run-default', // run the agent's default action (set_actions)
+  'space a X': 'agent:action-picker', // pick one of the agent's actions to run
   // Send editor context to an agent: the second key picks selection (s) or file
   // (f); the third picks the current agent (repeat), one from the picker (a), or
   // a new agent with an editable prompt (n).
