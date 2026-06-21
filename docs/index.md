@@ -9,6 +9,8 @@ subheader becomes a directory with an `index.md`.
 
 ## Architecture
 
+- Prefer idiomatic Node.js, only use GObject libraries when required.
+
 ### UI
 
 - Components use Adwaita and GTK4 via node-gtk (in dev, linked to `../node-gtk`),
@@ -197,9 +199,8 @@ change attribution within a shared tree. See [agents.md](agents.md),
 [agents/claude-sdk.md](agents/claude-sdk.md).
 
 Open, cross-kind: agent profiles/customization, richer management UX, reviewing an
-agent's diff (needs the editor Diff renderer first), worktree lifecycle
-(keep/merge/discard), and **IDE integration** (`claude --ide` WebSocket MCP server
-— see [ide-integration.md](ide-integration.md)).
+agent's diff (needs the editor Diff renderer first), and worktree lifecycle
+(keep/merge/discard).
 
 ## Notes
 

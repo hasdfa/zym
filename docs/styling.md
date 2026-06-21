@@ -73,26 +73,33 @@ widget. Prefer these over hard-coded literals so a change lands everywhere:
 ## Fonts (families)
 
 The font store `src/fonts.ts` (`fonts`) is the single source of the app's
-UI and monospace fonts; it follows the GNOME interface fonts live and
-publishes them as **reactive CSS variables on `#AppWindow`** (re-set on
-every change). A root `#AppWindow { font-family: var(--t-font-ui-family) }`
-baseline makes **all UI text follow the UI font by inheritance** — so only
-monospace surfaces need a rule.
+UI and monospace fonts. Each is the `core.uiFont` / `core.monospaceFont`
+config value (a Pango description) when set, else the live GNOME interface
+font — the store follows both. It publishes them as **reactive CSS
+variables on `#AppWindow`** (re-set on every change). A root
+`#AppWindow { font-family: var(--t-font-ui-family) }` baseline makes **all
+UI text follow the UI font by inheritance** — so only monospace surfaces
+need a rule.
 
-Both roles — `ui` and `monospace` — publish the **same full set**
-(`<role>` = `ui` | `monospace`):
+The picked font supplies the **medium** size; **small** (×0.85) and
+**large** (×1.2) are derived, rounded to the nearest half-point. Both
+roles — `ui` and `monospace` — publish the **same full set**
+(`<role>` = `ui` | `monospace`, `<size>` = `small` | `large`):
 
 | Variable                                  | Use                                                              |
 | ----------------------------------------- | --------------------------------------------------------------- |
-| `--t-font-<role>`                         | The `font:` shorthand (style + weight + size + family). For surfaces that want the **whole** font: the editor, code, mono inputs. |
+| `--t-font-<role>`                         | The `font:` shorthand (style + weight + size + family) at the medium size. For surfaces that want the **whole** font: the editor, code, mono inputs. |
+| `--t-font-<role>-<size>`                  | The `font:` shorthand at the small/large size — smaller secondary text, larger headings. |
 | `--t-font-<role>-family`                  | Family only — when the selector sets its own weight/size (e.g. a bold leap mark that inherits the editor size). The root baseline uses `--t-font-ui-family`. |
-| `--t-font-<role>-{weight,style,size}`     | The individual properties, for finer control. |
+| `--t-font-<role>-{weight,style}`          | The individual shared properties, for finer control. |
+| `--t-font-<role>-size`, `--t-font-<role>-size-<size>` | The point size alone — medium, or the small/large step. |
 
 Which form:
 
 - **Whole font** (editor, code, mono inputs) →
   `font: var(--t-font-monospace)`. The shorthand **resets**
-  weight/size/line-height — not where the selector sets its own.
+  weight/size/line-height — not where the selector sets its own. Use
+  `var(--t-font-monospace-small)` / `-large` for a different size.
 - **Family only** (keep own weight/size) →
   `font-family: var(--t-font-monospace-family)`.
 - **Pango markup** (no CSS vars) → `fonts.monospaceFamily` /

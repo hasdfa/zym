@@ -7,8 +7,9 @@
  * invalid CSS family, so we parse with Pango and emit each property explicitly.
  *
  * The single source of truth is the `fonts` store (bottom of this file): it owns
- * the app's monospace/UI fonts and follows the GNOME interface fonts live. It
- * publishes them three ways, one per consumer kind:
+ * the app's monospace/UI fonts — the `core.monospaceFont` / `core.uiFont` config
+ * value when set, else the live GNOME interface font. It publishes them three ways,
+ * one per consumer kind:
  *   - **CSS** — reactive custom properties on `#AppWindow` (`--t-font-ui-family`,
  *     `--t-font-monospace`, …; see `themeFontCssVariables`-style block in `css()`).
  *     A root `font-family: var(--t-font-ui-family)` baseline makes every widget
@@ -24,6 +25,7 @@
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Gio, Pango, PangoCairo } from './gi.ts';
+import { quilx } from './quilx.ts';
 import { styles } from './styles.ts';
 
 /** Pango family name of the bundled icon font (see assets/fonts). */
@@ -75,6 +77,15 @@ function familyOf(description: string, fallback: string): string {
 }
 
 /**
+ * The size scale: the picked font supplies the **medium** point size; `small` and
+ * `large` are derived as a multiplicative modular scale around it, rounded to the
+ * nearest half-point so the steps stay proportional at any base size.
+ */
+const FONT_SIZE_SCALE = { small: 0.85, large: 1.2 } as const;
+
+const roundHalf = (pt: number): number => Math.round(pt * 2) / 2;
+
+/**
  * The application font store — the single place the app's monospace/UI fonts are
  * defined and kept in sync. It publishes them as reactive CSS variables on the root
  * `#AppWindow` (plus a UI-font baseline), and exposes live family names + a
@@ -92,22 +103,34 @@ function familyOf(description: string, fallback: string): string {
  * Published CSS variables (on `#AppWindow`, re-set on every change) — the same full
  * set for each role (`ui`, `monospace`):
  *  - `--t-font-<role>-family`, `--t-font-<role>-weight`, `--t-font-<role>-style`
- *  - `--t-font-<role>-size?` and `--t-font-<role>?` (the `font` shorthand)
- * The `*-size` and shorthand vars are omitted when the font carries no point size
- * (an absolute/device-pixel description), since a `font` shorthand needs a size.
+ *  - three sizes — `--t-font-<role>-size-small`, `--t-font-<role>-size` (medium),
+ *    `--t-font-<role>-size-large` — and the matching `font` shorthands
+ *    `--t-font-<role>-small`, `--t-font-<role>` (medium), `--t-font-<role>-large`.
+ * The picked font supplies the medium size; small/large are derived (see
+ * `FONT_SIZE_SCALE`). The size vars and shorthands are omitted when the font carries
+ * no point size (an absolute/device-pixel description), since `font` needs a size.
  *
- * It follows the GNOME interface fonts live; `reload()` is public so a future user
- * font setting can drive the same path. See docs/styling.md → Fonts.
+ * The picked font is the `core.uiFont` / `core.monospaceFont` config value when set,
+ * else the live GNOME interface font; the store follows both, so changing either
+ * re-applies everything. See docs/styling.md → Fonts.
  */
 class FontStore {
   private readonly settings = new Gio.Settings({ schemaId: 'org.gnome.desktop.interface' });
   private readonly listeners = new Set<() => void>();
   private ready = false; // the display (and so `styles.set`) isn't available until init
 
-  private _monoCss: FontCss = fontDescriptionToCss(this.monoName());
-  private _uiCss: FontCss = fontDescriptionToCss(this.uiName());
-  private _monoFamily = familyOf(this.monoName(), 'monospace');
-  private _uiFamily = familyOf(this.uiName(), 'sans-serif');
+  private _monoCss!: FontCss;
+  private _uiCss!: FontCss;
+  private _monoFamily!: string;
+  private _uiFamily!: string;
+
+  constructor() {
+    // Bootstrap from the system fonts only. The config isn't safe to read here:
+    // fonts.ts ⇄ quilx.ts form an import cycle (quilx → Workspace → … → fonts),
+    // so during module load `quilx` may still be in its TDZ. init()/reload() fold
+    // in the core.uiFont / core.monospaceFont overrides once the app is running.
+    this.compute(this.systemMonoName(), this.systemUiName());
+  }
 
   /** The monospace family name (unquoted), for Pango `face=`/`font_family=`. */
   get monospaceFamily(): string {
@@ -132,20 +155,30 @@ class FontStore {
    *  after `installStyles()` (when the display exists). */
   init(): void {
     this.ready = true;
-    this.apply();
+    this.reload(); // now safe to read config — re-applies with any overrides folded in
     this.settings.on('changed', (key: string) => {
       if (key === 'monospace-font-name' || key === 'font-name') this.reload();
     });
+    // Follow the user font config too (it overrides the system font when non-empty);
+    // it's applied after this runs, so reload on change rather than read once.
+    quilx.config.onDidChange('core.uiFont', () => this.reload());
+    quilx.config.onDidChange('core.monospaceFont', () => this.reload());
   }
 
-  /** Recompute the fonts, re-apply the sheet, and notify subscribers. */
+  /** Recompute the fonts (config override or system), re-apply the sheet, and
+   *  notify subscribers. */
   reload(): void {
-    this._monoCss = fontDescriptionToCss(this.monoName());
-    this._uiCss = fontDescriptionToCss(this.uiName());
-    this._monoFamily = familyOf(this.monoName(), 'monospace');
-    this._uiFamily = familyOf(this.uiName(), 'sans-serif');
+    this.compute(this.monoName(), this.uiName());
     this.apply();
     for (const cb of [...this.listeners]) cb();
+  }
+
+  /** Cache the CSS/family forms of the given monospace + UI descriptions. */
+  private compute(mono: string, ui: string): void {
+    this._monoCss = fontDescriptionToCss(mono);
+    this._uiCss = fontDescriptionToCss(ui);
+    this._monoFamily = familyOf(mono, 'monospace');
+    this._uiFamily = familyOf(ui, 'sans-serif');
   }
 
   private apply(): void {
@@ -165,10 +198,13 @@ class FontStore {
       .join('\n');
   }
 
-  /** The full set of `--t-font-<role>-*` declarations for one font: family, weight,
-   *  style, and — when the font carries a point size — size plus the `font` shorthand
-   *  (`--t-font-<role>`). The `*-size` and shorthand are omitted for an absolute
-   *  (device-pixel) description, since a `font` shorthand needs a point size. */
+  /** The full set of `--t-font-<role>-*` declarations for one font: the shared
+   *  family/weight/style, plus — when the font carries a point size — the three
+   *  sizes (`small`/medium/`large`, medium being the picked size) as both a
+   *  `*-size`/`*-size-{small,large}` and the matching `font` shorthand
+   *  (`--t-font-<role>` / `--t-font-<role>-{small,large}`). The size vars and
+   *  shorthands are omitted for an absolute (device-pixel) description, since a
+   *  `font` shorthand needs a point size. */
   private fontVars(role: 'ui' | 'monospace', f: FontCss): string[] {
     const lines = [
       `--t-font-${role}-family: ${f.family};`,
@@ -176,17 +212,44 @@ class FontStore {
       `--t-font-${role}-style: ${f.style};`,
     ];
     if (f.sizePt) {
-      lines.push(`--t-font-${role}-size: ${f.sizePt}pt;`);
-      lines.push(`--t-font-${role}: ${f.style} ${f.weight} ${f.sizePt}pt ${f.family};`);
+      const sizes = {
+        small: roundHalf(f.sizePt * FONT_SIZE_SCALE.small),
+        medium: f.sizePt,
+        large: roundHalf(f.sizePt * FONT_SIZE_SCALE.large),
+      };
+      for (const [name, sizePt] of Object.entries(sizes)) {
+        const suffix = name === 'medium' ? '' : `-${name}`;
+        lines.push(`--t-font-${role}-size${suffix}: ${sizePt}pt;`);
+        lines.push(`--t-font-${role}${suffix}: ${f.style} ${f.weight} ${sizePt}pt ${f.family};`);
+      }
     }
     return lines;
   }
 
+  /** The monospace font description: the `core.monospaceFont` config override when
+   *  set, else the system monospace font. */
   private monoName(): string {
-    return (this.settings as any).getString('monospace-font-name') as string;
+    return this.configFont('core.monospaceFont') ?? this.systemMonoName();
   }
+  /** The UI font description: the `core.uiFont` config override when set, else the
+   *  system UI font. */
   private uiName(): string {
-    return (this.settings as any).getString('font-name') as string;
+    return this.configFont('core.uiFont') ?? this.systemUiName();
+  }
+
+  private systemMonoName(): string {
+    return this.settings.getString('monospace-font-name') as string;
+  }
+  private systemUiName(): string {
+    return this.settings.getString('font-name') as string;
+  }
+
+  /** A non-empty string config override for `key`, or null to fall back to the
+   *  system font. Safe only at runtime (post-init), never during module load —
+   *  see the constructor on the fonts ⇄ quilx import cycle. */
+  private configFont(key: string): string | null {
+    const value = quilx.config.get(key);
+    return typeof value === 'string' && value.trim() !== '' ? value : null;
   }
 }
 
