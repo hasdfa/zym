@@ -1,9 +1,9 @@
 /*
  * Regression tests for foldAll / unfoldAll (SyntaxController) over the ProjectionView fold
  * substrate. Guards two bugs found in GUI testing:
- *   1. nested `zM` drove folds from stale view-line snapshots → the outer fold ate past its
+ *   1. nested `zm` drove folds from stale view-line snapshots → the outer fold ate past its
  *      footer into the next statement (and was O(folds²) slow);
- *   2. `zR` (unfoldAll) didn't repaint, so a restored body — spliced between the `{` and `}`
+ *   2. `zr` (unfoldAll) didn't repaint, so a restored body — spliced between the `{` and `}`
  *      (both punctuation-tagged) — inherited the punctuation tag and showed in delimiter color.
  * Needs GTK + a bundled grammar; gated if the grammar isn't vendored.
  */
@@ -88,6 +88,60 @@ test('foldAll then unfoldAll round-trips on a single function', () => {
   assert.match(text(), /^function foo\(\) \{\[\d+\]\}\n?$/);
   syntax.unfoldAll();
   assert.equal(text(), 'function foo() {\n  const x = 1;\n  return x;\n}\n');
+});
+
+const CLASS = 'export class Doc {\n  m1() {\n    return 1;\n  }\n  m2() {\n    return 2;\n  }\n}\n';
+
+test('zm then opening an outer fold keeps its inner folds closed (nested close-all)', () => {
+  if (!hasJs) return;
+  const { syntax, text, buffer } = setup(CLASS);
+  syntax.foldAll();
+  assert.match(text(), /^export class Doc \{\[\d+\]\}\n?$/, 'foldAll collapses the whole class');
+  // Open the class (caret on its placeholder line): it must reveal with m1/m2 STILL collapsed
+  // (zm closed every level), not a fully-expanded body.
+  buffer.placeCursor(asIter(buffer.getIterAtLine(0)));
+  syntax.setFoldAtCursor(false);
+  assert.match(
+    text(),
+    /^export class Doc \{\n {2}m1\(\) \{\[\d+\]\}\n {2}m2\(\) \{\[\d+\]\}\n\}\n?$/,
+    `inner method folds should stay closed after opening the class:\n${text()}`,
+  );
+});
+
+test('zc on an already-closed fold closes its parent (close outward by level)', () => {
+  if (!hasJs) return;
+  const { syntax, text, buffer } = setup(CLASS);
+  // Close the inner method m1 (caret on its body).
+  buffer.placeCursor(asIter(buffer.getIterAtLine(2)));
+  syntax.setFoldAtCursor(true);
+  assert.match(text(), /m1\(\) \{\[\d+\]\}/, 'm1 folds first');
+  assert.match(text(), /^export class Doc \{\n/, 'class Doc still open after first zc');
+  // Caret now rests on m1's placeholder; a second zc closes the enclosing class.
+  syntax.setFoldAtCursor(true);
+  assert.match(text(), /^export class Doc \{\[\d+\]\}\n?$/, `class Doc should close on the second zc:\n${text()}`);
+});
+
+test('closing a fold from inside the body lands the caret before the marker, not on it', () => {
+  if (!hasJs) return;
+  const { syntax, buffer, text } = setup('function foo() {\n  const x = 1;\n  return x;\n}\n');
+  buffer.placeCursor(asIter(buffer.getIterAtLine(1))); // inside the body
+  syntax.setFoldAtCursor(true);
+  assert.match(text(), /^function foo\(\) \{\[\d+\]\}\n?$/, 'fold collapses');
+  const cur = asIter(buffer.getIterAtMark(buffer.getInsert()));
+  assert.equal(cur.getLine(), 0, 'caret moved up to the header line');
+  assert.equal(cur.getChar(), '{', "caret sits on the `{` before the marker, not on the `[N]`");
+});
+
+test('opening a fold reports its revealed body range (so the caret can land inside it)', () => {
+  if (!hasJs) return;
+  const { syntax, buffer, text } = setup('function foo() {\n  const x = 1;\n  return x;\n}\n');
+  buffer.placeCursor(asIter(buffer.getIterAtLine(1)));
+  syntax.setFoldAtCursor(true);
+  const range = syntax.setFoldAtCursor(false); // open
+  assert.ok(range, 'open returns the revealed range (not null), regardless of caret-on-marker');
+  assert.deepEqual(range[0], [0, 16], 'range starts just after the header `{`');
+  assert.equal(range[1][0], 3, 'range ends on the footer line — the body in between is what was revealed');
+  assert.equal(text(), 'function foo() {\n  const x = 1;\n  return x;\n}\n', 'text restored on open');
 });
 
 test('editing + undo with folds collapsed writes through and stays consistent', () => {
