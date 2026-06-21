@@ -57,14 +57,16 @@ addStyles(/* css */`
     box-shadow: 0px 10px 33px 28px var(--t-ui-shadow);
   }
   #AgentLauncherOptions {
-    padding: 0.5em;
+    padding: 0.6em;
     border-top: 1px solid var(--border-color);
+    background-color: var(--t-ui-editor-background);
+    border-bottom-left-radius: var(--popover-radius);
+    border-bottom-right-radius: var(--popover-radius);
   }
-  #AgentLauncherFooter {
-    padding: 0.4em 0.75em;
-    border-top: 1px solid var(--border-color);
-    opacity: 0.6;
+  #AgentLauncherField > .field-caption {
     font-size: var(--font-size-small);
+    opacity: 0.6;
+    margin-left: 2px;
   }
 `);
 
@@ -146,18 +148,20 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   effortCombo.setSensitive(false);
   effortCombo.root.setTooltipText('Effort — coming soon');
 
-  // Worktree is a toggle, not a combobox: off works in the current workbench cwd, on
-  // starts the work in a fresh worktree (the agent creates it). A SwitchRow in its own
-  // boxed list, to match the comboboxes' Adwaita framing.
-  const worktreeSwitch = new Adw.SwitchRow();
-  worktreeSwitch.setTitle('new worktree');
-  worktreeSwitch.setActive(false);
-  worktreeSwitch.setTooltipText('Start the work in a fresh git worktree instead of the current one');
-  const worktreeList = new Gtk.ListBox();
-  worktreeList.addCssClass('boxed-list');
-  worktreeList.setSelectionMode(Gtk.SelectionMode.NONE);
-  worktreeList.setSizeRequest(200, -1);
-  worktreeList.append(worktreeSwitch);
+  // Worktree is a toggle, not a combobox: "current" works in the current workbench
+  // cwd, "new" starts the work in a fresh worktree (the agent creates it). A compact
+  // captioned segmented control (a linked pair of grouped toggle buttons) with its
+  // label on top, to stay tight in the option row.
+  const currentButton = new Gtk.ToggleButton({ label: 'current' });
+  const newButton = new Gtk.ToggleButton({ label: 'new' });
+  newButton.setGroup(currentButton); // mutually exclusive (radio-like)
+  currentButton.setActive(true);
+  const worktreeToggle = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+  worktreeToggle.addCssClass('linked');
+  worktreeToggle.append(currentButton);
+  worktreeToggle.append(newButton);
+  const worktreeField = field('worktree', worktreeToggle);
+  worktreeField.setTooltipText('Start the work in a fresh git worktree instead of the current one');
 
   // A WrapBox so the option rows reflow onto another line on a narrow card rather
   // than overflowing. Each combobox carries its own floating Adwaita label.
@@ -166,12 +170,8 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   for (const combo of [modelCombo, effortCombo, permissionCombo, kindCombo]) {
     optionsRow.append(combo.root);
   }
-  optionsRow.append(worktreeList);
+  optionsRow.append(worktreeField);
   panel.append(optionsRow);
-
-  const footer = new Gtk.Label({ xalign: 0, label: '⏎ launch · esc cancel' });
-  footer.setName('AgentLauncherFooter');
-  panel.append(footer);
 
   const submit = () => {
     const kind = kindCombo.getValue() as AgentKind;
@@ -181,7 +181,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     });
     const prompt = input.getText().trim();
     card.close(false); // the host focuses the new agent
-    onLaunch({ prompt, command, cwd, kind, newWorktree: worktreeSwitch.getActive() });
+    onLaunch({ prompt, command, cwd, kind, newWorktree: newButton.getActive() });
   };
 
   registerLauncherKeymapOnce();
@@ -202,4 +202,16 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   panel.addController(keys);
 
   input.focusInsert(); // ready to type the prompt immediately
+}
+
+// A captioned field: a small muted label on top of `control`. Used for controls that
+// (unlike the comboboxes' Adw.EntryRow) have no built-in floating label.
+function field(caption: string, control: InstanceType<typeof Gtk.Widget>): InstanceType<typeof Gtk.Box> {
+  const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 3 });
+  box.setName('AgentLauncherField');
+  const label = new Gtk.Label({ xalign: 0, label: caption });
+  label.addCssClass('field-caption');
+  box.append(label);
+  box.append(control);
+  return box;
 }
