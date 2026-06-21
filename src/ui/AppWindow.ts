@@ -13,6 +13,7 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
+import { outdent } from 'outdent'
 import {
   Adw,
   Gtk,
@@ -782,7 +783,7 @@ export class AppWindow {
    * terminal already spawned in its constructor; the headless kind spawns here).
    */
   private openAgent(
-    options: { kind?: AgentKind; prompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[] } = {},
+    options: { kind?: AgentKind; prompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[]; background?: boolean } = {},
   ): Agent {
     const kind = options.kind ?? (options.resume ? 'claude-tui' : resolveAgentKind(zym.config.get('agent.implementation')));
     const cwd = options.cwd ?? process.cwd();
@@ -794,11 +795,13 @@ export class AppWindow {
     // Track in the kind's map (terminal focus-routing / headless disposal key off these).
     if (agent instanceof AgentTerminal) this.terminals.set(agent.root, agent);
     else if (agent instanceof AgentConversation) this.conversations.set(agent.root, agent);
+    // Background launch: build + pin the agent's workbench and start it, but stay on the
+    // current workbench and don't focus it (it's listed in the sidebar; switch to it later).
     const workbench = this.buildWorkbench(agent, cwd);
-    this.activateWorkbench(workbench);
+    if (!options.background) this.activateWorkbench(workbench);
     const child = workbench.center.pinChild(agent.root, { title: agentTabTitle(agent) });
     this.agentChildren.set(agent.root, child);
-    this.updateViewedAgent(); // the agent's tab is now the active one — mark it viewed
+    if (!options.background) this.updateViewedAgent(); // its tab is now active — mark it viewed
     // A running agent reports as modified, so it's consulted before exit.
     this.participants.set(agent.root, zym.session.registerParticipant(agent));
     // The agent's tab carries a status glyph prefix + attention highlight.
@@ -841,7 +844,7 @@ export class AppWindow {
     focus.on('enter', () => { this.lastAgent = agent; });
     agent.root.addController(focus);
     agent.start(); // terminal: no-op (already spawned); headless: spawn claude now
-    agent.focus(); // the workbench is already active (above); focus the agent
+    if (!options.background) agent.focus(); // the workbench is already active (above); focus the agent
     return agent;
   }
 
@@ -2414,8 +2417,8 @@ export class AppWindow {
           openAgentLauncher(this.overlay, {
             cwd: this.workbench.cwd,
             defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
-            onLaunch: ({ prompt, command, cwd, kind, worktree }) =>
-              this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind }),
+            onLaunch: ({ prompt, command, cwd, kind, worktree, background }) =>
+              this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind, background }),
           }),
         description: 'Start a new agent',
       },
@@ -3126,16 +3129,19 @@ function truncate(text: string, max: number): string {
 // agent itself (there's no host-side worktree creation): prepend an instruction to set
 // up the worktree and announce it via set_worktree (which re-roots the workbench), then
 // run the user's prompt.
-const NEW_WORKTREE_INSTRUCTION =
-  'Before anything else, create a new git worktree for this task (`git worktree add` ' +
-  'with a descriptive branch name), switch into it, and call the set_worktree tool with ' +
-  'its absolute path. Then continue.';
+const NEW_WORKTREE_INSTRUCTION = outdent`
+  ---
+  Before anything else, create a new git worktree with a descriptive branch 
+  name for the following task and switch into it:
+  ---
+`
 function branchWorktreeInstruction(branch: string): string {
-  return (
-    `Before anything else, set up a git worktree for the branch \`${branch}\` (check it ` +
-    'out into a new worktree with `git worktree add`, or reuse its existing one), switch ' +
-    'into it, and call the set_worktree tool with its absolute path. Then continue.'
-  );
+  return outdent`
+    ---
+    Before anything else, either go to the existing git worktree or create a new one
+    for the branch ${branch}, then do the following task:
+    ---
+  `;
 }
 function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
   if ('current' in worktree) return prompt || undefined; // run in the cwd, no worktree setup

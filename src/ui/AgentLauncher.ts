@@ -62,6 +62,8 @@ export interface AgentLaunchRequest {
   kind: AgentKind;
   /** Create a fresh worktree, or work on a chosen branch (the agent sets it up). */
   worktree: WorktreeChoice;
+  /** Start the agent without switching to it (it runs in the background). */
+  background: boolean;
 }
 
 export interface AgentLauncherOptions {
@@ -115,13 +117,20 @@ let keymapRegistered = false;
 function registerLauncherKeymapOnce(): void {
   if (keymapRegistered) return;
   keymapRegistered = true;
-  // Enter (in the prompt) launches; alt-enter inserts a newline — the app
-  // convention for agent prompts (see AgentConversation). Escape is handled by a
-  // bubble-phase controller on the card so an open combobox popover can swallow it
-  // first (the window keymap runs in capture phase, ahead of that).
+  // Enter (in the prompt) launches and switches to the agent; alt-enter inserts a newline
+  // (the app convention, see AgentConversation). ctrl-enter launches from anywhere in the
+  // card (incl. the option dropdowns); ctrl-shift-enter launches in the background (without
+  // switching to the new agent). Escape is handled by a bubble-phase controller on the card
+  // so an open combobox popover can swallow it first (the window keymap runs in capture
+  // phase, ahead of that).
   zym.keymaps.add('agent-launcher', {
+    '#AgentLauncher': {
+      'ctrl-enter': 'launcher:submit',
+      'ctrl-shift-enter': 'launcher:submit-background',
+    },
     '#AgentLauncherPrompt #TextEditor': {
       enter: 'launcher:submit',
+      'shift-enter': 'launcher:submit-background',
       'alt-enter': 'launcher:newline',
     },
     // From NORMAL mode, q or escape dismiss the launcher (in insert mode escape is
@@ -229,7 +238,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   optionsRow.append(worktreeField);
   panel.append(optionsRow);
 
-  const submit = () => {
+  const submit = (background: boolean) => {
     const kind = kindDropdown.getValue() as AgentKind;
     const command = AGENT_CONFIGS[kind].options.buildCommand({
       model: modelDropdown.getValue(),
@@ -241,12 +250,13 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
       sel === WT_CREATE ? { create: true } : sel === WT_CURRENT ? { current: true } : { branch: sel };
     card.close(false); // onClose stashes the text…
     savedDraft = ''; // …but it was submitted, so don't restore it next time
-    onLaunch({ prompt, command, cwd, kind, worktree });
+    onLaunch({ prompt, command, cwd, kind, worktree, background });
   };
 
   registerLauncherKeymapOnce();
   commandsSub = zym.commands.add(panel, {
-    'launcher:submit': { didDispatch: () => submit(), description: 'Launch the agent' },
+    'launcher:submit': { didDispatch: () => submit(false), description: 'Launch the agent and switch to it' },
+    'launcher:submit-background': { didDispatch: () => submit(true), description: 'Launch the agent without switching to it' },
     'launcher:newline': { didDispatch: () => input.insertText('\n'), description: 'Insert a newline in the prompt' },
     'launcher:close': { didDispatch: () => card.close(), description: 'Close the launcher' },
   });
