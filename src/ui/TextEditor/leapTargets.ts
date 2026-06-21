@@ -46,8 +46,9 @@ export function pageCount(count: number, size: number): number {
  * Every match of the literal `pattern` within `range`, ordered nearest-first
  * relative to `cursor`. Directional (forward keeps matches after the cursor,
  * backward those before it) unless `bidirectional`, which keeps both and orders
- * by distance (forward winning ties). Case-sensitive, like leap's default. Pure
- * (uses only the buffer scan), so it is headless-testable.
+ * by distance (forward winning ties). Smartcase: case-insensitive unless the
+ * pattern contains an uppercase letter (then case-sensitive), matching the
+ * editor's search. Pure (uses only the buffer scan), so it is headless-testable.
  */
 export function computeLeapTargets(
   editor: EditorModel,
@@ -55,7 +56,8 @@ export function computeLeapTargets(
   opts: { reverse: boolean; cursor: Point; range: Range; bidirectional?: boolean },
 ): Range[] {
   if (pattern.length === 0) return [];
-  const regex = new RegExp(escapeRegExp(pattern), 'g');
+  const insensitive = !/[A-Z]/.test(pattern); // smartcase: any uppercase ⇒ sensitive
+  const regex = new RegExp(escapeRegExp(pattern), insensitive ? 'gi' : 'g');
   const matches: Range[] = [];
   editor.scanInBufferRange(regex, opts.range, ({ range }) => matches.push(range));
 
@@ -87,12 +89,18 @@ function byDistance(a: Point, b: Point, cursor: Point): number {
 
 /** The set of characters that immediately follow a match — the keys that, typed
  *  next, would narrow the search. Excluding these from the label set keeps a
- *  narrowing keystroke from being read as a label. */
+ *  narrowing keystroke from being read as a label. Both cases of each follower
+ *  are excluded so that, under smartcase, a lowercase narrow key still narrows
+ *  even when the buffer character is uppercase. */
 export function leapNextChars(editor: EditorModel, matches: Range[]): Set<string> {
   const chars = new Set<string>();
   for (const m of matches) {
     const next = editor.getTextInBufferRange(new Range(m.end, new Point(m.end.row, m.end.column + 1)));
-    if (next) chars.add(next);
+    if (next) {
+      chars.add(next);
+      chars.add(next.toLowerCase());
+      chars.add(next.toUpperCase());
+    }
   }
   return chars;
 }
