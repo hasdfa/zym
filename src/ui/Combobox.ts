@@ -17,7 +17,7 @@ import { addStyles } from '../styles.ts';
 import { rank, highlightMarkup } from './Picker.ts';
 
 const POPOVER_MAX_HEIGHT = 320;
-const DEFAULT_WIDTH = 140;
+const DEFAULT_WIDTH = 110;
 
 export interface ComboOption {
   /** Returned by `getValue()` and passed to `onChange` when chosen. */
@@ -55,6 +55,7 @@ addStyles(/* css */`
     border-radius: var(--popover-radius-small);
   }
   #ComboboxMenu {
+    font: var(--t-font-ui);
     border-radius: var(--popover-radius-small);
     background: transparent;
   }

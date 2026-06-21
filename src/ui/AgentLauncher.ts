@@ -58,6 +58,9 @@ addStyles(/* css */`
   }
   #AgentLauncherOptions {
     padding: 0.6em;
+    /* The card is monospace (for the prompt); the option controls read better in the
+       UI (proportional) font. */
+    font: var(--t-font-ui);
     background-color: var(--t-ui-editor-background);
     border-bottom-left-radius: var(--popover-radius);
     border-bottom-right-radius: var(--popover-radius);
@@ -126,19 +129,19 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     title: 'model',
     options: kindOptions.models,
     value: kindOptions.defaultModel,
-    width: 140,
+    width: 110,
   });
   const permissionCombo = new Combobox({
     title: 'permission',
     options: kindOptions.permissionModes,
     value: kindOptions.defaultPermissionMode,
-    width: 155,
+    width: 130,
   });
   const kindCombo = new Combobox({
     title: 'agent',
     options: listAgentKinds(),
     value: defaultKind,
-    width: 130,
+    width: 105,
     onChange: (value) => {
       const opts = AGENT_CONFIGS[value as AgentKind].options;
       modelCombo.setOptions(opts.models, opts.defaultModel);
@@ -152,7 +155,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     title: 'effort',
     options: [{ value: 'auto', label: 'auto' }],
     value: 'auto',
-    width: 120,
+    width: 90,
   });
   effortCombo.setSensitive(false);
   effortCombo.root.setTooltipText('Effort — coming soon');
