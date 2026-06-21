@@ -130,6 +130,9 @@ addStyles(`
 
 const TAB_WIDTH = 4;
 const RIGHT_MARGIN = 80;
+// Inner padding (px) around the text of an embedded/input editor
+const INPUT_PADDING = 8;
+
 // A line this many characters or longer makes GtkTextView's per-paragraph PangoLayout
 // pathological (minified/generated files, big one-line JSON, base64 blobs). When a file
 // has one, we disable soft-wrap (re-flowing a giant line every layout is the worst cost)
@@ -253,6 +256,20 @@ export interface TextEditorOptions {
    *  keymaps target a specific flavour of editor (e.g. `zym-input`) — keymap selectors
    *  match on CSS classes (see util/selectors.ts). */
   cssClass?: string;
+  /** Inner padding (px) around the text, applied symmetrically on all four sides. Only
+   *  honoured for an embedded/input editor (a file editor fills its pane and uses none);
+   *  defaults to `INPUT_PADDING` when omitted. */
+  padding?: number;
+  /** Auto-height: size the editor to its content instead of filling its allocation, so the
+   *  input grows as the user types (an auto-growing textarea). Embedded editors only. Pair
+   *  with `maxLines`/`maxHeight` to cap the growth — past it the editor scrolls internally. */
+  grow?: boolean;
+  /** Cap the auto-height at N *text* lines (padding-aware); beyond it the editor scrolls.
+   *  Preferred over `maxHeight`, which it overrides. */
+  maxLines?: number;
+  /** Cap (px) on the auto-height growth when `grow` is set; beyond it the editor scrolls.
+   *  A raw-px alternative to `maxLines`. Unbounded growth when both are omitted. */
+  maxHeight?: number;
 }
 
 export interface BufferEditorOptions {
@@ -281,6 +298,15 @@ export interface InputEditorOptions extends BufferEditorOptions {
   /** Extra CSS class on the view, added alongside the shared `zym-input` class — so a
    *  given input (e.g. the agent prompt) can be targeted by its own styles/keymaps. */
   cssClass?: string;
+  /** Inner text padding (px) on all four sides. Defaults to `INPUT_PADDING`. */
+  padding?: number;
+  /** Grow the input's height with its text instead of filling its allocation. Pair with
+   *  `maxLines`/`maxHeight` to cap the growth (past it the input scrolls). */
+  grow?: boolean;
+  /** Cap `grow` at N text lines (padding-aware); overrides `maxHeight`. */
+  maxLines?: number;
+  /** Cap (px) on `grow`; a raw-px alternative to `maxLines`. Unbounded when both omitted. */
+  maxHeight?: number;
   /** Close request, passed through to the editor. */
   onClose?: () => void;
 }
@@ -493,6 +519,13 @@ export class TextEditor implements DocumentHost {
   // mode only) and an optional extra CSS class on the view (style/keymap targeting).
   private readonly softWrapOverride: boolean | undefined;
   private readonly cssClass: string | undefined;
+  // Inner text padding for an embedded/input editor (px); undefined → INPUT_PADDING.
+  private readonly paddingOverride: number | undefined;
+  // Auto-height (input grows with its text) and an optional cap on that growth, expressed
+  // as text lines (`growMaxLines`, padding-aware) or raw px (`growMaxHeight`).
+  private readonly growToContent: boolean;
+  private readonly growMaxHeight: number | undefined;
+  private readonly growMaxLines: number | undefined;
 
   constructor(options: TextEditorOptions = {}) {
     this.bufferMode = options.buffer ?? null;
@@ -500,6 +533,10 @@ export class TextEditor implements DocumentHost {
     this.gitRepo = options.git ?? null;
     this.softWrapOverride = options.softWrap;
     this.cssClass = options.cssClass;
+    this.paddingOverride = options.padding;
+    this.growToContent = options.grow ?? false;
+    this.growMaxHeight = options.maxHeight;
+    this.growMaxLines = options.maxLines;
     this.workbenchCwd = options.cwd ?? (() => process.cwd());
 
     // The backing this editor is a view onto: a multi-source `MultiBufferDocument` (the
@@ -1155,19 +1192,21 @@ export class TextEditor implements DocumentHost {
     if (this.cssClass) for (const c of this.cssClass.split(/\s+/)) if (c) view.addCssClass(c);
     view.setAutoIndent(true);
     view.setTabWidth(TAB_WIDTH);
-    view.setVexpand(true);
+    view.setVexpand(!this.growToContent); // auto-height: size to content, don't fill
     view.setHexpand(true);
     // Line numbers are drawn by SyntaxController's fold-aware gutter (not the
     // built-in one, which mashes folded line numbers together), gated on
     // !bufferMode where SyntaxController is given `lineNumbers: true`.
     if (this.embedded) {
-      // A plain embedded input: no right margin or current-line highlight; a
-      // little padding so the text doesn't hug the edges.
+      // A plain embedded input: no right-margin guide or current-line highlight; symmetric
+      // padding on all four sides so the text doesn't hug any edge.
       view.setShowRightMargin(false);
       view.setHighlightCurrentLine(false);
-      view.setLeftMargin(8);
-      view.setTopMargin(6);
-      view.setBottomMargin(6);
+      const padding = this.paddingOverride ?? INPUT_PADDING;
+      view.setLeftMargin(padding);
+      view.setRightMargin(padding);
+      view.setTopMargin(padding);
+      view.setBottomMargin(padding);
     } else {
       view.setHighlightCurrentLine(true);
       view.setShowRightMargin(true);
@@ -1203,6 +1242,29 @@ export class TextEditor implements DocumentHost {
     const scrolled = new Gtk.ScrolledWindow();
     scrolled.setChild(this.view);
     scrolled.setHexpand(true);
+
+    // Auto-height: request the view's natural (content) height so the input grows with its
+    // text instead of filling its allocation. A cap (`maxLines` or `maxHeight`) clamps it —
+    // past the cap the ScrolledWindow keeps that height and scrolls internally. The outer box
+    // opts out of vexpand below so the natural height propagates up to the editor root.
+    if (this.growToContent) {
+      scrolled.setPropagateNaturalHeight(true);
+      if (this.growMaxLines !== undefined) {
+        // Cap at N *text* lines: N line-heights plus the top+bottom padding (which the
+        // view's natural height also includes), so the cap means visible text rows
+        // regardless of padding. The real line height needs the resolved font, so seed it
+        // now (DEFAULT_LINE_HEIGHT until then) and refine once the view is mapped.
+        const padding = this.paddingOverride ?? INPUT_PADDING;
+        const applyMaxLines = () =>
+          scrolled.setMaxContentHeight(
+            Math.round(this.growMaxLines! * this.editorModel.getLineHeightInPixels() + 2 * padding),
+          );
+        applyMaxLines();
+        this.connect(this.view, 'map', applyMaxLines);
+      } else if (this.growMaxHeight !== undefined) {
+        scrolled.setMaxContentHeight(this.growMaxHeight);
+      }
+    }
 
     // Scroll-past-end (`editor.scrollPastEnd`): GtkSourceView has no native option,
     // so we emulate it with a dynamic bottom margin sized to ~one viewport minus a
@@ -1344,8 +1406,10 @@ export class TextEditor implements DocumentHost {
       this.placeholderLabel.addCssClass('zym-placeholder');
       this.placeholderLabel.setHalign(Gtk.Align.START);
       this.placeholderLabel.setValign(Gtk.Align.START);
-      this.placeholderLabel.setMarginStart(8);
-      this.placeholderLabel.setMarginTop(6);
+      // Align the placeholder with where typed text lands: the view's inner padding.
+      const padding = this.paddingOverride ?? INPUT_PADDING;
+      this.placeholderLabel.setMarginStart(padding);
+      this.placeholderLabel.setMarginTop(padding);
       this.placeholderLabel.setCanTarget(false);
       overlay.addOverlay(this.placeholderLabel);
       this.connect(this.buffer, 'changed', () =>
@@ -1381,7 +1445,7 @@ export class TextEditor implements DocumentHost {
     this.banner.setChild(this.bannerBox);
     this.banner.setRevealChild(false);
 
-    box.setVexpand(true);
+    box.setVexpand(!this.growToContent); // auto-height inputs hug their content
     box.setHexpand(true);
     const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     outer.append(this.banner);
@@ -2038,18 +2102,25 @@ export class TextEditor implements DocumentHost {
  * agent prompt, pickers) as opposed to a full "textarea"/file editor. Sets up the input
  * defaults so callers don't repeat them:
  *   - buffer-only mode (no file, LSP, line numbers, or minimap);
+ *   - folding off, so no gutter is installed at all (a short input has no code structure
+ *     to fold, and the lone fold-chevron column would just be empty margin) — overridable;
  *   - soft-wrap on (wraps instead of h-scrolling), overridable;
+ *   - symmetric inner text padding (`padding`, default `INPUT_PADDING`);
  *   - a `zym-input` CSS class so styles and keymaps can target inputs as a group
  *     (and an optional `cssClass` for one specific input).
  * The buffer knobs (placeholder, initialText, onSubmit, readOnly, …) pass straight
  * through. Prefer this over `new TextEditor({ buffer: … })` for embedded inputs.
  */
 export function createInput(options: InputEditorOptions = {}): TextEditor {
-  const { softWrap = true, cssClass, onClose, ...buffer } = options;
+  const { softWrap = true, cssClass, onClose, padding, grow, maxLines, maxHeight, folding = false, ...buffer } = options;
   return new TextEditor({
-    buffer,
+    buffer: { ...buffer, folding },
     softWrap,
     cssClass: cssClass ? `zym-input ${cssClass}` : 'zym-input',
+    padding,
+    grow,
+    maxLines,
+    maxHeight,
     onClose,
   });
 }

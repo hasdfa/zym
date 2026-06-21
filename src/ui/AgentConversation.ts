@@ -339,9 +339,14 @@ export class AgentConversation implements Agent {
 
     // A buffer-only editor (full vim editing) as the prompt input, wrapped in a
     // named container so the enter/alt-enter keymap can scope to it.
-    this.input = createInput({ placeholder: 'Message claude…' });
+    // Auto-grows from one line up to 240px; past that the editor scrolls internally.
+    this.input = createInput({
+      placeholder: 'Write prompt…', 
+      grow: true, 
+      maxHeight: 240,
+      padding: 16,
+    });
     this.input.root.setVexpand(false);
-    this.input.root.setSizeRequest(-1, 96); // ~5 lines tall; the editor scrolls internally beyond that
     this.input.addCompletionSource(createSlashCommandSource(() => this._slashCommands));
     this.promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.promptContainer.setName('AgentConversationPrompt');
