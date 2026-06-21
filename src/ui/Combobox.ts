@@ -1,29 +1,30 @@
 /*
- * Combobox — a reusable "Picker as a widget": an editable text input that drops a
- * filtered list below it, since GTK/Adwaita has no searchable dropdown (Gtk.DropDown
- * is a plain string list with no descriptions or typeahead). The input is the trigger
- * — click it or type to open the list, which fuzzy-filters as you type; Up/Down move
- * the selection, Enter/click commits, Escape cancels. Selecting fills the input with
+ * Combobox — a reusable "Picker as a widget": an editable row that drops a filtered
+ * list below it, since GTK/Adwaita has no searchable dropdown (Gtk.DropDown is a
+ * plain string list with no descriptions or typeahead). The trigger is an
+ * Adw.EntryRow, so its `title` floats inside the row like a labelled Adwaita field;
+ * click it or type to open the list, which fuzzy-filters as you type. Up/Down move
+ * the selection, Enter/click commits, Escape cancels. Selecting fills the row with
  * the option's label and fires `onChange`. Options carry an optional muted `detail`
  * shown right-aligned, reusing the Picker's fuzzy ranking and match highlighting.
  *
- * The list lives in a non-autohide Gtk.Popover parented to the input, so focus stays
- * on the input while filtering (an autohide popover would steal it). Dismissal is
- * handled explicitly: Escape, a commit, or the input losing focus.
+ * The list lives in a non-autohide Gtk.Popover parented to the row, so focus stays
+ * on the row while filtering (an autohide popover would steal it). Dismissal is
+ * handled explicitly: Escape, a commit, or the row losing focus.
  */
-import { Gtk, Gdk, Pango } from '../gi.ts';
+import { Gtk, Gdk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { rank, highlightMarkup } from './Picker.ts';
 
 const POPOVER_MAX_HEIGHT = 320;
-const DEFAULT_WIDTH = 160;
+const DEFAULT_WIDTH = 170;
 
 export interface ComboOption {
   /** Returned by `getValue()` and passed to `onChange` when chosen. */
   value: string;
-  /** Shown in the input and as the row's main (fuzzy-matched) text. */
+  /** Shown in the row and as the list item's main (fuzzy-matched) text. */
   label: string;
-  /** Optional muted text shown right-aligned in the row. */
+  /** Optional muted text shown right-aligned in the list item. */
   detail?: string;
 }
 
@@ -31,16 +32,24 @@ export interface ComboboxOptions {
   options: ComboOption[];
   /** Initially selected value (defaults to the first option). */
   value?: string;
-  placeholder?: string;
-  /** Input width in px (default 160). */
+  /** The floating field label shown inside the row. */
+  title?: string;
+  /** Row width in px (default 170). */
   width?: number;
   /** Fired when the user commits a different value. */
   onChange?: (value: string) => void;
 }
 
 addStyles(/* css */`
-  #Combobox {
-    font: var(--t-font-monospace);
+  #ComboboxList {
+    background: transparent;
+    box-shadow: none;
+  }
+  #ComboboxList > row {
+    min-height: 0;
+  }
+  #ComboboxRow {
+    /* the chevron suffix sits flush to the right edge */
   }
   #ComboboxPopover > contents {
     padding: 0;
@@ -48,38 +57,39 @@ addStyles(/* css */`
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius-small);
   }
-  #ComboboxList {
+  #ComboboxMenu {
+    font: var(--t-font-monospace);
     border-radius: var(--popover-radius-small);
     background: transparent;
   }
-  #ComboboxList row { padding: 0; }
-  #ComboboxRow {
+  #ComboboxMenu row { padding: 0; }
+  #ComboboxItem {
     padding: 0.35em 0.75em;
   }
-  #ComboboxRow > .combobox-detail {
+  #ComboboxItem > .combobox-detail {
     margin-left: 1em;
     opacity: 0.5;
   }
 `);
 
 export class Combobox {
-  /** The trigger input; add this to your layout. */
-  readonly root: InstanceType<typeof Gtk.Entry>;
+  /** The trigger — a single-row boxed list. Add this to your layout. */
+  readonly root: InstanceType<typeof Gtk.ListBox>;
 
   private options: ComboOption[];
   private value: string;
   private readonly onChange?: (value: string) => void;
   private readonly width: number;
 
-  private readonly entry: InstanceType<typeof Gtk.Entry>;
+  private readonly row: InstanceType<typeof Adw.EntryRow>;
   private readonly popover: InstanceType<typeof Gtk.Popover>;
-  private readonly listBox: InstanceType<typeof Gtk.ListBox>;
+  private readonly menu: InstanceType<typeof Gtk.ListBox>;
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
 
-  // Filtered options currently shown, parallel to the list rows (row index → option).
+  // Filtered options currently shown, parallel to the menu rows (row index → option).
   private results: ComboOption[] = [];
   private open = false;
-  // Suppress the `changed` reaction while we set the input text programmatically
+  // Suppress the `changed` reaction while we set the row text programmatically
   // (committing a label / restoring it), so it isn't mistaken for the user typing.
   private settingText = false;
 
@@ -89,61 +99,70 @@ export class Combobox {
     this.width = opts.width ?? DEFAULT_WIDTH;
     this.value = opts.value ?? opts.options[0]?.value ?? '';
 
-    this.entry = new Gtk.Entry();
-    this.entry.setName('Combobox');
-    this.entry.addCssClass('has-text-input'); // release the `space` leader so it types
-    this.entry.setSizeRequest(this.width, -1);
-    if (opts.placeholder) this.entry.setPlaceholderText(opts.placeholder);
-    this.entry.setIconFromIconName(Gtk.EntryIconPosition.SECONDARY, 'pan-down-symbolic');
-    this.entry.setText(this.selectedLabel()); // before wiring `changed`, so it's silent
-    this.root = this.entry;
+    this.row = new Adw.EntryRow();
+    this.row.setName('ComboboxRow');
+    this.row.addCssClass('has-text-input'); // release the `space` leader so it types
+    if (opts.title) this.row.setTitle(opts.title);
+    this.row.setShowApplyButton(false);
+    this.row.setActivatable(false); // clicking opens the list (below), not "activate"
+    const chevron = new Gtk.Image({ iconName: 'pan-down-symbolic' });
+    chevron.setOpacity(0.6);
+    this.row.addSuffix(chevron);
+    this.row.setText(this.selectedLabel()); // before wiring `changed`, so it's silent
 
-    this.listBox = new Gtk.ListBox();
-    this.listBox.setName('ComboboxList');
-    this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
-    this.listBox.setFocusable(false); // the input keeps focus; we drive selection
+    // A single-row boxed list gives the row its Adwaita card framing standalone.
+    this.root = new Gtk.ListBox();
+    this.root.setName('ComboboxList');
+    this.root.addCssClass('boxed-list');
+    this.root.setSelectionMode(Gtk.SelectionMode.NONE);
+    this.root.setSizeRequest(this.width, -1);
+    this.root.append(this.row);
+
+    this.menu = new Gtk.ListBox();
+    this.menu.setName('ComboboxMenu');
+    this.menu.setSelectionMode(Gtk.SelectionMode.SINGLE);
+    this.menu.setFocusable(false); // the row keeps focus; we drive selection
 
     this.scrolled = new Gtk.ScrolledWindow();
-    this.scrolled.setChild(this.listBox);
+    this.scrolled.setChild(this.menu);
     this.scrolled.setPropagateNaturalHeight(true);
     this.scrolled.setMaxContentHeight(POPOVER_MAX_HEIGHT);
     this.scrolled.setPolicy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
 
     this.popover = new Gtk.Popover();
     this.popover.setName('ComboboxPopover');
-    this.popover.setAutohide(false); // keep focus on the input while filtering
+    this.popover.setAutohide(false); // keep focus on the row while filtering
     this.popover.setHasArrow(false);
     this.popover.setPosition(Gtk.PositionType.BOTTOM);
     this.popover.setChild(this.scrolled);
-    this.popover.setParent(this.entry);
+    this.popover.setParent(this.row);
 
-    // Type to filter (and open). The `changed` signal also fires on programmatic
-    // text changes, which `settingText` guards out.
-    this.entry.on('changed', () => {
+    // Type to filter (and open). `changed` also fires on programmatic text changes,
+    // which `settingText` guards out.
+    this.row.on('changed', () => {
       if (this.settingText) return;
       if (!this.open) this.openPopover(false);
-      this.rebuild(this.entry.getText());
+      else this.rebuild(this.row.getText() ?? '');
     });
-    this.entry.on('activate', () => this.chooseSelected());
-    this.listBox.on('row-activated', (row) => this.chooseRow(row));
+    this.row.on('entry-activated', () => this.chooseSelected());
+    this.menu.on('row-activated', (r) => this.chooseRow(r));
 
-    // Click the input (including its chevron) to open the list with all options shown.
+    // Click the row (including its chevron) to open the list with all options shown.
     const click = new Gtk.GestureClick();
     click.on('pressed', () => { if (!this.open) this.openPopover(true); });
-    this.entry.addController(click);
+    this.row.addController(click);
 
-    // Navigation keys, in the capture phase so they act before the entry's own
-    // cursor handling. Printable keys fall through (return false) to the entry,
-    // then surface via `changed`.
+    // Navigation keys, in the capture phase so they act before the row's own entry
+    // handling. Printable keys fall through (return false) and surface via `changed`.
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => this.onKey(keyval));
-    this.entry.addController(keys);
+    this.row.addController(keys);
 
     // Commit on focus-out (or restore the label if the user typed a stray filter).
     const focus = new Gtk.EventControllerFocus();
     focus.on('leave', () => setTimeout(() => { if (this.open) this.closePopover(true); }, 0));
-    this.entry.addController(focus);
+    this.row.addController(focus);
   }
 
   getValue(): string {
@@ -154,7 +173,7 @@ export class Combobox {
   setValue(value: string): void {
     if (!this.options.some((o) => o.value === value)) return;
     this.value = value;
-    this.setEntryText(this.selectedLabel());
+    this.setRowText(this.selectedLabel());
   }
 
   /**
@@ -166,22 +185,22 @@ export class Combobox {
     this.options = options;
     const next = value ?? (options.some((o) => o.value === this.value) ? this.value : options[0]?.value ?? '');
     this.value = next;
-    this.setEntryText(this.selectedLabel());
-    if (this.open) this.rebuild(this.entry.getText());
+    this.setRowText(this.selectedLabel());
+    if (this.open) this.rebuild(this.row.getText() ?? '');
   }
 
   setSensitive(sensitive: boolean): void {
-    this.entry.setSensitive(sensitive);
+    this.row.setSensitive(sensitive);
   }
 
   private selectedLabel(): string {
     return this.options.find((o) => o.value === this.value)?.label ?? '';
   }
 
-  private setEntryText(text: string): void {
+  private setRowText(text: string): void {
     this.settingText = true;
-    this.entry.setText(text);
-    this.entry.setPosition(-1);
+    this.row.setText(text);
+    this.row.setPosition(-1);
     this.settingText = false;
   }
 
@@ -190,48 +209,47 @@ export class Combobox {
   private openPopover(showAll: boolean): void {
     if (this.open) return;
     this.open = true;
-    // Match the popover width to the input.
-    const width = Math.max(this.entry.getAllocatedWidth(), this.width);
+    const width = Math.max(this.root.getAllocatedWidth(), this.width);
     this.scrolled.setSizeRequest(width, -1);
-    this.rebuild(showAll ? '' : this.entry.getText());
+    this.rebuild(showAll ? '' : (this.row.getText() ?? ''));
     this.popover.popup();
     // Select the text so the first keystroke replaces the shown label and filters
     // from scratch. Deferred so it wins over the click's own cursor placement.
-    if (showAll) setTimeout(() => this.entry.selectRegion(0, -1), 0);
+    if (showAll) setTimeout(() => this.row.selectRegion(0, -1), 0);
   }
 
   private closePopover(restoreLabel: boolean): void {
     if (!this.open) return;
     this.open = false;
     this.popover.popdown();
-    if (restoreLabel) this.setEntryText(this.selectedLabel());
+    if (restoreLabel) this.setRowText(this.selectedLabel());
   }
 
-  // Rebuild the visible rows for `query`: fuzzy-rank the options (or show all in
-  // insertion order when empty), then select the row for the current value if it's
+  // Rebuild the visible items for `query`: fuzzy-rank the options (or show all in
+  // insertion order when empty), then select the item for the current value if it's
   // present, else the first.
   private rebuild(query: string): void {
-    let row: InstanceType<typeof Gtk.ListBoxRow> | null;
-    while ((row = this.listBox.getRowAtIndex(0))) this.listBox.remove(row);
+    let r: InstanceType<typeof Gtk.ListBoxRow> | null;
+    while ((r = this.menu.getRowAtIndex(0))) this.menu.remove(r);
 
     const items = this.options.map((o) => ({ value: o.value, text: o.label }));
     const byValue = new Map(this.options.map((o) => [o.value, o]));
     const ranked = rank(query, items);
-    this.results = ranked.map((r) => byValue.get(r.item.value)!).filter(Boolean);
+    this.results = ranked.map((m) => byValue.get(m.item.value)!).filter(Boolean);
 
-    ranked.forEach((r, i) => {
+    ranked.forEach((m, i) => {
       const opt = this.results[i];
-      if (opt) this.listBox.append(this.buildRow(opt, r.positions));
+      if (opt) this.menu.append(this.buildItem(opt, m.positions));
     });
 
     const selectIndex = Math.max(0, this.results.findIndex((o) => o.value === this.value));
-    const target = this.listBox.getRowAtIndex(selectIndex);
-    if (target) this.listBox.selectRow(target);
+    const target = this.menu.getRowAtIndex(selectIndex);
+    if (target) this.menu.selectRow(target);
   }
 
-  private buildRow(opt: ComboOption, positions: number[]): InstanceType<typeof Gtk.ListBoxRow> {
+  private buildItem(opt: ComboOption, positions: number[]): InstanceType<typeof Gtk.ListBoxRow> {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
-    box.setName('ComboboxRow');
+    box.setName('ComboboxItem');
     const main = new Gtk.Label({ xalign: 0, useMarkup: true });
     main.setMarkup(highlightMarkup(opt.label, positions));
     main.setHexpand(true);
@@ -247,7 +265,7 @@ export class Combobox {
     row.setChild(box);
     row.setFocusable(false);
     const hover = new Gtk.EventControllerMotion();
-    hover.on('enter', () => this.listBox.selectRow(row));
+    hover.on('enter', () => this.menu.selectRow(row));
     row.addController(hover);
     return row;
   }
@@ -255,16 +273,16 @@ export class Combobox {
   private move(delta: number): void {
     const count = this.results.length;
     if (count === 0) return;
-    const selected = this.listBox.getSelectedRow();
+    const selected = this.menu.getSelectedRow();
     const current = selected ? selected.getIndex() : -1;
     const next = (current + delta + count) % count;
-    const row = this.listBox.getRowAtIndex(next);
-    if (row) this.listBox.selectRow(row);
+    const row = this.menu.getRowAtIndex(next);
+    if (row) this.menu.selectRow(row);
   }
 
   private chooseSelected(): void {
     if (!this.open) { this.openPopover(true); return; }
-    this.chooseRow(this.listBox.getSelectedRow());
+    this.chooseRow(this.menu.getSelectedRow());
   }
 
   private chooseRow(row: InstanceType<typeof Gtk.ListBoxRow> | null): void {
@@ -273,12 +291,12 @@ export class Combobox {
     if (!opt) return;
     const changed = opt.value !== this.value;
     this.value = opt.value;
-    this.setEntryText(opt.label);
+    this.setRowText(opt.label);
     this.closePopover(false);
     if (changed) this.onChange?.(opt.value);
   }
 
-  // Returns true to swallow the key (handled here), false to let the entry have it.
+  // Returns true to swallow the key (handled here), false to let the row's entry have it.
   private onKey(keyval: number): boolean {
     switch (keyval) {
       case Gdk.KEY_Down:

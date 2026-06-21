@@ -55,17 +55,9 @@ addStyles(/* css */`
     background-color: var(--window-bg-color);
     box-shadow: 0px 10px 33px 28px var(--t-ui-shadow);
   }
-  #AgentLauncherPrompt {
-    padding: 0.5em;
-  }
   #AgentLauncherOptions {
     padding: 0.5em;
     border-top: 1px solid var(--border-color);
-  }
-  #AgentLauncherField > .field-caption {
-    font-size: var(--font-size-small);
-    opacity: 0.6;
-    margin-bottom: 2px;
   }
   #AgentLauncherFooter {
     padding: 0.4em 0.75em;
@@ -119,19 +111,22 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   const kindOptions = AGENT_CONFIGS[defaultKind].options;
 
   const modelCombo = new Combobox({
+    title: 'model',
     options: kindOptions.models,
     value: kindOptions.defaultModel,
-    width: 130,
+    width: 180,
   });
   const permissionCombo = new Combobox({
+    title: 'permission',
     options: kindOptions.permissionModes,
     value: kindOptions.defaultPermissionMode,
-    width: 140,
+    width: 190,
   });
   const kindCombo = new Combobox({
+    title: 'agent',
     options: listAgentKinds(),
     value: defaultKind,
-    width: 110,
+    width: 170,
     onChange: (value) => {
       const opts = AGENT_CONFIGS[value as AgentKind].options;
       modelCombo.setOptions(opts.models, opts.defaultModel);
@@ -142,31 +137,27 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // Effort isn't wired yet (no launch mechanism exists); a disabled slot reserves
   // its place so the row layout is stable when it lands.
   const effortCombo = new Combobox({
+    title: 'effort',
     options: [{ value: 'auto', label: 'auto' }],
     value: 'auto',
-    width: 100,
+    width: 170,
   });
   effortCombo.setSensitive(false);
   effortCombo.root.setTooltipText('Effort — coming soon');
 
   const worktreeCombo = new Combobox({
+    title: 'worktree',
     options: worktreeOptions(cwd),
     value: cwd,
-    width: 150,
+    width: 200,
   });
 
-  // A WrapBox so the options reflow onto another line on a narrow card rather than
-  // overflowing.
+  // A WrapBox so the option rows reflow onto another line on a narrow card rather
+  // than overflowing. Each combobox carries its own floating Adwaita label.
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
   optionsRow.setName('AgentLauncherOptions');
-  for (const [caption, combo] of [
-    ['model', modelCombo],
-    ['effort', effortCombo],
-    ['permission', permissionCombo],
-    ['worktree', worktreeCombo],
-    ['agent', kindCombo],
-  ] as const) {
-    optionsRow.append(field(caption, combo));
+  for (const combo of [modelCombo, effortCombo, permissionCombo, worktreeCombo, kindCombo]) {
+    optionsRow.append(combo.root);
   }
   panel.append(optionsRow);
 
@@ -214,15 +205,4 @@ function worktreeOptions(cwd: string): ComboOption[] {
     options.push({ value: wt.path, label: wt.name, detail: wt.branch ?? 'detached' });
   }
   return options;
-}
-
-// A captioned field: a small muted label above a combobox.
-function field(caption: string, combo: Combobox): InstanceType<typeof Gtk.Box> {
-  const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
-  box.setName('AgentLauncherField');
-  const label = new Gtk.Label({ xalign: 0, label: caption });
-  label.addCssClass('field-caption');
-  box.append(label);
-  box.append(combo.root);
-  return box;
 }
