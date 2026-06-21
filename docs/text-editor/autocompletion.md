@@ -62,9 +62,10 @@ All files under `src/ui/TextEditor/`.
   popup. Selecting an item lazily calls its `resolve()` to fill the doc pane
   / auto-import edits.
 
-- **`CompletionPopup.ts`** — a keyboard-driven dropdown floated at the
-  **start of the word** being completed in the editor's `Gtk.Overlay` (the
-  project's floating-card pattern). Non-focusable
+- **`CompletionPopup.ts`** — a keyboard-driven dropdown anchored below the
+  **start of the word** being completed, via the shared `EditorPopover`
+  (a chrome-less `Gtk.Popover` — the `#CompletionPopup` panel is the visual
+  card; the popover only positions it and slides it on-screen). Non-focusable
   (`setCanTarget(false)`) so the editor keeps focus and typing flows.
   Painted with the theme background; selected row uses the theme's selected
   color; rows have no min-height (a single match is one row tall). Each row:

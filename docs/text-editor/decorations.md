@@ -19,7 +19,7 @@ Atom's types are `line`, `line-number`/`gutter`, `highlight`, `cursor`,
 | **cursor** | `EditorModel` (`cursorTag`, `extraSelectionTag`) | tag + native | vim block cursor, multi-cursor, native selection |
 | **text** (trailing/virtual) | `VirtualText` | `GtkSourceAnnotations` (EOL) | inlay hints, error lens |
 | **text** (mid-line virtual) | the fold projection (`Document.foldViewRange`) | view-only text in the view buffer | fold `[N]` placeholder — see below |
-| **overlay** | `OverlayDecoration`, `Peek`, `Leap` | `Gtk.Overlay`/`Gtk.Fixed` child at a marker, scroll-following | hover, signature help (`OverlayDecoration`); see-definition (`Peek`); leap marks (`Leap`); completion (`CompletionController`, own positioning) |
+| **overlay** | `EditorPopover`, `Peek`, `Leap` | cursor-anchored `Gtk.Popover` (`EditorPopover`); `Gtk.Overlay`/`Gtk.Fixed` child (`Peek`/`Leap`) | hover, signature help, completion (`EditorPopover`); see-definition (`Peek`); leap marks (`Leap`) |
 | **block** | `BlockDecorations` | text-window overlay widget that reserves a vertical band | diff `⋯ N unchanged lines` |
 
 ## The two text-tag categories (`TextDecorations`)
@@ -62,12 +62,16 @@ Two flavors of "text shown but not in the model":
 
 ## overlay vs block
 
-- **`overlay`** — a floating widget positioned at a buffer point that
-  *follows scroll* and dismisses, without taking layout space.
-  `OverlayDecoration` is the shared base for the cursor-anchored cards
-  (hover, signature; the natural home for future code-lens / peek-references
-  popups). `Peek` (focusable, sibling overlay) and `Leap` (mark layer) are
-  specialized overlays; completion has its own dropdown positioning.
+- **`overlay`** — a floating card at a buffer point that dismisses without
+  taking layout space. `EditorPopover` (a cursor-anchored `Gtk.Popover`) is the
+  shared base for these cards — LSP hover, signature help, and the
+  autocompletion list, with future code-lens / peek-references popups the next
+  consumers. It centralizes anchoring (point it at the cursor cell;
+  GTK flips it above/below to fit), a freeze-safe deferred `popup()` (calling it
+  inside a promise-continuation microtask under the GLib loop freezes node-gtk),
+  and left-alignment (it measures the card so its text lands on the code column,
+  since a popover otherwise centers on its anchor). `Peek` (focusable, sibling
+  overlay) and `Leap` (mark layer) are specialized overlays.
 - **`block`** — `BlockDecorations`: a real widget *between* lines, reserving
   vertical space (zero buffer footprint). The diff's `⋯ N lines`. See
   [inline-widgets.md](inline-widgets.md).
@@ -87,7 +91,7 @@ cost of view≠model — see [folding.md](folding.md) → "Boundary rule".
 - a glyph in the gutter → a `GutterRendererText`.
 - trailing text after a line → `VirtualText`; column-positioned text → the
   projection.
-- a floating card at the cursor/a line → `OverlayDecoration` (or `Peek` if
+- a floating card at the cursor/a line → `EditorPopover` (or `Peek` if
   focusable).
 - a real widget between lines → `BlockDecorations`.
 
