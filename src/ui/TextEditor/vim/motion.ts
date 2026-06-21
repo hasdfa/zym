@@ -6,7 +6,6 @@ import { Point } from '../../../text/Point.ts'
 import { Range } from '../../../text/Range.ts'
 import { Base } from './base.ts'
 import type { Cursor } from '../Cursor.ts'
-import type { Selection } from '../Selection.ts'
 
 /** A buffer wise — how a motion/selection spans the buffer. */
 type Wise = 'characterwise' | 'linewise' | 'blockwise'

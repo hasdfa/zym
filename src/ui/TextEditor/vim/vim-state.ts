@@ -21,7 +21,6 @@ import * as utils from './utils.ts'
 import underscorePlus from './underscorePlus.ts'
 import { quilx } from '../../../quilx.ts'
 import type { EditorModel } from '../EditorModel.ts'
-import type { Selection } from '../Selection.ts'
 import type { Disposable as DisposableType } from '../../../util/eventKit.ts'
 import type { Key } from '../../../keymap/Key.ts'
 
@@ -69,9 +68,6 @@ const MANAGER_REGISTRY = {
 }
 
 const __vimStatesByEditor = new Map<EditorModel, VimState>()
-
-const dasherize = (s: string): string => (s[0].toLowerCase() + s.slice(1)).replace(/[A-Z]/g, m => '-' + m.toLowerCase())
-const classify = (s: string): string => s[0].toUpperCase() + s.slice(1).replace(/-(\w)/g, m => m[1].toUpperCase())
 
 export default class VimState {
   // Instance fields (assigned in the constructor)
@@ -191,8 +187,8 @@ export default class VimState {
 
     this.subscriptions = new CompositeDisposable(
       this.observeMouse(),
-      this.editor.onDidAddSelection(selection => this.reconcileVisualModeWithActualSelection()),
-      this.editor.onDidChangeSelectionRange(event => this.reconcileVisualModeWithActualSelection()),
+      this.editor.onDidAddSelection(_selection => this.reconcileVisualModeWithActualSelection()),
+      this.editor.onDidChangeSelectionRange(_event => this.reconcileVisualModeWithActualSelection()),
       // Record edit positions for the change list (g; / g,). Per emitted batch we
       // log the last change's start; same-row entries collapse (Vim dedups by line).
       this.editor.onDidChangeText(event => {
@@ -377,6 +373,7 @@ export default class VimState {
   }
 
   observeMouse (): DisposableType {
+    /* eslint-disable @typescript-eslint/no-unused-vars -- ported but not yet wired; kept for the FIXME below (see vim-mode-plus #830) */
     const nextMouseEventTable: Record<string, string> = {
       'mousedown-capture': 'mousedown-bubble',
       'mousedown-bubble': 'mouseup',
@@ -419,6 +416,7 @@ export default class VimState {
         this.reconcileVisualModeWithActualSelection()
       }
     }
+    /* eslint-enable @typescript-eslint/no-unused-vars */
 
     // FIXME: implement this
     // this.editorElement.addEventListener('mousedown', onMouseDownCapture, true)

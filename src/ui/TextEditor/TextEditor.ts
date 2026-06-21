@@ -6,8 +6,6 @@
  * bindings, and follows the system light/dark scheme. The assembled widget is
  * exposed via `root`.
  */
-import * as Fs from 'node:fs';
-import * as Path from 'node:path';
 import { SyntaxController, type RevealedRange, type ProvidedFold } from '../../syntax/syntax-controller.ts';
 import { detectIndentation } from './detectIndentation.ts';
 import { handleAutoPairInsert, handleAutoPairBackspace } from './autoPair.ts';

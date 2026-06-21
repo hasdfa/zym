@@ -33,11 +33,11 @@ import { WorkbenchList, PROJECT_NAME } from './WorkbenchList.ts';
 import { WorkbenchStatus } from './WorkbenchStatus.ts';
 import { GitPanel } from './GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
-import { Icons, iconLabel } from './icons.ts';
+import { Icons } from './icons.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
-import { acquireGitRepo, releaseGitRepo, type GitRepo, type GitOpResult } from '../git.ts';
+import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
 import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees } from '../git.ts';
 import { openGithubService, type GithubService } from '../github.ts';
 import { computeDiff } from '../util/DiffModel.ts';
@@ -88,7 +88,7 @@ import { NotificationToasts } from './NotificationToasts.ts';
 import { loadKeymaps } from '../keymaps/load.ts';
 import { loadConfig, configPath } from '../config/load.ts';
 import { type Disposable, type DisposableLike } from '../util/eventKit.ts';
-import { styles, addStyles } from '../styles.ts';
+import { styles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 
 // The identifier under the cursor (for prefilling the rename prompt). Codepoint-
