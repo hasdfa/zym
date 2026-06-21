@@ -95,6 +95,10 @@ test('getFileStatuses: tracked modified vs untracked', () => {
   assert.deepEqual(byName.get('untracked.txt'), { kind: 'untracked' });
 });
 
+test('isRepo is true inside a repository', () => {
+  assert.equal(repo.isRepo(), true);
+});
+
 test('getTrackedPaths lists tracked files only (absolute)', () => {
   const names = new Set([...repo.getTrackedPaths()].map((p) => Path.basename(p)));
   assert.ok(names.has('a.txt'));
@@ -163,6 +167,7 @@ test('outside a repo: null/empty, never throws', () => {
   const plain = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-nogit-'));
   try {
     const r = openGitRepo(plain);
+    assert.equal(r.isRepo(), false);
     assert.equal(r.getBranch(), null);
     assert.equal(r.getStatus(), null);
     assert.equal(r.getAheadBehind(), null);

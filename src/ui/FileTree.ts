@@ -382,7 +382,10 @@ export class FileTree {
   /** Whether a directory entry passes the active filters. */
   private isVisible(name: string, path: string | null, isDir: boolean): boolean {
     if (this.hideHidden && name.startsWith('.')) return false;
-    if (this.hideUntracked && this.git) {
+    // The untracked filter only applies inside an actual repo; for a plain
+    // directory the (dormant) repo reports nothing tracked, so gating on `git`
+    // alone would hide every file. See git.ts `isRepo`.
+    if (this.hideUntracked && this.git?.isRepo()) {
       if (!path) return false;
       // Show tracked files, and directories that contain a tracked file.
       return isDir ? this.trackedDirs.has(path) : this.trackedFiles.has(path);
@@ -410,10 +413,16 @@ export class FileTree {
     this.selection.setModel(this.tree);
   }
 
-  /** Refresh the tracked-paths set (and its ancestor directories) from git. */
-  private refreshTracked(): void {
-    if (!this.git) return;
-    this.trackedFiles = this.git.getTrackedPaths();
+  /** Refresh the tracked-paths set (and its ancestor directories) from git.
+   *  Returns whether the tracked file set actually changed (the first poll
+   *  landing, or an add/rm/commit) — plain working-tree edits leave it untouched,
+   *  so callers can skip a needless rebuild. */
+  private refreshTracked(): boolean {
+    if (!this.git) return false;
+    const next = this.git.getTrackedPaths();
+    const changed =
+      next.size !== this.trackedFiles.size || [...next].some((p) => !this.trackedFiles.has(p));
+    this.trackedFiles = next;
     this.trackedDirs = new Set();
     for (const file of this.trackedFiles) {
       let dir = Path.dirname(file);
@@ -424,6 +433,7 @@ export class FileTree {
         dir = parent;
       }
     }
+    return changed;
   }
 
   // --- Git status ----------------------------------------------------------
@@ -432,7 +442,17 @@ export class FileTree {
   private refreshStatuses(): void {
     if (!this.git) return;
     this.statuses = this.git.getFileStatuses();
-    this.refreshTracked(); // keep the tracked filter current for future expansions
+    const trackedChanged = this.refreshTracked(); // keep the tracked filter current
+    // When the untracked filter is active the visible rows are derived from the
+    // tracked set, so a change there must rebuild the tree — otherwise it keeps
+    // showing a stale (and, on a fresh repo whose first poll only just landed,
+    // empty) view. This is what fills in the tree after construction/re-root,
+    // since the git warm-up populates the tracked set asynchronously.
+    if (trackedChanged && this.hideUntracked) {
+      const expanded = this.serializeExpanded();
+      this.rebuild();
+      this.restoreExpanded(expanded);
+    }
     for (const listItem of this.boundItems) this.applyStatus(listItem);
   }
 

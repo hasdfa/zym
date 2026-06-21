@@ -101,6 +101,11 @@ export interface GitRepo {
    * or committed). Empty outside a repo.
    */
   getTrackedPaths(): Set<string>;
+  /** Whether `cwd` is inside a git repository. False for a plain directory, in
+   *  which case the repo is dormant (no poll/watch) and every getter above stays
+   *  at its empty value — callers must not treat that emptiness as "a repo with
+   *  nothing tracked". */
+  isRepo(): boolean;
   /** Whether a git operation (run via `run`) is currently in flight. */
   isBusy(): boolean;
 
@@ -262,6 +267,9 @@ class CliGitRepo implements GitRepo {
   }
   getTrackedPaths(): Set<string> {
     return this.state.tracked;
+  }
+  isRepo(): boolean {
+    return this.root !== null;
   }
   isBusy(): boolean {
     return this.busyCount > 0;
