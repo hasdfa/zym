@@ -208,6 +208,9 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     // surface is editable.
     'space h s': 'diff:stage-hunk',
     'space h u': 'diff:unstage-hunk',
+    // `g d` jumps to the file/line under the cursor — Enter now opens the inline comment box
+    // (handled directly in ContinuousDiffView), which sends the row/selection + comment to the agent.
+    'g d': 'diff:open-file',
   },
 
   // Workbench list (the left sidebar): shared list navigation (l reveals the selected

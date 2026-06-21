@@ -29,17 +29,33 @@ import { applyDiffDecorations } from './TextEditor/applyDiffDecorations.ts';
 import { CombinedDiffLineNumberGutter } from './TextEditor/DiffLineNumberGutter.ts';
 import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './multibuffer/diffMultiBuffer.ts';
 import { buildHeaderWidget, buildGapWidget } from './HeaderBands.ts';
+import { DiffCommentBox } from './DiffCommentBox.ts';
 import type { BlockDecorationSpec, BlockDecorationSet } from './TextEditor/BlockDecorationSet.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
 import { quilx } from '../quilx.ts';
 import * as Path from 'node:path';
 
+/** A review comment composed on a row/selection of the diff, to hand to the agent. */
+export interface DiffComment {
+  /** Absolute path of the commented file (the caller relativizes for display). */
+  path: string;
+  /** 1-based new-side line range the comment targets (start === end for a single line). */
+  startLine: number;
+  endLine: number;
+  /** The selected code, if any (empty when the comment is on a bare cursor row). */
+  selection: string;
+  /** The comment text the user typed (trimmed, non-empty). */
+  comment: string;
+}
+
 export interface ContinuousDiffOptions {
   /** Changed files: base (old/HEAD) + current (new/working) content. */
   files: DiffFile[];
   cwd?: string;
   onActivate?: (location: { path: string; row: number }) => void;
+  /** Compose a comment on the cursor/selection and send it to the agent (the `enter` action). */
+  onComment?: (comment: DiffComment) => void;
   /** Edit-in-place: back the NEW side with live `Document`s (write-through + save + live
    *  re-diff) instead of disk snapshots. Requires `documents`. */
   editable?: boolean;
@@ -110,6 +126,8 @@ export class ContinuousDiffView {
   private gapAnchors: DiffMultiBuffer['gapAnchors'] = [];
   private headerAnchors: DiffMultiBuffer['headerAnchors'] = [];
   private readonly onActivate?: (location: { path: string; row: number }) => void;
+  private readonly onComment?: (comment: DiffComment) => void;
+  private commentBox: DiffCommentBox | null = null;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
   // Hunk staging: the repo root, the per-file staged (index) blob, the last-built diff (for the
@@ -132,6 +150,7 @@ export class ContinuousDiffView {
 
   constructor(options: ContinuousDiffOptions) {
     this.onActivate = options.onActivate;
+    this.onComment = options.onComment;
     this.files = options.files;
     this.cwd = options.cwd;
     this.editable = !!options.editable;
@@ -553,7 +572,7 @@ export class ContinuousDiffView {
     keys.on('key-pressed', (keyval: number) => {
       if (keyval !== Gdk.KEY_Return && keyval !== Gdk.KEY_KP_Enter) return false;
       if (this.editable && view.getEditable()) return false; // insert mode: Enter is a newline
-      this.activateRow(this.cursorRow());
+      this.startComment(); // Enter (normal/visual) opens the inline comment box; `g d` jumps to the file
       return true;
     });
     view.addController(keys);
@@ -583,6 +602,62 @@ export class ContinuousDiffView {
     this.onActivate?.({ path, row: target.row });
   }
 
+  /** Jump to the file/line under the cursor (the `g d` action — Enter is the comment box now). */
+  openFileAtCursor(): void {
+    this.activateRow(this.cursorRow());
+  }
+
+  // --- comment to agent ------------------------------------------------------
+
+  /** Open the inline comment box (the `enter` action) on the cursor row or the active selection,
+   *  anchored just below the targeted range. Enter in the box sends `{path, lines, selection,
+   *  comment}` to the agent via `onComment`. No-op when already open or not on a file's rows. */
+  startComment(): void {
+    if (this.commentBox) return; // already open
+    const range = this.editor.model.getSelectedBufferRange();
+    const selection = this.editor.model.getSelectedText();
+    const startRow = range.start.row;
+    // An exclusive end at column 0 means the last row isn't actually selected (line-wise selection).
+    const endRow = range.end.row > startRow && range.end.column === 0 ? range.end.row - 1 : range.end.row;
+
+    const startHit = this.fileAtViewRow(startRow);
+    if (!startHit) return void quilx.notifications.addTrace('No file under the cursor');
+    const endHit = this.fileAtViewRow(endRow);
+    const path = startHit.path;
+    const startLine = startHit.worktreeRow + 1; // fileAtViewRow returns a 0-based new-side row
+    const endLine = (endHit && endHit.path === path ? endHit.worktreeRow : startHit.worktreeRow) + 1;
+
+    const box = new DiffCommentBox({
+      onSubmit: (text) => {
+        const comment = text.trim();
+        this.closeComment();
+        if (comment) this.onComment?.({ path, startLine, endLine, selection, comment });
+      },
+      onCancel: () => this.closeComment(),
+    });
+    this.commentBox = box;
+    this.editor.showPeek({
+      line: endRow,
+      widget: box.root,
+      height: box.height,
+      // Defer the box teardown off its own key-event dispatch (disposing the nested editor
+      // synchronously is unsafe — see buildDefinitionPeek, which never disposes its peek editor).
+      onClose: () => {
+        if (this.commentBox === box) this.commentBox = null;
+        if (this.disposed) return void box.dispose(); // view tearing down: don't tick a dead view
+        (this.editor.sourceView as any).addTickCallback(() => (box.dispose(), false));
+      },
+    });
+    box.focus();
+  }
+
+  /** Close the comment box (remove the card; the box is disposed from the peek's onClose). */
+  private closeComment(): void {
+    if (!this.commentBox) return;
+    this.editor.closePeek(); // removeOverlay synchronously (proven safe); onClose handles disposal
+    this.editor.focus();
+  }
+
   /** Whether any edited new-side file has unsaved changes (editable mode). */
   isModified(): boolean {
     for (const entry of this.sources.values()) if (entry.document?.isModified()) return true;
@@ -610,6 +685,8 @@ export class ContinuousDiffView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.commentBox?.dispose(); // close the inline comment box if open (idempotent)
+    this.commentBox = null;
     if (this.reDiffTimer) clearTimeout(this.reDiffTimer);
     this.reDiffTimer = null;
     if (this.microReDiffTickId) (this.editor.sourceView as any).removeTickCallback(this.microReDiffTickId);

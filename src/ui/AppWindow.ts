@@ -53,7 +53,7 @@ import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
 import { SearchResultsView } from './SearchResultsView.ts';
-import { ContinuousDiffView } from './ContinuousDiffView.ts';
+import { ContinuousDiffView, type DiffComment } from './ContinuousDiffView.ts';
 import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
@@ -2210,6 +2210,16 @@ export class AppWindow {
         description: 'Unstage the hunk under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff() !== null,
       },
+      'diff:comment': {
+        didDispatch: () => this.activeContinuousDiff()?.startComment(),
+        description: 'Comment on the cursor/selection and send it to the agent (continuous diff)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:open-file': {
+        didDispatch: () => this.activeContinuousDiff()?.openFileAtCursor(),
+        description: 'Open the file/line under the cursor (continuous diff)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
       'app:quit': { didDispatch: () => this.onQuit(), description: 'Quit quilx' },
       'command-palette:toggle': { didDispatch: () => openCommandPicker(this.overlay), description: 'Show all commands' },
     });
@@ -2322,6 +2332,9 @@ export class AppWindow {
       documents: this.documents,
       git: this.workbench.git, // enables the staged/unstaged gutter marker + `space h s`/`space h u`
       onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
+      // Enter on a row/selection composes a comment; it's delivered to the agent's prompt (the
+      // user reviews + submits, like the other send-to-agent commands).
+      onComment: (c) => this.sendToAgent(formatDiffComment(c, this.workbench.cwd)),
     });
     const title = () => (view.isModified() ? `${Icons.modified} ${Icons.git}  Diff` : `${Icons.git}  Diff`);
     const child = this.workbench.center.add(view.root, {
@@ -3030,6 +3043,17 @@ function terminalTabTitle(terminal: Terminal): string {
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// A continuous-diff comment, formatted as an agent prompt: a `path:line[-line]`
+// reference, the selected code (fenced, if any), then the user's comment.
+function formatDiffComment(c: DiffComment, cwd: string): string {
+  const rel = Path.relative(cwd, c.path);
+  const ref = c.startLine === c.endLine ? `${rel}:${c.startLine}` : `${rel}:${c.startLine}-${c.endLine}`;
+  const parts = [ref, ''];
+  if (c.selection.trim()) parts.push('```', c.selection, '```', '');
+  parts.push(c.comment);
+  return parts.join('\n');
 }
 
 // Whether `path` is `root` itself or lives beneath it (a `root + sep` prefix, so
