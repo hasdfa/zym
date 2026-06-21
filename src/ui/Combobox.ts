@@ -14,7 +14,7 @@
  * The value is resolved from the selected item's *string* (not its index), so it stays
  * correct while the search filter reorders/hides rows.
  */
-import { Gtk } from '../gi.ts';
+import { Gtk, Gdk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 
 export interface ComboOption {
@@ -117,17 +117,60 @@ export class Combobox {
     this.applying = false;
   }
 
-  // Drive `filter` from the dropdown's built-in search entry (found by walking the
-  // popup), re-filtering on each keystroke.
+  // Wire the dropdown's built-in search (found by walking the popup): live filtering, plus
+  // the keyboard the popup doesn't give us here — Up/Down move the (filtered) selection,
+  // Enter accepts + closes, Escape closes (just the popup), and typing a printable key on
+  // the closed dropdown opens the popup seeded with that character.
   private wireSearch(filter: InstanceType<typeof Gtk.CustomFilter>): void {
     const entry = findDescendant(this.widget, (w) => w instanceof Gtk.SearchEntry) as
-      | InstanceType<typeof Gtk.SearchEntry>
-      | null;
-    if (!entry) return;
+      | InstanceType<typeof Gtk.SearchEntry> | null;
+    const popover = findDescendant(this.widget, (w) => w instanceof Gtk.Popover) as
+      | InstanceType<typeof Gtk.Popover> | null;
+    if (!entry || !popover) return;
+
     entry.on('search-changed', () => {
       this.query = (entry.getText() ?? '').toLowerCase();
       filter.changed(Gtk.FilterChange.DIFFERENT);
     });
+    entry.on('activate', () => popover.popdown()); // Enter: commit the highlighted row
+
+    // Up/Down navigate the filtered list, Escape closes the popup — in the capture phase so
+    // they win over the entry's own handling and (for Escape) the surrounding card.
+    const nav = new Gtk.EventControllerKey();
+    nav.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
+    nav.on('key-pressed', (keyval: number) => {
+      const n = (this.widget.getModel() as any)?.getNItems?.() ?? 0;
+      switch (keyval) {
+        case Gdk.KEY_Down: case Gdk.KEY_KP_Down:
+          if (n > 0) this.widget.setSelected(Math.min(this.widget.getSelected() + 1, n - 1));
+          return true;
+        case Gdk.KEY_Up: case Gdk.KEY_KP_Up:
+          if (n > 0) this.widget.setSelected(Math.max(this.widget.getSelected() - 1, 0));
+          return true;
+        case Gdk.KEY_Escape:
+          popover.popdown();
+          return true;
+        default:
+          return false;
+      }
+    });
+    entry.addController(nav);
+
+    // Typing on the closed dropdown opens the search seeded with that character.
+    const typeToSearch = new Gtk.EventControllerKey();
+    typeToSearch.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
+    typeToSearch.on('key-pressed', (keyval: number, _keycode: number, state: number) => {
+      if (popover.getVisible()) return false; // already open — let the search handle it
+      if (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)) return false;
+      const ch = Gdk.keyvalToUnicode(keyval);
+      if (ch < 32 || ch === 127) return false; // not a printable character
+      popover.popup();
+      entry.grabFocus();
+      entry.setText(String.fromCharCode(ch));
+      entry.setPosition(-1);
+      return true;
+    });
+    this.widget.addController(typeToSearch);
   }
 
   private ingest(options: ComboOption[]): void {
