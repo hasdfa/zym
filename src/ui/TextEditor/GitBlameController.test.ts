@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseBlame } from './GitBlameController.ts';
+import { parseBlame, formatBlame } from './GitBlameController.ts';
 
 // A `git blame --line-porcelain` block per line: header (`<sha> <orig> <final>`),
 // full author/summary fields, then the `\t`-prefixed source line.
@@ -45,5 +45,24 @@ describe('parseBlame', () => {
 
   it('returns an empty map for empty input', () => {
     assert.equal(parseBlame('').size, 0);
+  });
+});
+
+describe('formatBlame', () => {
+  const info = { sha: 'abcdef1234567890abcdef1234567890abcdef12', author: 'Ada', timestamp: 1000, summary: 'first commit' };
+
+  it('emits the requested tokens, in order, joined by " • "', () => {
+    assert.equal(formatBlame(info, '[message, author]'), 'first commit • Ada');
+    assert.equal(formatBlame(info, '[author, message]'), 'Ada • first commit');
+    assert.equal(formatBlame(info, 'sha'), 'abcdef1');
+  });
+
+  it('treats any surrounding punctuation as a separator and ignores unknown tokens', () => {
+    assert.equal(formatBlame(info, 'author | nonsense | message'), 'Ada • first commit');
+  });
+
+  it('renders a friendly label for an uncommitted (zero-sha) line', () => {
+    const uncommitted = { sha: '0'.repeat(40), author: 'Not Committed Yet', timestamp: 0, summary: 'x' };
+    assert.equal(formatBlame(uncommitted, '[message, author]'), 'You • Uncommitted changes');
   });
 });

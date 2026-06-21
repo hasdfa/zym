@@ -69,13 +69,13 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g D': 'git:diff-current', // "D"iff just the current file (working tree vs HEAD)
   'space g c': 'git:start-commit', // "c"ommit staged changes (edit the message in a tab)
   'space g C': 'git:commit-amend', // "C"ommit --amend the last commit (prefilled message)
+  'space g m': 'git:show-commit', // show the commit "m"essage that last touched this line
   // File-level staging from anywhere (not just the Source Control panel).
   // "a"dd / "u"nstage sub-leaders, then "a"ll or "." for the current file.
   'space g a a': 'git:stage-all', // "a"dd "a"ll (git add -A)
   'space g a .': 'git:stage-current', // "a"dd the current file (git add <file>)
   'space g u a': 'git:unstage-all', // "u"nstage "a"ll
   'space g u .': 'git:unstage-current', // "u"nstage the current file
-  'space g B': 'git:blame-toggle', // "B"lame: toggle current-line authorship (editor only)
   // Hunk-level staging on the gutter hunk under the cursor (editor only): "s"tage,
   // "u"nstage (a staged/blue hunk), "r"evert (discard the unstaged change).
   'space h s': 'git:stage-hunk',
@@ -99,6 +99,8 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g h c': 'github:pull-request-checkout',
   'space g h n': 'github:pull-request-create', // "n"ew pull request
   'space g h o': 'github:pull-request-open', // "o"pen the PR for this branch in the browser
+  'space g h l': 'github:open-line', // open the current "l"ine on GitHub (permalink)
+  'space g h L': 'github:open-pr-for-line', // open the PR that introduced this "L"ine
   'space g h f': 'github:failed-ci-picker',
   'space l d': 'lsp:go-to-definition', // "l"sp "d"efinition
   'space l p': 'lsp:peek-definition', // "p"eek definition inline (below the cursor)
@@ -213,11 +215,9 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
     'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
     'z m': 'diff:collapse-context', // re-collapse expanded context
-    // Hunk staging on the change under the cursor — same `space h …` mnemonic as the editor gutter,
-    // but routed to the continuous diff. Bare `s`/`u` are left to vim (substitute / undo) since this
-    // surface is editable.
-    'space h s': 'diff:stage-hunk',
-    'space h u': 'diff:unstage-hunk',
+    // Hunk staging (`space h s`/`u` → git:stage-hunk/unstage-hunk) is the unified binding from
+    // `#AppWindow`; it routes here automatically (this embedded editor registers no gutter
+    // variant). Bare `s`/`u` are left to vim (substitute / undo) since this surface is editable.
     // `g d` jumps to the file/line under the cursor — Enter now opens the inline comment box
     // (handled directly in ContinuousDiffView), which sends the row/selection + comment to the agent.
     'g d': 'diff:open-file',

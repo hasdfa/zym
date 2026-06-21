@@ -20,7 +20,7 @@ import { EditorModel } from './EditorModel.ts';
 import { Document, type DocumentHost } from './Document.ts';
 import type { TextEditorSource } from './TextEditorSource.ts';
 import { InlayHintController } from './InlayHintController.ts';
-import { GitBlameController } from './GitBlameController.ts';
+import { GitBlameController, showCommitAtCursor } from './GitBlameController.ts';
 import { attachVim } from './vim/index.ts';
 import { zym } from '../../zym.ts';
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
@@ -763,13 +763,16 @@ export class TextEditor implements DocumentHost {
       (line) => this.document.viewLineForModelLine(this.buffer, line),
     );
     this.subs.add(zym.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
-    // Current-line git blame (toggled by `git:blame-toggle`), trailing the cursor line.
+    // Current-line git blame (gated by `editor.lineBlame`), trailing the cursor line.
     this.blame = new GitBlameController(
       this.view,
       () => this._currentFile,
+      () => this.document.getText(), // blame the live buffer, not the on-disk file
       () => this.editorModel.getCursorBufferPosition().row,
       (viewRow) => this.document.modelLineForViewLine(this.buffer, viewRow),
     );
+    this.subs.add(zym.config.observe('editor.lineBlame', () => this.blame.refresh()));
+    this.subs.add(zym.config.observe('editor.lineBlameFormat', () => this.blame.refresh()));
     // A fold open/close shifts the view lines under the model-positioned decorations
     // (diagnostic squiggles + gutter + error lens, inlay hints) — re-place them at the
     // new view positions (cached, no LSP round-trip).
@@ -955,12 +958,9 @@ export class TextEditor implements DocumentHost {
       'git:stage-hunk': { didDispatch: () => this.stageHunkAtCursor(), description: 'Stage the hunk under the cursor' },
       'git:unstage-hunk': { didDispatch: () => this.unstageHunkAtCursor(), description: 'Unstage the hunk under the cursor' },
       'git:revert-hunk': { didDispatch: () => this.revertHunkAtCursor(), description: 'Revert the hunk under the cursor' },
-      'git:blame-toggle': {
-        didDispatch: () => {
-          const on = this.blame.toggle();
-          zym.notifications.addTrace(on ? 'Line blame on' : 'Line blame off');
-        },
-        description: 'Toggle current-line git blame',
+      'git:show-commit': {
+        didDispatch: () => showCommitAtCursor(this),
+        description: 'Show the commit that last touched this line',
         when: () => this._currentFile != null,
       },
     });
@@ -1066,6 +1066,20 @@ export class TextEditor implements DocumentHost {
 
   private dismissHover() {
     this.hoverOverlay.hide();
+  }
+
+  /** The full MODEL (file) text — the whole document, not the fold-collapsed view that
+   *  `getText()` returns. Used by file-coordinate features (e.g. git blame). */
+  get documentText(): string {
+    return this.document.getText();
+  }
+
+  /** Show arbitrary Pango markup in the floating card above the cursor (the hover card,
+   *  reused for non-LSP popups like the git-blame commit message). */
+  showHoverMarkup(markup: string): void {
+    this.dismissHover();
+    this.hoverLabel.setMarkup(markup);
+    this.hoverOverlay.anchorAbove(this.editorModel.getCursorBufferPosition());
   }
 
   /** The inline decoration surface (search highlights, inline diff). */

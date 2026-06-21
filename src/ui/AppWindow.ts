@@ -46,6 +46,7 @@ import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
 import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
 import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
 import { openGithubService, type GithubService } from '../github.ts';
+import { registerGithubCommands } from './githubCommands.ts';
 import { computeDiff } from '../util/DiffModel.ts';
 import { DiffViewer } from './TextEditor/DiffViewer.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
@@ -71,10 +72,7 @@ import {
   openRenameBranchPicker,
 } from './BranchPicker.ts';
 import { openStashPicker } from './StashPicker.ts';
-import { openGithubFailedCIPicker } from './GithubFailedCIPicker.ts';
 import { openGithubCIChecksPicker } from './GithubCIChecksPicker.ts';
-import { switchToGithubPrPicker } from './GithubPrPicker.ts';
-import { openGithubIssuePicker } from './GithubIssuePicker.ts';
 import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
@@ -2228,12 +2226,16 @@ export class AppWindow {
         description: 'Expand every file (search results)',
         when: () => this.activeSearchResults() !== null,
       },
-      'diff:stage-hunk': {
+      // Unified hunk commands: the same `git:stage-hunk`/`git:unstage-hunk` (`space h s`/`u`)
+      // as the editor gutter, routed here for the continuous diff. The continuous-diff editor
+      // is embedded (no gutter), so it never registers the editor's variant — these AppWindow
+      // registrations are what the focus chain resolves while it's focused.
+      'git:stage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.stageHunkAtCursor(),
         description: 'Stage the hunk under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff() !== null,
       },
-      'diff:unstage-hunk': {
+      'git:unstage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.unstageHunkAtCursor(),
         description: 'Unstage the hunk under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff() !== null,
@@ -2607,26 +2609,15 @@ export class AppWindow {
         description: 'Drop a stash…',
         when: () => this.workbench.git.getBranch() !== null,
       },
-      'github:issue-picker': {
-        didDispatch: () => openGithubIssuePicker(this.overlay, this.workbench.cwd),
-        description: 'Open a GitHub issue…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
-      'github:failed-ci-picker': {
-        didDispatch: () => openGithubFailedCIPicker(this.overlay, this.workbench.cwd),
-        description: 'Open a failed CI check…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
-      'github:ci-checks': {
-        didDispatch: () => openGithubCIChecksPicker(this.overlay, this.workbench.cwd),
-        description: 'Show CI checks for this branch…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
-      'github:pull-request-checkout': {
-        didDispatch: () => switchToGithubPrPicker(this.overlay, this.workbench.cwd, this.workbench.git),
-        description: 'Check out a pull request…',
-        when: () => this.workbench.git.getBranch() !== null,
-      },
+    });
+    // GitHub-specific commands (pickers + open-on-web) live in their own module.
+    registerGithubCommands({
+      overlay: this.overlay,
+      github: this.github,
+      activeEditor: () => this.activeEditor,
+      cwd: () => this.workbench.cwd,
+      git: () => this.workbench.git,
+      toast: (message) => this.toast(message),
     });
   }
 

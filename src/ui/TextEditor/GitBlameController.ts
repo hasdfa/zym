@@ -1,23 +1,26 @@
 /*
  * GitBlameController — current-line git blame as end-of-line virtual text, per view
- * (GitLens-style). Toggled by `git:blame-toggle`; while on, the line under the cursor
- * trails "Author, N days ago • summary" for the commit that last touched it.
+ * (GitLens-style). Enabled by the `editor.lineBlame` config flag; while on, the line
+ * under the cursor trails the blame for the commit that last touched it, formatted by
+ * `editor.lineBlameFormat`.
  *
- * Built on `VirtualText` (the native annotation API), mirroring `InlayHintController`:
- * one flat annotation pushed per render. Blame is fetched once for the whole file
- * (`git blame --line-porcelain`) and cached by path; cursor moves and fold toggles just
- * re-place the single annotation from the cache (no new git call). An edit invalidates
- * the cache, so the next render re-blames.
- *
- * Blame reflects the file on disk (HEAD + committed history); a line with uncommitted
- * changes shows "Uncommitted changes" rather than stale authorship.
+ * Built on `VirtualText` (the native annotation API, `AnnotationStyle.NONE` — plain
+ * trailing text, no background), mirroring `InlayHintController`. Blame is fetched for
+ * the whole file (`git blame --line-porcelain --contents -`, feeding the LIVE buffer so
+ * line numbers and uncommitted lines match what the user sees) and cached; cursor moves
+ * and fold toggles re-place the single annotation from the cache with no new git call.
+ * An edit invalidates the cache, so the next render re-blames (debounced).
  */
 import * as Path from 'node:path';
 import type { SourceView } from '../../gi.ts';
+import { zym } from '../../zym.ts';
 import { VirtualText } from './VirtualText.ts';
-import { git, repoRoot } from '../../git.ts';
+import { escapeMarkup } from '../Picker.ts';
+import { blame, blameLine, git, repoRoot } from '../../git.ts';
+import { relativeTime } from '../../core/relativeTime.ts';
+import type { TextEditor } from './TextEditor.ts';
 
-interface BlameLine {
+export interface BlameLine {
   sha: string;
   author: string;
   timestamp: number; // author-time, epoch seconds
@@ -26,16 +29,74 @@ interface BlameLine {
 
 const UNCOMMITTED_SHA = '0000000000000000000000000000000000000000';
 
+/** True for the all-zero sha git blame assigns to not-yet-committed (working-tree) lines. */
+export function isUncommitted(sha: string): boolean {
+  return sha === UNCOMMITTED_SHA;
+}
+
+/** Blame the commit that last touched 0-based `modelLine` of `relPath` (blaming the live
+ *  `contents`). Returns null when blame fails or the line is out of range. The line may be
+ *  uncommitted — check `isUncommitted(info.sha)`. */
+export function blameCommitForLine(
+  root: string,
+  relPath: string,
+  modelLine: number,
+  contents: string,
+  onDone: (info: BlameLine | null) => void,
+): void {
+  blameLine(root, relPath, modelLine + 1, contents, (ok, stdout) => {
+    if (!ok) return onDone(null);
+    const [info] = parseBlame(stdout).values();
+    onDone(info ?? null);
+  });
+}
+
+/** Blame the commit that last touched the cursor's line of `editor` (live buffer). The
+ *  callback gets null outside a repo / on a blame failure; an uncommitted line yields a
+ *  zero-sha `BlameLine` (test with `isUncommitted`). Backs the commit popover + PR-for-line. */
+export function blameCommitAtCursor(editor: TextEditor, onDone: (info: BlameLine | null) => void): void {
+  const file = editor.currentFile;
+  if (!file) return onDone(null);
+  const root = repoRoot(Path.dirname(file));
+  if (!root) return onDone(null);
+  blameCommitForLine(root, Path.relative(root, file), editor.lspCursor().row, editor.documentText, onDone);
+}
+
+/** Pop the full message of the commit that last touched the cursor line, above the cursor
+ *  (the editor's hover card). Backs `git:show-commit`. */
+export function showCommitAtCursor(editor: TextEditor): void {
+  const file = editor.currentFile;
+  if (!file) return;
+  const root = repoRoot(Path.dirname(file));
+  if (!root) return;
+  blameCommitAtCursor(editor, (info) => {
+    if (!info) return void zym.notifications.addInfo('No blame for this line');
+    if (isUncommitted(info.sha)) return void zym.notifications.addInfo('Line is not committed yet');
+    git(root, ['show', '-s', '--date=short', '--format=%h • %an, %ad%n%n%B', info.sha], (ok, stdout) => {
+      if (!ok) return;
+      const text = stdout.trimEnd();
+      const nl = text.indexOf('\n');
+      const head = nl < 0 ? text : text.slice(0, nl);
+      const body = nl < 0 ? '' : text.slice(nl);
+      editor.showHoverMarkup(`<b>${escapeMarkup(head)}</b>${escapeMarkup(body)}`);
+    });
+  });
+}
+const DEBOUNCE_MS = 400;
+const DEFAULT_FORMAT = '[message, time, author]';
+
 export class GitBlameController {
   private readonly annotations: VirtualText;
-  private enabled = false;
   private disposed = false;
   private cache: Map<number, BlameLine> | null = null;
-  private cacheFile: string | null = null; // the file `cache` was blamed from
+  private cacheKey: string | null = null; // file path the cache was blamed from
   private seq = 0; // drops stale async blame responses
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   // Absolute path of the file in this view, or null (buffer-only editor).
   private readonly getFile: () => string | null;
+  // The live buffer text (MODEL / full file) blamed via `--contents -`.
+  private readonly getContents: () => string;
   // The cursor's VIEW row (0-based).
   private readonly getCursorViewRow: () => number;
   // VIEW row → MODEL (file) line: folds collapse text, so the two diverge.
@@ -44,26 +105,24 @@ export class GitBlameController {
   constructor(
     view: SourceView,
     getFile: () => string | null,
+    getContents: () => string,
     getCursorViewRow: () => number,
     viewRowToModelLine: (viewRow: number) => number,
   ) {
     this.annotations = new VirtualText(view);
     this.getFile = getFile;
+    this.getContents = getContents;
     this.getCursorViewRow = getCursorViewRow;
     this.viewRowToModelLine = viewRowToModelLine;
   }
 
-  get isEnabled(): boolean {
-    return this.enabled;
+  private get enabled(): boolean {
+    return zym.config.get('editor.lineBlame') === true;
   }
 
-  /** Flip the annotation on/off; returns the new state. */
-  toggle(): boolean {
-    this.enabled = !this.enabled;
-    if (this.enabled) this.render();
-    else this.annotations.clear();
-    return this.enabled;
-  }
+  // The hot per-edit/move hooks early-return when disabled, so a turned-off blame
+  // costs only a config-flag read (no annotation churn, no git). `refresh()` — fired
+  // by the config observer on the on→off transition — is the one path that clears.
 
   /** Cursor moved — re-place the annotation on the new line (cache hit: synchronous). */
   onCursorMoved(): void {
@@ -75,45 +134,68 @@ export class GitBlameController {
     if (this.enabled) this.render();
   }
 
-  /** The file content/identity changed — drop the cache so the next render re-blames. */
+  /** The file content/identity changed — drop the cache so a re-enable re-blames fresh
+   *  rather than painting stale line→commit mappings (still cheap while disabled). */
   invalidate(): void {
     this.cache = null;
-    this.cacheFile = null;
+    this.cacheKey = null;
     if (this.enabled) this.render();
   }
 
+  /** Config (`editor.lineBlame` / `editor.lineBlameFormat`) changed — re-evaluate (this
+   *  is what clears the annotation when the flag goes off). */
+  refresh(): void {
+    this.render();
+  }
+
   private render(): void {
-    if (this.disposed || !this.enabled) return;
+    if (this.disposed) return;
+    if (!this.enabled) return void this.annotations.clear();
     const file = this.getFile();
     if (!file) return void this.annotations.clear();
-    const root = repoRoot(Path.dirname(file));
-    if (!root) return void this.annotations.clear();
-    if (this.cache && this.cacheFile === file) {
+    if (!repoRoot(Path.dirname(file))) return void this.annotations.clear();
+    if (this.cache && this.cacheKey === file) {
       this.paint(file);
       return;
     }
+    this.scheduleFetch(file);
+  }
+
+  /** (Re)blame the live buffer after a short idle (coalesces a burst of edits). */
+  private scheduleFetch(file: string): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.fetch(file);
+    }, DEBOUNCE_MS);
+  }
+
+  private fetch(file: string): void {
+    if (this.disposed || !this.enabled) return;
+    const root = repoRoot(Path.dirname(file));
+    if (!root) return void this.annotations.clear();
     const token = ++this.seq;
-    const rel = Path.relative(root, file);
-    git(root, ['blame', '--line-porcelain', '--', rel], (ok, stdout) => {
+    blame(root, Path.relative(root, file), this.getContents(), (ok, stdout) => {
       if (this.disposed || token !== this.seq) return; // superseded / torn down
       if (!ok) return void this.annotations.clear();
       this.cache = parseBlame(stdout);
-      this.cacheFile = file;
-      if (this.enabled) this.paint(file);
+      this.cacheKey = file;
+      if (this.enabled && this.getFile() === file) this.paint(file);
     });
   }
 
   /** Place the single annotation for the cursor's current line, from the cache. */
   private paint(file: string): void {
-    if (!this.cache || this.cacheFile !== file) return;
-    const viewRow = this.getCursorViewRow();
-    const info = this.cache.get(this.viewRowToModelLine(viewRow));
+    if (!this.cache || this.cacheKey !== file) return;
+    const info = this.cache.get(this.viewRowToModelLine(this.getCursorViewRow()));
     if (!info) return void this.annotations.clear();
-    this.annotations.setAnnotations([{ line: viewRow, text: formatBlame(info), style: 'none' }]);
+    this.annotations.setAnnotations([{ line: this.getCursorViewRow(), text: formatBlame(info), style: 'none' }]);
   }
 
   dispose(): void {
     this.disposed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
     this.annotations.dispose();
   }
 }
@@ -145,31 +227,27 @@ export function parseBlame(out: string): Map<number, BlameLine> {
   return map;
 }
 
-function formatBlame(info: BlameLine): string {
+/** Render a blame line per the `editor.lineBlameFormat` token list (message/time/
+ *  author/date/sha, in the order they appear), joined by ` • `. */
+export function formatBlame(info: BlameLine, format = blameFormat()): string {
   if (info.sha === UNCOMMITTED_SHA) return 'You • Uncommitted changes';
-  return `${info.author}, ${relativeTime(info.timestamp)} • ${info.summary}`;
+  const parts: string[] = [];
+  for (const token of format.toLowerCase().match(/[a-z]+/g) ?? []) {
+    if (token === 'message') parts.push(info.summary);
+    else if (token === 'time') parts.push(relativeTime(info.timestamp));
+    else if (token === 'author') parts.push(info.author);
+    else if (token === 'date') parts.push(absoluteDate(info.timestamp));
+    else if (token === 'sha') parts.push(info.sha.slice(0, 7));
+  }
+  return parts.filter(Boolean).join(' • ');
 }
 
-/** Coarse "N units ago" for an epoch-seconds timestamp. */
-function relativeTime(epochSeconds: number): string {
+function blameFormat(): string {
+  const value = zym.config.get('editor.lineBlameFormat');
+  return typeof value === 'string' && value.trim() ? value : DEFAULT_FORMAT;
+}
+
+function absoluteDate(epochSeconds: number): string {
   if (!epochSeconds) return 'unknown';
-  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
-  const units: Array<[number, string]> = [
-    [60, 'second'],
-    [60, 'minute'],
-    [24, 'hour'],
-    [7, 'day'],
-    [4.35, 'week'],
-    [12, 'month'],
-    [Number.POSITIVE_INFINITY, 'year'],
-  ];
-  let value = seconds;
-  for (const [size, name] of units) {
-    if (value < size) {
-      const n = Math.floor(value);
-      return n <= 0 ? `just now` : `${n} ${name}${n === 1 ? '' : 's'} ago`;
-    }
-    value /= size;
-  }
-  return 'just now';
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 10); // YYYY-MM-DD
 }

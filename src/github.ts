@@ -104,6 +104,13 @@ export function repoWebUrl(r: GithubRepo): string {
   return `https://${r.host}/${r.owner}/${r.repo}`;
 }
 
+/** Web permalink to a 1-based `line` of `relPath` (a repo-root-relative POSIX path) at
+ *  `ref` — a commit sha pins it so the link survives the line later moving. */
+export function lineWebUrl(r: GithubRepo, ref: string, relPath: string, line: number): string {
+  const encoded = relPath.split('/').map(encodeURIComponent).join('/');
+  return `${repoWebUrl(r)}/blob/${ref}/${encoded}#L${line}`;
+}
+
 /**
  * Resolve the GitHub repo for `root` by trying `remoteNames` in order (e.g.
  * upstream then origin). Calls back with the first that parses as a GitHub
@@ -328,6 +335,17 @@ export function fetchDefaultBranch(cwd: string, onDone: (branch: string | null) 
   gh(
     cwd,
     ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
+    (err, stdout) => onDone(err ? null : stdout.trim() || null),
+  );
+}
+
+/** Web URL of the first pull request associated with `sha` — i.e. the PR that
+ *  introduced it — or null when none (a commit pushed straight to a branch).
+ *  `gh api` substitutes `{owner}`/`{repo}` from `cwd`'s repo. Async. */
+export function fetchCommitPullRequestUrl(cwd: string, sha: string, onDone: (url: string | null) => void): void {
+  gh(
+    cwd,
+    ['api', `repos/{owner}/{repo}/commits/${sha}/pulls`, '--jq', '.[0].html_url // empty'],
     (err, stdout) => onDone(err ? null : stdout.trim() || null),
   );
 }

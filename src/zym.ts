@@ -92,6 +92,17 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: true,
     description: 'Show LSP inlay hints (parameter names / inferred types) trailing each line.',
   },
+  'editor.lineBlame': {
+    type: 'boolean',
+    default: false,
+    description: 'Show git blame for the line under the cursor, trailing it (GitLens-style).',
+  },
+  'editor.lineBlameFormat': {
+    type: 'string',
+    default: '[message, time, author]',
+    description:
+      "Fields shown in the line-blame annotation, in order. Recognized tokens: message, time, author, date, sha (any surrounding punctuation is a separator).",
+  },
   'ui.lsColors': {
     type: 'boolean',
     default: true,

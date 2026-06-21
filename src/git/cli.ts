@@ -340,6 +340,22 @@ export function lastCommitMessage(root: string, onDone: (message: string) => voi
   git(root, ['log', '-1', '--format=%B'], (ok, stdout) => onDone(ok ? stdout : ''));
 }
 
+/** `git blame --line-porcelain` for `relPath`, blaming `contents` (the live buffer,
+ *  fed on stdin via `--contents -`) so line numbers and uncommitted lines match what
+ *  the user sees rather than the on-disk file. */
+export function blame(root: string, relPath: string, contents: string, onDone: GitDone): void {
+  const args = ['blame', '--line-porcelain', '--contents', '-', '--', relPath];
+  runProcess({ file: 'git', args, cwd: root, input: contents }, (r) => decode(r, onDone));
+}
+
+/** `git blame` for a single 1-based `line` of `relPath` (blaming the live `contents`).
+ *  The cheap path for "what commit touched this one line" — used by the commit popover
+ *  and PR-for-line lookup, independent of whether inline blame is on. */
+export function blameLine(root: string, relPath: string, line: number, contents: string, onDone: GitDone): void {
+  const args = ['blame', '-L', `${line},${line}`, '--line-porcelain', '--contents', '-', '--', relPath];
+  runProcess({ file: 'git', args, cwd: root, input: contents }, (r) => decode(r, onDone));
+}
+
 // --- branches ----------------------------------------------------------------
 
 /** The current branch name, or null (detached HEAD / not a repo). Async. */

@@ -285,17 +285,29 @@ r`) is done in the buffer by the editor. Hunk helpers live in
 
 ### Inline blame — `src/ui/TextEditor/GitBlameController.ts`
 
-Current-line blame (GitLens-style), toggled per editor with `space g B`
-(`git:blame-toggle`). While on, the line under the cursor trails greyed
-virtual text — `Author, N days ago • summary` — for the commit that last
-touched it (or `You • Uncommitted changes` for the zero-sha working-tree
-line). Built on `VirtualText` (the native `GtkSourceAnnotations` API), like
-`InlayHintController`: blame is fetched once per file (`git blame
---line-porcelain`, parsed by `parseBlame`) and cached by path; cursor moves
-and fold toggles re-place the single annotation from the cache with no new
-git call, and an edit invalidates the cache so the next render re-blames.
-Blame reflects the file on disk, so it maps VIEW→MODEL lines through the
-document (folds) just like the gutter.
+Current-line blame (GitLens-style), gated by the **`editor.lineBlame`**
+config flag (off by default). While on, the line under the cursor trails the
+blame for the commit that last touched it (or `You • Uncommitted changes` for
+the zero-sha working-tree line). The fields and their order come from
+**`editor.lineBlameFormat`** (default `[message, time, author]`; tokens
+`message`/`time`/`author`/`date`/`sha`, joined by ` • `, parsed by
+`formatBlame`).
+
+Built on `VirtualText` (the native `GtkSourceAnnotations` API, `NONE` style —
+plain trailing text, no background), like `InlayHintController`. Blame is
+fetched per file with `git blame --line-porcelain --contents -`, feeding the
+**live buffer** on stdin so line numbers and uncommitted lines match what the
+user sees (not the on-disk file); the result is parsed by `parseBlame` and
+cached. Cursor moves and fold toggles re-place the single annotation from the
+cache with no new git call (mapping VIEW→MODEL lines through the document, for
+folds); an edit invalidates the cache so the next render re-blames (debounced).
+
+Independent of the inline annotation, **`git:show-commit`** (`space g m`) pops
+the **full message** of the commit that last touched the cursor line above the
+cursor, reusing the LSP hover card. It blames just that line
+(`blameCommitForLine` → `git blame -L n,n --contents -`) for the sha, then
+`git show -s` for the message; `blameCommitAtCursor` is the shared entry point
+(also used by `github:open-pr-for-line`).
 
 ### Continuous editable diff
 
@@ -335,12 +347,12 @@ if/when GitLab lands).
 - **Pickers** — `GithubPrPicker` (checkout), `GithubIssuePicker`,
   `GithubCIChecksPicker`, `GithubFailedCIPicker`.
 - **Commands / keymaps** (`space g h …`) — `r` repo, `a` actions, `i`
-  issues, `p`/`c` PR checkout, `n` new PR, `o` open this branch's PR, `f`
-  failed CI.
+  issues, `p`/`c` PR checkout, `n` new PR, `o` open this branch's PR, `l`
+  open the current line (`github:open-line`), `L` open the PR that introduced
+  the current line (`github:open-pr-for-line`), `f` failed CI.
 
 Not done: `#123`-in-text / branch-name / selection detection (offer *Open
-#123*); *open file/line on web* (`blameUrl`/`compareUrl`); GitLab and
-other providers.
+#123*); `compareUrl`; GitLab and other providers.
 
 ## Config: default git workflow
 
