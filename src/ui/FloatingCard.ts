@@ -8,19 +8,25 @@
  * own widgets to `panel` and registers whatever keymap/commands it needs (the card
  * only provides `close`, which the caller can bind to Escape).
  */
-import { Gtk } from '../gi.ts';
+import { Gtk, Adw } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 /** Default distance from the top of the overlay to the card (the Picker's position). */
 const CARD_MARGIN_TOP = 48;
+/** Fade-in/out duration (ms) when `fade` is enabled. */
+const FADE_MS = 110;
 
-// The shared drop shadow for every floating card: a soft, wide blur with no spread
-// (a large spread reads as a dark halo) at reduced opacity.
+// The shared drop shadow for every floating card (a soft, wide blur with no spread —
+// a large spread reads as a dark halo — at reduced opacity), and the optional dim
+// scrim painted behind a card over the rest of the window.
 addStyles(/* css */`
   .floating-card {
     box-shadow: 0px 8px 28px 0px alpha(var(--t-ui-shadow), 0.55);
+  }
+  .floating-card-scrim {
+    background-color: alpha(black, 0.35);
   }
 `);
 
@@ -31,6 +37,10 @@ export interface FloatingCardOptions {
   name: string;
   /** Distance from the top of the overlay to the card (default 48, the Picker's). */
   marginTop?: number;
+  /** Dim the rest of the window with a scrim behind the card; clicking it dismisses. */
+  dim?: boolean;
+  /** Fade the card (and scrim) in on open and out on close. */
+  fade?: boolean;
   /** Extra teardown run when the card closes (dispose subscriptions, timers). */
   onClose?: () => void;
 }
@@ -61,6 +71,18 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
   // overlay. Captured before the caller grabs focus into the card.
   const previousFocus = host.getRoot()?.getFocus() ?? null;
 
+  // Optional dim scrim behind the card, covering the rest of the window. Added first so
+  // it sits below the panel; clicking it dismisses the card (standard modal behaviour).
+  let scrim: InstanceType<typeof Gtk.Box> | null = null;
+  if (options.dim) {
+    scrim = new Gtk.Box();
+    scrim.addCssClass('floating-card-scrim');
+    const click = new Gtk.GestureClick();
+    click.on('released', () => close());
+    scrim.addController(click);
+    host.addOverlay(scrim);
+  }
+
   // A floating, opaque card placed at the top-centre of the overlay.
   const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
   panel.setName(options.name);
@@ -70,13 +92,31 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
   panel.setMarginTop(options.marginTop ?? CARD_MARGIN_TOP);
   panel.overflow = Gtk.Overflow.HIDDEN;
 
+  // Fade the card + scrim together by tweening a shared opacity (Adw respects the
+  // system reduce-motion / enable-animations setting, jumping straight to the end).
+  const setOpacity = (v: number) => { panel.setOpacity(v); scrim?.setOpacity(v); };
+  const fadeTo = (to: number, onDone?: () => void) => {
+    const target = Adw.CallbackAnimationTarget.new((v) => setOpacity(v));
+    const anim = new Adw.TimedAnimation({
+      widget: panel, valueFrom: panel.getOpacity(), valueTo: to, duration: FADE_MS,
+      easing: Adw.Easing.EASE_OUT_CUBIC, target,
+    });
+    if (onDone) anim.on('done', onDone);
+    anim.play();
+  };
+
   let closed = false;
   const close = (restoreFocus = true) => {
     if (closed) return;
     closed = true;
     options.onClose?.();
-    host.removeOverlay(panel);
-    if (restoreFocus) previousFocus?.grabFocus();
+    const remove = () => {
+      host.removeOverlay(panel);
+      if (scrim) host.removeOverlay(scrim);
+      if (restoreFocus) previousFocus?.grabFocus();
+    };
+    if (options.fade) fadeTo(0, remove);
+    else remove();
   };
 
   // Dismiss when focus moves to another widget in the app (click elsewhere, tab
@@ -107,6 +147,12 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
   panel.addController(focus);
 
   host.addOverlay(panel);
+
+  // Fade in (from fully transparent) once mounted.
+  if (options.fade) {
+    setOpacity(0);
+    fadeTo(1);
+  }
 
   return {
     panel,

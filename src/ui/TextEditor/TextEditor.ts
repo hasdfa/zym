@@ -1249,21 +1249,29 @@ export class TextEditor implements DocumentHost {
     // opts out of vexpand below so the natural height propagates up to the editor root.
     if (this.growToContent) {
       scrolled.setPropagateNaturalHeight(true);
-      if (this.growMaxLines !== undefined) {
-        // Cap at N *text* lines: N line-heights plus the top+bottom padding (which the
-        // view's natural height also includes), so the cap means visible text rows
-        // regardless of padding. The real line height needs the resolved font, so seed it
-        // now (DEFAULT_LINE_HEIGHT until then) and refine once the view is mapped.
-        const padding = this.paddingOverride ?? INPUT_PADDING;
-        const applyMaxLines = () =>
-          scrolled.setMaxContentHeight(
-            Math.round(this.growMaxLines! * this.editorModel.getLineHeightInPixels() + 2 * padding),
-          );
-        applyMaxLines();
-        this.connect(this.view, 'map', applyMaxLines);
-      } else if (this.growMaxHeight !== undefined) {
-        scrolled.setMaxContentHeight(this.growMaxHeight);
-      }
+      const padding = this.paddingOverride ?? INPUT_PADDING;
+      // The growth cap in px, if any: N text lines (line-heights + the top+bottom padding
+      // the natural height also includes, so the cap counts visible text rows regardless
+      // of padding), or a raw max height. Undefined → unbounded.
+      const capHeight = (): number | undefined =>
+        this.growMaxLines !== undefined
+          ? Math.round(this.growMaxLines * this.editorModel.getLineHeightInPixels() + 2 * padding)
+          : this.growMaxHeight;
+      // GtkScrolledWindow's propagate-natural-height can report 0 before the view's first
+      // layout, so an unedited input collapsed to "0 lines" until its first edit. Drive a
+      // min content height from the actual line count instead (line height resolves to a
+      // default until the view is mapped, then refines), capped, and refresh it on map and
+      // on every edit so the input shows its true height immediately and grows/shrinks.
+      const applyHeight = () => {
+        const cap = capHeight();
+        if (cap !== undefined) scrolled.setMaxContentHeight(cap);
+        const lines = Math.max(1, this.editorModel.getLineCount());
+        const content = Math.round(lines * this.editorModel.getLineHeightInPixels() + 2 * padding);
+        scrolled.setMinContentHeight(cap !== undefined ? Math.min(content, cap) : content);
+      };
+      applyHeight();
+      this.connect(this.view, 'map', applyHeight);
+      this.editorModel.onDidChangeText(applyHeight);
     }
 
     // Scroll-past-end (`editor.scrollPastEnd`): GtkSourceView has no native option,

@@ -5,8 +5,8 @@
  * launches, Escape cancels.
  *
  * It's a `FloatingCard` (the same overlay shell the Picker uses) filled with a
- * `createInput` prompt, `Gtk.DropDown`s for the picked options, and a toggle-button
- * group for the worktree choice. The options come from the chosen kind's
+ * `createInput` prompt and `Gtk.DropDown`s for the options (model, permission, agent,
+ * and the worktree choice). The options come from the chosen kind's
  * `AgentLaunchOptions` (see `agents/configs.ts`), so changing the kind re-populates
  * the model/permission lists — today the Claude kinds share a list, but the wiring
  * lets them diverge. `onLaunch` receives the assembled argv + cwd + kind; the host
@@ -100,6 +100,11 @@ addStyles(/* css */`
     color: var(--t-ui-text-muted);
     padding-left: 6px;
   }
+  /* The worktree "Create" option, set apart from the branch names. */
+  .combobox-special {
+    color: var(--accent-color);
+    font-weight: bold;
+  }
 `);
 
 let keymapRegistered = false;
@@ -135,6 +140,8 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     host,
     name: 'AgentLauncher',
     marginTop: 110, // sit lower than the Picker's default — it's a taller compose card
+    dim: true, // it's a focused compose surface — dim the rest of the window
+    fade: true,
     // Remember the (possibly unsent) prompt on any dismissal; submit clears it below.
     onClose: () => { savedDraft = input.getText(); commandsSub?.dispose(); },
   });
@@ -160,19 +167,27 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // Claude kinds share a list today, but changing the kind re-populates them.
   const kindOptions = AGENT_CONFIGS[defaultKind].options;
 
-  const modelDropdown = new OptionDropdown(kindOptions.models, kindOptions.defaultModel);
-  const permissionDropdown = new OptionDropdown(kindOptions.permissionModes, kindOptions.defaultPermissionMode);
-  const kindDropdown = new OptionDropdown(listAgentKinds(), defaultKind, (value) => {
-    const opts = AGENT_CONFIGS[value as AgentKind].options;
-    modelDropdown.setOptions(opts.models, opts.defaultModel);
-    permissionDropdown.setOptions(opts.permissionModes, opts.defaultPermissionMode);
+  const modelDropdown = new OptionDropdown({ options: kindOptions.models, value: kindOptions.defaultModel });
+  const permissionDropdown = new OptionDropdown({ options: kindOptions.permissionModes, value: kindOptions.defaultPermissionMode });
+  const kindDropdown = new OptionDropdown({
+    options: listAgentKinds(),
+    value: defaultKind,
+    onChange: (value) => {
+      const opts = AGENT_CONFIGS[value as AgentKind].options;
+      modelDropdown.setOptions(opts.models, opts.defaultModel);
+      permissionDropdown.setOptions(opts.permissionModes, opts.defaultPermissionMode);
+    },
   });
 
   // Worktree: a dropdown whose first value, "Create", starts the work in a fresh
   // worktree (the agent creates it); the rest are the repo's branches, to work on a
   // chosen branch in its own worktree. "Create" is the empty-string sentinel (a branch
-  // name can never be empty). Branches load asynchronously.
-  const worktreeDropdown = new OptionDropdown([{ value: '', label: 'Create' }], '');
+  // name can never be empty) and is rendered specially. Branches load asynchronously.
+  const worktreeDropdown = new OptionDropdown({
+    options: [{ value: '', label: 'Create' }],
+    value: '',
+    specialLabel: 'Create',
+  });
   const worktreeField = field('worktree', worktreeDropdown.widget);
   const repo = repoRoot(cwd);
   if (repo) {
@@ -231,34 +246,70 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   if (draft) input.selectAll(); // a restored draft starts fully selected (keep or overtype)
 }
 
+interface OptionDropdownConfig {
+  options: LaunchOption[];
+  value: string;
+  onChange?: (value: string) => void;
+  /** A label rendered with emphasis (the `.combobox-special` accent), e.g. "Create". */
+  specialLabel?: string;
+}
+
 // A Gtk.DropDown over a list of LaunchOptions: shows each option's label, maps the
-// selection back to its value, and can be re-populated (when the kind changes the
-// available models / permission modes).
+// selection back to its value (by the selected item's string, so it's robust to search
+// filtering), and can be re-populated (when the kind changes the available models, or
+// branches load in). Opt-in type-ahead search and a special-styled label.
 class OptionDropdown {
   readonly widget: InstanceType<typeof Gtk.DropDown>;
-  private values: string[];
+  private values: string[] = [];
+  private labelToValue = new Map<string, string>();
   private applying = false; // suppress onChange while re-populating
 
-  constructor(options: LaunchOption[], value: string, onChange?: (value: string) => void) {
-    this.widget = Gtk.DropDown.newFromStrings(options.map((o) => o.label));
+  constructor(config: OptionDropdownConfig) {
+    this.widget = Gtk.DropDown.newFromStrings(config.options.map((o) => o.label));
     this.widget.addCssClass('flat');
-    this.values = options.map((o) => o.value);
-    this.selectValue(value);
-    if (onChange) {
+    this.ingest(config.options);
+
+    if (config.specialLabel !== undefined) {
+      const special = config.specialLabel;
+      const factory = new Gtk.SignalListItemFactory();
+      factory.on('setup', (li: any) => li.setChild(new Gtk.Label({ xalign: 0 })));
+      factory.on('bind', (li: any) => {
+        const label = li.getChild();
+        const text = (li.getItem() as any).getString();
+        label.setText(text);
+        if (text === special) label.addCssClass('combobox-special');
+        else label.removeCssClass('combobox-special');
+      });
+      this.widget.setFactory(factory);
+    }
+
+    this.selectValue(config.value);
+    if (config.onChange) {
+      const onChange = config.onChange;
       this.widget.on('notify::selected', () => { if (!this.applying) onChange(this.getValue()); });
     }
   }
 
   getValue(): string {
-    return this.values[this.widget.getSelected()] ?? this.values[0] ?? '';
+    const item = this.widget.getSelectedItem() as any;
+    if (item) {
+      const v = this.labelToValue.get(item.getString());
+      if (v !== undefined) return v;
+    }
+    return this.values[0] ?? '';
   }
 
   setOptions(options: LaunchOption[], value: string): void {
     this.applying = true;
     this.widget.setModel(Gtk.StringList.new(options.map((o) => o.label)));
-    this.values = options.map((o) => o.value);
+    this.ingest(options);
     this.selectValue(value);
     this.applying = false;
+  }
+
+  private ingest(options: LaunchOption[]): void {
+    this.values = options.map((o) => o.value);
+    this.labelToValue = new Map(options.map((o) => [o.label, o.value]));
   }
 
   private selectValue(value: string): void {
