@@ -5,19 +5,19 @@
  * launches, Escape cancels.
  *
  * It's a `FloatingCard` (the same overlay shell the Picker uses) filled with a
- * `createInput` prompt and reusable `Combobox` widgets. The options come from the
- * chosen kind's `AgentLaunchOptions` (see `agents/configs.ts`), so changing the kind
- * re-populates the model/permission lists — today the Claude kinds share a list, but
- * the wiring lets them diverge. `onLaunch` receives the assembled argv + cwd + kind;
- * the host turns that into `openAgent`.
+ * `createInput` prompt, `Gtk.DropDown`s for the picked options, and a toggle-button
+ * group for the worktree choice. The options come from the chosen kind's
+ * `AgentLaunchOptions` (see `agents/configs.ts`), so changing the kind re-populates
+ * the model/permission lists — today the Claude kinds share a list, but the wiring
+ * lets them diverge. `onLaunch` receives the assembled argv + cwd + kind; the host
+ * turns that into `openAgent`.
  */
 import { Gtk, Gdk, Adw } from '../gi.ts';
 import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { openFloatingCard } from './FloatingCard.ts';
-import { Combobox } from './Combobox.ts';
 import { createInput } from './TextEditor/TextEditor.ts';
-import { AGENT_CONFIGS, listAgentKinds, type AgentKind } from '../agents/configs.ts';
+import { AGENT_CONFIGS, listAgentKinds, type AgentKind, type LaunchOption } from '../agents/configs.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -67,13 +67,16 @@ addStyles(/* css */`
   }
   /* Each option sits on its own raised chip: the elevated-surface background (pickers
      / popovers / menus), a step up from the footer's editor background behind them. */
-  #AgentLauncherOptions #ComboboxList,
   #AgentLauncherOptions #AgentLauncherField {
     background-color: var(--t-ui-surface-popover);
     border-radius: var(--popover-radius-small);
-  }
-  #AgentLauncherField {
     padding: 4px 8px;
+  }
+  /* The dropdowns sit flush on their chip (no extra button frame/background). */
+  #AgentLauncherField > dropdown {
+    background: none;
+    box-shadow: none;
+    padding: 0;
   }
   #AgentLauncherField > .field-caption {
     font-size: var(--font-size-small);
@@ -125,28 +128,12 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // Claude kinds share a list today, but changing the kind re-populates them.
   const kindOptions = AGENT_CONFIGS[defaultKind].options;
 
-  const modelCombo = new Combobox({
-    title: 'model',
-    options: kindOptions.models,
-    value: kindOptions.defaultModel,
-    width: 80,
-  });
-  const permissionCombo = new Combobox({
-    title: 'permission',
-    options: kindOptions.permissionModes,
-    value: kindOptions.defaultPermissionMode,
-    width: 80,
-  });
-  const kindCombo = new Combobox({
-    title: 'agent',
-    options: listAgentKinds(),
-    value: defaultKind,
-    width: 80,
-    onChange: (value) => {
-      const opts = AGENT_CONFIGS[value as AgentKind].options;
-      modelCombo.setOptions(opts.models, opts.defaultModel);
-      permissionCombo.setOptions(opts.permissionModes, opts.defaultPermissionMode);
-    },
+  const modelDropdown = new OptionDropdown(kindOptions.models, kindOptions.defaultModel);
+  const permissionDropdown = new OptionDropdown(kindOptions.permissionModes, kindOptions.defaultPermissionMode);
+  const kindDropdown = new OptionDropdown(listAgentKinds(), defaultKind, (value) => {
+    const opts = AGENT_CONFIGS[value as AgentKind].options;
+    modelDropdown.setOptions(opts.models, opts.defaultModel);
+    permissionDropdown.setOptions(opts.permissionModes, opts.defaultPermissionMode);
   });
 
   // Worktree is a toggle, not a combobox: "current" works in the current workbench
@@ -164,21 +151,21 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   const worktreeField = field('worktree', worktreeToggle);
   worktreeField.setTooltipText('Start the work in a fresh git worktree instead of the current one');
 
-  // A WrapBox so the option rows reflow onto another line on a narrow card rather
-  // than overflowing. Each combobox carries its own floating Adwaita label.
+  // A WrapBox so the option fields reflow onto another line on a narrow card rather
+  // than overflowing. Each field carries a caption above its control.
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
   optionsRow.setName('AgentLauncherOptions');
-  for (const combo of [modelCombo, permissionCombo, kindCombo]) {
-    optionsRow.append(combo.root);
-  }
+  optionsRow.append(field('model', modelDropdown.widget));
+  optionsRow.append(field('permission', permissionDropdown.widget));
+  optionsRow.append(field('agent', kindDropdown.widget));
   optionsRow.append(worktreeField);
   panel.append(optionsRow);
 
   const submit = () => {
-    const kind = kindCombo.getValue() as AgentKind;
+    const kind = kindDropdown.getValue() as AgentKind;
     const command = AGENT_CONFIGS[kind].options.buildCommand({
-      model: modelCombo.getValue(),
-      permissionMode: permissionCombo.getValue(),
+      model: modelDropdown.getValue(),
+      permissionMode: permissionDropdown.getValue(),
     });
     const prompt = input.getText().trim();
     card.close(false); // the host focuses the new agent
@@ -205,8 +192,44 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   input.focusInsert(); // ready to type the prompt immediately
 }
 
-// A captioned field: a small muted label on top of `control`. Used for controls that
-// (unlike the comboboxes' Adw.EntryRow) have no built-in floating label.
+// A Gtk.DropDown over a list of LaunchOptions: shows each option's label, maps the
+// selection back to its value, and can be re-populated (when the kind changes the
+// available models / permission modes).
+class OptionDropdown {
+  readonly widget: InstanceType<typeof Gtk.DropDown>;
+  private values: string[];
+  private applying = false; // suppress onChange while re-populating
+
+  constructor(options: LaunchOption[], value: string, onChange?: (value: string) => void) {
+    this.widget = Gtk.DropDown.newFromStrings(options.map((o) => o.label));
+    this.widget.addCssClass('flat');
+    this.values = options.map((o) => o.value);
+    this.selectValue(value);
+    if (onChange) {
+      this.widget.on('notify::selected', () => { if (!this.applying) onChange(this.getValue()); });
+    }
+  }
+
+  getValue(): string {
+    return this.values[this.widget.getSelected()] ?? this.values[0] ?? '';
+  }
+
+  setOptions(options: LaunchOption[], value: string): void {
+    this.applying = true;
+    this.widget.setModel(Gtk.StringList.new(options.map((o) => o.label)));
+    this.values = options.map((o) => o.value);
+    this.selectValue(value);
+    this.applying = false;
+  }
+
+  private selectValue(value: string): void {
+    const i = this.values.indexOf(value);
+    this.widget.setSelected(i >= 0 ? i : 0);
+  }
+}
+
+// A captioned field: a small muted label on top of `control`. Used for the dropdowns
+// and the worktree toggle (Gtk.DropDown has no built-in label).
 function field(caption: string, control: InstanceType<typeof Gtk.Widget>): InstanceType<typeof Gtk.Box> {
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 3 });
   box.setName('AgentLauncherField');
