@@ -618,8 +618,36 @@ class Delete extends Operator {
     super.execute()
   }
 
+  selectTarget (): boolean {
+    if (super.selectTarget()) return true
+    // The generic guard rejects an *empty* selection. The one linewise case that
+    // must still delete is the empty row GtkSourceView renders after the file's
+    // final newline: it has no trailing newline to span, so its forward linewise
+    // range is empty. Accept it — mutateSelection borrows the preceding newline.
+    const wise = this.occurrenceSelected ? this.occurrenceWise : this.target.wise
+    const row = this.editor.getCursorBufferPosition().row
+    if (wise === 'linewise' && row > 0 && row === this.editor.getLastBufferRow() && this.editor.lineTextForBufferRow(row) === '') {
+      this.targetSelected = true
+      this.emitDidSelectTarget()
+    }
+    return this.targetSelected ?? false
+  }
+
   mutateSelection (selection: Selection): void {
     this.setTextToRegister(selection.getText(), selection)
+    const wise = this.occurrenceSelected ? this.occurrenceWise : this.target.wise
+    // A linewise range that reaches the buffer's last row is short one newline:
+    // the last row never has a trailing one, so deleting forward removes nothing
+    // (or leaves a stray empty row). Borrow the *preceding* newline instead —
+    // how Vim removes the final line, and what makes `dd` delete the empty row
+    // GtkSourceView renders after the file's final newline.
+    if (wise === 'linewise') {
+      const range = selection.getBufferRange()
+      if (range.end.row === this.editor.getLastBufferRow() && range.start.row > 0) {
+        const prevEnd = this.editor.bufferRangeForBufferRow(range.start.row - 1).end
+        selection.setBufferRange(new Range(prevEnd, range.end))
+      }
+    }
     selection.deleteSelectedText()
   }
 }

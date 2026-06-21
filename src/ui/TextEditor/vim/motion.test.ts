@@ -111,9 +111,16 @@ test('gg / G jump to the first and last line', () => {
   const { run, at, pos } = setup('one\ntwo\nthree\n');
   at(1, 1);
   run('MoveToLastLine');
-  assert.equal(pos()[0], 2); // last non-empty line
+  assert.equal(pos()[0], 3); // trailing empty row rendered after the final newline
   run('MoveToFirstLine');
   assert.deepEqual(pos(), [0, 0]);
+});
+
+test('G reaches the trailing empty line below the final newline', () => {
+  const { run, at, pos } = setup('one\ntwo\n');
+  at(0, 0);
+  run('MoveToLastLine');
+  assert.deepEqual(pos(), [2, 0]); // empty row below "two"
 });
 
 test('a count repeats a motion (3 l)', () => {

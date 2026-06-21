@@ -209,18 +209,15 @@ function getRows (editor: EditorModel, bufferOrScreen: 'buffer' | 'screen', {sta
   }
 }
 
-// Return Vim's EOF position rather than Atom's EOF position.
-// This function change meaning of EOF from native TextEditor::getEofBufferPosition()
-// Atom is special(strange) for cursor can past very last newline character.
-// Because of this, Atom's EOF position is [actualLastRow+1, 0] provided last-non-blank-row
-// ends with newline char.
-// But in Vim, curor can NOT past last newline. EOF is next position of very last character.
+// Return Vim's EOF position.
+//
+// Classic Vim treats a file's final newline as a terminator, not a line, so its
+// EOF sits at the end of the last non-blank row. GtkSourceView instead renders a
+// real, navigable empty row after that final newline (the cursor rests there in
+// normal editing), so here EOF is simply the buffer's actual EOF — that trailing
+// row is a real line that `G`, `dd`, etc. can reach and delete.
 function getVimEofBufferPosition (editor: EditorModel): Point {
-  const eof = editor.getEofBufferPosition()
-  // In Vim the cursor can't sit past the last newline, so when the buffer ends
-  // with a newline (EOF is column 0 of a trailing empty row) the Vim EOF is the
-  // end of the previous row instead.
-  return eof.row === 0 || eof.column > 0 ? eof : getEndOfLineForBufferRow(editor, eof.row - 1)
+  return editor.getEofBufferPosition()
 }
 
 function getVimEofScreenPosition (editor: EditorModel): Point {
