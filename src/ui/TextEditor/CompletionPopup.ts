@@ -71,6 +71,7 @@ export class CompletionPopup {
   private readonly popover: EditorPopover;
   private entries: RankedCompletion[] = [];
   private shown = false;
+  private anchor: { row: number; column: number } | null = null; // word-start, for re-anchoring
   // Once any entry's docs have been shown, the doc pane stays open (empty for
   // doc-less entries) so cycling doesn't flicker it open/closed. Reset per show.
   private docPaneSticky = false;
@@ -135,15 +136,24 @@ export class CompletionPopup {
    *  The popover slides to stay on-screen; the doc pane opens to the right, growing the
    *  card rightward without moving the list (its left edge is anchored). */
   showAt(entries: RankedCompletion[], point: { row: number; column: number }): void {
+    this.anchor = point;
     this.entries = entries;
     this.rebuild();
     this.popover.showAt(point, LABEL_INSET_PX);
     this.shown = true;
   }
 
+  /** Re-anchor at the stored point: EditorPopover left-aligns by the panel's *current*
+   *  measured width, so calling this after the doc pane opens/closes keeps the list's left
+   *  edge put (the doc pane grows rightward) instead of the popover sliding to re-centre. */
+  private reanchor(): void {
+    if (this.shown && this.anchor) this.popover.reposition(this.anchor, LABEL_INSET_PX);
+  }
+
   hide(): void {
     if (!this.shown) return;
     this.shown = false;
+    this.anchor = null;
     this.popover.hide();
   }
 
@@ -227,6 +237,7 @@ export class CompletionPopup {
    *  sticky: once any entry has shown docs it stays open (empty for doc-less
    *  entries) so cycling doesn't flicker it open and closed. */
   private updateDoc(): void {
+    const wasOpen = this.docPaneSticky;
     const doc = this.getSelected()?.documentation?.trim();
     if (doc) this.docPaneSticky = true;
     // Render LSP docs as markdown — code mono + fenced blocks highlighted, same as the
@@ -235,6 +246,8 @@ export class CompletionPopup {
     else this.docCard.clear();
     this.divider.setVisible(this.docPaneSticky);
     this.docScroller.setVisible(this.docPaneSticky);
+    // The pane just opened → the panel widened; re-anchor so the list's left edge stays put.
+    if (this.docPaneSticky !== wasOpen) this.reanchor();
   }
 
   private buildRow({ item, positions }: RankedCompletion): InstanceType<typeof Gtk.ListBoxRow> {
