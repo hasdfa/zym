@@ -172,6 +172,12 @@ export class Document implements TextEditorSource {
   /** Replace the whole document (a file load/reload). Re-materializes every view (dropping
    *  its folds) and clears the modified flag. */
   setText(text: string): void {
+    // GLib treats a NUL byte as a string terminator: gtk_text_buffer_set_text with len=-1
+    // truncates the buffer at the first \0, and passing an explicit length trips the
+    // g_utf8_validate assertion (it also rejects embedded NULs) and inserts nothing. A
+    // GtkTextBuffer simply cannot hold a NUL, so map them to U+FFFD — the file loads whole
+    // instead of being silently cut off at the first null character.
+    if (text.includes('\0')) text = text.replace(/\0/g, '�');
     this.syncing = true;
     try {
       // Drive the bulk replace explicitly: suspend each view's reverse-sync so the
