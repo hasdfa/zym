@@ -3216,17 +3216,13 @@ function truncate(text: string, max: number): string {
 // up the worktree and announce it via set_worktree (which re-roots the workbench), then
 // run the user's prompt.
 const NEW_WORKTREE_INSTRUCTION = outdent`
-  ---
   Before anything else, create a new git worktree with a descriptive branch 
   name for the following task and switch into it:
-  ---
 `
 function branchWorktreeInstruction(branch: string): string {
   return outdent`
-    ---
     Before anything else, either go to the existing git worktree or create a new one
     for the branch ${branch}, then do the following task:
-    ---
   `;
 }
 function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
