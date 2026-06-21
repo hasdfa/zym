@@ -33,6 +33,18 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     default: true,
     description: 'Follow the system light/dark preference for the active theme.',
   },
+  'core.uiFont': {
+    type: 'string',
+    default: '',
+    description:
+      "UI (proportional) font as a Pango description, e.g. 'Cantarell 11'; empty follows the system UI font.",
+  },
+  'core.monospaceFont': {
+    type: 'string',
+    default: '',
+    description:
+      "Monospace font as a Pango description, e.g. 'JetBrains Mono 13'; empty follows the system monospace font.",
+  },
   'editor.tabLength': {
     type: 'integer',
     default: 2,
@@ -49,18 +61,6 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     type: 'boolean',
     default: true,
     description: 'Auto-insert the closing bracket/quote when typing an opener, and delete both on backspace.',
-  },
-  'editor.fontFamily': {
-    type: 'string',
-    default: '',
-    description: 'Editor font family; empty uses the platform monospace default.',
-  },
-  'editor.fontSize': {
-    type: 'integer',
-    default: 13,
-    minimum: 6,
-    maximum: 100,
-    description: 'Editor font size in points.',
   },
   'editor.minimap': {
     type: 'boolean',
