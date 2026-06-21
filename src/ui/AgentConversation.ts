@@ -264,6 +264,8 @@ export class AgentConversation implements Agent {
   // A resumed agent defers spawning `claude -p --resume` until the user's first
   // turn (its transcript is rebuilt from disk meanwhile); flipped false on connect.
   private deferredStart = false;
+  // The "send a message to reconnect" system row shown while disconnected; removed on connect.
+  private resumeNoteRow: InstanceType<typeof Gtk.Widget> | null = null;
   // True while rebuilding the transcript from a past session (see restoreTranscript):
   // tool rows render statically and changed-file notifications are suppressed.
   private replaying = false;
@@ -489,6 +491,13 @@ export class AgentConversation implements Agent {
     // restoring N agents doesn't fire N claude processes up front). A resume that
     // carries a prompt — e.g. the worktree re-announce — still starts eagerly.
     this.deferredStart = !!options.resume && !options.prompt;
+    if (this.deferredStart) {
+      // Reflect the not-yet-reconnected state (a dim hollow dot, not live green) and
+      // tell the user the session reconnects when they send something.
+      this.resumeNoteRow = this.addRow('zym-conversation-system');
+      (this.resumeNoteRow as InstanceType<typeof Gtk.Label>).setText('── send a message to resume this conversation ──');
+      this.setStatus('disconnected');
+    }
   }
 
   // Rebuild the conversation rows from a past session's on-disk transcript, by
@@ -533,6 +542,8 @@ export class AgentConversation implements Agent {
   private ensureConnected(): void {
     if (!this.deferredStart) return;
     this.deferredStart = false;
+    if (this.resumeNoteRow) { this.messages.remove(this.resumeNoteRow); this.resumeNoteRow = null; }
+    this.setStatus('idle'); // leave disconnected; the turn that follows flips it to working
     this.session.start();
   }
 
@@ -618,7 +629,7 @@ export class AgentConversation implements Agent {
     };
   }
   isModified(): boolean { return !this.exited; }
-  getModifiedLabel(): string { return `${this.title} (running)`; }
+  getModifiedLabel(): string { return `${this.title}${this._status === 'disconnected' ? ' (resumed)' : ' (running)'}`; }
 
   onDidChangeStatus(cb: () => void): () => void { return push(this.statusHandlers, cb); }
   onDidChangeFiles(cb: () => void): () => void { return push(this.fileHandlers, cb); }
@@ -794,10 +805,19 @@ export class AgentConversation implements Agent {
       }),
       this.session.onToolUse(({ id, name, input }) => {
         if (this.handleTaskTool(id, name, input)) return; // TaskCreate/TaskUpdate → tasks panel, no row
-        // While rebuilding a past transcript, draw every tool as a static row: the
-        // interactive Agent/Monitor/Question widgets drive off a live lifecycle the
-        // replay has no events for. The Agent/Monitor result still attaches by id.
-        if (this.replaying) { this.recordChangedFile(name, input); this.endTurn(); this.addToolRow(id, name, input); return; }
+        // While rebuilding a past transcript, an Agent whose subagent transcript we
+        // reconstructed (seeded into the session before this event) spawns the real
+        // subagent button + page; every other tool draws as a static row, since the
+        // interactive Monitor/Question widgets drive off a lifecycle replay lacks.
+        if (this.replaying) {
+          if (name === 'Agent' && this.session.getSubagent(id)) {
+            this.endTurn();
+            this.messages.append(this.subagentView.spawn(id, input));
+            this.scrollToBottom();
+            return;
+          }
+          this.recordChangedFile(name, input); this.endTurn(); this.addToolRow(id, name, input); return;
+        }
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
         if (name === 'Agent') { this.endTurn(); this.messages.append(this.subagentView.spawn(id, input)); this.scrollToBottom(); return; }
         if (name === 'Monitor') {

@@ -307,9 +307,18 @@ export class SdkSession {
           this.emitter.emit('assistant-text', { delta: e.text });
           break;
         case 'tool_use':
-          // The widget decides how to draw it (AgentConversation renders Agent /
-          // Monitor / AskUserQuestion as static rows while replaying, since their
-          // live interactive widgets expect a lifecycle that a replay has no events for).
+          // A reconstructed subagent: seed its captured transcript before the row is
+          // drawn (so the widget spawns the real subagent button + page), then mark it
+          // done so it doesn't linger in the running panel.
+          if (e.subagent) {
+            this.subagents.set(e.id, e.subagent);
+            this.emitter.emit('tool-use', { id: e.id, name: e.name, input: e.input });
+            this.emitter.emit('subagent-done', { id: e.id });
+            break;
+          }
+          // Otherwise the widget decides how to draw it (AgentConversation renders
+          // Monitor / AskUserQuestion as static rows while replaying, since their live
+          // interactive widgets expect a lifecycle that a replay has no events for).
           this.emitter.emit('tool-use', { id: e.id, name: e.name, input: e.input });
           break;
         case 'tool_result':

@@ -20,13 +20,16 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { transcriptDir } from '../../agentSessions.ts';
+import type { SubagentInfo, SubagentMessage } from './SdkSession.ts';
 
-/** A single replayable step, mirroring one of `SdkSession`'s domain emissions. */
+/** A single replayable step, mirroring one of `SdkSession`'s domain emissions. A
+ *  tool_use that spawned a subagent (the `Agent` tool) carries its reconstructed
+ *  inner transcript so the resumed subagent page fills in. */
 export type ReplayEntry =
   | { kind: 'user'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'text'; text: string }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; subagent?: SubagentInfo }
   | { kind: 'tool_result'; id: string; isError: boolean; text: string };
 
 interface TranscriptLine {
@@ -58,11 +61,96 @@ export function readTranscript(cwd: string, sessionId: string): ReplayEntry[] {
     } catch {
       continue; // not JSON — skip
     }
-    if (parsed.isSidechain) continue; // subagent inner transcript — not restored (v1)
+    if (parsed.isSidechain) continue; // subagent turns live in their own files (see readSubagents)
     if (parsed.type === 'assistant') appendAssistant(entries, parsed);
     else if (parsed.type === 'user') appendUser(entries, parsed);
   }
+  // Attach each spawned subagent's reconstructed transcript to its `Agent` tool call,
+  // so the resumed subagent button + page show the inner conversation.
+  const subagents = readSubagents(cwd, sessionId);
+  if (subagents.size > 0) {
+    for (const e of entries) {
+      if (e.kind === 'tool_use' && subagents.has(e.id)) e.subagent = subagents.get(e.id);
+    }
+  }
   return entries;
+}
+
+// Claude stores each subagent's conversation as `<sid>/subagents/agent-<n>.jsonl`
+// plus a `.meta.json` ({agentType, description, toolUseId}). Read each into a
+// SubagentInfo keyed by the spawning `Agent` tool's id (meta.toolUseId).
+function readSubagents(cwd: string, sessionId: string): Map<string, SubagentInfo> {
+  const out = new Map<string, SubagentInfo>();
+  const dir = Path.join(transcriptDir(cwd), sessionId, 'subagents');
+  let files: string[];
+  try {
+    files = Fs.readdirSync(dir);
+  } catch {
+    return out; // no subagents dir — nothing to restore
+  }
+  for (const file of files) {
+    if (!file.endsWith('.meta.json')) continue;
+    let meta: { agentType?: string; description?: string; toolUseId?: string };
+    try {
+      meta = JSON.parse(Fs.readFileSync(Path.join(dir, file), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!meta.toolUseId) continue;
+    let raw = '';
+    try {
+      raw = Fs.readFileSync(Path.join(dir, file.replace(/\.meta\.json$/, '.jsonl')), 'utf8');
+    } catch {
+      /* transcript missing — keep the (empty) subagent so the button still resolves */
+    }
+    const { prompt, messages } = parseSubagentFile(raw);
+    out.set(meta.toolUseId, {
+      id: meta.toolUseId,
+      agentType: meta.agentType ?? 'agent',
+      description: meta.description ?? '',
+      prompt,
+      status: 'completed', // historical
+      messages,
+    });
+  }
+  return out;
+}
+
+// Parse one subagent's JSONL into its prompt (the first human turn) + messages,
+// mirroring SdkSession.onSubagentAssistant/onSubagentUser.
+function parseSubagentFile(raw: string): { prompt: string; messages: SubagentMessage[] } {
+  const messages: SubagentMessage[] = [];
+  let prompt = '';
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed: TranscriptLine;
+    try {
+      parsed = JSON.parse(trimmed) as TranscriptLine;
+    } catch {
+      continue;
+    }
+    const content = parsed.message?.content;
+    if (parsed.type === 'assistant' && Array.isArray(content)) {
+      for (const block of content) {
+        const b = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
+        if (b.type === 'text' && b.text) messages.push({ kind: 'text', text: b.text });
+        else if (b.type === 'tool_use') messages.push({ kind: 'tool', toolId: b.id ?? '', name: b.name ?? 'tool', input: b.input });
+      }
+    } else if (parsed.type === 'user') {
+      if (typeof content === 'string') {
+        if (!prompt && content.trim()) prompt = content; // the instruction given to the subagent
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          const b = block as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
+          if (b.type !== 'tool_result' || !b.tool_use_id) continue;
+          const msg = messages.find((m): m is Extract<SubagentMessage, { kind: 'tool' }> => m.kind === 'tool' && m.toolId === b.tool_use_id);
+          if (msg) msg.result = { isError: !!b.is_error, text: toolResultText(b.content) };
+        }
+      }
+    }
+  }
+  return { prompt, messages };
 }
 
 // Assistant message → thinking / text / tool_use entries, preserving block order

@@ -176,20 +176,32 @@ up front. `serialize()` falls back to the resume id when the deferred process ha
 reported its own init session id yet, so a never-resumed agent still round-trips its
 id. A resume that carries a prompt (e.g. the worktree re-announce) starts eagerly.
 
+A not-yet-reconnected agent reports the `disconnected` status (a dim hollow dot,
+not live green — see `agentStatusIcon`) and shows a `── send a message to resume
+this conversation ──` note at the tail of its transcript; `ensureConnected` clears
+both on the first turn.
+
 `AgentConversation.serialize()` returns `{kind:'agent', agentKind:'claude-sdk',
 …, sessionId}`; `TabState.agentKind` tells `restoreAgent` which host to relaunch.
 A resume no longer forces `claude-tui` (`openAgent`); in-place resume of a headless
 agent is a restart (its session is wired into views built at construction).
 
-Scope (v1): the main thread restores fully — user turns, assistant text/thinking,
-tool calls + results, the tasks panel. Subagent (`isSidechain`) **inner**
-transcripts are not yet reconstructed; the spawning `Agent` tool still shows as a
-row. Empty thinking blocks (transcript stores signatures, not text) don't render.
+**Subagent restore:** Claude stores each subagent's conversation as
+`<sid>/subagents/agent-<n>.jsonl` + a `.meta.json` ({agentType, description,
+toolUseId}). `readSubagents` rebuilds each into a `SubagentInfo` keyed by its
+spawning `Agent` tool id and attaches it to that tool's `ReplayEntry`; `replay`
+seeds it into the session before the row is drawn, so the restored `Agent` tool
+spawns the real subagent button + drill-down page (not a static row) and is marked
+done. Monitor **inner** state is still not reconstructed (drawn as a static row).
+
+Scope: the main thread restores fully — user turns, assistant text/thinking, tool
+calls + results, the tasks panel, and spawned subagents' inner transcripts. Empty
+thinking blocks (transcript stores signatures, not text) don't render.
 
 ## Remaining / planned
 
-- [ ] **Subagent / monitor inner-transcript restore** — parse `isSidechain`
-      lines into `SubagentInfo` so a resumed subagent's drill-down page fills in.
+- [ ] **Monitor inner-state restore** — the `Monitor` tool draws as a static row
+      on resume; its live panel/output isn't reconstructed.
 - [ ] **Cost/context meter row** in the transcript (and seed the gauge on resume
       from the transcript's last `usage`).
 - [ ] **Token-level live streaming** via `--include-partial-messages`.

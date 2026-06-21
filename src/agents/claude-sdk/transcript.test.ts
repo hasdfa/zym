@@ -8,7 +8,11 @@ import { transcriptDir } from '../../agentSessions.ts';
 
 // Write `lines` (objects, one per JSONL line) as the transcript for `sessionId`
 // under a throwaway HOME, so readTranscript resolves it the way it does in app.
-function withTranscript(lines: unknown[], run: (cwd: string, id: string) => void): void {
+function withTranscript(
+  lines: unknown[],
+  run: (cwd: string, id: string) => void,
+  subagents?: Array<{ base: string; meta: object; lines: unknown[] }>,
+): void {
   const home = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-transcript-'));
   const prevHome = process.env.HOME;
   process.env.HOME = home;
@@ -18,6 +22,14 @@ function withTranscript(lines: unknown[], run: (cwd: string, id: string) => void
     const dir = transcriptDir(cwd);
     Fs.mkdirSync(dir, { recursive: true });
     Fs.writeFileSync(Path.join(dir, `${id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    if (subagents?.length) {
+      const subDir = Path.join(dir, id, 'subagents');
+      Fs.mkdirSync(subDir, { recursive: true });
+      for (const s of subagents) {
+        Fs.writeFileSync(Path.join(subDir, `${s.base}.meta.json`), JSON.stringify(s.meta));
+        Fs.writeFileSync(Path.join(subDir, `${s.base}.jsonl`), s.lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      }
+    }
     run(cwd, id);
   } finally {
     if (prevHome === undefined) delete process.env.HOME;
@@ -68,6 +80,46 @@ test('skips meta, system-injected, and subagent lines (not human turns)', () => 
       { kind: 'text', text: 'reply' },
     ]);
   });
+});
+
+test('reconstructs a subagent transcript and attaches it to its Agent tool call', () => {
+  withTranscript(
+    [
+      { type: 'user', promptSource: 'sdk', message: { role: 'user', content: 'investigate' } },
+      { type: 'assistant', message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'toolu_agent1', name: 'Agent', input: { subagent_type: 'Explore', description: 'find it' } },
+      ] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_agent1', content: 'found' }] } },
+    ],
+    (cwd, id) => {
+      const entries = readTranscript(cwd, id);
+      const agent = entries.find((e) => e.kind === 'tool_use' && e.name === 'Agent');
+      assert.ok(agent && agent.kind === 'tool_use' && agent.subagent, 'subagent attached to Agent tool call');
+      const sub = agent.subagent!;
+      assert.equal(sub.id, 'toolu_agent1');
+      assert.equal(sub.agentType, 'Explore');
+      assert.equal(sub.status, 'completed');
+      assert.equal(sub.prompt, 'Look at the foo module.');
+      assert.deepEqual(sub.messages, [
+        { kind: 'text', text: 'Scanning.' },
+        { kind: 'tool', toolId: 'st1', name: 'Grep', input: { pattern: 'foo' }, result: { isError: false, text: 'foo.ts' } },
+        { kind: 'text', text: 'It is in foo.ts.' },
+      ]);
+    },
+    [{
+      base: 'agent-deadbeef',
+      meta: { agentType: 'Explore', description: 'find it', toolUseId: 'toolu_agent1' },
+      lines: [
+        { type: 'user', isSidechain: true, message: { role: 'user', content: 'Look at the foo module.' } },
+        { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [
+          { type: 'text', text: 'Scanning.' },
+          { type: 'tool_use', id: 'st1', name: 'Grep', input: { pattern: 'foo' } },
+        ] } },
+        { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'st1', is_error: false, content: 'foo.ts' }] } },
+        { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: 'It is in foo.ts.' }] } },
+      ],
+    }],
+  );
 });
 
 test('flattens array-form tool_result content and returns [] for a missing transcript', () => {
