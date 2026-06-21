@@ -25,6 +25,8 @@ import { Disposable, Emitter } from '../../util/eventKit.ts';
 import { ClaudeStreamTransport, type Transport, type TransportOptions } from './transport.ts';
 import { userTurn, isSystemInit, isThinkingTokens, isResult, type StreamEvent, type ContentBlock, type Usage as TokenUsage } from './protocol.ts';
 import type { AgentMode, AgentStatus } from '../types.ts';
+import { parseActions, type AgentAction } from '../actions.ts';
+import { AGENT_SYSTEM_PROMPT } from '../prompts.ts';
 
 const AGENT_MODES = new Set<AgentMode>(['default', 'plan', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']);
 
@@ -36,6 +38,13 @@ const FileProto = (Gio.File as any).prototype;
 // so three `..` reach the repo root.
 const PERMISSION_SCRIPT = Path.join(
   Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxPermission.mjs',
+);
+
+// The bundled agent↔editor bridge MCP server. The sdk runs it only for its
+// `set_actions` tool (it has no live worktree re-rooting), so it passes only
+// QUILX_ACTIONS_FILE — the bridge then advertises just that tool.
+const BRIDGE_SCRIPT = Path.join(
+  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxBridge.mjs',
 );
 
 /** A permission request surfaced from claude (status goes `waiting` until answered). */
@@ -153,9 +162,20 @@ export class SdkSession {
   // request atomically; we answer by writing the response atomically.
   private readonly permRequestFile: string;
   private readonly permResponseFile: string;
+  // The `set_actions` bridge tool writes the registered actions here (atomic);
+  // we watch it and emit an `actions` event.
+  private readonly actionsFile: string;
+  // The `set_worktree` bridge tool writes the agent's current worktree to
+  // `<statusFile>.cwd` (atomic); we watch it and emit a `cwd` event so the
+  // workbench re-roots to the worktree the agent moved into.
+  private readonly statusFile: string;
   private readonly mcpConfig: string;
   private permMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  private actionsMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  private cwdMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   private lastPermId: string | null = null;
+  private lastActions: string | null = null;
+  private lastCwd: string | null = null;
 
   constructor(options: SdkSessionOptions) {
     this.options = options;
@@ -163,8 +183,11 @@ export class SdkSession {
     Fs.mkdirSync(dir, { recursive: true });
     this.permRequestFile = Path.join(dir, 'permission.req');
     this.permResponseFile = Path.join(dir, 'permission.res');
-    // The permission MCP server inherits the request/response paths and writes the
-    // request / polls for the response over them.
+    this.actionsFile = Path.join(dir, 'actions.json');
+    this.statusFile = Path.join(dir, 'status');
+    // Two bundled MCP servers: the permission server inherits the request/response
+    // paths (writes the request / polls for the response); the bridge inherits the
+    // status + actions files so its set_worktree / set_actions tools write there.
     this.mcpConfig = JSON.stringify({
       mcpServers: {
         quilxPerm: {
@@ -174,6 +197,11 @@ export class SdkSession {
             QUILX_PERM_REQUEST: this.permRequestFile,
             QUILX_PERM_RESPONSE: this.permResponseFile,
           },
+        },
+        quilx: {
+          command: process.execPath,
+          args: [BRIDGE_SCRIPT],
+          env: { QUILX_STATUS_FILE: this.statusFile, QUILX_ACTIONS_FILE: this.actionsFile },
         },
       },
     });
@@ -193,6 +221,10 @@ export class SdkSession {
       // claude calls our tool for any operation the mode would gate.
       '--permission-mode', 'default',
       '--permission-prompt-tool', 'mcp__quilxPerm__approve',
+      // Pre-allow the bridge tools so announcing a worktree / registering actions
+      // never prompts the user.
+      '--allowedTools', 'mcp__quilx__set_worktree,mcp__quilx__set_actions',
+      '--append-system-prompt', AGENT_SYSTEM_PROMPT,
       '--mcp-config', this.mcpConfig,
       ...base.slice(1),
     ];
@@ -207,6 +239,16 @@ export class SdkSession {
     const gfile = Gio.File.newForPath(this.permRequestFile);
     this.permMonitor = FileProto.monitorFile.call(gfile, Gio.FileMonitorFlags.WATCH_MOVES, null);
     this.permMonitor!.on('changed', () => this.readPermissionRequest());
+
+    // Watch for registered actions (set_actions writes atomically → WATCH_MOVES).
+    const afile = Gio.File.newForPath(this.actionsFile);
+    this.actionsMonitor = FileProto.monitorFile.call(afile, Gio.FileMonitorFlags.WATCH_MOVES, null);
+    this.actionsMonitor!.on('changed', () => this.readActions());
+
+    // Watch for worktree moves (set_worktree writes `<statusFile>.cwd` atomically).
+    const cfile = Gio.File.newForPath(`${this.statusFile}.cwd`);
+    this.cwdMonitor = FileProto.monitorFile.call(cfile, Gio.FileMonitorFlags.WATCH_MOVES, null);
+    this.cwdMonitor!.on('changed', () => this.readCwd());
   }
 
   /** Send a user turn. Pushes a user row, then flips to `working`. */
@@ -306,6 +348,8 @@ export class SdkSession {
   onUnhandled(cb: (m: { event: unknown }) => void): Disposable { return this.emitter.on('unhandled', cb as (v?: unknown) => void); }
   onPermission(cb: (r: PermissionRequest) => void): Disposable { return this.emitter.on('permission', cb as (v?: unknown) => void); }
   onQuestion(cb: (r: QuestionRequest) => void): Disposable { return this.emitter.on('question', cb as (v?: unknown) => void); }
+  onActions(cb: (m: { actions: AgentAction[] }) => void): Disposable { return this.emitter.on('actions', cb as (v?: unknown) => void); }
+  onCwd(cb: (m: { cwd: string }) => void): Disposable { return this.emitter.on('cwd', cb as (v?: unknown) => void); }
   onExit(cb: (code: number | null) => void): Disposable { return this.emitter.on('exit', cb as (v?: unknown) => void); }
 
   /** Stop the claude process but keep the session object (status → `exited`),
@@ -321,6 +365,10 @@ export class SdkSession {
   dispose(): void {
     this.permMonitor?.cancel();
     this.permMonitor = null;
+    this.actionsMonitor?.cancel();
+    this.actionsMonitor = null;
+    this.cwdMonitor?.cancel();
+    this.cwdMonitor = null;
     this.transport?.dispose();
     this.transport = null;
     try { Fs.rmSync(Path.dirname(this.permRequestFile), { recursive: true, force: true }); } catch { /* best effort */ }
@@ -647,6 +695,40 @@ export class SdkSession {
       if (questions.length > 0) { this.emitter.emit('question', { id: req.id, questions }); return; }
     }
     this.emitter.emit('permission', { id: req.id, toolName, input: req.input });
+  }
+
+  // The bridge's `set_actions` tool writes the registered actions (a JSON array)
+  // atomically to actionsFile; parse + emit them (empty array clears the set).
+  private readActions(): void {
+    let raw: string;
+    try {
+      raw = Fs.readFileSync(this.actionsFile, 'utf8').trim();
+    } catch {
+      return; // mid-rename / removed
+    }
+    if (!raw || raw === this.lastActions) return; // unchanged
+    this.lastActions = raw;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return; // mid-write / malformed
+    }
+    this.emitter.emit('actions', { actions: parseActions(parsed) });
+  }
+
+  // The `set_worktree` bridge tool writes the agent's current worktree path
+  // atomically to `<statusFile>.cwd`; emit it so the workbench re-roots.
+  private readCwd(): void {
+    let raw: string;
+    try {
+      raw = Fs.readFileSync(`${this.statusFile}.cwd`, 'utf8').trim();
+    } catch {
+      return; // mid-rename / removed
+    }
+    if (!raw || raw === this.lastCwd) return; // empty (pre-report) or unchanged
+    this.lastCwd = raw;
+    this.emitter.emit('cwd', { cwd: raw });
   }
 }
 

@@ -39,6 +39,8 @@ import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
 import { SdkSession, type PermissionRequest, type QuestionRequest, type TaskProgress } from '../agents/claude-sdk/SdkSession.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentStatus } from '../agents/types.ts';
+import type { AgentAction } from '../agents/actions.ts';
+import { ActionProcesses } from '../agents/ActionProcesses.ts';
 import type { TabState } from '../SessionManager.ts';
 
 // Tools whose first input path counts as a "changed file" (mirrors the claude-tui
@@ -111,6 +113,11 @@ addStyles(`
     border-radius: 4px;
   }
   .quilx-conversation-unknown-body { opacity: 0.75; }
+  /* Agent-registered actions: a row of buttons just above the input card. The
+     default action reads as the suggested (accent) button. */
+  .quilx-conversation-actions {
+    padding: 6px 8px 0 8px;
+  }
   /* The input + its status strip, as a bordered rounded card with its own bg. */
   .quilx-conversation-input-card {
     margin: 8px;
@@ -199,6 +206,8 @@ export interface AgentConversationOptions {
   prompt?: string;
   /** Open a file the agent touched (makes file-tool rows clickable). */
   onOpenFile?: (path: string) => void;
+  /** Run a `terminal` action in a terminal tab (terminal-less ones run in-process). */
+  onRunInTerminal?: (action: AgentAction) => void;
 }
 
 export class AgentConversation implements Agent {
@@ -245,6 +254,19 @@ export class AgentConversation implements Agent {
   private _model: string | null = null;
   private _slashCommands: string[] = []; // from init; offered by the slash completion source
   private readonly onOpenFile?: (path: string) => void;
+  private readonly onRunInTerminal?: (action: AgentAction) => void;
+  // Runnable actions the agent has registered (set_actions), rendered as a button
+  // bar above the input card; the bar hides when the set is empty.
+  private _actions: AgentAction[] = [];
+  private readonly actionHandlers: Array<() => void> = [];
+  private readonly runningActionHandlers: Array<() => void> = [];
+  private readonly actionsBar: InstanceType<typeof Adw.WrapBox>;
+  // Background processes of terminal-less actions; re-rendering the bar on change
+  // toggles each running action's stop control.
+  private readonly actionProcesses = new ActionProcesses(() => {
+    this.renderActions();
+    for (const handler of this.runningActionHandlers) handler();
+  });
 
   // Per-turn streaming state: the open assistant/thinking markdown views and the
   // raw markdown accumulated into each (re-rendered on every delta). Reset per turn.
@@ -259,6 +281,9 @@ export class AgentConversation implements Agent {
   private readonly permissionModeHandlers: Array<() => void> = [];
   private _displayName: string | null = null;
   private _changedFiles: string[] = [];
+  // The agent's current working directory: its launch cwd, or a worktree it has
+  // since moved into (announced via the set_worktree bridge tool).
+  private _effectiveCwd: string;
   private _worktree: WorktreeInfo | null | undefined;
   private _viewed = false;
   private _acknowledged = true;
@@ -266,11 +291,14 @@ export class AgentConversation implements Agent {
   private readonly fileHandlers: Array<() => void> = [];
   private readonly titleHandlers: Array<() => void> = [];
   private readonly attentionHandlers: Array<() => void> = [];
+  private readonly worktreeHandlers: Array<() => void> = [];
 
   constructor(options: AgentConversationOptions) {
     this.cwd = options.cwd;
+    this._effectiveCwd = options.cwd;
     this.launchPrompt = options.prompt;
     this.onOpenFile = options.onOpenFile;
+    this.onRunInTerminal = options.onRunInTerminal;
     this.session = new SdkSession({ cwd: options.cwd, command: options.command });
 
     this.messages = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
@@ -354,11 +382,19 @@ export class AgentConversation implements Agent {
     this.subagentView = new SubagentView(this.session, nav, this.cwd);
     this.monitorView = new MonitorView(this.session, nav);
 
+    // A button bar for the agent's registered actions, just above the input card;
+    // hidden until the agent registers any (see renderActions). A WrapBox so a long
+    // row of actions wraps onto further lines instead of overflowing the width.
+    this.actionsBar = new Adw.WrapBox({ childSpacing: 6, lineSpacing: 6 });
+    this.actionsBar.addCssClass('quilx-conversation-actions');
+    this.actionsBar.setVisible(false);
+
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('quilx-conversation');
     mainBox.append(this.tasksPanel.root);
     mainBox.append(this.scroller);
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
+    mainBox.append(this.actionsBar);
     mainBox.append(inputCard);
     mainBox.append(this.subagentView.panel.root); // running subagents expand below the input card
     mainBox.append(this.monitorView.panel.root); // running shell monitors, likewise
@@ -408,15 +444,25 @@ export class AgentConversation implements Agent {
   get status(): AgentStatus { return this._status; }
   get permissionMode(): AgentMode { return this._permissionMode; }
   get changedFiles(): string[] { return this._changedFiles.slice(); }
-  get effectiveCwd(): string { return this.cwd; }
+  get actions(): AgentAction[] { return this._actions.slice(); }
+  get effectiveCwd(): string { return this._effectiveCwd; }
   get sessionId(): string | null { return this.session.sessionId; }
   get renamed(): boolean { return this._displayName !== null; }
   get exited(): boolean { return this._status === 'exited'; }
   get unannouncedWorktree(): string | null { return null; }
 
   get worktree(): WorktreeInfo | null {
-    if (this._worktree === undefined) this._worktree = worktreeInfo(this.cwd);
+    if (this._worktree === undefined) this._worktree = worktreeInfo(this._effectiveCwd);
     return this._worktree;
+  }
+
+  // The agent moved into `cwd` (set_worktree): recompute the worktree and notify so
+  // AppWindow re-roots this agent's workbench.
+  private setEffectiveCwd(cwd: string): void {
+    if (cwd === this._effectiveCwd) return;
+    this._effectiveCwd = cwd;
+    this._worktree = worktreeInfo(cwd);
+    for (const handler of this.worktreeHandlers) handler();
   }
 
   get needsAttention(): boolean {
@@ -459,12 +505,28 @@ export class AgentConversation implements Agent {
 
   onDidChangeStatus(cb: () => void): () => void { return push(this.statusHandlers, cb); }
   onDidChangeFiles(cb: () => void): () => void { return push(this.fileHandlers, cb); }
+  onDidChangeActions(cb: () => void): () => void { return push(this.actionHandlers, cb); }
+  onDidChangeRunningActions(cb: () => void): () => void { return push(this.runningActionHandlers, cb); }
+
+  /** Run an action: `terminal` ones open a terminal tab (`onRunInTerminal`), the
+   *  rest run as a background process (re-running terminates the previous one). */
+  runAction(action: AgentAction): void {
+    if (action.terminal) this.onRunInTerminal?.(action);
+    else this.actionProcesses.run(action, this._effectiveCwd);
+  }
+
+  /** Stop a terminal-less action's process (no-op otherwise). */
+  stopAction(actionId: string): void { this.actionProcesses.stop(actionId); }
+
+  /** Whether a terminal-less action currently has a running process. */
+  isActionRunning(actionId: string): boolean { return this.actionProcesses.isRunning(actionId); }
   onTitleChange(cb: () => void): () => void { return push(this.titleHandlers, cb); }
   onDidChangeAttention(cb: () => void): () => void { return push(this.attentionHandlers, cb); }
   onDidChangePermissionMode(cb: () => void): () => void { return push(this.permissionModeHandlers, cb); }
-  onDidChangeWorktree(_cb: () => void): () => void { return () => {}; }
+  onDidChangeWorktree(cb: () => void): () => void { return push(this.worktreeHandlers, cb); }
 
   dispose(): void {
+    this.actionProcesses.stopAll(); // terminate any terminal-less action processes
     this.subs.dispose();
     this.statusIcon.dispose();
     this.input.dispose();
@@ -502,6 +564,51 @@ export class AgentConversation implements Agent {
     );
   }
 
+  // Replace the registered-actions set and re-render the button bar.
+  private setActions(actions: AgentAction[]): void {
+    this._actions = actions;
+    this.renderActions();
+    for (const handler of this.actionHandlers) handler();
+  }
+
+  // Rebuild the action button bar from `_actions`. The first action is the default
+  // and reads as the accent "suggested" button; a terminal-less action that is
+  // currently running gets a linked stop control. The bar hides when empty.
+  private renderActions(): void {
+    this.actionsBar.removeAll();
+    this._actions.forEach((action, index) => {
+      const run = new Gtk.Button({ label: action.label });
+      if (index === 0) run.addCssClass('suggested-action'); // the default action
+      // Re-running terminates the previous process first (handled in runAction).
+      run.on('clicked', () => this.runAction(action));
+
+      if (action.terminal) {
+        run.setTooltipText(action.command);
+        this.actionsBar.append(run);
+        return;
+      }
+
+      // Terminal-less: the run button + a stop control, joined (`linked`). The stop
+      // button shows only while the background process is running.
+      const running = this.actionProcesses.isRunning(action.id);
+      run.setTooltipText(`${action.command}\n(background process${running ? ', running — click to restart' : ''})`);
+      const group = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+      group.addCssClass('linked');
+      group.append(run);
+      if (running) {
+        const stop = new Gtk.Button({ valign: Gtk.Align.CENTER });
+        const stopLabel = new Gtk.Label();
+        setMarkupSafe(stopLabel, iconSpan(NERDFONT.STATUS.CROSS, theme.ui.text.muted), '✗');
+        stop.setChild(stopLabel);
+        stop.setTooltipText(`Stop ${action.label}`);
+        stop.on('clicked', () => this.stopAction(action.id));
+        group.append(stop);
+      }
+      this.actionsBar.append(group);
+    });
+    this.actionsBar.setVisible(this._actions.length > 0);
+  }
+
   private cyclePermissionMode(): void {
     const index = PERMISSION_CYCLE.indexOf(this._permissionMode);
     const next = PERMISSION_CYCLE[(index + 1) % PERMISSION_CYCLE.length];
@@ -523,6 +630,8 @@ export class AgentConversation implements Agent {
   private wireSession(): void {
     this.subs.add(
       this.session.onStatus(() => this.setStatus(this.session.status)),
+      this.session.onActions(({ actions }) => this.setActions(actions)),
+      this.session.onCwd(({ cwd }) => this.setEffectiveCwd(cwd)),
       this.session.onMode(() => {
         this._permissionMode = this.session.permissionMode;
         this.updateFooter();
