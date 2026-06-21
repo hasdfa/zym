@@ -36,8 +36,9 @@ tool; this config enables no stylistic/layout rules.
 
 ### `local/no-floating-cleanup` (type-aware)
 
-Vendored from MUI ([mui/mui-public#1538](https://github.com/mui/mui-public/pull/1538))
-into `eslint-rules/no-floating-cleanup.js` — the rule is not yet in a published
+Vendored from MUI
+([mui/mui-public#1538](https://github.com/mui/mui-public/pull/1538)) into
+`eslint-rules/no-floating-cleanup.js` — the rule is not yet in a published
 `@mui/internal-code-infra`. Once it ships, replace the vendored file with the
 package import.
 
@@ -64,6 +65,6 @@ A handful of deliberate spots carry an inline `// eslint-disable` rather than a
 config change: the `\x00` sentinel regex in `src/ui/markdownMarkup.ts`
 (`no-control-regex`), the `debugger` statements in `src/util/assert.ts`, the
 emscripten-Module `this` capture in `src/syntax/grammar.ts` (`no-this-alias`),
-the forward-referenced `leaf` in `src/ui/PanelGroup.ts` (`prefer-const`), and the
-ported-but-unwired mouse handlers in `VimState.observeMouse` (vim-mode-plus #830).
-
+the forward-referenced `leaf` in `src/ui/PanelGroup.ts` (`prefer-const`), and
+the ported-but-unwired mouse handlers in `VimState.observeMouse`
+(vim-mode-plus #830).

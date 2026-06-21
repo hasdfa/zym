@@ -1,21 +1,21 @@
 # Language configuration (grammar + LSP) and the plugin seam
 
-Grammar **and** LSP config are plugin-contributed and curated — no runtime fetch.
-A `LanguageRegistry` ties files → languages → their grammar + servers; the syntax
-layer and `LspManager` read off it. One language can use **different servers per
-project** (a JS project on Flow vs tsserver vs Deno), selected by root markers.
+Grammar **and** LSP config are plugin-contributed and curated — no runtime
+fetch. A `LanguageRegistry` ties files → languages → their grammar + servers;
+the syntax layer and `LspManager` read off it. One language can use
+**different servers per project** (a JS project on Flow vs tsserver vs Deno),
+selected by root markers.
 
-(History: this replaced a hardcoded `syntax/grammar.ts` `SPECS` map plus an
-`lsp/registry.ts` that fetched Helix's `languages.toml` at runtime. Helix's
-`languages.toml` is now only an authoring *reference*, not a dependency.)
+Helix's `languages.toml` is an authoring *reference* only, not a dependency.
 
 ## `LanguageRegistry` (core, the plugin seam)
 
 `src/lang/LanguageRegistry.ts` + `src/lang/types.ts`; the app-wide `languages`
-singleton is in `src/lang/index.ts`. Registry starts empty; plugins populate it at
-activation (before grammars preload / files open). One registry keyed by language
-id; grammar and servers attach independently (VSCode-style), so a plugin can
-contribute any subset. Each `register*` returns a `Disposable` (plugin teardown).
+singleton is in `src/lang/index.ts`. Registry starts empty; plugins populate it
+at activation (before grammars preload / files open). One registry keyed by
+language id; grammar and servers attach independently (VSCode-style), so a
+plugin can contribute any subset. Each `register*` returns a `Disposable`
+(plugin teardown).
 
 ```ts
 registerLanguage({ id, fileTypes?, filenames?, globs?, lspId?, lspIds? }): Disposable
@@ -24,23 +24,28 @@ registerServer(langId, ServerDef): Disposable   // 0..n per language
 ```
 
 - `LanguageDef`: detection. `fileTypes` are bare extensions; `lspId`/`lspIds`
-  give the LSP `languageId` when it differs from `id` (`lspIds` is per-extension —
-  one grammar can span several LSP languages, e.g. the `tsx` grammar backs
+  give the LSP `languageId` when it differs from `id` (`lspIds` is per-extension
+  — one grammar can span several LSP languages, e.g. the `tsx` grammar backs
   `.js`→javascript, `.jsx`→javascriptreact, `.tsx`→typescriptreact).
-- `GrammarDef`: `wasm` (absolute path or node_modules specifier), `highlightsPath`
-  + `foldsPath` (absolute `.scm` paths the plugin vendors via `ctx.resolve`),
-  `foldTypes` (node-type folding fallback when no `foldsPath`), `injections`.
+- `GrammarDef`: `wasm` (absolute path or node_modules specifier),
+  `highlightsPath` + `foldsPath` (absolute `.scm` paths the plugin vendors via
+  `ctx.resolve`), `foldTypes` (node-type folding fallback when no `foldsPath`),
+  `injections`.
 
 Resolution API: `languageForPath`, `lspLanguageId`, `grammarFor`,
-`grammarLanguageIds` (preload), `serversFor`, `effectiveServers`, `activeServers`,
-`installableServers`, `setOverrides`. `src/syntax/grammar.ts` keeps wasm/query
-loading but reads its specs from `languages.grammarFor` (public API
-`langIdForPath`/`loadGrammar`/`getGrammar`/`preloadGrammars`/`createParser`).
+`grammarLanguageIds` (preload), `serversFor`, `effectiveServers`,
+`activeServers`, `installableServers`, `setOverrides`. `src/syntax/grammar.ts`
+keeps wasm/query loading but reads its specs from `languages.grammarFor`
+(public API `langIdForPath`/`loadGrammar`/`getGrammar`/`preloadGrammars`/
+`createParser`).
 
 Built-in languages register via the bundled plugins (`plugins/*`); the
 TypeScript plugin (`plugins/typescript/index.ts`) is the reference and
-contributes the whole TS/JS family. See [../plugins.md](../plugins.md). External
-plugin *loading* (manifest + out-of-repo packages) is still ahead.
+contributes the whole TS/JS family. See [../plugins.md](../plugins.md).
+
+### Remaining / planned
+
+- External plugin *loading* (manifest + out-of-repo packages).
 
 ## Per-project server selection
 
@@ -60,44 +65,46 @@ interface ServerDef {
 ```
 
 `activeServers(file)` (injectable `fileExists` for tests):
-1. `langId = languageForPath(file)` → `effectiveServers(langId)` (candidates with
-   user overrides applied).
-2. Per candidate: walk ancestors for `roots` → `rootDir`; **activated** iff a root
-   is found (or `singleFile`, root = file's dir).
+1. `langId = languageForPath(file)` → `effectiveServers(langId)` (candidates
+   with user overrides applied).
+2. Per candidate: walk ancestors for `roots` → `rootDir`; **activated** iff a
+   root is found (or `singleFile`, root = file's dir).
 3. Within each `group`, keep only the highest-`priority` activated server;
    ungrouped activated servers all stay.
-4. → `ActiveServer { server, rootDir }[]` to spawn/reuse (keyed by `(name, rootDir)`).
+4. → `ActiveServer { server, rootDir }[]` to spawn/reuse (keyed by
+   `(name, rootDir)`).
 
 Example — the `tsx` language (`plugins/typescript/index.ts`): flow
 (`roots:['.flowconfig']`, group `js-types`, prio 20), tsserver
-(`roots:['tsconfig.json','jsconfig.json','package.json']`, group `js-types`, prio
-10), deno (`roots:['deno.json','deno.jsonc']`, group `js-types`, prio 30), eslint
-(roots `.eslintrc*` + `eslint.config.*`, no group). A Flow project picks flow,
-plain TS/JS picks tsserver, Deno picks deno; eslint runs alongside any. (The `ts`
-language registers tsserver/deno/eslint but not flow.)
+(`roots:['tsconfig.json','jsconfig.json','package.json']`, group `js-types`,
+prio 10), deno (`roots:['deno.json','deno.jsonc']`, group `js-types`, prio 30),
+eslint (roots `.eslintrc*` + `eslint.config.*`, no group). A Flow project picks
+flow, plain TS/JS picks tsserver, Deno picks deno; eslint runs alongside any.
+(The `ts` language registers tsserver/deno/eslint but not flow.)
 
 ## User overrides (`lsp.disabledLanguages` / `lsp.servers`)
 
 `setOverrides({ disabledLanguages, servers })` stores config; `effectiveServers`
 applies it, so overrides flow through activation + groups + priority:
-- a disabled language → no servers (detection + grammars/highlighting unaffected);
+- a disabled language → no servers (detection + grammars/highlighting
+  unaffected);
 - `lsp.servers` is keyed **langId → serverName → `ServerOverride`**: a name
-  matching a built-in tweaks it (disable, or replace command/args/settings/roots/
-  singleFile/group/priority — set fields replace wholesale, not deep-merged); an
-  unknown name with a `command` adds a server.
+  matching a built-in tweaks it (disable, or replace command/args/settings/
+  roots/singleFile/group/priority — set fields replace wholesale, not
+  deep-merged); an unknown name with a `command` adds a server.
 
 `LspManager.configure` applies overrides and reconciles open docs (restart under
 the new config).
 
 ## How `LspManager` consumes it
 
-- `resolveServers(file)` → all active servers (each with a reuse key + a `primary`
-  flag). One document drives several servers: didOpen/didChange/didSave/didClose
-  fan out to every active server (didOpen guarded so a crash-restart can't
-  double-open a healthy sibling).
-- Requests (hover/definition/references/code-action/rename/format/signature-help)
-  target the **primary** — the grouped server wins over ungrouped linters,
-  tie-break on priority (`primaryKeyOf`).
+- `resolveServers(file)` → all active servers (each with a reuse key + a
+  `primary` flag). One document drives several servers:
+  didOpen/didChange/didSave/didClose fan out to every active server (didOpen
+  guarded so a crash-restart can't double-open a healthy sibling).
+- Requests (hover/definition/references/code-action/rename/format/
+  signature-help) target the **primary** — the grouped server wins over
+  ungrouped linters, tie-break on priority (`primaryKeyOf`).
 - **Diagnostics are namespaced per server.** `DiagnosticsStore` keys by
   `path → (serverName → {diagnostics, encoding})` so eslint + tsserver don't
   clobber each other; `get(path)` returns merged entries (each paired with its
@@ -108,17 +115,17 @@ the new config).
 
 A configured server only runs if its command is actually installed. `LspManager`
 resolves each candidate's command via `lsp/which.ts` (`resolveCommand`) over: the
-quilx-managed install dir (`managedBinDir`), then project `node_modules/.bin` from
-the server's root dir upward (`nodeModulesBinDirs`), then PATH — and **drops**
-servers that don't resolve (memoized per command+root). So an optional server the
-user hasn't installed is skipped rather than spawned → ENOENT → crash-restart
-loop. `LspClient` prepends the same dirs to the spawned server's PATH. Spawn-level
-failures (e.g. EACCES) are captured and logged with the full invocation; trace
-logs record each `starting <cmd> <args> (cwd …)`.
+quilx-managed install dir (`managedBinDir`), then project `node_modules/.bin`
+from the server's root dir upward (`nodeModulesBinDirs`), then PATH — and
+**drops** servers that don't resolve (memoized per command+root). So an optional
+server the user hasn't installed is skipped rather than spawned → ENOENT →
+crash-restart loop. `LspClient` prepends the same dirs to the spawned server's
+PATH. Spawn-level failures (e.g. EACCES) are captured and logged with the full
+invocation; trace logs record each `starting <cmd> <args> (cwd …)`.
 
 Note the binary names: the LSP servers are `typescript-language-server` /
-`vscode-eslint-language-server`, **not** the `tsserver` / `eslint` CLIs that often
-sit in `node_modules/.bin` (those don't speak LSP over stdio).
+`vscode-eslint-language-server`, **not** the `tsserver` / `eslint` CLIs that
+often sit in `node_modules/.bin` (those don't speak LSP over stdio).
 
 ## Installing servers
 
@@ -130,8 +137,8 @@ its `node_modules/.bin`), never the user's global env or project.
 Triggers when a needed server is missing:
 - **Warning + "Install" button** (default): the "not started" notice carries an
   install action.
-- **`lsp:install-server` command**: a picker of installable servers (install state
-  annotated) → `LspManager.installByName`.
+- **`lsp:install-server` command**: a picker of installable servers (install
+  state annotated) → `LspManager.installByName`.
 - **Auto-install** (`lsp.autoInstall`, default off): install on first need,
   announced with an `auto-installing <server>` notification (not silent).
 
@@ -142,14 +149,15 @@ starts without a restart. Built-ins with installs: `typescript-language-server`
 
 ## Server→client requests & configuration
 
-Servers send requests *to* the client; with no handler vscode-jsonrpc auto-replies
-`MethodNotFound`, breaking config-driven servers. `LanguageServer` answers:
+Servers send requests *to* the client; with no handler vscode-jsonrpc
+auto-replies `MethodNotFound`, breaking config-driven servers. `LanguageServer`
+answers:
 
-- **`workspace/configuration`** → the server's `settings`, resolved per requested
-  section via `getConfigSection` (empty/absent → whole object; dotted path
-  otherwise; missing → `null`). We push `workspace/didChangeConfiguration` after
-  `initialized` and advertise both capabilities. ESLint pulls its config this way
-  (empty section), so `ESLINT.settings` carries VS Code-style defaults.
+- **`workspace/configuration`** → the server's `settings`, resolved per
+  requested section via `getConfigSection` (empty/absent → whole object; dotted
+  path otherwise; missing → `null`). We push `workspace/didChangeConfiguration`
+  after `initialized` and advertise both capabilities. ESLint pulls its config
+  this way (empty section), so `ESLINT.settings` carries VS Code-style defaults.
 - **`client/registerCapability`/`unregisterCapability`** → file-watcher
   registrations honored (see below); other dynamic registrations acknowledged.
 - **`window/workDoneProgress/create`** → acknowledged (progress not shown yet).
@@ -165,32 +173,35 @@ encoding-aware); `normalizeWorkspaceEdit` flattens a `WorkspaceEdit`'s `changes`
 `documentChanges` to per-file edits (resource create/rename/delete ops counted,
 applied by the UI later).
 
-`LanguageServer.codeAction` + `resolveCodeAction` (servers omit the `edit` from the
-list; advertised via `codeActionLiteralSupport` + `resolveSupport`).
+`LanguageServer.codeAction` + `resolveCodeAction` (servers omit the `edit` from
+the list; advertised via `codeActionLiteralSupport` + `resolveSupport`).
 `LspManager.codeActions(doc, range?)` targets the primary, passing overlapping
 diagnostics as context.
 
-**UI:** `lsp:code-action` (`space l a`), `lsp:rename` (`space l R`, prefilled with
-the symbol), `lsp:format` (`space l f`). All apply via
+**UI:** `lsp:code-action` (`space l a`), `lsp:rename` (`space l R`, prefilled
+with the symbol), `lsp:format` (`space l f`). All apply via
 `AppWindow.applyWorkspaceEdit` — open editors edited in their buffer
 (`TextEditor.applyLspEdits`, one undo group), unopened files on disk.
-`FormattingOptions` come from `editor.tabLength`/`insertSpaces`. Verified
-end-to-end against tsserver. **Not wired:** command-only code actions
-(`workspace/executeCommand`), resource operations (create/rename/delete file), and
-range-formatting from the selection (the backend supports it).
+`FormattingOptions` come from `editor.tabLength`/`insertSpaces`.
+
+### Remaining / planned
+
+- Command-only code actions (`workspace/executeCommand`).
+- Resource operations (create/rename/delete file).
+- Range-formatting from the selection (the backend supports it).
 
 ## Signature help
 
-`LanguageServer.signatureHelp` + `hasSignatureHelp` + `signatureHelpTriggerCharacters`
-(labelOffset + activeParameter support); `LspManager.signatureHelp(doc)` targets
-the primary (timeout-bounded). The UI card (in `TextEditor`) shows while typing a
-call's arguments: triggered when a trigger char (`(`/`,`) appears in the *typed
-text* (not the char before the cursor, which autopair leaves as the inserted `)`),
-debounced so autopair edits settle, re-requested on cursor moves while open (so a
-type-over of `)` closes it). Anchored once at the callee name
-(`callNameStartColumn` walks to the active call's open paren, depth-aware, then
-back over the `obj.method` chain); the active parameter is bolded and the label
-syntax-highlighted.
+`LanguageServer.signatureHelp` + `hasSignatureHelp` +
+`signatureHelpTriggerCharacters` (labelOffset + activeParameter support);
+`LspManager.signatureHelp(doc)` targets the primary (timeout-bounded). The UI
+card (in `TextEditor`) shows while typing a call's arguments: triggered when a
+trigger char (`(`/`,`) appears in the *typed text* (not the char before the
+cursor, which autopair leaves as the inserted `)`), debounced so autopair edits
+settle, re-requested on cursor moves while open (so a type-over of `)` closes
+it). Anchored once at the callee name (`callNameStartColumn` walks to the active
+call's open paren, depth-aware, then back over the `obj.method` chain); the
+active parameter is bolded and the label syntax-highlighted.
 
 ## Document sync (incremental)
 
@@ -209,34 +220,40 @@ change lands in the server's pre-change coordinates without the old line text.
 ## File watching (`workspace/didChangeWatchedFiles`)
 
 We advertise `workspace.didChangeWatchedFiles.dynamicRegistration`, so servers
-register watchers (tsserver watches `tsconfig`/source files; eslint its config) via
-`client/registerCapability`. `LanguageServer` compiles each watcher's glob to an
-absolute-path regex (`lsp/glob.ts`: `**`/`*`/`?`/`{}`) and lazily starts a
+register watchers (tsserver watches `tsconfig`/source files; eslint its config)
+via `client/registerCapability`. `LanguageServer` compiles each watcher's glob to
+an absolute-path regex (`lsp/glob.ts`: `**`/`*`/`?`/`{}`) and lazily starts a
 `WorkspaceWatcher` (`lsp/workspaceWatcher.ts`) over the server's root. Matching
 changes are sent as `workspace/didChangeWatchedFiles`, so servers learn about
 external edits without a restart.
 
 `WorkspaceWatcher` places a **non-recursive `fs.watch` per directory** (added/
 dropped as dirs appear/vanish) instead of `fs.watch({recursive})`, so it can
-**exclude** `node_modules`/`.git`/build dirs (recursive offers no ignore and would
-hit inotify limits). Raw events are debounced; type (created/changed/deleted) is
-resolved by stat + a known-files set. Failures (perm/limit) degrade gracefully
-(that dir is skipped). One watcher per (server, root) — two servers at one root
-double the watches today (a future dedup-by-root opportunity).
+**exclude** `node_modules`/`.git`/build dirs (recursive offers no ignore and
+would hit inotify limits). Raw events are debounced; type
+(created/changed/deleted) is resolved by stat + a known-files set. Failures
+(perm/limit) degrade gracefully (that dir is skipped). One watcher per
+(server, root).
+
+### Remaining / planned
+
+- Dedup watches by root: two servers at one root double the watches today.
 
 ## Fold queries (`folds.scm`)
 
-A grammar declares foldable constructs in `queries/<lang>/folds.scm` (referenced by
-`registerGrammar`'s `foldsPath`; `foldTypes` is the node-type fallback when no query
-ships). Two capture names control fold *style* (the projection mechanism is in
-[folding.md](folding.md)):
+A grammar declares foldable constructs in `queries/<lang>/folds.scm` (referenced
+by `registerGrammar`'s `foldsPath`; `foldTypes` is the node-type fallback when no
+query ships). Two capture names control fold *style* (the projection mechanism is
+in [folding.md](folding.md)):
 
-- **`@fold`** — the default: folds to a single line, the footer (`}` / `} from 'x'`)
-  joins the header (`import {[N]} from 'x'`). Use for blocks, objects, arrays,
-  class/interface bodies, comments, standalone `if`, the final `else`/`finally`.
-- **`@fold.keepFooter`** — keeps the closing line on its **own** line, so a chained
-  construct reads one-per-line (`if (x) {[N]` / `} else if (y) {…`). Capture the
-  body block of a clause that is *continued* by another (`} else {`, `} catch {`).
+- **`@fold`** — the default: folds to a single line, the footer
+  (`}` / `} from 'x'`) joins the header (`import {[N]} from 'x'`). Use for
+  blocks, objects, arrays, class/interface bodies, comments, standalone `if`, the
+  final `else`/`finally`.
+- **`@fold.keepFooter`** — keeps the closing line on its **own** line, so a
+  chained construct reads one-per-line (`if (x) {[N]` / `} else if (y) {…`).
+  Capture the body block of a clause that is *continued* by another (`} else {`,
+  `} catch {`).
 
 A node may match both; `computeFoldRanges` merges per start row and keep-footer
 wins. Example (TS/TSX `folds.scm`):
@@ -248,9 +265,10 @@ wins. Example (TS/TSX `folds.scm`):
 (try_statement body: (statement_block) @fold.keepFooter handler: (catch_clause))
 ```
 
-Adding keep-footer to another language is a **query-only** change (no code). Verify
-field names against the grammar — a bad pattern fails the whole `language.query`
-compile (folding then silently stops); the runtime path is `grammar.ts` (~line 89).
+Adding keep-footer to another language is a **query-only** change (no code).
+Verify field names against the grammar — a bad pattern fails the whole
+`language.query` compile (folding then silently stops); the runtime path is
+`grammar.ts` (~line 89).
 
 ## Open questions
 
