@@ -42,8 +42,14 @@ let savedPermission = '';
 let savedKind: AgentKind | '' = '';
 let savedWorktree = '';
 
-/** The worktree choice: create a fresh worktree, or work on an existing branch. */
-export type WorktreeChoice = { create: true } | { branch: string };
+/** The worktree choice: run in the current workbench cwd (no worktree), create a fresh
+ *  worktree, or work on an existing branch (in its own worktree). */
+export type WorktreeChoice = { current: true } | { create: true } | { branch: string };
+
+// Worktree dropdown sentinel values, distinct from any branch name (a branch can't be
+// empty or contain a NUL); branches use their own name as the value.
+const WT_CREATE = '';
+const WT_CURRENT = '\0current';
 
 export interface AgentLaunchRequest {
   /** The (trimmed) prompt text, or '' if left empty. */
@@ -193,16 +199,19 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     },
   });
 
-  // Worktree: a dropdown whose first value, "create", starts the work in a fresh
-  // worktree (the agent creates it); the rest are the repo's branches, to work on a
-  // chosen branch in its own worktree. "create" is the empty-string sentinel (a branch
-  // name can never be empty), rendered specially, and the list is searchable. Branches
-  // load asynchronously.
+  // Worktree: a dropdown with two special choices up top — "create" (start in a fresh
+  // worktree the agent makes) and "current" (run in the workbench cwd, no worktree) —
+  // followed by the repo's branches (work on a chosen branch in its own worktree). The
+  // specials use sentinel values; the list is searchable; branches load asynchronously.
+  const worktreeSpecials = [
+    { value: WT_CREATE, label: 'create' },
+    { value: WT_CURRENT, label: 'current' },
+  ];
   const worktreeDropdown = new Combobox({
-    options: [{ value: '', label: 'create' }],
+    options: worktreeSpecials,
     value: savedWorktree,
     search: true,
-    specialLabel: 'create',
+    specialLabels: ['create', 'current'],
   });
   const worktreeField = field('worktree', worktreeDropdown.widget);
   const repo = repoRoot(cwd);
@@ -210,8 +219,8 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     listBranches(repo, (branches) => {
       if (card.isClosed()) return;
       worktreeDropdown.setOptions(
-        [{ value: '', label: 'create' }, ...branches.map((b) => ({ value: b, label: b }))],
-        savedWorktree, // keep the last-used branch selected if it still exists
+        [...worktreeSpecials, ...branches.map((b) => ({ value: b, label: b }))],
+        savedWorktree, // keep the last-used choice selected if it still exists
       );
     });
   }
@@ -234,7 +243,8 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     });
     const prompt = input.getText().trim();
     const sel = worktreeDropdown.getValue();
-    const worktree: WorktreeChoice = sel === '' ? { create: true } : { branch: sel };
+    const worktree: WorktreeChoice =
+      sel === WT_CREATE ? { create: true } : sel === WT_CURRENT ? { current: true } : { branch: sel };
     card.close(false); // onClose stashes the text…
     savedDraft = ''; // …but it was submitted, so don't restore it next time
     onLaunch({ prompt, command, cwd, kind, worktree });

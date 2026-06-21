@@ -3138,6 +3138,7 @@ function branchWorktreeInstruction(branch: string): string {
   );
 }
 function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
+  if ('current' in worktree) return prompt || undefined; // run in the cwd, no worktree setup
   const instruction = 'create' in worktree ? NEW_WORKTREE_INSTRUCTION : branchWorktreeInstruction(worktree.branch);
   return prompt ? `${instruction}\n\n${prompt}` : instruction;
 }

@@ -30,8 +30,8 @@ export interface ComboboxConfig {
   onChange?: (value: string) => void;
   /** Show a search entry in the popup and filter the list by it. */
   search?: boolean;
-  /** A label rendered with emphasis (the `.combobox-special` accent). */
-  specialLabel?: string;
+  /** Labels rendered with emphasis (the `.combobox-special` accent). */
+  specialLabels?: string[];
 }
 
 addStyles(/* css */`
@@ -67,15 +67,15 @@ export class Combobox {
     this.widget.addCssClass('flat');
     this.ingest(config.options);
 
-    if (config.specialLabel !== undefined) {
-      const special = config.specialLabel;
+    if (config.specialLabels && config.specialLabels.length > 0) {
+      const special = new Set(config.specialLabels);
       const factory = new Gtk.SignalListItemFactory();
       factory.on('setup', (li: any) => li.setChild(new Gtk.Label({ xalign: 0 })));
       factory.on('bind', (li: any) => {
         const label = li.getChild();
         const text = (li.getItem() as any).getString();
         label.setText(text);
-        if (text === special) label.addCssClass('combobox-special');
+        if (special.has(text)) label.addCssClass('combobox-special');
         else label.removeCssClass('combobox-special');
       });
       this.widget.setFactory(factory);
