@@ -63,9 +63,8 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g f': 'git:fetch',
   'space g l': 'git:pull', // git "l"oad / pull from upstream
   'space g p': 'git:push',
-  'space g d': 'git:diff-current', // diff the current file (working tree vs HEAD)
-  'space g o': 'git:continuous-diff', // "o"pen the continuous diff (the staging surface)
-  'space g D': 'git:continuous-diff', // "D"iff all changed files as one continuous diff
+  'space g d': 'git:continuous-diff', // "d"iff view: the continuous diff / staging surface
+  'space g D': 'git:diff-current', // "D"iff just the current file (working tree vs HEAD)
   'space g c': 'git:start-commit', // "c"ommit staged changes (edit the message in a tab)
   // Hunk-level staging on the gutter hunk under the cursor (editor only): "s"tage,
   // "u"nstage (a staged/blue hunk), "r"evert (discard the unstaged change).
