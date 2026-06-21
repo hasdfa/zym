@@ -1,5 +1,5 @@
-- Read `./tasks/index.md` and relevant files in `./tasks` before anything else
-- Update `./tasks` after doing a relevant change
+- Read `./tasks/index.md` before starting a task. Read linked documents in `./tasks` when relevant for your task.
+- Update `./tasks` after doing a relevant change, and include it in your commit.
 - Your memory files should never contain data; at most, they should point to `./tasks`
 - Run the typescript check with `pnpm run typecheck`
-- When creating a worktree, run `pnpm install`
+- When creating a worktree, run `pnpm install` immediately.
