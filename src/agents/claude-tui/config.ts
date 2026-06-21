@@ -13,7 +13,7 @@ import {
 } from '../claudeOptions.ts';
 
 export const claudeTuiLaunchOptions: AgentLaunchOptions = {
-  label: 'terminal',
+  label: 'claude-tui',
   models: CLAUDE_MODELS,
   defaultModel: CLAUDE_DEFAULT_MODEL,
   permissionModes: CLAUDE_PERMISSION_MODES,

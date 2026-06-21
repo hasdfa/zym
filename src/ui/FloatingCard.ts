@@ -97,7 +97,11 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
       const windowActive = root?.isActive?.() ?? true;
       const focused = root?.getFocus?.() ?? null;
       const focusWithin = !!focused && (focused === panel || focused.isAncestor(panel));
-      if (windowActive && !focusWithin) close();
+      // Only dismiss when focus genuinely moved to another in-app widget. A null focus
+      // means a transient popup grabbed it onto its own surface (e.g. a Gtk.DropDown's
+      // list opening) — that must NOT dismiss the card, or the card would vanish the
+      // moment one of its dropdowns opens.
+      if (windowActive && focused && !focusWithin) close();
     }, 0);
   });
   panel.addController(focus);

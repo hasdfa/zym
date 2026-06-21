@@ -13,13 +13,12 @@ export const CLAUDE_MODELS: LaunchOption[] = [
 ];
 export const CLAUDE_DEFAULT_MODEL = 'claude-opus-4-8';
 
-// The `--permission-mode` values the `claude` CLI accepts. (zym's runtime AgentMode
-// also has `auto`/`dontAsk`, which aren't valid launch flags — they're omitted here.)
+// The permission modes offered at launch (passed as `--permission-mode`).
 export const CLAUDE_PERMISSION_MODES: LaunchOption[] = [
   { value: 'default', label: 'default', detail: 'ask before edits' },
   { value: 'acceptEdits', label: 'acceptEdits', detail: 'auto-accept edits' },
   { value: 'plan', label: 'plan', detail: 'read-only planning' },
-  { value: 'bypassPermissions', label: 'bypass', detail: 'skip all prompts' },
+  { value: 'auto', label: 'auto', detail: 'auto-approve actions' },
 ];
 export const CLAUDE_DEFAULT_PERMISSION_MODE = 'default';
 

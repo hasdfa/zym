@@ -14,7 +14,7 @@ import {
 } from '../claudeOptions.ts';
 
 export const claudeSdkLaunchOptions: AgentLaunchOptions = {
-  label: 'native',
+  label: 'claude-sdk',
   models: CLAUDE_MODELS,
   defaultModel: CLAUDE_DEFAULT_MODEL,
   permissionModes: CLAUDE_PERMISSION_MODES,
