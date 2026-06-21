@@ -127,6 +127,9 @@ interface KeybindingMatch {
   effect: Effect;
   element: Widget;
   priority: number;
+  /** The matched rule's CSS specificity — tiebreaks full matches of equal
+   *  priority (more specific selector wins). See `Rule.specificity`. */
+  specificity: number;
 }
 
 export class KeymapManager {
@@ -236,10 +239,6 @@ export class KeymapManager {
     });
   }
 
-  private emitBindingsChanged(): void {
-    for (const listener of this.bindingsListeners) listener();
-  }
-
   /**
    * Every registered keybinding (one row per selector × keystroke), with the
    * source it came from and its priority — for a keymap reference panel. Not
@@ -253,7 +252,7 @@ export class KeymapManager {
         for (const [keystroke, effect] of Object.entries(entry.keymap)) {
           // A selector with multiple compound rules lands one entry per rule;
           // dedupe so a binding isn't listed twice.
-          const id = `${entry.source} ${entry.selector} ${keystroke}`;
+          const id = `${entry.source}${entry.selector}${keystroke}`;
           if (seen.has(id)) continue;
           seen.add(id);
           result.push({
@@ -519,10 +518,12 @@ export class KeymapManager {
     // Drop unset markers so they are never treated as commands below.
     const active = matches.filter(m => m.effect !== UNSET);
 
-    // Highest priority first; ties keep registration/chain order (stable sort).
+    // Highest priority first; at equal priority the more specific selector wins
+    // (CSS specificity); ties beyond that keep registration/chain order (stable
+    // sort).
     const fullMatches = active
       .filter(m => m.match === MATCH.FULL)
-      .sort((a, b) => b.priority - a.priority);
+      .sort((a, b) => b.priority - a.priority || b.specificity - a.specificity);
     const partialMatches = active.filter(m => m.match === MATCH.PARTIAL);
 
     // A longer sequence may still complete — wait for the next key. Remember
@@ -579,7 +580,7 @@ export class KeymapManager {
 
       const matchingKeymaps = keymaps.filter(k => matchesRule(element, k.rule));
       const matchingKeybindings =
-        matchingKeymaps.map(k => matchKeybinding(keystrokes, k.keymap, element, k.priority)).flat();
+        matchingKeymaps.map(k => matchKeybinding(keystrokes, k.keymap, element, k.priority, k.rule.specificity)).flat();
 
       if (matchingKeybindings.length === 0)
         continue;
@@ -618,7 +619,7 @@ export class KeymapManager {
   }
 }
 
-function matchKeybinding(queuedKeystrokes: Key[], keymap: Keymap, element: Widget, priority: number): KeybindingMatch[] {
+function matchKeybinding(queuedKeystrokes: Key[], keymap: Keymap, element: Widget, priority: number, specificity: number): KeybindingMatch[] {
   const keybindingKeys = Object.keys(keymap);
   const results: KeybindingMatch[] = [];
 
@@ -642,6 +643,7 @@ function matchKeybinding(queuedKeystrokes: Key[], keymap: Keymap, element: Widge
         effect: keymap[keybinding],
         element,
         priority,
+        specificity,
       });
     }
     else if (keyStack.length === queuedKeystrokes.length) {
@@ -651,6 +653,7 @@ function matchKeybinding(queuedKeystrokes: Key[], keymap: Keymap, element: Widge
         effect: keymap[keybinding],
         element,
         priority,
+        specificity,
       });
     }
     else {

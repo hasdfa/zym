@@ -28,6 +28,8 @@ import * as Path from 'node:path';
 import { Gdk } from '../gi.ts';
 import { Terminal, type TerminalOptions } from './Terminal.ts';
 import type { Agent, AgentDriver, AgentDriverFactory, AgentHost, AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
+import type { AgentAction } from '../agents/actions.ts';
+import { ActionProcesses } from '../agents/ActionProcesses.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { theme } from '../theme/theme.ts';
 import { quilx } from '../quilx.ts';
@@ -45,6 +47,8 @@ export interface AgentTerminalOptions extends TerminalOptions {
    *  driver, that driver's argv is spawned and it reports live state; when it
    *  returns null (or is absent) the base command runs plain (alive/exited only). */
   driverFactory?: AgentDriverFactory;
+  /** Run a `terminal` action in a terminal tab (terminal-less ones run in-process). */
+  onRunInTerminal?: (action: AgentAction) => void;
 }
 
 export class AgentTerminal extends Terminal implements Agent {
@@ -64,6 +68,16 @@ export class AgentTerminal extends Terminal implements Agent {
   private readonly permissionModeHandlers: Array<() => void> = [];
   private _changedFiles: string[] = [];
   private readonly fileHandlers: Array<() => void> = [];
+  // The runnable actions the agent has registered (set_actions bridge tool).
+  private _actions: AgentAction[] = [];
+  private readonly actionHandlers: Array<() => void> = [];
+  // Background processes of terminal-less actions; `onRunInTerminal` opens a
+  // terminal tab for `terminal` ones (the host owns no workbench).
+  private readonly runningActionHandlers: Array<() => void> = [];
+  private readonly actionProcesses = new ActionProcesses(() => {
+    for (const handler of this.runningActionHandlers) handler();
+  });
+  private readonly onRunInTerminal?: (action: AgentAction) => void;
   // The agent's current working directory: its launch cwd, or a worktree it has
   // since moved into (reported via the set_worktree bridge tool).
   private _effectiveCwd: string = this.cwd;
@@ -100,8 +114,13 @@ export class AgentTerminal extends Terminal implements Agent {
     super({ ...options, command, title: options.title ?? agentName(baseCommand) });
     this.driver = driver;
     this.driverFactory = options.driverFactory;
+    this.onRunInTerminal = options.onRunInTerminal;
     this.baseCommand = baseCommand;
     this.launchPrompt = options.prompt;
+    // Stop terminal-less action processes when the widget is destroyed (a full
+    // close), so a closed agent leaves nothing running. Backgrounding a tab only
+    // detaches the widget (no destroy), so the processes keep running — desired.
+    this.terminal.on('destroy', () => this.actionProcesses.stopAll());
     this.root.setName('AgentTerminal'); // distinct identity from a plain Terminal
     this.applyThemeColors();
 
@@ -244,6 +263,8 @@ export class AgentTerminal extends Terminal implements Agent {
     // direct write: setStatus refuses to leave the terminal `exited` state).
     this._changedFiles = [];
     for (const handler of this.fileHandlers) handler();
+    this._actions = [];
+    for (const handler of this.actionHandlers) handler();
     this._status = 'idle';
     this._acknowledged = true; // user-initiated resume — nothing unseen to flag
     for (const handler of this.statusHandlers) handler();
@@ -314,6 +335,46 @@ export class AgentTerminal extends Terminal implements Agent {
     };
   }
 
+  /** The runnable actions the agent has registered (set_actions). */
+  get actions(): AgentAction[] {
+    return this._actions.slice();
+  }
+
+  /** Subscribe to the registered-actions set changing. Returns unsub. */
+  onDidChangeActions(callback: () => void): () => void {
+    this.actionHandlers.push(callback);
+    return () => {
+      const index = this.actionHandlers.indexOf(callback);
+      if (index !== -1) this.actionHandlers.splice(index, 1);
+    };
+  }
+
+  /** Run an action: `terminal` ones open a terminal tab (`onRunInTerminal`), the
+   *  rest run as a background process (re-running terminates the previous one). */
+  runAction(action: AgentAction): void {
+    if (action.terminal) this.onRunInTerminal?.(action);
+    else this.actionProcesses.run(action, this._effectiveCwd);
+  }
+
+  /** Stop a terminal-less action's process (no-op otherwise). */
+  stopAction(actionId: string): void {
+    this.actionProcesses.stop(actionId);
+  }
+
+  /** Whether a terminal-less action currently has a running process. */
+  isActionRunning(actionId: string): boolean {
+    return this.actionProcesses.isRunning(actionId);
+  }
+
+  /** Subscribe to the running terminal-less actions set changing. Returns unsub. */
+  onDidChangeRunningActions(callback: () => void): () => void {
+    this.runningActionHandlers.push(callback);
+    return () => {
+      const index = this.runningActionHandlers.indexOf(callback);
+      if (index !== -1) this.runningActionHandlers.splice(index, 1);
+    };
+  }
+
   // --- Agent driver host -------------------------------------------------------
 
   // The callbacks the driver pushes live state through as its session progresses.
@@ -332,6 +393,10 @@ export class AgentTerminal extends Terminal implements Agent {
       },
       onCwd: (cwd) => this.setEffectiveCwd(cwd),
       onWorktreeCreated: (path) => { this._pendingWorktree = path; },
+      onActions: (actions) => {
+        this._actions = actions;
+        for (const handler of this.actionHandlers) handler();
+      },
     };
   }
 

@@ -409,6 +409,15 @@ until after the re-root foundation lands; co-design with per-agent review
 baselines (above) and Session management (agent-workbench serialization already
 stores `cwd`).
 
+## Editor integration (MCP tools)
+
+An agent running inside quilx can call back into the editor through bundled MCP
+tools (`assets/mcp/quilxBridge.mjs`; both kinds get every tool):
+
+- **`set_worktree(path)`**: update the workbench's cwd to this worktree.
+- **`set_actions([{ label, command, terminal? }])`**: register runnable actions 
+   (buttons and commands available in IDE).
+
 ## More ideas
 
 Backlog beyond the features above, roughly in priority order. The first group
@@ -483,6 +492,19 @@ exists, so it's cheap and high-value; the rest are bigger or more speculative.
       leaves; per-worktree vs per-agent (baseline) review granularity
 - [ ] Resume/serialize for the `claude-sdk` kind (currently deferred; see
       *agents/claude-sdk.md*)
+- [ ] **Retire the file-based IPC.** Every agent→editor channel today round-trips
+      through atomic-rename files watched by `Gio.FileMonitor` — status hooks
+      (`$QUILX_STATUS_FILE.*`), the permission server
+      (`permission.{req,res}`), and the bridge tools (`set_worktree` →
+      `.cwd`, `set_actions` → `actions.json`). It's used because the bridge/perm
+      MCP servers are *grandchild* processes (quilx → claude → server) with no
+      direct pipe back, but it spreads watchers + temp files across the tree and
+      can't carry rich/bidirectional data cleanly. Replace with one channel: have
+      quilx host an in-process MCP server over a local socket the spawned servers
+      (and hooks) connect to — the WebSocket/JSON-RPC transport the
+      `feat/ide-integration` branch already builds for `claude --ide` is the
+      natural carrier. Collapses the bridge, permission prompt, and status
+      reporting onto a single typed connection.
 
 ## Open questions
 
