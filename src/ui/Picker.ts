@@ -480,6 +480,8 @@ export function openPicker(options: PickerOptions): PickerHandle {
   const card = openFloatingCard({
     host,
     name: 'Picker',
+    dim: true,
+    fade: true,
     onClose: () => {
       commandsSub?.dispose();
       readlineSub.dispose();

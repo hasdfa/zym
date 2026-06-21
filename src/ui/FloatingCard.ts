@@ -14,7 +14,8 @@ import { addStyles } from '../styles.ts';
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 /** Default distance from the top of the overlay to the card (the Picker's position). */
-const CARD_MARGIN_TOP = 48;
+const CARD_MARGIN_TOP = 48 * 2;
+
 /** Fade-in/out duration (ms) when `fade` is enabled. */
 const FADE_MS = 110;
 
@@ -36,7 +37,7 @@ export interface FloatingCardOptions {
   /** CSS `#id` for the card; the caller scopes its keymap/styles to this name. */
   name: string;
   /** Distance from the top of the overlay to the card (default 48, the Picker's). */
-  marginTop?: number;
+  top?: number;
   /** Dim the rest of the window with a scrim behind the card; clicking it dismisses. */
   dim?: boolean;
   /** Fade the card (and scrim) in on open and out on close. */
@@ -89,7 +90,7 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
   panel.addCssClass('floating-card'); // shared drop shadow
   panel.setHalign(Gtk.Align.CENTER);
   panel.setValign(Gtk.Align.START);
-  panel.setMarginTop(options.marginTop ?? CARD_MARGIN_TOP);
+  panel.setMarginTop(options.top ?? CARD_MARGIN_TOP);
   panel.overflow = Gtk.Overflow.HIDDEN;
 
   // Fade the card + scrim together by tweening a shared opacity (Adw respects the
