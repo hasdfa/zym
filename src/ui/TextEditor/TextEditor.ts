@@ -245,6 +245,14 @@ export interface TextEditorOptions {
   /** Read-only, compact view onto the given `document` — the live see-definition peek
    *  (a second view of an open file). Requires `document`. */
   peek?: boolean;
+  /** Soft-wrap long lines. Overrides the global `editor.softWrap` config for this one
+   *  editor; when omitted, a file editor follows (and live-tracks) the config and an
+   *  embedded/buffer editor defaults off. Use it for inputs that should always wrap. */
+  softWrap?: boolean;
+  /** Extra CSS class set on the inner view, alongside `quilx-editor`. Lets styles and
+   *  keymaps target a specific flavour of editor (e.g. `quilx-input`) — keymap selectors
+   *  match on CSS classes (see util/selectors.ts). */
+  cssClass?: string;
 }
 
 export interface BufferEditorOptions {
@@ -263,6 +271,18 @@ export interface BufferEditorOptions {
    *  supply their own fold ranges (`setProvidedFolds`) — unchanged runs, not code
    *  structure; peek/preview panes set it false to disable folding entirely. */
   folding?: boolean;
+}
+
+/** Options for `createInput()` — the buffer-only input flavour. Extends the buffer
+ *  options with input-specific knobs; everything has an input-friendly default. */
+export interface InputEditorOptions extends BufferEditorOptions {
+  /** Soft-wrap long lines. Defaults to `true` for inputs (wrapping, not h-scroll). */
+  softWrap?: boolean;
+  /** Extra CSS class on the view, added alongside the shared `quilx-input` class — so a
+   *  given input (e.g. the agent prompt) can be targeted by its own styles/keymaps. */
+  cssClass?: string;
+  /** Close request, passed through to the editor. */
+  onClose?: () => void;
 }
 
 // Syntax-highlight a signature fragment (falling back to plain escaped text when
@@ -469,10 +489,17 @@ export class TextEditor implements DocumentHost {
   private longLineMode = false;
   private applyWrap: () => void = () => {};
 
+  // Per-editor soft-wrap override (undefined = follow the `editor.softWrap` config, file
+  // mode only) and an optional extra CSS class on the view (style/keymap targeting).
+  private readonly softWrapOverride: boolean | undefined;
+  private readonly cssClass: string | undefined;
+
   constructor(options: TextEditorOptions = {}) {
     this.bufferMode = options.buffer ?? null;
     this.peekMode = options.peek ?? false;
     this.gitRepo = options.git ?? null;
+    this.softWrapOverride = options.softWrap;
+    this.cssClass = options.cssClass;
     this.workbenchCwd = options.cwd ?? (() => process.cwd());
 
     // The backing this editor is a view onto: a multi-source `MultiBufferDocument` (the
@@ -1125,6 +1152,7 @@ export class TextEditor implements DocumentHost {
   private createView(buffer: SourceBuffer): SourceView {
     const view = new GtkSource.View({ buffer });
     view.addCssClass('quilx-editor'); // monospace font applied via CSS (font store)
+    if (this.cssClass) for (const c of this.cssClass.split(/\s+/)) if (c) view.addCssClass(c);
     view.setAutoIndent(true);
     view.setTabWidth(TAB_WIDTH);
     view.setVexpand(true);
@@ -1144,19 +1172,29 @@ export class TextEditor implements DocumentHost {
       view.setHighlightCurrentLine(true);
       view.setShowRightMargin(true);
       view.setRightMarginPosition(RIGHT_MARGIN);
-      // Soft-wrap (live-toggled by `editor.softWrap`): wrap long lines to the
-      // editor width instead of scrolling horizontally. Vim display-line motion
-      // (j/k, gj/gk) is wrap-aware via EditorModel.displayLineMove. Forced off in
-      // long-line mode (wrapping a giant line re-flows it on every layout).
-      let wrapEnabled = quilx.config.get('editor.softWrap') !== false;
-      this.applyWrap = () =>
-        view.setWrapMode(this.longLineMode || !wrapEnabled ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
+    }
+
+    // Soft-wrap: wrap long lines to the editor width instead of scrolling horizontally.
+    // Vim display-line motion (j/k, gj/gk) is wrap-aware via EditorModel.displayLineMove.
+    // Forced off in long-line mode (wrapping a giant line re-flows it on every layout).
+    // The enabled state has three sources, in priority order: an explicit per-editor
+    // `softWrap` option (wins, and opts out of live config tracking); otherwise the
+    // `editor.softWrap` config for a file editor (live-toggled); otherwise off for an
+    // embedded editor (diff panes, search results — they never wrapped). Inputs created
+    // via `createInput()` pass `softWrap: true` to wrap regardless of the config.
+    const configDefault = this.embedded ? false : quilx.config.get('editor.softWrap') !== false;
+    let wrapEnabled = this.softWrapOverride ?? configDefault;
+    this.applyWrap = () =>
+      view.setWrapMode(this.longLineMode || !wrapEnabled ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
+    if (this.softWrapOverride === undefined && !this.embedded) {
       this.subs.add(
         quilx.config.observe('editor.softWrap', (v) => {
           wrapEnabled = v !== false;
           this.applyWrap();
         }),
       );
+    } else {
+      this.applyWrap();
     }
     return view;
   }
@@ -1991,4 +2029,25 @@ export class TextEditor implements DocumentHost {
   onModifiedChange(callback: () => void) {
     return this.document.onModifiedChange(callback);
   }
+}
+
+/**
+ * Build a transient "input"-flavour editor — a short text field (commit messages, the
+ * agent prompt, pickers) as opposed to a full "textarea"/file editor. Sets up the input
+ * defaults so callers don't repeat them:
+ *   - buffer-only mode (no file, LSP, line numbers, or minimap);
+ *   - soft-wrap on (wraps instead of h-scrolling), overridable;
+ *   - a `quilx-input` CSS class so styles and keymaps can target inputs as a group
+ *     (and an optional `cssClass` for one specific input).
+ * The buffer knobs (placeholder, initialText, onSubmit, readOnly, …) pass straight
+ * through. Prefer this over `new TextEditor({ buffer: … })` for embedded inputs.
+ */
+export function createInput(options: InputEditorOptions = {}): TextEditor {
+  const { softWrap = true, cssClass, onClose, ...buffer } = options;
+  return new TextEditor({
+    buffer,
+    softWrap,
+    cssClass: cssClass ? `quilx-input ${cssClass}` : 'quilx-input',
+    onClose,
+  });
 }

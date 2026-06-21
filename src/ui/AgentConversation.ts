@@ -21,7 +21,7 @@ import { theme } from '../theme/theme.ts';
 import { fonts } from '../fonts.ts';
 import { quilx } from '../quilx.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
-import { TextEditor } from './TextEditor/TextEditor.ts';
+import { TextEditor, createInput } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
 import { MarkdownView } from './markdown/MarkdownView.ts';
 import { toolMarkup, toolDetailMarkup, toolFilePath, describeTool } from './toolDisplay.ts';
@@ -337,7 +337,7 @@ export class AgentConversation implements Agent {
 
     // A buffer-only editor (full vim editing) as the prompt input, wrapped in a
     // named container so the enter/alt-enter keymap can scope to it.
-    this.input = new TextEditor({ buffer: { placeholder: 'Message claude…' } });
+    this.input = createInput({ placeholder: 'Message claude…' });
     this.input.root.setVexpand(false);
     this.input.root.setSizeRequest(-1, 96); // ~5 lines tall; the editor scrolls internally beyond that
     this.input.addCompletionSource(createSlashCommandSource(() => this._slashCommands));
