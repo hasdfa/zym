@@ -113,9 +113,9 @@ addStyles(`
   .quilx-conversation-unknown-body { opacity: 0.75; }
   /* The input + its status strip, as a bordered rounded card with its own bg. */
   .quilx-conversation-input-card {
-    margin: 8px;
+    margin: var(--spacing);
     border: 1px solid var(--t-ui-border);
-    border-radius: 12px;
+    border-radius: var(--card-radius);
     background: var(--t-ui-surface-popover);
   }
   /* Let the card's background show through the editor (no separate editor bg). */
@@ -446,9 +446,10 @@ export class AgentConversation implements Agent {
   focus(): void { this.input.focus(); }
 
   /** Push editor context into the input (Agent surface). */
-  deliver(text: string): void {
+  deliver(text: string, options?: { submit?: boolean; focus?: boolean }): void {
     this.input.insertText(text);
-    this.input.focus();
+    if (options?.focus !== false) this.input.focus(); // background delivery leaves the cursor put
+    if (options?.submit) this.submit(); // send it as a turn now (queues if the agent is busy)
   }
 
   clearUnannouncedWorktree(): void { /* no worktree validator for sdk */ }

@@ -295,6 +295,7 @@ Capture each agent's "before" so its diff is well-defined:
   per-hunk accept / revert.
 - **Depends on the editor Diff renderer** (`text-editor/diff.md`, not built
   yet) — that's the rendering substrate. Sequence: diff display → agent review.
+- TODO: expand the diff comment-to-agent action into threaded comments the agent can reply to inline.
 
 ### Ongoing vs past
 

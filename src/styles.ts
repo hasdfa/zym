@@ -148,6 +148,12 @@ export function installStyles(): void {
 // fullscreen/maximised — these surfaces should stay rounded regardless.
 // `--popover-radius-small` is the tighter radius for compact, in-text chrome
 // (the autocompletion popup) that sits flush against the cursor.
+// `--card-radius` is the radius for bordered content cards that sit inside the
+// content area (the agent input card, the diff comment box) — softer than a
+// floating popover.
+//
+// `--spacing` is the base spacing unit (margins / gaps between content chrome).
+// Hardcoded for now; promote to a scale (×0.5/×2) if more steps are needed.
 //
 // `--font-size-small` is the one secondary-text size — metadata and counts that
 // sit beside full-size text (sidebar/diagnostics counts, list detail columns).
@@ -156,6 +162,8 @@ addStyles(`
   window {
     --popover-radius: 15px;
     --popover-radius-small: 6px;
+    --card-radius: 12px;
+    --spacing: 8px;
     --font-size-small: 0.85em;
   }
 `);

@@ -29,8 +29,8 @@ import { applyDiffDecorations } from './TextEditor/applyDiffDecorations.ts';
 import { CombinedDiffLineNumberGutter } from './TextEditor/DiffLineNumberGutter.ts';
 import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './multibuffer/diffMultiBuffer.ts';
 import { buildHeaderWidget, buildGapWidget } from './HeaderBands.ts';
-import { DiffCommentBox } from './DiffCommentBox.ts';
-import type { BlockDecorationSpec, BlockDecorationSet } from './TextEditor/BlockDecorationSet.ts';
+import { DiffCommentBox, buildCommentCard } from './DiffCommentBox.ts';
+import type { BlockDecorationSpec, BlockDecorationSet, BlockDecorationAnchor } from './TextEditor/BlockDecorationSet.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
 import { quilx } from '../quilx.ts';
@@ -40,11 +40,14 @@ import * as Path from 'node:path';
 export interface DiffComment {
   /** Absolute path of the commented file (the caller relativizes for display). */
   path: string;
-  /** 1-based new-side line range the comment targets (start === end for a single line). */
-  startLine: number;
-  endLine: number;
-  /** The selected code, if any (empty when the comment is on a bare cursor row). */
-  selection: string;
+  /** 1-based line to open for navigation (new side preferred, else old). */
+  navLine: number;
+  /** Precise target: per-side line ranges, and columns when the selection is sub-line.
+   *  e.g. "new L42-43, old L40" or "new L42, cols 5-12". */
+  locator: string;
+  /** Unified-diff hunk of EXACTLY the selected rows (`@@` header + `-`/`+`/` ` lines), so the
+   *  agent sees which lines are old/new/context without guessing. */
+  patch: string;
   /** The comment text the user typed (trimmed, non-empty). */
   comment: string;
 }
@@ -54,8 +57,10 @@ export interface ContinuousDiffOptions {
   files: DiffFile[];
   cwd?: string;
   onActivate?: (location: { path: string; row: number }) => void;
-  /** Compose a comment on the cursor/selection and send it to the agent (the `enter` action). */
-  onComment?: (comment: DiffComment) => void;
+  /** Deliver a formatted review message (one comment, or an accumulated batch) to the agent. The
+   *  view does ALL formatting (`formatDiffComment`/`formatDiffReview`); the host just sends the
+   *  string. Absent → commenting is disabled (no agent to address — e.g. the user workbench). */
+  onSend?: (message: string) => void;
   /** Edit-in-place: back the NEW side with live `Document`s (write-through + save + live
    *  re-diff) instead of disk snapshots. Requires `documents`. */
   editable?: boolean;
@@ -126,8 +131,15 @@ export class ContinuousDiffView {
   private gapAnchors: DiffMultiBuffer['gapAnchors'] = [];
   private headerAnchors: DiffMultiBuffer['headerAnchors'] = [];
   private readonly onActivate?: (location: { path: string; row: number }) => void;
-  private readonly onComment?: (comment: DiffComment) => void;
+  private readonly onSend?: (message: string) => void;
   private commentBox: DiffCommentBox | null = null;
+  // Review mode: while on, a submitted comment is ACCUMULATED (shown as an inline read-only card)
+  // instead of sent; `submitReview` flushes the batch. Cards are folded into `installOverlays`'
+  // band set with SOURCE anchors, so they survive re-diffs/edits. Default off (immediate send).
+  private reviewMode = false;
+  private readonly pending: { comment: DiffComment; anchor: BlockDecorationAnchor; id: string }[] = [];
+  private pendingSeq = 0;
+  private readonly reviewHandlers: Array<() => void> = [];
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
   // Hunk staging: the repo root, the per-file staged (index) blob, the last-built diff (for the
@@ -150,7 +162,7 @@ export class ContinuousDiffView {
 
   constructor(options: ContinuousDiffOptions) {
     this.onActivate = options.onActivate;
-    this.onComment = options.onComment;
+    this.onSend = options.onSend;
     this.files = options.files;
     this.cwd = options.cwd;
     this.editable = !!options.editable;
@@ -452,6 +464,17 @@ export class ContinuousDiffView {
         build: () => buildGapWidget(g.label, () => this.revealChunk(g.revealRows, true)),
       }),
     );
+    // Accumulated review comments: a read-only card under each commented line (source-anchored, so
+    // it tracks the line across re-diffs/edits). Reconciled in the same set by stable id.
+    this.pending.forEach((p) =>
+      specs.push({
+        id: p.id,
+        key: p.comment.comment,
+        anchor: p.anchor,
+        placement: 'below',
+        build: () => buildCommentCard(p.comment.comment),
+      }),
+    );
     this.bands.set(specs);
   }
 
@@ -572,7 +595,10 @@ export class ContinuousDiffView {
     keys.on('key-pressed', (keyval: number) => {
       if (keyval !== Gdk.KEY_Return && keyval !== Gdk.KEY_KP_Enter) return false;
       if (this.editable && view.getEditable()) return false; // insert mode: Enter is a newline
-      this.startComment(); // Enter (normal/visual) opens the inline comment box; `g d` jumps to the file
+      // Enter opens the comment box where commenting is enabled (an agent workbench); elsewhere it
+      // keeps the original jump-to-file behaviour. `g d` always jumps.
+      if (this.canComment) this.startComment();
+      else this.activateRow(this.cursorRow());
       return true;
     });
     view.addController(keys);
@@ -609,37 +635,82 @@ export class ContinuousDiffView {
 
   // --- comment to agent ------------------------------------------------------
 
-  /** Open the inline comment box (the `enter` action) on the cursor row or the active selection,
-   *  anchored just below the targeted range. Enter in the box sends `{path, lines, selection,
-   *  comment}` to the agent via `onComment`. No-op when already open or not on a file's rows. */
-  startComment(): void {
-    if (this.commentBox) return; // already open
-    const range = this.editor.model.getSelectedBufferRange();
-    const selection = this.editor.model.getSelectedText();
-    const startRow = range.start.row;
-    // An exclusive end at column 0 means the last row isn't actually selected (line-wise selection).
-    const endRow = range.end.row > startRow && range.end.column === 0 ? range.end.row - 1 : range.end.row;
+  /** Whether commenting-to-agent is enabled here — only when an `onSend` sink was wired (i.e. the
+   *  diff lives in an agent's workbench). Gates the `enter` action + the `diff:*` review commands. */
+  get canComment(): boolean {
+    return !!this.onSend;
+  }
 
-    const startHit = this.fileAtViewRow(startRow);
-    if (!startHit) return void quilx.notifications.addTrace('No file under the cursor');
-    const endHit = this.fileAtViewRow(endRow);
-    const path = startHit.path;
-    const startLine = startHit.worktreeRow + 1; // fileAtViewRow returns a 0-based new-side row
-    const endLine = (endHit && endHit.path === path ? endHit.worktreeRow : startHit.worktreeRow) + 1;
+  /** Whether review mode (accumulate, send later) is on. */
+  get isReviewing(): boolean {
+    return this.reviewMode;
+  }
+
+  /** Number of accumulated (not-yet-sent) review comments. */
+  get reviewCount(): number {
+    return this.pending.length;
+  }
+
+  /** Open the inline comment box (the `enter` action) on the cursor row or the active selection,
+   *  anchored just below the targeted range. On submit: in review mode the comment is accumulated as
+   *  an inline card; otherwise it's formatted + sent to the agent now (via `onSend`). No-op when
+   *  already open or the selection isn't on any diff line. */
+  startComment(): void {
+    if (!this.canComment) return; // disabled (non-agent workbench)
+    if (this.commentBox) this.closeComment(); // re-target: close any open box onto the cursor line
+    // Enter on a line that already has a pending comment edits it, rather than starting a new one.
+    const existing = this.pending.find((p) => this.anchorViewRow(p.anchor) === this.cursorRow());
+    if (existing) return this.editPending(existing);
+
+    const target = this.buildCommentTarget();
+    if (!target) return void quilx.notifications.addTrace('No diff line under the cursor');
+    const { anchorRow, cardAnchor, ...rest } = target;
 
     const box = new DiffCommentBox({
+      reviewing: this.reviewMode,
+      onStartReview: () => this.setReviewMode(true),
       onSubmit: (text) => {
-        const comment = text.trim();
+        const body = text.trim();
         this.closeComment();
-        if (comment) this.onComment?.({ path, startLine, endLine, selection, comment });
+        if (!body) return;
+        const comment: DiffComment = { ...rest, comment: body };
+        if (this.reviewMode) this.addPending(comment, cardAnchor);
+        else this.onSend?.(formatDiffReview([comment], this.cwd ?? process.cwd()));
       },
       onCancel: () => this.closeComment(),
     });
+    this.openCommentBox(box, anchorRow);
+  }
+
+  /** Re-open the comment box on an existing pending comment, prefilled — Enter updates it in place
+   *  (an empty submit deletes it). */
+  private editPending(p: { comment: DiffComment; anchor: BlockDecorationAnchor; id: string }): void {
+    const box = new DiffCommentBox({
+      reviewing: true, // a pending comment only exists in review mode
+      editing: true,
+      initialText: p.comment.comment,
+      onStartReview: () => this.setReviewMode(true),
+      onSubmit: (text) => {
+        const body = text.trim();
+        this.closeComment();
+        if (!body) return void this.removePending(p.id); // cleared → delete
+        p.comment = { ...p.comment, comment: body };
+        this.installOverlays(this.dmb); // rebuild the card with the new text
+        this.emitReview();
+      },
+      onCancel: () => this.closeComment(),
+    });
+    this.openCommentBox(box, this.anchorViewRow(p.anchor) ?? this.cursorRow());
+  }
+
+  /** Show `box` in the focusable peek anchored below `anchorRow`, tracking it as the open box. */
+  private openCommentBox(box: DiffCommentBox, anchorRow: number): void {
     this.commentBox = box;
     this.editor.showPeek({
-      line: endRow,
+      line: anchorRow,
       widget: box.root,
       height: box.height,
+      alignLeft: true, // line up with the pending-comment cards (add_overlay at the text-window left)
       // Defer the box teardown off its own key-event dispatch (disposing the nested editor
       // synchronously is unsafe — see buildDefinitionPeek, which never disposes its peek editor).
       onClose: () => {
@@ -658,15 +729,218 @@ export class ContinuousDiffView {
     this.editor.focus();
   }
 
-  /** Whether any edited new-side file has unsaved changes (editable mode). */
+  // --- review mode (accumulate, send later) ----------------------------------
+
+  /** Toggle review mode: while on, a submitted comment is accumulated (shown inline) rather than
+   *  sent immediately; `submitReview` sends the batch. */
+  toggleReviewMode(): void {
+    if (this.canComment) this.setReviewMode(!this.reviewMode);
+  }
+
+  /** Set review mode on/off (the `ctrl-enter` "start review" path comes through here). */
+  private setReviewMode(on: boolean): void {
+    if (this.reviewMode === on) return;
+    this.reviewMode = on;
+    quilx.notifications.addTrace(`Review mode ${on ? 'on' : 'off'}`);
+    this.emitReview();
+  }
+
+  /** Send all accumulated comments to the agent as one review message, then clear them. */
+  submitReview(): void {
+    if (!this.onSend) return;
+    if (this.pending.length === 0) return void quilx.notifications.addTrace('No review comments to send');
+    this.onSend(formatDiffReview(this.pending.map((p) => p.comment), this.cwd ?? process.cwd()));
+    this.pending.length = 0;
+    this.installOverlays(this.dmb); // drop the inline cards
+    this.emitReview();
+  }
+
+  /** Drop the accumulated comment whose card sits on the cursor's line (to fix a mistake). */
+  removeCommentAtCursor(): void {
+    const p = this.pending.find((p) => this.anchorViewRow(p.anchor) === this.cursorRow());
+    if (!p) return void quilx.notifications.addTrace('No review comment on this line');
+    this.removePending(p.id);
+  }
+
+  private removePending(id: string): void {
+    const idx = this.pending.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    this.pending.splice(idx, 1);
+    this.installOverlays(this.dmb); // drop the inline card
+    this.emitReview();
+  }
+
+  private addPending(comment: DiffComment, anchor: BlockDecorationAnchor): void {
+    this.pending.push({ comment, anchor, id: `comment:${this.pendingSeq++}` });
+    this.installOverlays(this.dmb); // place the new inline card
+    this.emitReview();
+  }
+
+  /** The current view row of a block-decoration anchor (for matching the cursor to a card). */
+  private anchorViewRow(anchor: BlockDecorationAnchor): number | null {
+    if ('viewRow' in anchor) return anchor.viewRow;
+    const pos = this.projection.sourceToView(anchor.sourceKey ?? '', anchor.row, 0);
+    return pos ? pos.row : null;
+  }
+
+  /** Subscribe to review-state changes (mode toggled / a comment added/removed/sent). For the tab
+   *  title's review count. */
+  onReviewChange(callback: () => void): void {
+    this.reviewHandlers.push(callback);
+  }
+  private emitReview(): void {
+    for (const cb of this.reviewHandlers) cb();
+  }
+
+  /** Build the comment target from the current cursor/selection: a unified-diff hunk plus a precise
+   *  locator and a navigation line. With a VISUAL selection the hunk is EXACTLY the selected rows
+   *  (so the range is exact); with NO selection (a bare cursor) it's the whole surrounding diff hunk
+   *  (the changed run + a little context) — a lone line has no context and reads as confusing.
+   *  Returns null when there's no diff line near the cursor. */
+  private buildCommentTarget(): (Omit<DiffComment, 'comment'> & { anchorRow: number; cardAnchor: BlockDecorationAnchor }) | null {
+    const kinds = this.dmb.rowKinds;
+    const isReal = (k: DiffMultiBuffer['rowKinds'][number]): boolean => k === 'context' || k === 'added' || k === 'removed';
+    const range = this.editor.model.getSelectedBufferRange();
+    const empty = range.start.row === range.end.row && range.start.column === range.end.column;
+    let r0 = range.start.row;
+    // An exclusive end at column 0 means the last row isn't actually selected (line-wise selection).
+    let r1 = range.end.row > r0 && range.end.column === 0 ? range.end.row - 1 : range.end.row;
+    // The box/card anchors at the cursor (or selection end) — captured BEFORE the hunk widening
+    // below, which only widens the patch CONTENT, not where the editor appears.
+    const anchorRow = r1;
+    // No selection → widen to the surrounding hunk so the agent gets context, not a single line.
+    if (empty) [r0, r1] = this.hunkRangeAt(r0);
+
+    // The real diff rows in the selection; fall back to the nearest one (selection on a header/gap).
+    let rows: number[] = [];
+    for (let r = r0; r <= r1; r++) if (r >= 0 && r < kinds.length && isReal(kinds[r])) rows.push(r);
+    if (rows.length === 0) {
+      const n = this.nearestRealRow(r0);
+      if (n == null) return null;
+      rows = [n];
+    }
+
+    const hit = this.fileAtViewRow(rows[0]);
+    if (!hit) return null;
+
+    // Diff body: each selected row as a unified-diff line (+/-/space by kind).
+    const buffer = this.projectionView.buffer as any;
+    const body = rows.map((r) => {
+      const prefix = kinds[r] === 'added' ? '+' : kinds[r] === 'removed' ? '-' : ' ';
+      return prefix + this.lineText(buffer, r);
+    });
+
+    // `@@` header: each side's start = its first selected line number (nearest diff line when this
+    // side is absent — a pure add/delete), count = how many selected rows carry that side.
+    const olds = rows.map((r) => this.dmb.oldNums[r]).filter((n): n is number => n != null);
+    const news = rows.map((r) => this.dmb.newNums[r]).filter((n): n is number => n != null);
+    const oldStart = olds.length ? olds[0] : this.nearestNum(rows[0], 'old') ?? 0;
+    const newStart = news.length ? news[0] : this.nearestNum(rows[0], 'new') ?? 0;
+    const patch = [`@@ -${oldStart},${olds.length} +${newStart},${news.length} @@`, ...body].join('\n');
+
+    // Precise locator: per-side line ranges, plus columns when the selection is within one line and
+    // doesn't span it whole (where sub-line precision actually adds information).
+    const span = (nums: number[]): string => {
+      const a = Math.min(...nums), b = Math.max(...nums);
+      return a === b ? `L${a}` : `L${a}-${b}`;
+    };
+    const parts: string[] = [];
+    if (news.length) parts.push(`new ${span(news)}`);
+    if (olds.length) parts.push(`old ${span(olds)}`);
+    // Column precision only for an explicit sub-line selection (not the cursor-widened hunk).
+    if (!empty && r0 === r1) {
+      const sc = range.start.column, ec = range.end.column; // 0-based; selection covers [sc, ec)
+      const len = this.lineText(buffer, r0).length;
+      if (sc === ec) parts.push(`col ${sc + 1}`);
+      else if (!(sc === 0 && ec >= len)) parts.push(`cols ${sc + 1}-${ec}`);
+    }
+
+    // Anchor a pending-comment card at the cursor/selection line (same spot the editor box sat) by
+    // SOURCE position, so it tracks the line across re-diffs/edits; fall back to a direct view row.
+    const src = this.projection.viewToSource(anchorRow, 0);
+    const cardAnchor: BlockDecorationAnchor =
+      src.kind === 'source' ? { sourceKey: src.sourceKey, row: src.row } : { viewRow: anchorRow };
+
+    return {
+      path: hit.path,
+      navLine: newStart, // always a new-side line (the working-tree file the agent opens)
+      locator: parts.join(', '),
+      patch,
+      anchorRow,
+      cardAnchor,
+    };
+  }
+
+  /** The view-row range of the diff hunk at (or nearest) `row`: the contiguous run of changed
+   *  (added/removed) rows around the cursor, plus a few context lines each side — bounded by the
+   *  shown block (header/blank/gap rows stop the expansion). For the no-selection comment, so the
+   *  agent sees a hunk with context rather than a lone line. */
+  private static readonly COMMENT_CONTEXT = 3;
+  private hunkRangeAt(row: number): [number, number] {
+    const kinds = this.dmb.rowKinds;
+    const isReal = (r: number): boolean => r >= 0 && r < kinds.length && (kinds[r] === 'context' || kinds[r] === 'added' || kinds[r] === 'removed');
+    const isChange = (r: number): boolean => kinds[r] === 'added' || kinds[r] === 'removed';
+    const anchor = isReal(row) ? row : this.nearestRealRow(row);
+    if (anchor == null) return [row, row]; // empty diff — buildCommentTarget will bail
+    // The changed cluster around the anchor (just the anchor if it's a context line).
+    let cs = anchor, ce = anchor;
+    if (isChange(anchor)) {
+      while (isChange(cs - 1)) cs--;
+      while (isChange(ce + 1)) ce++;
+    }
+    // Pad with context, clamped to the contiguous shown block.
+    let s = cs, e = ce;
+    for (let k = 0; k < ContinuousDiffView.COMMENT_CONTEXT && isReal(s - 1); k++) s--;
+    for (let k = 0; k < ContinuousDiffView.COMMENT_CONTEXT && isReal(e + 1); k++) e++;
+    return [s, e];
+  }
+
+  /** The nearest view row to `row` that is a real diff line (context/added/removed), searching
+   *  outward; null if there are none (an empty diff). */
+  private nearestRealRow(row: number): number | null {
+    const kinds = this.dmb.rowKinds;
+    const isReal = (r: number): boolean => kinds[r] === 'context' || kinds[r] === 'added' || kinds[r] === 'removed';
+    for (let d = 0; d < kinds.length; d++) {
+      if (row + d < kinds.length && isReal(row + d)) return row + d;
+      if (row - d >= 0 && isReal(row - d)) return row - d;
+    }
+    return null;
+  }
+
+  /** The nearest non-null line number on `side`, searching outward from `row` — the anchor for the
+   *  absent side of a pure add/delete hunk. */
+  private nearestNum(row: number, side: 'old' | 'new'): number | null {
+    const arr = side === 'old' ? this.dmb.oldNums : this.dmb.newNums;
+    for (let d = 0; d < arr.length; d++) {
+      if (row + d < arr.length && arr[row + d] != null) return arr[row + d];
+      if (row - d >= 0 && arr[row - d] != null) return arr[row - d];
+    }
+    return null;
+  }
+
+  /** Whether there's unsaved work the editor should prompt about before closing: any edited
+   *  new-side file (editable mode) OR accumulated, not-yet-sent review comments. */
   isModified(): boolean {
+    if (this.pending.length > 0) return true;
     for (const entry of this.sources.values()) if (entry.document?.isModified()) return true;
     return false;
   }
 
-  /** Save every edited new-side file back to disk (editable mode; no-op read-only). */
+  /** Close-prompt label (SessionParticipant) describing what's unsaved. */
+  getModifiedLabel(): string {
+    const parts: string[] = [];
+    for (const entry of this.sources.values()) if (entry.document?.isModified()) { parts.push('unsaved edits'); break; }
+    if (this.pending.length) parts.push(`${this.pending.length} unsent comment${this.pending.length === 1 ? '' : 's'}`);
+    return `Git diff (${parts.join(', ') || 'modified'})`;
+  }
+
+  /** Save every edited new-side file back to disk (editable mode; no-op read-only). Comments are not
+   *  persistable, so a save leaves them — the close prompt still lists them. SessionParticipant. */
   save(): void {
     for (const entry of this.sources.values()) if (entry.document?.isModified()) entry.document.save();
+  }
+  saveModified(): void {
+    this.save();
   }
 
   /** Subscribe to changes in this diff's unsaved state (any edited new-side file). For the tab's
@@ -695,6 +969,8 @@ export class ContinuousDiffView {
     this.gitUnsub = undefined;
     for (const unsub of this.modifiedUnsubs) unsub(); // detach from the (possibly shared) Documents
     this.modifiedUnsubs.length = 0;
+    this.pending.length = 0; // cards are torn down by bands.clear() below
+    this.reviewHandlers.length = 0;
     this.bands.clear();
     this.lineNumbers?.dispose();
     // The editor owns the ProjectionView (via its MultiBufferDocument) and disposes it below.
@@ -707,4 +983,19 @@ export class ContinuousDiffView {
     this.sources.clear();
     this.editor.dispose();
   }
+}
+
+/** One comment as an agent prompt: a `path:line (locator)` reference, the targeted lines as a
+ *  unified-diff hunk (so old/new is explicit), then the comment text. */
+function formatDiffComment(c: DiffComment, cwd: string): string {
+  const rel = Path.relative(cwd, c.path);
+  return [`${rel}:${c.navLine} (${c.locator})`, '', '```diff', c.patch, '```', '', c.comment].join('\n');
+}
+
+/** A review as an agent prompt: a single comment formats as itself; a batch becomes a numbered list
+ *  of the same per-comment blocks under a count header. */
+function formatDiffReview(comments: DiffComment[], cwd: string): string {
+  if (comments.length === 1) return formatDiffComment(comments[0], cwd);
+  const blocks = comments.map((c, i) => `### Comment ${i + 1}\n\n${formatDiffComment(c, cwd)}`);
+  return [`Code review — ${comments.length} comments:`, '', ...blocks].join('\n\n');
 }

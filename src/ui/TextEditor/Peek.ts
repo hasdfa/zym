@@ -27,6 +27,9 @@ export interface PeekOptions {
   widget: InstanceType<typeof Gtk.Widget>;
   /** Reserved gap height = card height, in px. */
   height: number;
+  /** Anchor the card at the text-window left (buffer x=0) instead of the anchor line's text x —
+   *  so it lines up with `add_overlay`-based block decorations (the diff comment card). */
+  alignLeft?: boolean;
   /** Called when the peek is closed (by `close()` or being replaced). */
   onClose?: () => void;
 }
@@ -35,6 +38,7 @@ interface Current {
   widget: any;
   mark: any; // GtkTextMark at the anchor line
   height: number;
+  alignLeft: boolean;
   onClose?: () => void;
 }
 
@@ -69,7 +73,7 @@ export class Peek {
     const end = asIter(this.buffer.getIterAtLine(options.line + 1));
     this.buffer.applyTag(this.gapTag, start, end);
 
-    this.current = { widget: options.widget, mark, height: options.height, onClose: options.onClose };
+    this.current = { widget: options.widget, mark, height: options.height, alignLeft: !!options.alignLeft, onClose: options.onClose };
     this.overlay.addOverlay(options.widget);
     (this.view as any).queueResize();
     this.reposition();
@@ -122,7 +126,8 @@ export class Peek {
     const iter = asIter(this.buffer.getIterAtMark(mark));
     const loc = (this.view as any).getIterLocation(iter);
     const rect = Array.isArray(loc) ? loc[0] ?? loc[1] : loc;
-    const bufX = rect?.x ?? 0;
+    // `alignLeft` pins to the text-window left (buffer x=0) to match add_overlay decorations.
+    const bufX = this.current?.alignLeft ? 0 : (rect?.x ?? 0);
     const bufY = (rect?.y ?? 0) + (rect?.height ?? 0);
     return (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, bufX, bufY);
   }

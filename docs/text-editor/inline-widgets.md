@@ -261,3 +261,5 @@ provider vfunc binding).
 
 **Suggested priority** (value ÷ effort): error lens → peek references →
 code lens; most *distinctive*: inline AI edit + peek commit diff.
+
+**TODO — unify scroll behaviour:** `Peek` (sibling-overlay, widget coords) is pinned under horizontal scroll while `BlockDecorations` (`add_overlay`, buffer coords) scrolls on both axes; reconcile so inline widgets behave the same (e.g. hook `hadjustment` in `Peek`, or move both onto one mechanism).

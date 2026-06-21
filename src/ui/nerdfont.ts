@@ -45,6 +45,7 @@ export const NERDFONT = {
     SIDEBAR:       '', // U+EBF5 nf-cod-layout_sidebar_left
   },
   EDITOR: {
+    COMMENT:  '', // U+F075 nf-fa-comment
     FOLDER:   '', // U+F07B nf-fa-folder
     SEARCH:   '', // U+F002 nf-fa-search
     SYMBOL:   '', // U+EA8B nf-cod-symbol_namespace

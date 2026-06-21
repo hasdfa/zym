@@ -258,7 +258,17 @@ export class AgentTerminal extends Terminal implements Agent {
 
   /** Push editor context into the agent (Agent surface): typed into the child as
    *  if at the keyboard, so the user can keep editing before submitting. */
-  deliver(text: string): void {
+  // `focus` is handled by the host (showAgent) — a terminal doesn't self-focus on deliver.
+  deliver(text: string, options?: { submit?: boolean; focus?: boolean }): void {
+    if (options?.submit) {
+      // Submit the turn. Wrap the (multi-line) body in a bracketed paste (`ESC[200~`…`ESC[201~`) so
+      // the TUI inserts it literally. The Enter must come as a SEPARATE, deferred write: a CR in the
+      // same write — even after `201~` — is folded into the paste and doesn't submit, so send it a
+      // tick later, when it arrives as its own Enter keypress.
+      this.feedChild(`\x1b[200~${text}\x1b[201~`);
+      setTimeout(() => { if (!this.exited) this.feedChild('\r'); }, 80);
+      return;
+    }
     this.feedChild(text);
   }
 

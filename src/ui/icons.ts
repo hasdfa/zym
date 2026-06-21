@@ -28,6 +28,7 @@ export const Icons = {
   gitMerge: NERDFONT.GIT.MERGE,
   github: NERDFONT.SOCIAL.GITHUB,
   modified: NERDFONT.STATUS.DOT, // unsaved/modified marker
+  comment: NERDFONT.EDITOR.COMMENT, // review/comment count (continuous diff tab)
   trash: NERDFONT.ACTION.TRASH,
   pencil: NERDFONT.ACTION.EDIT, // rename/edit
   stash: NERDFONT.GIT.STASH,

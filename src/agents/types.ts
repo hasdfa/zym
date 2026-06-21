@@ -123,8 +123,12 @@ export interface Agent {
   /** Stop the agent's process (keeps the widget listed as `exited`). */
   kill(): void;
   focus(): void;
-  /** Push editor context (a selection / file path) into the agent's input. */
-  deliver(text: string): void;
+  /** Push editor context (a selection / file path) into the agent's input. With
+   *  `submit`, send it as a turn immediately (TUI: assumes Enter submits) instead
+   *  of leaving it in the prompt for the user to edit + submit. `focus` (default
+   *  true) moves keyboard focus into the agent's input; pass false to deliver in
+   *  the background (e.g. a diff comment) and leave the cursor where it is. */
+  deliver(text: string, options?: { submit?: boolean; focus?: boolean }): void;
   serialize(): TabState | null;
   isModified(): boolean;
   getModifiedLabel(): string;
