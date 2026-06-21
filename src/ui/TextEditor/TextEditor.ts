@@ -244,9 +244,9 @@ export interface TextEditorOptions {
    *  keymaps target a specific flavour of editor (e.g. `zym-input`) — keymap selectors
    *  match on CSS classes (see util/selectors.ts). */
   cssClass?: string;
-  /** Inner padding (px) around the text, applied symmetrically on all four sides. Only
-   *  honoured for an embedded/input editor (a file editor fills its pane and uses none);
-   *  defaults to `INPUT_PADDING` when omitted. */
+  /** Inner padding (px) around the text, applied symmetrically on all four sides.
+   * Defaults to `INPUT_PADDING` for input editors, and to `0` for the rest.
+   */
   padding?: number;
   /** Auto-height: size the editor to its content instead of filling its allocation, so the
    *  input grows as the user types (an auto-growing textarea). Embedded editors only. Pair
@@ -1224,11 +1224,13 @@ export class TextEditor implements DocumentHost {
     // built-in one, which mashes folded line numbers together), gated on
     // !bufferMode where SyntaxController is given `lineNumbers: true`.
     if (this.embedded) {
-      // A plain embedded input: no right-margin guide or current-line highlight; symmetric
-      // padding on all four sides so the text doesn't hug any edge.
+      // An embedded surface (a buffer input or a multibuffer): no right-margin guide or
+      // current-line highlight, and a symmetric `padding` inset on all four sides. The inset
+      // defaults to 0, so a surface with its own left gutter (the diff/search multibuffers) sits
+      // flush against it; inputs that want breathing room pass `padding` (`createInput` does).
       view.setShowRightMargin(false);
       view.setHighlightCurrentLine(false);
-      const padding = this.paddingOverride ?? INPUT_PADDING;
+      const padding = this.paddingOverride ?? 0;
       view.setLeftMargin(padding);
       view.setRightMargin(padding);
       view.setTopMargin(padding);
@@ -1278,7 +1280,7 @@ export class TextEditor implements DocumentHost {
       // the input grows/shrinks with its text (cap below). That handles edits natively and
       // exactly — no manual height math.
       scrolled.setPropagateNaturalHeight(true);
-      const padding = this.paddingOverride ?? INPUT_PADDING;
+      const padding = this.paddingOverride ?? 0;
       // Cap at N *text* lines (line-heights + the top+bottom padding the natural height
       // also includes) or a raw max height; past it the ScrolledWindow scrolls.
       const capValue = (): number | undefined =>
@@ -1451,7 +1453,7 @@ export class TextEditor implements DocumentHost {
       this.placeholderLabel.setHalign(Gtk.Align.START);
       this.placeholderLabel.setValign(Gtk.Align.START);
       // Align the placeholder with where typed text lands: the view's inner padding.
-      const padding = this.paddingOverride ?? INPUT_PADDING;
+      const padding = this.paddingOverride ?? 0;
       this.placeholderLabel.setMarginStart(padding);
       this.placeholderLabel.setMarginTop(padding);
       this.placeholderLabel.setCanTarget(false);
@@ -2162,7 +2164,7 @@ export class TextEditor implements DocumentHost {
  * through. Prefer this over `new TextEditor({ buffer: … })` for embedded inputs.
  */
 export function createInput(options: InputEditorOptions = {}): TextEditor {
-  const { softWrap = true, cssClass, onClose, padding, grow, maxLines, maxHeight, folding = false, ...buffer } = options;
+  const { softWrap = true, cssClass, onClose, padding = INPUT_PADDING, grow, maxLines, maxHeight, folding = false, ...buffer } = options;
   return new TextEditor({
     buffer: { ...buffer, folding },
     softWrap,

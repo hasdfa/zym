@@ -9,7 +9,7 @@ import * as Path from 'node:path';
 import { Gdk, Gtk } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
 import { addStyles } from '../../styles.ts';
-import { TextEditor } from './TextEditor.ts';
+import { TextEditor, INPUT_PADDING } from './TextEditor.ts';
 
 const PEEK_BG = theme.ui.surface.popover;
 const PEEK_FG = theme.ui.editor.foreground;
@@ -95,7 +95,10 @@ export function buildDefinitionPeek(
   const slice = lines.slice(start, end).join('\n');
 
   const editor = new TextEditor({
+    // A gutterless code peek: keep the symmetric inset (the editor's `padding` now defaults to 0)
+    // so the slice doesn't hug the popover edges.
     buffer: { readOnly: true, initialText: slice, languagePath: target.path, folding: false },
+    padding: INPUT_PADDING,
   });
   return wrapPeekBody(target, editor.root, 30 + (end - start) * 20, onClose);
 }
