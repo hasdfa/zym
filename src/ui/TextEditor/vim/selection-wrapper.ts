@@ -14,6 +14,7 @@ import {
   isLinewiseRange,
   assertWithException,
   getFoldEndRowForRow,
+  getFirstCharacterPositionForBufferRow,
   getList
 } from './utils.ts'
 import settings from './settings.ts'
@@ -148,11 +149,21 @@ class SelectionWrapper {
 
   fixPropertyRowToRowRange () {
     const {head, tail} = this.getProperties()!
-    if (this.selection.isReversed()) {
-      ;[head.row, tail.row] = this.selection.getBufferRowRange()
-    } else {
-      ;[tail.row, head.row] = this.selection.getBufferRowRange()
-    }
+    const {editor} = this.selection
+    const range = this.selection.getBufferRange()
+    const startRow = range.start.row
+    // A linewise selection runs to column-0 of the row *after* the content; the
+    // last content row is one above that boundary (`getBufferRowRange` reports
+    // the raw, un-normalized end here).
+    let endRow = range.end.row
+    if (endRow > startRow && range.end.column === 0) endRow -= 1
+    const [headRow, tailRow] = this.selection.isReversed() ? [startRow, endRow] : [endRow, startRow]
+    // Seat the caret on the first non-blank char (`^`) of its row, like vim does
+    // after a linewise text object (e.g. `vip` lands on the last paragraph line).
+    const headPoint = getFirstCharacterPositionForBufferRow(editor, headRow) ?? new Point(headRow, 0)
+    head.row = headPoint.row
+    head.column = headPoint.column
+    tail.row = tailRow
   }
 
   // Use this for normalized(non-select-right-ed) selection.

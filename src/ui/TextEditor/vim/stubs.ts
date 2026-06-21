@@ -29,17 +29,29 @@ export class CursorStyleManager {
   private readonly vimState: VimState;
   constructor(vimState: VimState) {
     this.vimState = vimState;
+    // The secondary block carets (visual-block / multi-cursor) paint at each
+    // selection's head; supply the *visual* head (select-right normalized onto
+    // the last selected char) so they don't sit one column too far right.
+    vimState.editor.setCursorDisplayResolver((selection) => this.visualHead(selection));
   }
+
+  /** The selection's logical caret position: the saved (normalized) head in
+   *  visual mode, else the raw head. */
+  private visualHead(selection: Selection) {
+    return this.vimState.swrap(selection).getBufferPositionFor('head', { from: ['property', 'selection'] }) ?? null;
+  }
+
   refresh(): void {
     const { editor } = this.vimState;
     // In visual mode the block caret belongs on the selection's logical head
     // (which `saveProperties` keeps on the line), not the insert mark — for a
-    // linewise selection the insert mark sits at the next line's start.
+    // linewise selection the insert mark sits at the next line's start. For a
+    // visual-block the primary member is the *first* row (`getSelections()[0]`);
+    // the other rows are secondaries painted by `renderExtraSelections`, so using
+    // the first member here keeps every row covered exactly once (no gap on the
+    // first row, no double caret on the head row).
     if (this.vimState.mode === 'visual') {
-      const head = this.vimState
-        .swrap(editor.getLastSelection())
-        .getBufferPositionFor('head', { from: ['property', 'selection'] });
-      editor.setCursorDisplayPoint(head ?? null);
+      editor.setCursorDisplayPoint(this.visualHead(editor.getSelections()[0]));
     } else {
       editor.setCursorDisplayPoint(null);
     }

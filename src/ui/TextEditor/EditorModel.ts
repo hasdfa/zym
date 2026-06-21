@@ -149,6 +149,12 @@ export class EditorModel {
   // (to cover the trailing newline), but the caret belongs on the current line;
   // the vim layer points this at the selection's logical head. null = insert mark.
   private cursorDisplayPoint: Point | null = null;
+  // Maps a selection to its *visual* caret position. In visual mode the buffer
+  // selection is select-right-extended (head one past the last selected char),
+  // so the secondary block carets (visual-block / multi-cursor) would paint one
+  // column too far right; the vim layer installs this to normalize the head back
+  // onto the last selected char. null/unset = the raw head (plain multi-cursor).
+  private cursorDisplayResolver: ((selection: Selection) => PointLike | null) | null = null;
   private readonly cursorTag: InstanceType<typeof Gtk.TextTag>;
 
   // The on-character block caret is a reverse-video tag (keeps the glyph
@@ -678,7 +684,8 @@ export class EditorModel {
       if (!r.isEmpty()) {
         this.buffer.applyTag(this.extraSelectionTag, this.iterAtPoint(r.start), this.iterAtPoint(r.end));
       }
-      const headIter = this.iterAtPoint(selection.getHeadBufferPosition());
+      const headPoint = this.cursorDisplayResolver?.(selection) ?? selection.getHeadBufferPosition();
+      const headIter = this.iterAtPoint(headPoint);
       const noGlyph = headIter.endsLine() || headIter.isEnd();
       if (!beam && !noGlyph) {
         // Block caret over the character — a reverse-video tag (cheap, no widget).
@@ -1483,6 +1490,13 @@ export class EditorModel {
    *  caller refreshes; see `cursorDisplayPoint`. */
   setCursorDisplayPoint(point: PointLike | null): void {
     this.cursorDisplayPoint = point ? Point.fromObject(point) : null;
+  }
+
+  /** Install the visual caret-position resolver for secondary selections (see
+   *  `cursorDisplayResolver`). The vim layer sets this once; `null` restores the
+   *  raw-head behavior. */
+  setCursorDisplayResolver(resolver: ((selection: Selection) => PointLike | null) | null): void {
+    this.cursorDisplayResolver = resolver;
   }
 
   /**

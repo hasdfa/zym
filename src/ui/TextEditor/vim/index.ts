@@ -54,11 +54,15 @@ const VISUAL_BINDINGS: Record<string, string> = {
 };
 
 // Commands available only in visual mode (so they don't shadow normal-mode keys
-// like `o` = open-line). `o` swaps the selection's active end; `O` swaps the
-// other corner in blockwise.
+// like `o` = open-line, `I`/`A` = insert at line start/end). `o` swaps the
+// selection's active end; `O` swaps the other corner in blockwise. `I`/`A` enter
+// insert mode at the start/end of every selection (column-insert in visual-block,
+// the start/end of each line otherwise).
 const VISUAL_COMMAND_BINDINGS: Record<string, string> = {
   o: 'ReverseSelections',
   O: 'BlockwiseOtherEnd',
+  I: 'InsertAtStartOfTarget',
+  A: 'InsertAtEndOfTarget',
 };
 
 // Single-key motions, available while NOT in insert mode.
@@ -498,6 +502,8 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   // for command registration, so the keys are arbitrary.
   'visual:o': 'ReverseSelections',
   'visual:O': 'BlockwiseOtherEnd',
+  'visual:I': 'InsertAtStartOfTarget',
+  'visual:A': 'InsertAtEndOfTarget',
   // Insert-mode commands, likewise under unique keys (ctrl-r/ctrl-a otherwise
   // collide with Redo / Increase).
   'insert:ctrl-w': 'DeleteToPreviousWordBoundary',

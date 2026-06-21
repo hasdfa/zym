@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../../gi.ts';
-import { EditorModel } from '../EditorModel.ts';
+import { EditorModel, CursorType } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
 import VimState from './vim-state.ts';
 import { StatusBarManager } from './stubs.ts';
@@ -49,6 +49,34 @@ test('blockwise motion makes one selection per spanned row', () => {
     editor.getSelections().map((s) => s.getText()),
     ['bc', 'gh', 'lm'],
   );
+});
+
+test('blockwise carets sit on each row at the active column (no offset/gap/dup)', () => {
+  const { editor, at, block } = setup(GRID);
+  editor.setCursorType(CursorType.BLOCK);
+  at(0, 1);
+  block(); // rows 0-2, columns 1-2 ('bc'/'gh'/'lm'); the active column is 2
+  const tag = (name: string) => editor.buffer.getTagTable().lookup(name);
+  const positions = (name: string): Array<[number, number]> => {
+    const t = tag(name);
+    const out: Array<[number, number]> = [];
+    if (!t) return out;
+    for (let o = 0; o < editor.buffer.getCharCount(); o++) {
+      const it = editor.buffer.getIterAtOffset(o);
+      if (it.hasTag(t)) out.push([it.getLine(), it.getLineOffset()]);
+    }
+    return out;
+  };
+  const all = [...positions('vim-block-cursor'), ...positions('vim-extra-cursor')].sort(
+    (a, b) => a[0] - b[0],
+  );
+  // Exactly one caret per row, each on the last selected char (col 2) — not the
+  // select-right head (col 3), and no missing first row / doubled head row.
+  assert.deepEqual(all, [
+    [0, 2],
+    [1, 2],
+    [2, 2],
+  ]);
 });
 
 test('blockwise delete removes the column on every row and returns to normal', () => {

@@ -80,14 +80,35 @@ test('computeLeapTargets treats the pattern literally (regex chars escaped)', ()
   assert.deepEqual(targets.map((t) => t.start.toArray()), [[0, 4]]);
 });
 
-test('computeLeapTargets is case-sensitive', () => {
-  const m = model('Ab ab AB ab\n');
+test('computeLeapTargets is smartcase: a lowercase pattern matches any case', () => {
+  const m = model('Ab ab AB ab\n'); // Ab@0 ab@3 AB@6 ab@9
   const targets = computeLeapTargets(m, 'ab', {
     reverse: false,
     cursor: new Point(0, 0),
     range: whole(m),
   });
-  assert.deepEqual(targets.map((t) => t.start.toArray()), [[0, 3], [0, 9]]);
+  // Ab@0 is at the cursor (excluded); every remaining case-variant matches.
+  assert.deepEqual(targets.map((t) => t.start.toArray()), [[0, 3], [0, 6], [0, 9]]);
+});
+
+test('computeLeapTargets is smartcase: an uppercase letter forces case-sensitivity', () => {
+  const m = model('Ab ab AB ab\n');
+  const targets = computeLeapTargets(m, 'AB', {
+    reverse: false,
+    cursor: new Point(0, 0),
+    range: whole(m),
+  });
+  assert.deepEqual(targets.map((t) => t.start.toArray()), [[0, 6]]); // only the exact-case "AB"
+});
+
+test('leapNextChars excludes both cases of a follower (smartcase narrowing)', () => {
+  const m = model('z foR foX\n'); // followers after "fo" are uppercase R / X
+  const targets = computeLeapTargets(m, 'fo', { reverse: false, cursor: new Point(0, 0), range: whole(m) });
+  const next = leapNextChars(m, targets);
+  // A lowercase narrow key ('r'/'x') must be excluded from labels even though the
+  // buffer character is uppercase, so it narrows instead of being read as a label.
+  assert.ok(next.has('r') && next.has('R'));
+  assert.ok(next.has('x') && next.has('X'));
 });
 
 test('leapNextChars collects the character following each match', () => {
