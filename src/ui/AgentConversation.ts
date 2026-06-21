@@ -157,9 +157,9 @@ addStyles(`
   /* AskUserQuestion: an interactive choice card (info-tinted while open). Split
      into a choice list (left) + a detail pane (right) for the focused choice. */
   .zym-conversation-question {
-    padding: 10px; margin: 6px 0;
+    padding: calc(2 * var(--spacing)); margin: 6px 0;
     border: 1px solid var(--t-ui-status-info);
-    border-radius: 6px;
+    border-radius: var(--card-radius);
   }
   /* Once answered the border is dropped — it's just a record of the choice. */
   .zym-conversation-question-answered { padding: 6px 0; margin: 6px 0; }
