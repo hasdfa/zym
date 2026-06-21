@@ -22,6 +22,9 @@ import { AGENT_CONFIGS, listAgentKinds, type AgentKind, type LaunchOption } from
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 const CARD_WIDTH = 640;
+// Shared inset (px) for the prompt text and the options row, so the two sections line
+// up on the same left edge.
+const CARD_PADDING = 10;
 
 // An unsent prompt left over from a dismissed launcher, restored (fully selected) on
 // the next open so a cancelled compose isn't lost. Cleared once submitted.
@@ -60,16 +63,13 @@ addStyles(/* css */`
     background-color: var(--window-bg-color);
   }
   #AgentLauncherOptions {
-    padding: 0.6em;
+    padding: ${CARD_PADDING}px;
     /* The card is monospace (for the prompt); the option controls read better in the
        UI (proportional) font. */
     font: var(--t-font-ui);
     background-color: var(--t-ui-editor-background);
     border-bottom-left-radius: var(--popover-radius);
     border-bottom-right-radius: var(--popover-radius);
-  }
-  #AgentLauncherField {
-    padding: 4px 8px;
   }
   /* The dropdowns sit flush in the option row (no extra button frame/background). */
   #AgentLauncherField > dropdown {
@@ -126,7 +126,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // The prompt — a buffer-only editor (full vim editing) that auto-grows with its
   // content up to 5 lines (then scrolls), wrapped in a named container so the
   // enter/alt-enter keymap scopes to it. Seeded with any restored draft.
-  const input = createInput({ placeholder: 'Prompt for the agent…', initialText: draft, grow: true, maxLines: 5 });
+  const input = createInput({ placeholder: 'Prompt for the agent…', initialText: draft, grow: true, maxLines: 5, padding: CARD_PADDING });
   const promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   promptContainer.setName('AgentLauncherPrompt');
   promptContainer.append(input.root);
