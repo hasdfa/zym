@@ -1,0 +1,67 @@
+# Developer tooling
+
+## Linting (ESLint)
+
+`pnpm run lint` (`eslint .`) — flat config in `eslint.config.js`.
+
+**Purpose: catch real bugs, not style.** Formatting is deferred to a separate
+tool; this config enables no stylistic/layout rules.
+
+### Config base
+
+- `@eslint/js` `recommended` + `typescript-eslint` `recommended` (the
+  **non**-type-checked preset).
+- These presets are logic-only — ESLint moved all formatting rules out to the
+  separate `@stylistic` plugin, which we deliberately do **not** add. So "defer
+  formatting to another tool" falls out for free; no `eslint-config-prettier`
+  needed.
+- The presets run without type information. `pnpm run typecheck` (`tsc
+  --noEmit`, strict) already does whole-program type analysis, and type-aware
+  linting over the generated GIR type surface (353 TS files, `skipLibCheck`) is
+  slow. The one exception is `local/no-floating-cleanup` (below), which needs
+  type info — so a second config block scoped to `src/**` + `plugins/**` turns
+  on the typescript-eslint project service just for it.
+
+### Local rule tuning (in `eslint.config.js`)
+
+- `@typescript-eslint/no-explicit-any: off` — node-gtk's GObject/GIR/vfunc
+  bindings are pervasively `any`; flagging it is pure noise.
+- `@typescript-eslint/no-unused-vars: warn` with `^_` ignore patterns —
+  `_`-prefixed args are intentional placeholders in GObject vfunc/signal
+  signatures.
+- `no-undef: off` for TS — TypeScript already resolves identifiers.
+- `no-empty` stays at the default **error** with no `allowEmptyCatch`: empty
+  `catch {}` blocks are not allowed (an intentional one needs an explicit
+  comment or a no-op statement).
+
+### `local/no-floating-cleanup` (type-aware)
+
+Vendored from MUI ([mui/mui-public#1538](https://github.com/mui/mui-public/pull/1538))
+into `eslint-rules/no-floating-cleanup.js` — the rule is not yet in a published
+`@mui/internal-code-infra`. Once it ships, replace the vendored file with the
+package import.
+
+Like `@typescript-eslint/no-floating-promises`, but for functions: an expression
+statement whose call returns a callable (an `unsubscribe` / cleanup function)
+that is discarded is flagged as a likely subscription leak. This is high-value
+here — `eventKit` subscriptions (`onDidChange*`, `onTitleChange`, …) return
+disposer functions, and dropping them is a documented leak class (see
+[lifecycle-and-disposal.md](lifecycle-and-disposal.md)).
+
+- Opt out per call with `void expr` (same convention as no-floating-promises).
+- Fluent/builder calls that return `this` are never reported.
+- Requires the type-aware block, hence `@typescript-eslint/utils` as a dep.
+
+### Upgrade path
+
+For more type-aware bug rules (`no-floating-promises` itself is the obvious next
+one), swap the base `recommended` → `recommendedTypeChecked`; the project
+service is already wired up in the type-aware block.
+
+### Known intentional findings
+
+Some flagged spots are deliberate and want an inline `// eslint-disable-next-line`
+rather than a config change, e.g. the `\x00` sentinel regex in
+`src/ui/markdownMarkup.ts` (`no-control-regex`), and the `createRequire(...)`
+call in `src/poc/inline-overlay.ts` (`local/no-floating-cleanup` — a callable
+return that isn't actually a cleanup function).
