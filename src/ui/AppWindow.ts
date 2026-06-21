@@ -13,7 +13,6 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { outdent } from 'outdent'
 import {
   Adw,
   Gtk,
@@ -27,7 +26,7 @@ import { PanelGroup, type Direction, type RestoredChild } from './PanelGroup.ts'
 import { TextEditor } from './TextEditor/index.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
 import { buildDefinitionPeek, wrapPeekBody, LIVE_PEEK_HEIGHT } from './TextEditor/buildDefinitionPeek.ts';
-import { Terminal } from './Terminal.ts';
+import { Terminal, terminalTabTitle } from './Terminal.ts';
 import { AgentTerminal, type AgentStatus, type AgentResume } from './AgentTerminal.ts';
 import type { Agent } from '../agents/types.ts';
 import { defaultAction, type AgentAction } from '../agents/actions.ts';
@@ -40,7 +39,7 @@ import { WorkbenchStatus } from './WorkbenchStatus.ts';
 import { GitPanel } from './GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons } from './icons.ts';
-import { NERDFONT } from './nerdfont.ts';
+import { agentTabTitle } from './agentStatusIcon.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
@@ -65,7 +64,7 @@ import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
 import { openWorktreePicker } from './WorktreePicker.ts';
-import { openAgentLauncher, type WorktreeChoice } from './AgentLauncher.ts';
+import { openAgentLauncher, launchPrompt } from './AgentLauncher.ts';
 import {
   openBranchPicker,
   openDeleteBranchPicker,
@@ -78,7 +77,7 @@ import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
 import { zym } from '../zym.ts';
-import { type SessionParticipant, type TabState, type WorkspaceState, type SessionState, type PanelNode } from '../SessionManager.ts';
+import { fileTabsOf, type SessionParticipant, type TabState, type WorkspaceState, type SessionState } from '../SessionManager.ts';
 import { SessionController } from '../SessionController.ts';
 import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
@@ -3187,62 +3186,13 @@ function span(a0: number, aLen: number, b0: number, bLen: number): number {
   return Math.min(a0 + aLen, b0 + bLen) - Math.max(a0, b0);
 }
 
-// The same indicators the WorkbenchList uses: nf-md-cog-sync while working, else a
-// round dot. Adw tab titles are plain text (no markup, no colour), so the dot
-// can't be colour-coded like the sidebar — the waiting state instead drives Adw's
-// native `needs-attention` tab highlight (see updateAgentTab).
-const AGENT_WORKING_GLYPH = NERDFONT.STATUS.SYNC;
-const AGENT_STATUS_DOT = '●';
-
-/** An agent tab's title: the WorkbenchList status glyph prefixed to the agent's name. */
-function agentTabTitle(agent: Agent): string {
-  const glyph = agent.status === 'working' ? AGENT_WORKING_GLYPH : AGENT_STATUS_DOT;
-  return `${glyph} ${agent.title}`;
-}
-
-// A terminal tab is prefixed with the shell glyph (the Adw tab-icon convention is
-// a glyph embedded in the title; see icons.ts), mirroring how editor/agent tabs
-// carry their own marker.
-function terminalTabTitle(terminal: Terminal): string {
-  return `${Icons.terminal} ${terminal.title}`;
-}
-
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-// The launch prompt for a new agent. The launcher's worktree choice is realized by the
-// agent itself (there's no host-side worktree creation): prepend an instruction to set
-// up the worktree and announce it via set_worktree (which re-roots the workbench), then
-// run the user's prompt.
-const NEW_WORKTREE_INSTRUCTION = outdent`
-  Before anything else, create a new git worktree with a descriptive branch 
-  name for the following task and switch into it:
-`
-function branchWorktreeInstruction(branch: string): string {
-  return outdent`
-    Before anything else, either go to the existing git worktree or create a new one
-    for the branch ${branch}, then do the following task:
-  `;
-}
-function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
-  if ('current' in worktree) return prompt || undefined; // run in the cwd, no worktree setup
-  const instruction = 'create' in worktree ? NEW_WORKTREE_INSTRUCTION : branchWorktreeInstruction(worktree.branch);
-  return prompt ? `${instruction}\n\n${prompt}` : instruction;
 }
 
 // Whether `path` is `root` itself or lives beneath it (a `root + sep` prefix, so
 // `/a/bc` doesn't count as under `/a/b`).
 function isUnderRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(Path.sep) ? root : root + Path.sep);
-}
-
-// The `file` tabs in a saved center layout, depth-first — used to reopen an agent
-// workbench's reviewed files on restore (the agent leaf is recreated separately).
-function fileTabsOf(node: PanelNode): Extract<TabState, { kind: 'file' }>[] {
-  if (node.type === 'leaf') {
-    return node.tabs.filter((t): t is Extract<TabState, { kind: 'file' }> => t.kind === 'file');
-  }
-  return [...fileTabsOf(node.start), ...fileTabsOf(node.end)];
 }
 

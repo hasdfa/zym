@@ -333,6 +333,15 @@ export class SessionManager {
   }
 }
 
+/** The `file` tabs in a saved center layout, depth-first — used to reopen an agent
+ *  workbench's reviewed files on restore (the agent leaf is recreated separately). */
+export function fileTabsOf(node: PanelNode): Extract<TabState, { kind: 'file' }>[] {
+  if (node.type === 'leaf') {
+    return node.tabs.filter((t): t is Extract<TabState, { kind: 'file' }> => t.kind === 'file');
+  }
+  return [...fileTabsOf(node.start), ...fileTabsOf(node.end)];
+}
+
 /** Structural guard: enough shape to trust the file as a session. */
 function isSessionState(value: unknown): value is SessionState {
   if (value === null || typeof value !== 'object') return false;

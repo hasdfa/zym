@@ -126,6 +126,17 @@ export function agentStatusMarkup(status: AgentStatus): string {
   return `<span foreground="${color}">${status === 'disconnected' ? DISCONNECTED_DOT : STATUS_DOT}</span>`;
 }
 
+/**
+ * An agent tab's title: the status glyph prefixed to the agent's name. Adw tab
+ * titles are plain text (no markup, no colour), so the dot can't be colour-coded
+ * like the sidebar — the waiting state instead drives Adw's native
+ * `needs-attention` tab highlight (see AppWindow.updateAgentTab).
+ */
+export function agentTabTitle(agent: Agent): string {
+  const glyph = agent.status === 'working' ? WORKING_GLYPH : STATUS_DOT;
+  return `${glyph} ${agent.title}`;
+}
+
 // --- Worktree ---------------------------------------------------------------
 
 /** Pango markup for a linked-worktree badge (git glyph + branch/worktree name),
