@@ -67,15 +67,3 @@ emscripten-Module `this` capture in `src/syntax/grammar.ts` (`no-this-alias`),
 the forward-referenced `leaf` in `src/ui/PanelGroup.ts` (`prefer-const`), and the
 ported-but-unwired mouse handlers in `VimState.observeMouse` (vim-mode-plus #830).
 
-### Real leaks this rule caught (now fixed)
-
-`local/no-floating-cleanup` surfaced 7 discarded `eventKit` disposers in
-`src/ui/AppWindow.ts` (editor `onTitleChange`/`onModifiedChange`; terminal
-`onTitleChange`; agent `onTitleChange`/`onDidChangeStatus`/`onDidChangeWorktree`/
-`onDidChangeFiles`). `AppWindow` outlives the editor/agent tabs it subscribes to,
-so the discarded disposers — and the closures they pin — survived every tab
-close. Fixed by collecting them into per-tab (`tabSubs`) / per-agent
-(`agentSubs`) `CompositeDisposable`s disposed in `disposeChild` / `closeAgent`
-(see [lifecycle-and-disposal.md](lifecycle-and-disposal.md)). Along the way,
-`onTitleChange` was made to return an unsubscribe function (it previously
-returned `void`, so the subscription could never be detached).

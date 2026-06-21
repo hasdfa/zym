@@ -8,7 +8,7 @@
  * each open editor it owns a decoration layer and re-syncs it (clear + re-tint
  * every literal) on edits, debounced. Background-tint only — a clickable swatch /
  * color picker is a later, focusable-overlay feature (see
- * tasks/code-editing/inline-widgets.md).
+ * docs/text-editor/inline-widgets.md).
  *
  * The parsing/contrast logic is the pure, unit-tested `colors.ts`; this file is
  * just the editor wiring.

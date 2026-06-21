@@ -97,7 +97,7 @@ function familyOf(description: string, fallback: string): string {
  * (an absolute/device-pixel description), since a `font` shorthand needs a size.
  *
  * It follows the GNOME interface fonts live; `reload()` is public so a future user
- * font setting can drive the same path. See tasks/styling.md → Fonts.
+ * font setting can drive the same path. See docs/styling.md → Fonts.
  */
 class FontStore {
   private readonly settings = new Gio.Settings({ schemaId: 'org.gnome.desktop.interface' });

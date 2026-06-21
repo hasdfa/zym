@@ -5,7 +5,7 @@
  * BlockDecorations), the peek must take keyboard focus — so it lives in the
  * editor's sibling `Gtk.Overlay` (the hover/caret layer host), NOT as a descendant
  * of the GtkTextView. A sibling release the outer view's IM on focus, so typing in
- * the peek doesn't leak into the file behind it (see tasks/code-editing/inline-widgets.md).
+ * the peek doesn't leak into the file behind it (see docs/text-editor/inline-widgets.md).
  *
  * Mechanics (all proven in src/poc/sibling-peek.ts):
  *   - a `pixels-below-lines` tag on the anchor line reserves the gap (real lines part);

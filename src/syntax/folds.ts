@@ -7,7 +7,7 @@
  *    A node captured as `@fold.keepFooter` (instead of `@fold`) keeps its closing
  *    line on its own line when folded — for chained constructs like if/else and
  *    try/catch where the `}` line continues (`} else {`). See the grammar query
- *    convention in code-editing/folding.md.
+ *    convention in text-editor/folding.md.
  *  - **Run folds**: a run of >= 2 consecutive same-type siblings the grammar folds
  *    as a block (import statements, line comments) — collapse to the first line.
  *

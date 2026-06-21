@@ -106,7 +106,7 @@ registerClass(SnapRenderer);
      (simple; band matches, but every line number sits on that shade).
    - **Extend the header widget over the gutter:** make the filename band a *sibling overlay*
      spanning the whole `SourceView` (gutter + text) instead of a text-area `add_overlay` child —
-     see the sibling-overlay note in `tasks/code-editing/inline-widgets.md`. Bigger change to the
+     see the sibling-overlay note in `docs/text-editor/inline-widgets.md`. Bigger change to the
      shared `BlockDecorations` (also affects project-search headers).
 
 ## Files
@@ -118,4 +118,4 @@ registerClass(SnapRenderer);
   the header widget overlay; the band is empty in the gutter.
 - `src/ui/multibuffer/DiffMultiBufferView.ts` — wires `headerRows(dmb)` into the gutter on build
   and on `reDiff`; `installOverlays` reconciles the header/gap bands.
-- `tasks/code-editing/inline-widgets.md` — BlockDecorations / overlay background.
+- `docs/text-editor/inline-widgets.md` — BlockDecorations / overlay background.

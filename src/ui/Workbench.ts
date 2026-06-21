@@ -57,7 +57,7 @@ export interface WorkbenchContents {
   // The workbench's root directory and the (pooled) git repo for it. Every
   // per-person view — file tree, Source Control, and the chrome/pickers while
   // this workbench is active — resolves against these, so an agent in a worktree
-  // sees its own tree/branch (see tasks/agents.md "git worktree integration").
+  // sees its own tree/branch (see docs/agents.md "git worktree integration").
   cwd: string;
   git: GitRepo;
   center: PanelGroup;

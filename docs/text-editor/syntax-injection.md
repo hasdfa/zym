@@ -205,7 +205,7 @@ web-tree-sitter runtime. The pinned 0.20.x runtime provides the common ctype hel
 the Markdown scanner's `parse_html_block` needs (case-insensitive HTML-block tag
 matching). An unprovided import resolves to `undefined`, so the scanner's first call
 throws `Cannot read properties of undefined (reading 'apply')` mid-parse — markdown with
-any `<...>` block (e.g. `tasks/styling.md`) opened with **no highlighting**, and editing
+any `<...>` block (e.g. `docs/styling.md`) opened with **no highlighting**, and editing
 it left the tree corrupt so a later incremental `tree.edit` faulted with **memory access
 out of bounds** (whole-process crash).
 

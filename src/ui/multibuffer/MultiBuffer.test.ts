@@ -2,7 +2,7 @@
  * Multibuffer Phase 1a integration: prove the painter (SyntaxController), driven through an
  * ExcerptSyntaxProjection, paints each excerpt from ITS OWN grammar at the right (translated)
  * view rows — one painter on one buffer, many source parses. This is the place a
- * stitched-coordinate or shared-parse bug surfaces in isolation (tasks/.../multibuffer.md).
+ * stitched-coordinate or shared-parse bug surfaces in isolation (docs/.../multibuffer.md).
  * The full SearchResultsView (a TextEditor wrapper) is exercised by the runtime smoke, which
  * needs the app's singletons. Grammars come from bundled plugins; gated if not vendored.
  */

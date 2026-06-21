@@ -1,6 +1,6 @@
 /*
  * Document — the model layer behind one or more TextEditor views (the A2
- * "document-model" architecture; see tasks/code-editing/text-editor.md →
+ * "document-model" architecture; see docs/text-editor/index.md →
  * "Document-model direction (A2)").
  *
  * GtkTextBuffer conflates model and view: a buffer shared by N GtkSourceViews renders

@@ -1,6 +1,6 @@
 /*
  * diffMultiBuffer — assemble a CONTINUOUS multi-file diff into the projection model the diff
- * multibuffer surface renders (tasks/code-editing/multibuffer.md, Phase 3b / G5 — the editable
+ * multibuffer surface renders (docs/text-editor/multibuffer.md, Phase 3b / G5 — the editable
  * diff that replaces GitStagingView). For each changed file it emits a filename header block,
  * then the file's diff WINDOWED like a real diff — changed hunks plus a few lines of context,
  * with long unchanged runs elided to a `⋯ N unchanged lines` gap row — via `diffRows` +

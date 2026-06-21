@@ -7,7 +7,7 @@
  *
  * Equal line counts + no wrapping mean row N sits at the same pixel y on both
  * sides, so scroll-sync is a value copy. Built at runtime (vfunc gutter); the
- * assembled widget is `root`. See tasks/code-editing/diff.md.
+ * assembled widget is `root`. See docs/text-editor/diff.md.
  */
 import { Gtk, type SourceView } from '../../gi.ts';
 import { quilx } from '../../quilx.ts';

@@ -47,7 +47,7 @@ import type { TabState } from '../SessionManager.ts';
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
-// the font store's --t-font-monospace-family. See tasks/styling.md + theming.md.
+// the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
 addStyles(`
   .quilx-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
   .quilx-conversation-transcript { padding: 12px; }

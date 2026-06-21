@@ -86,5 +86,5 @@ Core pieces:
   are declared in TS with the state in scope. Applied to `file:save`/`save-as`,
   `git:*`, and the `agent:*` commands (see `AppWindow`).
 - The `:` ex-command line and richer search are tracked under
-  [code-editing](code-editing/text-editor.md) (vim mode), not here — they consume
+  [text-editor](text-editor/index.md) (vim mode), not here — they consume
   this layer rather than extend it.

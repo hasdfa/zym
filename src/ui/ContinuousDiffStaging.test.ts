@@ -1,5 +1,5 @@
 /*
- * Editable diff multibuffer — HUNK STAGING (Phase G5, tasks/code-editing/multibuffer.md, task #17).
+ * Editable diff multibuffer — HUNK STAGING (Phase G5, docs/text-editor/multibuffer.md, task #17).
  * Over a real temp git repo, `ContinuousDiffView({ editable, cwd })` reads each file's index blob
  * and classifies every changed row as staged / unstaged (the gutter marker). `stageHunkAtCursor`
  * builds the index→worktree hunk patch and `git apply --cached`s it; `unstageHunkAtCursor` reverses

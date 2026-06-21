@@ -38,7 +38,7 @@ Track a component's subs in one `CompositeDisposable` and dispose it as a unit.
    hangs).
 6. **Detach overlay children by hide+pool, never `unparent`** (`gtk_text_view_remove`
    is a no-op; forcing it → snapshot CRITICAL). See
-   [code-editing/inline-widgets.md](code-editing/inline-widgets.md).
+   [text-editor/inline-widgets.md](text-editor/inline-widgets.md).
 7. **Clear timers** in `dispose()` (`setTimeout`/`setInterval` ids).
 8. **Prefer `WeakMap` for per-widget side tables** — a missed disposal degrades to
    dead data, not a pinned widget.

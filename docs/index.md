@@ -1,9 +1,10 @@
-# Tasks
+# Docs
 
-Each task can have its own page with research, design, and implementation details.
+This document should contain to-the-point entries about important decisions/details.
+Each point that requires more than a small paragraph should instead be in its own file.
 File names mirror the header structure, e.g. 
  - `git.md` for the git section, 
- - `code-editing/lsp-integration.md` for the LSP integration section, etc. 
+ - `text-editor/lsp-integration.md` for the LSP integration section, etc. 
 When a header has more than one subheader, it becomes a directory with an `index.md` file for the main section.
 
 ## Architecture
@@ -145,9 +146,9 @@ shells out reuses the same primitive. Direct-spawn fallback if the child is down
 
 ### LSP integration
 
-See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the design and decisions.
+See [text-editor/lsp-integration.md](text-editor/lsp-integration.md) for the design and decisions.
 
-- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [code-editing/language-config.md](code-editing/language-config.md).
+- [x] **Restructure:** grammar + LSP unified under a `LanguageRegistry` (the plugin seam); curated hand-authored server defs (now contributed by the TypeScript plugin, `plugins/typescript/` — see [plugins.md](plugins.md)); runtime Helix fetch dropped; **per-project server selection** (flow vs tsserver vs deno, + additive linters) via root-marker activation + exclusion groups + priority; user overrides (`lsp.servers`/`lsp.disabledLanguages`). See [text-editor/language-config.md](text-editor/language-config.md).
 - [x] LSP client + per-(server,root) lifecycle with crash recovery (exponential-backoff restart) and trace logging. **Incremental** document sync (full-text fallback). Correct LSP `languageId` (`.tsx`→typescriptreact, `.js`→javascript, …). See `src/lsp/`.
 - [x] Server→client requests answered: `workspace/configuration` (from `ServerDef.settings`), `client/(un)registerCapability`, `workDoneProgress/create`; `window/showMessage` surfaced, error `logMessage` to the trace log. File watching: dynamically-registered `workspace/didChangeWatchedFiles` via a per-dir `WorkspaceWatcher` (excludes node_modules/.git).
 - [x] Diagnostics integration (gutter, inline, panel) — custom-drawn Cairo squiggles (`UnderlineOverlay`), Nerd-Font gutter glyphs, a "Diagnostics" panel (shared `LocationList`). Namespaced by `(server, path)` and merged.
@@ -166,7 +167,7 @@ See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the d
 
 - [ ] More default grammars
 - [x] **Language injection** (embedded languages) — done; see
-  [code-editing/syntax-injection.md](code-editing/syntax-injection.md). The
+  [text-editor/syntax-injection.md](text-editor/syntax-injection.md). The
   highlighter gathers base + injected captures into one paint sweep; grammars
   declare `injections` on their `GrammarDef` (guest resolved through the shared
   `LanguageRegistry`, so it's cross-plugin). **Markdown** is fully working: block +
@@ -186,7 +187,7 @@ See [code-editing/lsp-integration.md](code-editing/lsp-integration.md) for the d
 
 ### Autocompletion
 
-See [code-editing/autocompletion.md](code-editing/autocompletion.md).
+See [text-editor/autocompletion.md](text-editor/autocompletion.md).
 
 - [x] Framework: source contract (`CompletionSource`), coordinator (`CompletionController` — insert-mode triggers, debounce, rank, sync-immediate/async-awaited, accept/navigate/dismiss keys), and keyboard-driven popup (`CompletionPopup`).
 - [x] Fuzzy matching: reuse the picker's fzy scorer (`fuzzyMatch`, subsequence + 1 typo) for ranking, with matched-character highlighting in the popup.
@@ -202,7 +203,7 @@ See [code-editing/autocompletion.md](code-editing/autocompletion.md).
 
 ### Text editor
 
-See [code-editing/text-editor.md](code-editing/text-editor.md) for the widget evaluation (GtkSourceView vs. custom/Rust), the shared editor-layer primitives, and the prioritized "What's next".
+See [text-editor/index.md](text-editor/index.md) for the widget evaluation (GtkSourceView vs. custom/Rust), the shared editor-layer primitives, and the prioritized "What's next".
 
 The widget question is settled (**stay on GtkSourceView + emulate**), and the A2 document model, multi-cursor, vim mode, diff, folding, and inline widgets have all shipped (see below). Remaining editor work is mostly polish and the future inline-widget consumers. (The vim `:` ex-command line is **won't-do** — see text-editor.md.)
 
@@ -216,11 +217,11 @@ Features:
 
 - [~] Consider a custom widget or a fork of GtkSourceView for better control and features. Research how to implement features like multiple cursors, rectangular selection, and better performance with large files. Consider a JS widget, or a Rust widget with a JS wrapper. — **Decided: stay on GtkSourceView and emulate (Option A).** Multi-cursor + blockwise are now built on top (virtual selection/cursor mark pairs via `MarkerLayer`, surfaced through the array-shaped `getCursors()`/`getSelections()`); see Vim mode below. A custom/Rust widget remains a gated escape hatch only if long single lines become intolerable (see text-editor.md).
 - [x] **Scroll / open performance** — the cost was per-frame node-gtk FFI, not GtkTextView layout. IndentGuides batched + hoisted geometry; line-number width cached; **syntax highlighting is a persistent, incremental, throttled cache** (`syntax/paintRegions.ts` — never clears on scroll, so highlights persist and a held ctrl-d/u keeps up); **first paint bounded to the viewport** (open O(viewport), ~70ms any size); a **long-line guard** degrades minified files instead of hanging. Per-frame JS is ~1% CPU now — native GTK rendering is the floor. See text-editor.md → "Scrolling & open performance". Open: unbounded highlight cache, O(file) first parse, startup grammar preload.
-- [x] Diff display (unified + side-by-side) — see [code-editing/diff.md](code-editing/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; fold-unchanged (`foldUnchanged` collapses long context runs to a `⋯ N unchanged lines` row via the editor's fold projection, both panes in lockstep); `git:diff-current` (`space g d`) → working-tree vs HEAD in a tab. Remaining: more git diff sources (commit/PR). (Try it: `node scripts/diff-demo.ts`.) Next direction: a continuous, multi-file, editable diff/search surface — see [code-editing/multibuffer.md](code-editing/multibuffer.md).
+- [x] Diff display (unified + side-by-side) — see [text-editor/diff.md](text-editor/diff.md). Synthesized read-only buffers + decorations + diff gutter + scroll-sync (sidesteps GtkTextView's lack of virtual lines). `DiffModel`/`splitSides` (computeDiff + word-level intra-line diff, unit-tested); `DiffView` (unified) + `SideBySideDiffView` (scroll-synced, Tab switches panes); `DiffViewer` wrapper (stats header, icon toggle, hunk nav); per-pane syntax highlighting; full-line backgrounds; fold-unchanged (`foldUnchanged` collapses long context runs to a `⋯ N unchanged lines` row via the editor's fold projection, both panes in lockstep); `git:diff-current` (`space g d`) → working-tree vs HEAD in a tab. Remaining: more git diff sources (commit/PR). (Try it: `node scripts/diff-demo.ts`.) Next direction: a continuous, multi-file, editable diff/search surface — see [text-editor/multibuffer.md](text-editor/multibuffer.md).
 - [x] Search interface — `SearchBar` (top-right) + `SearchController` over `EditorModel.scan`: case/regex toggles, replace + replace-all, highlights via `editor.decorations`. Bound to vim `/` `?` `n` `N`.
-- [x] **Code folding (single-line, navigable)** — view-side text *projection*: a model range is physically collapsed to a `[N]` placeholder in the view buffer (model stays source of truth + view↔model translation), so `import {[N]} from 'x'` is one real navigable line. Fold style is grammar-declared in `folds.scm` (`@fold` joins the footer; `@fold.keepFooter` keeps `} else {`-style chains on their own line — TS/TSX, Rust, and C/C++ ship keep-footer queries). See [code-editing/folding.md](code-editing/folding.md). Reusable for any "show less than the model" marker. Remaining: fold persistence across reload.
-- [~] Inline widgets / virtual lines — three mechanisms (see [code-editing/inline-widgets.md](code-editing/inline-widgets.md) and the API survey in [virtual-lines.md](code-editing/virtual-lines.md)). **Done:** `BlockDecorations` (text-window `add_overlay`, scrolls natively, non-interactive) → **markdown image preview** (`plugins/markdown/imagePreview.ts`); `Peek` (sibling `Gtk.Overlay` child positioned via `get-child-position`, focusable, no IM leak) → **see-definition** (`lsp:peek-definition` / `space l p`) — now a **live** read-only view of the file's shared `Document` when open, snapshot otherwise (the document-registry refactor shipped); `VirtualText` (EOL `GtkSourceAnnotations`) → inlay hints + error-lens. The focusable peek path required a node-gtk fix (`get-child-position` out-struct, **#444 / PR #445**). **Remaining:** polish (center the def slice, jump-to button) and the future consumers below.
-  - Future consumers (ideas to split; detail + infra-reuse + priority in [inline-widgets.md](code-editing/inline-widgets.md)):
+- [x] **Code folding (single-line, navigable)** — view-side text *projection*: a model range is physically collapsed to a `[N]` placeholder in the view buffer (model stays source of truth + view↔model translation), so `import {[N]} from 'x'` is one real navigable line. Fold style is grammar-declared in `folds.scm` (`@fold` joins the footer; `@fold.keepFooter` keeps `} else {`-style chains on their own line — TS/TSX, Rust, and C/C++ ship keep-footer queries). See [text-editor/folding.md](text-editor/folding.md). Reusable for any "show less than the model" marker. Remaining: fold persistence across reload.
+- [~] Inline widgets / virtual lines — three mechanisms (see [text-editor/inline-widgets.md](text-editor/inline-widgets.md) and the API survey in [virtual-lines.md](text-editor/virtual-lines.md)). **Done:** `BlockDecorations` (text-window `add_overlay`, scrolls natively, non-interactive) → **markdown image preview** (`plugins/markdown/imagePreview.ts`); `Peek` (sibling `Gtk.Overlay` child positioned via `get-child-position`, focusable, no IM leak) → **see-definition** (`lsp:peek-definition` / `space l p`) — now a **live** read-only view of the file's shared `Document` when open, snapshot otherwise (the document-registry refactor shipped); `VirtualText` (EOL `GtkSourceAnnotations`) → inlay hints + error-lens. The focusable peek path required a node-gtk fix (`get-child-position` out-struct, **#444 / PR #445**). **Remaining:** polish (center the def slice, jump-to button) and the future consumers below.
+  - Future consumers (ideas to split; detail + infra-reuse + priority in [inline-widgets.md](text-editor/inline-widgets.md)):
     - [x] **Error lens** — diagnostic message as trailing text (`VirtualText`, `editor.errorLens`; in `DiagnosticsView`).
     - [ ] **Code lens** — `N references` / `run·debug` above a symbol, clickable (block, `placement: above`; LSP `codeLens`). *med*
     - [ ] **Inline AI ghost text** — multi-line agent completion preview below the cursor (block; agents). *higher*
@@ -230,7 +231,7 @@ Features:
     - [ ] **Peek commit / blame diff** — inline `DiffViewer` below a line (peek; diff viewer + git). *med*
     - [ ] **Inline rename** — small inline editor for LSP rename + preview (peek). *med*
     - [x] **EOL trailing text** (`VirtualText` over `GtkSourceAnnotations`) — built; powers inlay hints + error-lens. Remaining idea: git blame.
-- [x] Document registry — `Document` (buffer + syntax + LSP + modified + undo) split from the `TextEditor` view via `DocumentRegistry` (ref-counted `acquire`/`release`), N views per document, each with its own native `GtkSource.Buffer`/cursor (the A2 model). Enables the live see-definition peek and split-view-of-same-file. See [code-editing/document-registry.md](code-editing/document-registry.md).
+- [x] Document registry — `Document` (buffer + syntax + LSP + modified + undo) split from the `TextEditor` view via `DocumentRegistry` (ref-counted `acquire`/`release`), N views per document, each with its own native `GtkSource.Buffer`/cursor (the A2 model). Enables the live see-definition peek and split-view-of-same-file. See [text-editor/document-registry.md](text-editor/document-registry.md).
 
 #### Vim mode
 

@@ -1,5 +1,5 @@
 /*
- * Editable diff multibuffer — SURFACE proof (Phase 3b / G5, tasks/code-editing/multibuffer.md).
+ * Editable diff multibuffer — SURFACE proof (Phase 3b / G5, docs/text-editor/multibuffer.md).
  * `ContinuousDiffView({ editable: true })` backs the NEW side with a live `Document`: editing a
  * context/added row writes through to the file's model, removed (phantom) rows reject edits, and
  * after the edit settles the diff is RE-COMPUTED and re-flowed via `ProjectionView.retarget` —

@@ -3,7 +3,7 @@
  * theme.schema.json) and normalizes it into the shape the editor consumes (nested
  * UI chrome colors + a flat syntax capture → color map). Themes live as JSON next
  * to this module (e.g. quilx.json), are loaded through `loadTheme`, and the active
- * theme is exported as `theme`. See tasks/theming.md.
+ * theme is exported as `theme`. See docs/theming.md.
  *
  * On disk a theme is one file: `{ name, appearance, ui, syntax }`, and the
  * consumed `Theme.ui` mirrors the file's `ui` shape 1:1 — concern-grouped nested

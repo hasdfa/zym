@@ -358,10 +358,10 @@ Porcelain v2 includes the staged X state, so an external `git add` fires
   continuous editable diff multibuffer below). See [staging-interface.md](staging-interface.md)
   for the original design (kept for history).
 - [ ] In-panel diffs in `GitPanel` itself
-- [ ] More git diff sources (commit / PR) — see code-editing/diff.md
+- [ ] More git diff sources (commit / PR) — see text-editor/diff.md
 - [x] **Continuous multi-file editable diff** replacing `GitStagingView` — hunk staging via
   the gutter marker + `space h s`/`space h u`, commit via `space g c`; opened with
-  `space g o`/`space g D`. See [../code-editing/multibuffer.md](../code-editing/multibuffer.md)
+  `space g o`/`space g D`. See [../text-editor/multibuffer.md](../text-editor/multibuffer.md)
 - [x] Mutations are coordinated `GitRepo` methods; busy+refresh primitives private to the impl
 - [x] Two-module boundary: rest of codebase imports only `git.ts`/`github.ts`; `src/git/` internal
 - [x] CLI-backed `CliGitRepo`: pure parsers (`status.ts` + `status.test.ts`), async

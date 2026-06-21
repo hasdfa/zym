@@ -1,7 +1,7 @@
 /*
  * DiffView — a unified (inline) diff pane. Given a `DiffModel`, it synthesizes a
  * read-only buffer whose lines ARE the diff (context + removed + added, in file
- * order — see tasks/code-editing/diff.md), then paints `added`/`removed` line
+ * order — see docs/text-editor/diff.md), then paints `added`/`removed` line
  * backgrounds via the editor's decoration surface and a `+`/`−` `DiffGutter`.
  *
  * Unchanged runs collapse by handing the editor their ranges as *provided folds*

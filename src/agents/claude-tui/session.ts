@@ -41,7 +41,7 @@ const HOOK_SCRIPT = Path.join(
 
 // The bundled agent↔editor MCP bridge (assets/mcp/quilxBridge.mjs), exposing the
 // `set_worktree` tool the agent calls to re-root the editor (Phase 4 in
-// tasks/agents.md). Run by claude as an MCP stdio server via --mcp-config.
+// docs/agents.md). Run by claude as an MCP stdio server via --mcp-config.
 const BRIDGE_SCRIPT = Path.join(
   Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxBridge.mjs',
 );

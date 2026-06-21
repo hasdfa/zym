@@ -1,7 +1,7 @@
 /*
  * protocol.ts — types and constructors for Claude Code's `claude -p` stream-json
  * wire protocol, as driven by the `claude-sdk` agent kind (see
- * tasks/agents/claude-sdk.md).
+ * docs/agents/claude-sdk.md).
  *
  * The shapes here are grounded in the *observed* output of
  *   claude -p --input-format stream-json --output-format stream-json --verbose

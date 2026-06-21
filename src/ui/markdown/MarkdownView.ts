@@ -24,7 +24,7 @@ type Widget = InstanceType<typeof Gtk.Widget>;
 const COPY_GLYPH = NERDFONT.ACTION.COPY;
 
 // Colors as CSS variables (--t-ui-*); code blocks read the font store's monospace
-// family (--t-font-monospace-family). See tasks/styling.md.
+// family (--t-font-monospace-family). See docs/styling.md.
 addStyles(`
   .quilx-md { }
   .quilx-md-code {

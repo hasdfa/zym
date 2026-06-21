@@ -271,7 +271,7 @@ Capture each agent's "before" so its diff is well-defined:
   badge / `o` key graduates from "open the files" to "review the changes."
 - A **diff view** per file (`baseline → current`): next/prev change, optionally
   per-hunk accept / revert.
-- **Depends on the editor Diff renderer** (`code-editing/diff.md`, not built yet) —
+- **Depends on the editor Diff renderer** (`text-editor/diff.md`, not built yet) —
   that's the rendering substrate. Sequence: diff display → agent review.
 
 ### Ongoing vs past
@@ -455,7 +455,7 @@ container that steals focus from the Vte; see index.md).
       per-row hover actions)
 - [x] Status in the tab title; rename
 - [x] File-change awareness (PostToolUse hook → `.files`; agent-list badge)
-- [ ] Editor Diff renderer (`code-editing/diff.md`) — substrate for review (blocks below)
+- [ ] Editor Diff renderer (`text-editor/diff.md`) — substrate for review (blocks below)
 - [ ] Review work: per-agent baselines (PreToolUse snapshot → `.baseline/`); "Agent
       Changes" diff panel (baseline → current); live (FileMonitor) + post-exit
 - [ ] Overlap warning when two live agents edit the same file (compare `changedFiles`)

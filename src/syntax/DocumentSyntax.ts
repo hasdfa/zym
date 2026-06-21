@@ -1,6 +1,6 @@
 /*
  * DocumentSyntax — the per-`Document` tree-sitter layer (Phase 0 of the multibuffer
- * split; see tasks/code-editing/multibuffer.md).
+ * split; see docs/text-editor/multibuffer.md).
  *
  * It owns the parse: the tree-sitter `Tree`, the injection parsers, incremental
  * reparse on edits, fold-region *discovery*, and the tree queries (enclosing

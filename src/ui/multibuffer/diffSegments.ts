@@ -1,5 +1,5 @@
 /*
- * diffSegments — the diff-duality coordinate model (tasks/code-editing/multibuffer.md, Phase
+ * diffSegments — the diff-duality coordinate model (docs/text-editor/multibuffer.md, Phase
  * 3b; the foundation for the editable diff multibuffer that replaces GitStagingView, G5).
  *
  * `diffRows` is the per-row line diff: each row carries its op (`eq`/`ins`/`del`) and BOTH the

@@ -5,7 +5,7 @@
  * The A2 document-model gave each view its own buffer, which unblocks GtkSourceView's
  * native annotation API (a shared buffer would render annotations in every view). The
  * API binding is verified headless; this confirms the open risk from
- * tasks/code-editing/virtual-lines.md: does it actually *render* end-of-line text, and
+ * docs/text-editor/virtual-lines.md: does it actually *render* end-of-line text, and
  * do the styles (error/warning/accent) look right?
  *
  * Flow: `new GtkSource.AnnotationProvider()` → `provider.addAnnotation(annotation)` →

@@ -151,7 +151,7 @@ export function installStyles(): void {
 //
 // `--font-size-small` is the one secondary-text size — metadata and counts that
 // sit beside full-size text (sidebar/diagnostics counts, list detail columns).
-// See tasks/styling.md for when to use it vs. the inline Pango `size="smaller"`.
+// See docs/styling.md for when to use it vs. the inline Pango `size="smaller"`.
 addStyles(`
   window {
     --popover-radius: 15px;
@@ -164,7 +164,7 @@ addStyles(`
 // leaf becomes `--t-ui-<dashed-path>` (e.g. `theme.ui.editor.background` →
 // `--t-ui-editor-background`), so CSS under `#AppWindow` reads a theme color as
 // `var(--t-ui-…)` instead of interpolating the literal. See themeUiCssVariables and
-// tasks/styling.md. (Markup / GtkTextTag consumers can't read CSS vars and still use
+// docs/styling.md. (Markup / GtkTextTag consumers can't read CSS vars and still use
 // `theme.ui.*` directly.) Static today because `theme` is load-constant; when live
 // theme-switching lands this becomes a keyed sheet re-set on theme change.
 addStyles(`

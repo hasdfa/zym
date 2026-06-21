@@ -1,5 +1,5 @@
 /*
- * MultiBufferModel — the multibuffer's excerpt LAYOUT (tasks/code-editing/multibuffer.md). It
+ * MultiBufferModel — the multibuffer's excerpt LAYOUT (docs/text-editor/multibuffer.md). It
  * models a multi-file surface as a list of **excerpts** (a filename header + ordered source
  * **segments**) and flattens them into the ordered `Item[]` that `ViewProjection` (the unified
  * coordinate substrate) materializes: a blank separator between excerpts, a header row, each

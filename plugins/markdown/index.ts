@@ -99,7 +99,7 @@ export const markdownPlugin: Plugin = {
     activateImagePreview(ctx, MARKDOWN_FILE_TYPES);
 
     // Tree-sitter highlighting lights up the moment the grammar assets are
-    // vendored (see tasks/code-editing/syntax-injection.md). Until then we
+    // vendored (see docs/text-editor/syntax-injection.md). Until then we
     // register no grammar, so Markdown falls back cleanly to no tree-sitter
     // highlighting — registering a grammar whose wasm is missing would throw and
     // roll back the whole plugin (losing detection + the server too).

@@ -1,6 +1,6 @@
 /*
  * ProjectionView — the per-view materialization + sync layer that sits on top of
- * ViewProjection (Phase 2b/2c of tasks/code-editing/multibuffer.md). It owns ONE view
+ * ViewProjection (Phase 2b/2c of docs/text-editor/multibuffer.md). It owns ONE view
  * `GtkSource.Buffer`, materialized from a `ViewProjection` over a set of source buffers, and
  * keeps the two in lock-step:
  *

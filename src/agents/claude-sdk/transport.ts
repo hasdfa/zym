@@ -1,6 +1,6 @@
 /*
  * transport.ts — the long-lived streaming transport for one headless `claude -p`
- * process (the `claude-sdk` agent kind; see tasks/agents/claude-sdk.md).
+ * process (the `claude-sdk` agent kind; see docs/agents/claude-sdk.md).
  *
  * Modeled on LspClient: a streaming child process over stdio works under
  * node-gtk's GLib loop (the `node-gtk-node-io-lsp` finding) — the only rule is

@@ -3,7 +3,7 @@
  * shared buffer/LSP state lives exactly as long as some view is showing it.
  *
  * Phase 1 of the document-registry refactor (see
- * tasks/code-editing/document-registry.md). Today every file editor is still 1:1 with
+ * docs/text-editor/document-registry.md). Today every file editor is still 1:1 with
  * its document (`AppWindow.openFile` reveals an already-open tab rather than opening a
  * second view), so the ref count is always 1 in practice. The registry exists so the
  * later phases — per-view cursor, then N views per document, then the live

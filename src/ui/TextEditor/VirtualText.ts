@@ -11,7 +11,7 @@
  *
  * Line-anchored, end-of-line only (the native API's shape). Mid-line / above-line
  * virtual content wants the gap-tag + overlay recipe instead — see
- * tasks/code-editing/virtual-lines.md.
+ * docs/text-editor/virtual-lines.md.
  */
 import { GtkSource, type SourceView } from '../../gi.ts';
 

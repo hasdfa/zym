@@ -51,7 +51,7 @@ const DIAG_ANIM_MS = 200;
 
 // A ready server's glyph is muted (it's ambient, not an alert); a failed one is
 // error-coloured to draw the eye. The diagnostics counts use the shared small
-// secondary-text size (see tasks/styling.md), matching GitBranchButton's counts.
+// secondary-text size (see docs/styling.md), matching GitBranchButton's counts.
 // Both buttons get the same horizontal padding so the pill and the icon match.
 addStyles(`
   #WorkbenchStatus button { min-width: 0; padding-left: 6px; padding-right: 6px; }

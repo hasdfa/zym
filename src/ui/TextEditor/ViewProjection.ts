@@ -1,6 +1,6 @@
 /*
  * ViewProjection — the unified per-view coordinate substrate behind every TextEditor (the
- * keystone of tasks/code-editing/multibuffer.md, Phase 2). It models what one
+ * keystone of docs/text-editor/multibuffer.md, Phase 2). It models what one
  * GtkSource.View shows as an ordered list of ITEMS — `segment`s (a contiguous row range of
  * some source) and `block`s (synthesized header / gap / blank rows) — and provides the
  * coordinate map between three spaces:

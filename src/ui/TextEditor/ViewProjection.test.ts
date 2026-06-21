@@ -1,5 +1,5 @@
 /*
- * ViewProjection coordinate-substrate tests (Phase 2a, tasks/code-editing/multibuffer.md).
+ * ViewProjection coordinate-substrate tests (Phase 2a, docs/text-editor/multibuffer.md).
  * Pure + GTK-free: the place a stitched-coordinate or fold-composition bug must surface in
  * isolation. Covers the three correctness pillars: (1) the single-file IDENTITY path, (2)
  * the multi-source segment map, (3) the fold transform composed on top — plus editability

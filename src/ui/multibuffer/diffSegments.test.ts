@@ -1,5 +1,5 @@
 /*
- * diffSegments tests (Phase 3b foundation, tasks/code-editing/multibuffer.md) — pure, no GTK.
+ * diffSegments tests (Phase 3b foundation, docs/text-editor/multibuffer.md) — pure, no GTK.
  * The diff-duality coordinate model: context/added → editable new-side rows, removed →
  * read-only phantom old-side rows, composed with the unified ViewProjection.
  */

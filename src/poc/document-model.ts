@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * POC: the A2 "document-model" direction (see tasks/code-editing/text-editor.md →
+ * POC: the A2 "document-model" direction (see docs/text-editor/index.md →
  * "Document-model direction (A2)").
  *
  * Question: instead of sharing ONE GtkSource.Buffer across N views (which forces every

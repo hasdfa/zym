@@ -10,7 +10,7 @@
  *
  * Positioning is by margins + bottom-left alignment: the card's bottom edge sits
  * `gapPx` above the anchor (so it grows upward, no height needed) and its left edge at
- * the anchor, clamped into the overlay. See tasks/code-editing/decorations.md.
+ * the anchor, clamped into the overlay. See docs/text-editor/decorations.md.
  */
 import { Gtk } from '../../gi.ts';
 import type { EditorModel } from './EditorModel.ts';

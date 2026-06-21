@@ -7,7 +7,7 @@
  * exactly the rows a synthesized inline (unified) buffer holds, each tagged with
  * its `kind` (for the line decoration + gutter glyph) and its source rows.
  * `hunks` are the contiguous changed regions, for hunk navigation / fold-unchanged
- * (each points at a `lines` row range). See tasks/code-editing/diff.md.
+ * (each points at a `lines` row range). See docs/text-editor/diff.md.
  */
 import { diffWordsWithSpace } from 'diff';
 import { diffLines } from './lineDiff.ts';

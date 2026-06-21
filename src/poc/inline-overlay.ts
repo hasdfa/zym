@@ -5,7 +5,7 @@
  * Throwaway harness (separate from the editor) that drives the actual controller
  * from src/ui/TextEditor/BlockDecorations.ts, so running it validates the
  * primitive itself — map-deferred placement, measure-to-fit gap, reposition, and
- * clean add/remove — not just raw GTK calls. See tasks/code-editing/inline-widgets.md.
+ * clean add/remove — not just raw GTK calls. See docs/text-editor/inline-widgets.md.
  *
  * Run interactively:   pnpm poc:inline   (or: node src/poc/inline-overlay.ts)
  *   Ctrl+Space   add / remove the inline block at line 6

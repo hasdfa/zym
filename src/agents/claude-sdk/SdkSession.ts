@@ -1,6 +1,6 @@
 /*
  * SdkSession — the domain model for one headless `claude -p` agent (the
- * `claude-sdk` kind; see tasks/agents/claude-sdk.md).
+ * `claude-sdk` kind; see docs/agents/claude-sdk.md).
  *
  * It owns a ClaudeStreamTransport, builds the argv (stream-json + the
  * permission-prompt-tool wiring), drives turns, and maps the raw stream events

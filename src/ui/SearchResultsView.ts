@@ -1,6 +1,6 @@
 /*
  * SearchResultsView — ONE editor stitching excerpts from many files, each with a filename
- * header, each highlighted by its own grammar (tasks/code-editing/multibuffer.md). It IS a
+ * header, each highlighted by its own grammar (docs/text-editor/multibuffer.md). It IS a
  * `TextEditor` (buffer mode) so it gets vim navigation, search, selection, and decorations for
  * free; the per-file highlighting comes from an `ExcerptSyntaxProjection` the editor's painter
  * renders through (one painter on the buffer — no second highlighter, no parsing the

@@ -4,7 +4,7 @@
  * Exposed as `quilx.session`. A *session* is everything that makes up "where I
  * was": the split layout, the open files/terminals/agents, cursors, and file-tree
  * expansion — as opposed to `quilx.config`, which is global app settings. See
- * tasks/session-management.md for the full design.
+ * docs/session-management.md for the full design.
  *
  * This module is the storage + format spine. It is deliberately free of any GTK
  * import so it can be unit-tested under `node --test`; the widget walk that
@@ -28,7 +28,7 @@ import { Disposable } from './util/eventKit.ts';
 /** Current on-disk format version. Bumped only on an incompatible change. */
 export const SESSION_VERSION = 1;
 
-// --- State shapes (see tasks/session-management.md) --------------------------
+// --- State shapes (see docs/session-management.md) --------------------------
 
 /** One tab's restorable state — a discriminated union over the tab kinds. */
 export type TabState =

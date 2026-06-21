@@ -4,7 +4,7 @@
  * Lists every worktree of the repo (the main checkout first, then linked ones
  * from `git worktree add`); selecting one calls `onChoose(path)`, and the host
  * launches a new agent rooted there — that path becomes the agent's workbench
- * cwd, file tree, and git (see tasks/agents.md "git worktree integration"). The
+ * cwd, file tree, and git (see docs/agents.md "git worktree integration"). The
  * agent itself still creates *new* worktrees; this only picks existing ones.
  */
 import { Gtk } from '../gi.ts';

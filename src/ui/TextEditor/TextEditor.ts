@@ -333,7 +333,7 @@ export class TextEditor implements DocumentHost {
   // whole editor (buffer, tree-sitter tree, widgets) forever, exactly the way the
   // Adw.StyleManager handler did. The owned widgets are detached (not destroyed) on
   // tab close, so they never finalize on their own — `dispose()` must cut these by
-  // hand. Disposed as a unit; see tasks/lifecycle-and-disposal.md. Use `connect()`
+  // hand. Disposed as a unit; see docs/lifecycle-and-disposal.md. Use `connect()`
   // for signals and `subs.add(...)` for registry Disposables.
   private readonly subs = new CompositeDisposable();
 

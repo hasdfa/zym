@@ -10,7 +10,7 @@ storage/format, exposed as `quilx.session`) + `SessionController`
 (`src/SessionController.ts`, per-window policy), wired from
 `src/ui/AppWindow.ts`. See the Phasing checklist at the bottom for what's done vs.
 outstanding. The one large unbuilt feature is **named sessions** (its own section
-below — all `[ ]`). (Note: `tasks/index.md` still lists this whole section as
+below — all `[ ]`). (Note: `docs/index.md` still lists this whole section as
 unchecked; that index is stale relative to the code and this page.)
 
 This page covers the architecture; per-feature pages can split out later if they

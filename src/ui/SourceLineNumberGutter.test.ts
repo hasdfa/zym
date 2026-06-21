@@ -1,6 +1,6 @@
 /*
  * SourceLineNumberGutter label logic — the pure core of the per-excerpt line-number gutter
- * (tasks/code-editing/multibuffer.md). A multibuffer view row maps to a SOURCE line (or to a
+ * (docs/text-editor/multibuffer.md). A multibuffer view row maps to a SOURCE line (or to a
  * synthesized header/gap/blank row); `lineNumberLabel` must render `sourceRow + 1` for real
  * rows and all-blank for block rows, right-aligned to the column width. The GtkSource renderer
  * itself is display-only (verified in the app); this pins the math.

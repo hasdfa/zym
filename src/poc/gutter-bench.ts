@@ -2,7 +2,7 @@
 /*
  * POC / GATE: measure the native per-line cost of the editor's gutter renderers.
  *
- * The text-editor doc (tasks/code-editing/text-editor.md → "Gutter rendering")
+ * The text-editor doc (docs/text-editor/index.md → "Gutter rendering")
  * says the next native scroll lever is collapsing our FOUR GtkSourceGutterRenderer
  * subclasses (line-number + fold-chevron + git-bar + diagnostic-glyph) into fewer,
  * but gates it behind *measuring the gutter's native cost first*, because "the

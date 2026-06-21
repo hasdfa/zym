@@ -58,7 +58,7 @@ Notes:
   (rust-analyzer, clangd) — it's simply skipped, not crash-looped, when absent from
   PATH. Use `roots` for workspace-root markers, `singleFile: true` to let it
   activate on a loose file. See `plugins/cpp/index.ts` and
-  [code-editing/language-config.md](code-editing/language-config.md).
+  [text-editor/language-config.md](text-editor/language-config.md).
 
 ## 3. Vendor the grammar assets
 
@@ -78,7 +78,7 @@ is relocatable). For a tree-sitter grammar:
 ### Fold queries — ship keep-footer for chained constructs
 
 The fold style is grammar-declared in `folds.scm`
-([code-editing/folding.md](code-editing/folding.md)):
+([text-editor/folding.md](text-editor/folding.md)):
 - `@fold` — **join** (default): the footer joins the header onto one line.
 - `@fold.keepFooter` — **keep-footer**: the closing line that *continues* a chain
   (`} else {`, `} else if … {`, `} catch (…) {`) stays on its own line.

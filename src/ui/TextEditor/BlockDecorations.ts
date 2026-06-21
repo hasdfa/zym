@@ -1,7 +1,7 @@
 /*
  * BlockDecorations — show a real widget *between* buffer lines with zero
  * buffer footprint (no synthesized text line). The "proper" virtual-line
- * mechanism from tasks/code-editing/inline-widgets.md, proven in
+ * mechanism from docs/text-editor/inline-widgets.md, proven in
  * src/poc/inline-overlay.ts.
  *
  * How it works (per block):

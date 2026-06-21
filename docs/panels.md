@@ -16,7 +16,7 @@ Notifications/Diagnostics/Keybindings docks) — is a `Panel`.
   collapsed; opens beside it land in the work area (`openPanel` / `ensureWorkArea`).
 - **`Workbench`** — fixed dock slots (left/right/top/bottom, nested Gtk.Paned)
   around the center. One Workbench per "person" (the user, each agent); switching
-  person swaps which Workbench the window shows (see tasks/agents.md). The
+  person swaps which Workbench the window shows (see docs/agents.md). The
   Files/Source-Control dock lives in the **right** slot — note the misleading
   `leftPanel` field / `revealLeftTab` names, which dock via `setRight`.
 

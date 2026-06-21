@@ -5,7 +5,7 @@
  * Step 3 proved that an `add_overlay` child (a descendant of the GtkTextView) can't
  * host a focusable editor: it receives key events but letter input (IM-commit) leaks
  * to the OUTER view, because focus stays "within" the outer view's subtree (see
- * tasks/code-editing/inline-widgets.md). This POC tests the fix: put the nested
+ * docs/text-editor/inline-widgets.md). This POC tests the fix: put the nested
  * editor in a *sibling* overlay (the editor's `Gtk.Overlay` layer, like the hover
  * card / caret), positioned at the reserved gap via buffer→window coords with
  * manual scroll-follow. A sibling is NOT a descendant, so focusing it should make

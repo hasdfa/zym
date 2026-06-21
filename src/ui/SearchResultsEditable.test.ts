@@ -1,6 +1,6 @@
 /*
  * Editable project-search multibuffer — SURFACE proof (3d / G6,
- * tasks/code-editing/multibuffer.md). A `SearchResultsView({ editable: true })` backs each
+ * docs/text-editor/multibuffer.md). A `SearchResultsView({ editable: true })` backs each
  * source with a live `Document` from the registry, so editing a result row writes through to
  * the file's model (visible to any open tab, persisted by save), block (header) rows reject
  * edits, undo routes through the coordinating `ProjectionView`, and a row-count-changing edit

@@ -51,7 +51,7 @@ export class GitBranchButton {
   readonly root: InstanceType<typeof Gtk.Button>;
 
   // The git repo this button reflects — swapped via `setRepo` when the active
-  // workbench changes (per-workbench roots; see tasks/agents.md).
+  // workbench changes (per-workbench roots; see docs/agents.md).
   private repo: GitRepo;
   private readonly icon: InstanceType<typeof Gtk.Label>;
   private readonly spinner: InstanceType<typeof Gtk.Spinner>;

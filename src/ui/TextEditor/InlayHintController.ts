@@ -4,7 +4,7 @@
  *
  * The native annotation API is line-anchored (end-of-line), so a line's hints are joined
  * and trailed after the line rather than placed at their exact column — "simple
- * end-of-line inlay hints" per tasks/code-editing/virtual-lines.md. (Mid-line placement
+ * end-of-line inlay hints" per docs/text-editor/virtual-lines.md. (Mid-line placement
  * would need the gap-tag + overlay recipe.) Like everything annotation-based, this is
  * per-view thanks to the A2 document-model: each view has its own buffer.
  *

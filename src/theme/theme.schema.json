@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://quilx.dev/schema/theme/v1.json",
   "title": "quilx theme",
-  "description": "A quilx editor theme. One theme per file; loaded by src/theme/theme.ts. See tasks/theming.md.",
+  "description": "A quilx editor theme. One theme per file; loaded by src/theme/theme.ts. See docs/theming.md.",
   "type": "object",
   "required": ["name", "appearance"],
   "additionalProperties": false,

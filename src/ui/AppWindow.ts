@@ -2241,7 +2241,7 @@ export class AppWindow {
 
   /** Search the project for the active editor's selected text and show every match,
    *  grouped by file with context, in a continuous read-only multibuffer tab. Phase 1a
-   *  of the multibuffer (tasks/code-editing/multibuffer.md). */
+   *  of the multibuffer (docs/text-editor/multibuffer.md). */
   private openSearchResults(): void {
     const query = this.activeEditor?.getSelectedText().trim() ?? '';
     if (query === '') {
@@ -2281,7 +2281,7 @@ export class AppWindow {
   }
 
   /** Show every changed file (working tree vs HEAD) as ONE continuous diff in a tab — the
-   *  multibuffer diff surface (read-only for now; tasks/code-editing/multibuffer.md, G5). */
+   *  multibuffer diff surface (read-only for now; docs/text-editor/multibuffer.md, G5). */
   private async openContinuousDiff(): Promise<void> {
     const cwd = this.workbench.cwd;
     const root = repoRoot(cwd);

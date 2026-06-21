@@ -8,7 +8,7 @@
  *
  * Captures are flattened off their tree-sitter nodes at gather time so each
  * injected tree can be freed immediately — its `SyntaxNode`s would dangle once
- * the wasm tree is deleted. See tasks/code-editing/syntax-injection.md.
+ * the wasm tree is deleted. See docs/text-editor/syntax-injection.md.
  */
 import { type Grammar, grammarForName } from './grammar.ts';
 

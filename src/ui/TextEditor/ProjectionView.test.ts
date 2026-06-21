@@ -1,5 +1,5 @@
 /*
- * ProjectionView tests (Phase 2b/2c, tasks/code-editing/multibuffer.md). The IDENTITY case
+ * ProjectionView tests (Phase 2b/2c, docs/text-editor/multibuffer.md). The IDENTITY case
  * (single full-file source) must reproduce Document's view↔model sync byte-for-byte — these
  * mirror Document.test.ts's sync contract, but through the new projection-backed materializer
  * (the substrate that Phase 2e swaps Document onto). Plus: multi-source materialization,

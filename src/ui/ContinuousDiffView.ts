@@ -1,6 +1,6 @@
 /*
  * ContinuousDiffView — a CONTINUOUS multi-file diff in one scrollable editor
- * (tasks/code-editing/multibuffer.md, Phase 3b / G5). Each changed file is a filename header
+ * (docs/text-editor/multibuffer.md, Phase 3b / G5). Each changed file is a filename header
  * then its diff windowed like a real diff (changed hunks + context, long unchanged runs elided
  * to a `⋯` gap; see `buildDiffMultiBuffer`): context + added rows over the NEW side, removed
  * rows over the OLD/HEAD blob, all stitched into one `ViewProjection`. Per-side syntax

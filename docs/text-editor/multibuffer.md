@@ -92,7 +92,7 @@ their name; that's the model layer):
   hunk-level discard on the surface (whole-file discard still lives on `GitPanel`).* Also one
   deferred polish: the gutter band beside the filename
   widget can't be painted the header color (node-gtk blocks gutter background drawing) — see
-  `tasks/code-editing/gutter-cell-background.md`.
+  `docs/text-editor/gutter-cell-background.md`.
 - **G6 — Editable project search + replace-all.** ✅ (`space *`; `file:save` routes to the active
   multibuffer).
 - **G7 — Cross-source undo/redo.** ✅ `ProjectionView` is the `UndoTarget`; re-entrant user
@@ -105,7 +105,7 @@ their name; that's the model layer):
   (`▸` chevron) — an item-level transform, NOT a view-fold (keeps the painter fold-naive per the
   Invariant). All three band consumers (diff, search, markdown image preview) declare their header/
   gap/image bands as SOURCE-anchored block decorations via `editor.blockDecorations()` — see
-  `tasks/code-editing/block-decorations.md` (generic primitive + declarative `BlockDecorationSet`).
+  `docs/text-editor/block-decorations.md` (generic primitive + declarative `BlockDecorationSet`).
 - **G9 — Multiple diff sources.** ☐ only working-tree vs HEAD today; commit / PR / range TODO.
 - **G10 — Performance.** ◐ single-file identity is zero-cost. *Viewport virtualization across many
   excerpts = TODO if profiling demands.*
@@ -145,7 +145,7 @@ duality, so low-value / high-risk to touch.*
 
 ### Backlog (after the two pickups)
 
-- **Gutter band background** (G5 polish, blocked on node-gtk) — `tasks/code-editing/gutter-cell-background.md`.
+- **Gutter band background** (G5 polish, blocked on node-gtk) — `docs/text-editor/gutter-cell-background.md`.
 - **G9** more diff sources (commit / PR / range); **G10** viewport virtualization (only if profiling
   demands); **G11** session persistence + a close-confirmation for a file edited ONLY in a
   multibuffer. (G8 — copy + per-excerpt collapse — is done.)
@@ -186,7 +186,7 @@ duality, so low-value / high-risk to touch.*
   `SearchResultsView` skips its repaint when `ProjectionView.isSyncPending()` and re-runs it from
   `setReflowHandler` (after the deferred rebuild), so the painter always reads the fresh map.
   (Header/gap *bands* don't need this — they're source-anchored block decorations that ride their
-  marks; see `tasks/code-editing/block-decorations.md`.)
+  marks; see `docs/text-editor/block-decorations.md`.)
 - **Cross-segment edits must be rejected at the FUNNEL, not in write-through.** A view range can be
   contiguous yet map to a non-contiguous source range — two regions of one file are the same source
   in different segments, with hidden rows between them. `EditorModel.setTextInBufferRange`'s
@@ -200,7 +200,7 @@ duality, so low-value / high-risk to touch.*
   on a logical-model change (collapse, re-diff, image re-scan) — NOT per edit. Positions then ride
   the decoration's anchor mark across every edit/undo/splice; reconcile matches by `id`, rebuilds a
   widget only when its `key` changed, and the editor re-projects only on a re-materialize. Full
-  design + the mark-survival proof: `tasks/code-editing/block-decorations.md`. Headers AND gaps are
+  design + the mark-survival proof: `docs/text-editor/block-decorations.md`. Headers AND gaps are
   widget bands (never buffer rows).
 - **Per-row gutter alignment.** A row that carries a band ABOVE it (a filename header, or the search
   `⋯` gap — anchored above the NEXT region's first row, see below) bottom-aligns its gutter number
