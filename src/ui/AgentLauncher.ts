@@ -19,6 +19,7 @@ import { theme } from '../theme/theme.ts';
 import { openFloatingCard } from './FloatingCard.ts';
 import { createInput } from './TextEditor/TextEditor.ts';
 import { AGENT_CONFIGS, listAgentKinds, type AgentKind, type LaunchOption } from '../agents/configs.ts';
+import { repoRoot, listBranches } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -32,6 +33,9 @@ const CARD_PADDING = 4 * theme.spacing;
 // the next open so a cancelled compose isn't lost. Cleared once submitted.
 let savedDraft = '';
 
+/** The worktree choice: create a fresh worktree, or work on an existing branch. */
+export type WorktreeChoice = { create: true } | { branch: string };
+
 export interface AgentLaunchRequest {
   /** The (trimmed) prompt text, or '' if left empty. */
   prompt: string;
@@ -41,9 +45,8 @@ export interface AgentLaunchRequest {
   cwd: string;
   /** The chosen agent kind. */
   kind: AgentKind;
-  /** Whether to start the work in a fresh git worktree (the agent creates it) rather
-   *  than the current one. */
-  newWorktree: boolean;
+  /** Create a fresh worktree, or work on a chosen branch (the agent sets it up). */
+  worktree: WorktreeChoice;
 }
 
 export interface AgentLauncherOptions {
@@ -165,20 +168,22 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     permissionDropdown.setOptions(opts.permissionModes, opts.defaultPermissionMode);
   });
 
-  // Worktree is a toggle, not a combobox: "current" works in the current workbench
-  // cwd, "new" starts the work in a fresh worktree (the agent creates it). A compact
-  // captioned segmented control (a linked pair of grouped toggle buttons) with its
-  // label on top, to stay tight in the option row.
-  const currentButton = new Gtk.ToggleButton({ label: 'current' });
-  const newButton = new Gtk.ToggleButton({ label: 'new' });
-  newButton.setGroup(currentButton); // mutually exclusive (radio-like)
-  currentButton.setActive(true);
-  const worktreeToggle = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-  worktreeToggle.addCssClass('linked');
-  worktreeToggle.append(currentButton);
-  worktreeToggle.append(newButton);
-  const worktreeField = field('worktree', worktreeToggle);
-  worktreeField.setTooltipText('Start the work in a fresh git worktree instead of the current one');
+  // Worktree: a dropdown whose first value, "Create", starts the work in a fresh
+  // worktree (the agent creates it); the rest are the repo's branches, to work on a
+  // chosen branch in its own worktree. "Create" is the empty-string sentinel (a branch
+  // name can never be empty). Branches load asynchronously.
+  const worktreeDropdown = new OptionDropdown([{ value: '', label: 'Create' }], '');
+  const worktreeField = field('worktree', worktreeDropdown.widget);
+  const repo = repoRoot(cwd);
+  if (repo) {
+    listBranches(repo, (branches) => {
+      if (card.isClosed()) return;
+      worktreeDropdown.setOptions(
+        [{ value: '', label: 'Create' }, ...branches.map((b) => ({ value: b, label: b }))],
+        '',
+      );
+    });
+  }
 
   // A WrapBox so the option fields reflow onto another line on a narrow card rather
   // than overflowing. Each field carries a caption above its control.
@@ -197,9 +202,11 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
       permissionMode: permissionDropdown.getValue(),
     });
     const prompt = input.getText().trim();
+    const sel = worktreeDropdown.getValue();
+    const worktree: WorktreeChoice = sel === '' ? { create: true } : { branch: sel };
     card.close(false); // onClose stashes the text…
     savedDraft = ''; // …but it was submitted, so don't restore it next time
-    onLaunch({ prompt, command, cwd, kind, newWorktree: newButton.getActive() });
+    onLaunch({ prompt, command, cwd, kind, worktree });
   };
 
   registerLauncherKeymapOnce();

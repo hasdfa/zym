@@ -62,7 +62,7 @@ import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
 import { openWorktreePicker } from './WorktreePicker.ts';
-import { openAgentLauncher } from './AgentLauncher.ts';
+import { openAgentLauncher, type WorktreeChoice } from './AgentLauncher.ts';
 import {
   openBranchPicker,
   openDeleteBranchPicker,
@@ -2406,16 +2406,16 @@ export class AppWindow {
         description: 'Run a package.json script in a terminal',
       },
       'agent:new': {
-        // The launcher gathers the prompt + model / permission mode / kind + a
-        // "new worktree" toggle, then hands back the assembled argv for openAgent.
-        // When the toggle is on, the agent is asked to create the worktree itself
-        // (and announce it via set_worktree, which re-roots the workbench).
+        // The launcher gathers the prompt + model / permission mode / kind + a worktree
+        // choice (create a fresh one, or a branch to work on), then hands back the
+        // assembled argv. The worktree is set up by the agent itself (it announces it via
+        // set_worktree, which re-roots the workbench) — see launchPrompt.
         didDispatch: () =>
           openAgentLauncher(this.overlay, {
             cwd: this.workbench.cwd,
             defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
-            onLaunch: ({ prompt, command, cwd, kind, newWorktree }) =>
-              this.openAgent({ prompt: launchPrompt(prompt, newWorktree), command, cwd, kind }),
+            onLaunch: ({ prompt, command, cwd, kind, worktree }) =>
+              this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind }),
           }),
         description: 'Start a new agent',
       },
@@ -3122,17 +3122,24 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-// The launch prompt for a new agent. With the launcher's "new worktree" toggle on,
-// prepend an instruction for the agent to create its own worktree and announce it
-// (set_worktree re-roots the workbench) — there's no host-side worktree creation; the
-// agent owns it. Returns undefined for an empty prompt with the toggle off.
+// The launch prompt for a new agent. The launcher's worktree choice is realized by the
+// agent itself (there's no host-side worktree creation): prepend an instruction to set
+// up the worktree and announce it via set_worktree (which re-roots the workbench), then
+// run the user's prompt.
 const NEW_WORKTREE_INSTRUCTION =
   'Before anything else, create a new git worktree for this task (`git worktree add` ' +
   'with a descriptive branch name), switch into it, and call the set_worktree tool with ' +
   'its absolute path. Then continue.';
-function launchPrompt(prompt: string, newWorktree: boolean): string | undefined {
-  if (!newWorktree) return prompt || undefined;
-  return prompt ? `${NEW_WORKTREE_INSTRUCTION}\n\n${prompt}` : NEW_WORKTREE_INSTRUCTION;
+function branchWorktreeInstruction(branch: string): string {
+  return (
+    `Before anything else, set up a git worktree for the branch \`${branch}\` (check it ` +
+    'out into a new worktree with `git worktree add`, or reuse its existing one), switch ' +
+    'into it, and call the set_worktree tool with its absolute path. Then continue.'
+  );
+}
+function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
+  const instruction = 'create' in worktree ? NEW_WORKTREE_INSTRUCTION : branchWorktreeInstruction(worktree.branch);
+  return prompt ? `${instruction}\n\n${prompt}` : instruction;
 }
 
 // Whether `path` is `root` itself or lives beneath it (a `root + sep` prefix, so
