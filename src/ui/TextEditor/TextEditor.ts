@@ -1259,20 +1259,25 @@ export class TextEditor implements DocumentHost {
           : this.growMaxHeight;
       // GtkScrolledWindow's propagate-natural-height can report 0 before the view's first
       // layout, so an unedited input collapsed to "0 lines" until its first edit. Drive a
-      // min content height instead, from the view's *measured* natural height — the same
-      // value propagate-natural-height settles on, so the height doesn't jump by a few px
-      // on the first edit. Measured height-for-width at the current width (or unconstrained
-      // before it's allocated), refreshed on map and on every edit.
+      // min content height from the view's measured natural height instead — but measure on
+      // a one-shot frame-clock tick, *after* GTK's layout pass, so it reflects the just-
+      // applied edit/allocation. Measuring inline reads the pre-relayout size (stale: the
+      // initial collapse, and a lag on shrink) and is also a few px off the settled height.
+      let pendingMeasure = false;
       const applyHeight = () => {
         const cap = capHeight();
         if (cap !== undefined) scrolled.setMaxContentHeight(cap);
         const width = this.view.getWidth();
         const natural = this.view.measure(Gtk.Orientation.VERTICAL, width > 0 ? width : -1)[1];
-        scrolled.setMinContentHeight(cap !== undefined ? Math.min(natural, cap) : natural);
+        if (natural > 0) scrolled.setMinContentHeight(cap !== undefined ? Math.min(natural, cap) : natural);
       };
-      applyHeight();
-      this.connect(this.view, 'map', applyHeight);
-      this.editorModel.onDidChangeText(applyHeight);
+      const scheduleMeasure = () => {
+        if (pendingMeasure || !this.view.getRealized()) return; // map (below) covers the unrealized case
+        pendingMeasure = true;
+        (this.view as any).addTickCallback(() => { pendingMeasure = false; applyHeight(); return false; });
+      };
+      this.connect(this.view, 'map', scheduleMeasure);
+      this.editorModel.onDidChangeText(scheduleMeasure);
     }
 
     // Scroll-past-end (`editor.scrollPastEnd`): GtkSourceView has no native option,
