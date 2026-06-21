@@ -48,6 +48,25 @@ test('dd deletes the whole line (linewise)', () => {
   assert.equal(editor.getText(), 'one\nthree\n');
 });
 
+test('dd deletes the empty row rendered after the final newline', () => {
+  const { editor, vimState, run, at } = setup('one\ntwo\n');
+  at(2, 0); // the trailing empty row GtkSourceView renders
+  run('Delete');
+  run('Delete'); // dd
+  assert.equal(editor.getText(), 'one\ntwo'); // drops the final newline's empty row
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [1, 0]);
+  assert.equal(vimState.register.getText('"'), '\n'); // yanked as a linewise empty line
+});
+
+test('dd on the last content line (no trailing newline) removes the line', () => {
+  const { editor, vimState, run, at } = setup('one\ntwo');
+  at(1, 0); // "two" is the last row, with no newline after it
+  run('Delete');
+  run('Delete'); // dd
+  assert.equal(editor.getText(), 'one');
+  assert.equal(vimState.register.getText('"'), 'two\n'); // register keeps proper linewise text
+});
+
 test('yw yanks into the unnamed register without changing the buffer', () => {
   const { editor, vimState, run, at } = setup('foo bar\n');
   at(0, 0);
