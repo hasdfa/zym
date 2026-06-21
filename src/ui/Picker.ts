@@ -17,6 +17,7 @@ import { fuzzyMatch } from './fuzzyMatch.ts';
 import { theme } from '../theme/theme.ts';
 import { frecency } from '../util/Frecency.ts';
 import { enableReadline } from './readline.ts';
+import { openFloatingCard } from './FloatingCard.ts';
 
 
 const PICKER_WIDTH = 640;
@@ -467,12 +468,26 @@ export function openPicker(options: PickerOptions): PickerHandle {
   scrolled.setPolicy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
   scrolled.setName('PickerList');
 
-  // A floating, opaque "card" placed at the top-centre of the overlay.
-  const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
-  panel.setName('Picker');
-  panel.setHalign(Gtk.Align.CENTER);
-  panel.setValign(Gtk.Align.START);
-  panel.setMarginTop(48);
+  // Teardown handles disposed when the card closes (declared up-front so the card's
+  // `onClose` can reach them; assigned further down as they're created).
+  let commandsSub: { dispose(): void } | null = null;
+  // Pending side-preview refresh (debounced as the selection moves); cleared on close.
+  let previewTimer: NodeJS.Timeout | null = null;
+
+  // The floating card shell — mounts an opaque card at the overlay's top-centre,
+  // remembers/restores focus, and dismisses on focus-loss. The Picker fills it with
+  // the entry + result list and registers its own navigation keymap on the panel.
+  const card = openFloatingCard({
+    host,
+    name: 'Picker',
+    onClose: () => {
+      commandsSub?.dispose();
+      readlineSub.dispose();
+      promptSpinner?.stop();
+      if (previewTimer) clearTimeout(previewTimer);
+    },
+  });
+  const panel = card.panel;
   // Mirror the entry's `has-prompt` onto the card so the rows inset to align with
   // the (icon-offset) entry text — see the `#Picker.has-prompt #PickerRow` rule.
   // Skipped when `disableIconPadding` is set: the caller renders its own per-row
@@ -497,7 +512,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
     panel.setSizeRequest(PICKER_WIDTH, -1);
     panel.append(scrolled);
   }
-  panel.overflow = Gtk.Overflow.HIDDEN;
 
   let items = (options.items ?? []).map(normalizeItem);
 
@@ -528,28 +542,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
   let actionRow: InstanceType<typeof Gtk.ListBoxRow> | null = null;
   // The trailing non-interactive message row (loading / empty / error), if shown.
   let messageRow: InstanceType<typeof Gtk.ListBoxRow> | null = null;
-  let closed = false;
-  // The picker's `core:*` command bundle, registered on the panel below and torn
-  // down here so a dismissed picker leaves no dangling commands.
-  let commandsSub: { dispose(): void } | null = null;
-  // Pending side-preview refresh (debounced as the selection moves); cleared on close.
-  let previewTimer: NodeJS.Timeout | null = null;
-
-  // Remember whatever held focus before the picker grabbed it, so that
-  // dismissing without a selection returns focus there (e.g. back to the editor)
-  // instead of leaving it stranded on the now-removed overlay.
-  const previousFocus = host.getRoot()?.getFocus() ?? null;
-
-  const close = (restoreFocus = true) => {
-    if (closed) return;
-    closed = true;
-    commandsSub?.dispose();
-    readlineSub.dispose();
-    promptSpinner?.stop();
-    if (previewTimer) clearTimeout(previewTimer);
-    host.removeOverlay(panel);
-    if (restoreFocus) previousFocus?.grabFocus();
-  };
+  const close = card.close;
 
   // Refresh the side preview for the currently selected match (debounced, so
   // holding Down doesn't rebuild the preview for every row flown past). Action and
@@ -723,7 +716,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     setLoading(true);
     // A stale/closed response (result or error) is dropped; only the latest
     // query's outcome updates the picker.
-    const isCurrent = () => !closed && generation === fetchGeneration;
+    const isCurrent = () => !card.isClosed() && generation === fetchGeneration;
     const fail = (message: string) => {
       if (!isCurrent()) return;
       setError(message);
@@ -787,32 +780,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
     'core:cancel': () => close(),
   });
 
-  // Dismiss when focus moves to another widget in the app (click elsewhere, tab
-  // away): close and hand focus back to wherever it came from. `leave` fires only
-  // when focus exits the panel *and* its descendants, so moving between the entry
-  // and the list rows doesn't trigger it; the entry is focused below, so the first
-  // event is an `enter`, never a spurious `leave`. `close()` restores
-  // `previousFocus` by default and is idempotent (the focus restore can re-enter).
-  //
-  // A `leave` also fires when the whole window is deactivated (alt-tabbing to
-  // another app), but that must NOT close the picker — it should still be there on
-  // return. So defer a tick (let the focus/active state settle) and close only if
-  // the window is still active: i.e. focus genuinely moved to another in-app widget
-  // rather than the app losing focus entirely (where the focus stays on the entry).
-  const focus = new Gtk.EventControllerFocus();
-  focus.on('leave', () => {
-    setTimeout(() => {
-      if (closed) return;
-      const root = panel.getRoot() as any;
-      const windowActive = root?.isActive?.() ?? true;
-      const focused = root?.getFocus?.() ?? null;
-      const focusWithin = !!focused && (focused === panel || focused.isAncestor(panel));
-      if (windowActive && !focusWithin) close();
-    }, 0);
-  });
-  panel.addController(focus);
-
-  host.addOverlay(panel);
   if (options.query) {
     entry.setText(options.query); // prefill (e.g. a seeded prompt / a full path)
     entry.setPosition(-1); // cursor at the end, ready to keep typing
@@ -827,15 +794,15 @@ export function openPicker(options: PickerOptions): PickerHandle {
       setError(null); // content arrived — clear any prior failure
       setLoading(false); // content arrived
       applySearchDelay(); // dataset size may have crossed the auto threshold
-      if (!closed) rebuild();
+      if (!card.isClosed()) rebuild();
     },
     setLoading(loading: boolean) {
       setLoading(loading);
-      if (!closed) rebuild(); // refresh the placeholder row's text
+      if (!card.isClosed()) rebuild(); // refresh the placeholder row's text
     },
     setError(message: string | null) {
       setError(message);
-      if (!closed) rebuild();
+      if (!card.isClosed()) rebuild();
     },
     close,
   };
