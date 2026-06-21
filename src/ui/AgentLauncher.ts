@@ -110,11 +110,10 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   const panel = card.panel;
   panel.setSizeRequest(CARD_WIDTH, -1);
 
-  // The prompt — a buffer-only editor (full vim editing), wrapped in a named
-  // container so the enter/alt-enter keymap scopes to it.
-  const input = createInput({ placeholder: 'Prompt for the agent…' });
-  input.root.setVexpand(false);
-  input.root.setSizeRequest(-1, 120);
+  // The prompt — a buffer-only editor (full vim editing) that auto-grows with its
+  // content up to 5 lines (then scrolls), wrapped in a named container so the
+  // enter/alt-enter keymap scopes to it.
+  const input = createInput({ placeholder: 'Prompt for the agent…', grow: true, maxLines: 5 });
   const promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   promptContainer.setName('AgentLauncherPrompt');
   promptContainer.append(input.root);
