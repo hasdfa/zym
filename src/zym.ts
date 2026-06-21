@@ -20,6 +20,7 @@ import { SessionManager } from './SessionManager.ts';
 import { LspManager } from './lsp/LspManager.ts';
 import { Workspace } from './Workspace.ts';
 import { Config, type ConfigSchema } from './util/Config.ts';
+import { availableThemes, DEFAULT_THEME_NAME } from './theme/theme.ts';
 
 /*
  * The application-wide config schema (Atom's `core.*` / `editor.*`). This is the
@@ -32,6 +33,12 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     type: 'boolean',
     default: true,
     description: 'Follow the system light/dark preference for the active theme.',
+  },
+  'theme.active': {
+    type: 'string',
+    default: DEFAULT_THEME_NAME,
+    enum: availableThemes(),
+    description: 'Active theme; loads <name>.json from src/theme/. Overridden by the ZYM_THEME env var. Applied at startup — restart after changing.',
   },
   'core.uiFont': {
     type: 'string',

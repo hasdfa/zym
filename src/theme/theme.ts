@@ -14,6 +14,7 @@
  * tokens into the color + style maps. Every `theme.ui.*` field is guaranteed filled.
  */
 import * as Fs from 'node:fs';
+import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { alpha as withAlpha, darken, formatHEXA, lighten, parse } from 'color-bits';
 
@@ -380,8 +381,53 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
   }
 }
 
+/** The name loaded when no override is set — see `activeThemeName`. */
+export const DEFAULT_THEME_NAME = 'zym';
+
+/** The themes shippable by name: every `<name>.json` next to this module (minus the
+ *  JSON Schema). Used by the theme picker and as the `theme.active` config enum. */
+export function availableThemes(): string[] {
+  return Fs.readdirSync(import.meta.dirname)
+    .filter((f) => f.endsWith('.json') && f !== 'theme.schema.json')
+    .map((f) => f.slice(0, -'.json'.length))
+    .sort();
+}
+
+// Read `theme.active` straight from the user config file, WITHOUT importing the
+// config/zym modules — `theme.ts` is loaded very early (its `theme` const evaluates
+// on first import) and pulling in `zym.ts` here would be a cycle. We replicate the
+// tiny XDG path calc from config/load.ts. Returns undefined on any problem.
+function configThemeName(): string | undefined {
+  try {
+    const configHome = process.env.XDG_CONFIG_HOME || Path.join(Os.homedir(), '.config');
+    const parsed = JSON.parse(Fs.readFileSync(Path.join(configHome, 'zym', 'config.json'), 'utf8')) as Record<string, unknown>;
+    const name = parsed['theme.active'];
+    return typeof name === 'string' ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The theme name to load at startup, by precedence: the `ZYM_THEME` env var (for
+ * testing a theme without touching config) → the `theme.active` user setting →
+ * `DEFAULT_THEME_NAME`. Each candidate must name an existing theme file or it's
+ * skipped (an unknown `ZYM_THEME` is warned about, since it's set deliberately).
+ */
+export function activeThemeName(): string {
+  const available = new Set(availableThemes());
+  const env = process.env.ZYM_THEME;
+  if (env) {
+    if (available.has(env)) return env;
+    console.warn(`[theme] ZYM_THEME="${env}" is not an available theme (${[...available].join(', ')}); ignoring`);
+  }
+  const fromConfig = configThemeName();
+  if (fromConfig && available.has(fromConfig)) return fromConfig;
+  return DEFAULT_THEME_NAME;
+}
+
 /** The active theme. */
-export const theme = loadTheme('zym');
+export const theme = loadTheme(activeThemeName());
 
 /**
  * The theme's `ui.*` color tokens as CSS custom-property declarations — one per leaf,

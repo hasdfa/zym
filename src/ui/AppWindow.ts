@@ -62,6 +62,8 @@ import { ContinuousDiffView } from './ContinuousDiffView.ts';
 import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
+import { openThemePicker } from './ThemePicker.ts';
+import { saveConfig } from '../config/load.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
 import { openWorktreePicker } from './WorktreePicker.ts';
@@ -1718,6 +1720,23 @@ export class AppWindow {
       'dock:toggle-right': { didDispatch: () => this.toggleDockSide('right'), description: 'Toggle the right dock (Files / Source Control)' },
       'dock:toggle-top': { didDispatch: () => this.toggleDockSide('top'), description: 'Toggle the top dock' },
       'dock:toggle-bottom': { didDispatch: () => this.toggleDockSide('bottom'), description: 'Toggle the bottom dock' },
+      'theme:select': { didDispatch: () => this.selectTheme(), description: 'Select the editor theme' },
+    });
+  }
+
+  // Open the theme picker; persist the chosen theme to `theme.active` and toast a
+  // restart hint (themes are resolved at startup by `activeThemeName`, not live).
+  // A no-op selection of the active theme just reports it.
+  private selectTheme() {
+    const current = String(zym.config.get('theme.active'));
+    openThemePicker(this.overlay, current, (name) => {
+      if (name === current) {
+        this.toast(`Theme “${name}” is already active`);
+        return;
+      }
+      zym.config.set('theme.active', name);
+      saveConfig();
+      this.toast(`Theme set to “${name}” — restart to apply`);
     });
   }
 
