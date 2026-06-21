@@ -12,7 +12,7 @@
  */
 import { Gtk, Gdk, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
-import { rank, highlightMarkup } from './Picker.ts';
+import { rank } from './Picker.ts';
 
 const POPOVER_MAX_HEIGHT = 320;
 
@@ -67,6 +67,7 @@ export class Combobox {
   private results: ComboOption[] = []; // filtered options, parallel to the list rows
   private open = false;
   private settingText = false; // suppress `changed` while seeding the entry
+  private suppressOpen = false; // don't auto-reopen when focus returns after a close
 
   constructor(config: ComboboxConfig) {
     this.options = config.options;
@@ -92,6 +93,11 @@ export class Combobox {
     const displayKeys = new Gtk.EventControllerKey();
     displayKeys.on('key-pressed', (keyval: number, _kc: number, state: number) => this.onDisplayKey(keyval, state));
     display.addController(displayKeys);
+    // Focusing the trigger opens the popup (e.g. tabbing in), except when focus is just
+    // returning to it after a close (guarded below) — that must not auto-reopen.
+    const displayFocus = new Gtk.EventControllerFocus();
+    displayFocus.on('enter', () => { if (!this.suppressOpen) this.openPopup(); });
+    display.addController(displayFocus);
 
     // Open trigger: a plain entry (no search icon) in the trigger's place.
     this.entry = new Gtk.Entry();
@@ -211,7 +217,11 @@ export class Combobox {
   private closePopup(): void {
     this.open = false;
     this.popover.popdown();
+    // Swapping back focuses the trigger again; suppress the auto-open that would cause,
+    // briefly, so it stays closed (a click / Down / tab-in still opens it).
+    this.suppressOpen = true;
     this.stack.setVisibleChildName('display');
+    setTimeout(() => { this.suppressOpen = false; }, 200);
   }
 
   // Revert: close without committing; the trigger shows the unchanged value.
@@ -235,20 +245,18 @@ export class Combobox {
 
     const items = this.options.map((o) => ({ value: o.value, text: o.label }));
     const byValue = new Map(this.options.map((o) => [o.value, o]));
-    const ranked = rank(query, items);
-    this.results = ranked.map((r) => byValue.get(r.item.value)!).filter(Boolean);
-    ranked.forEach((r, i) => {
-      const opt = this.results[i];
-      if (opt) this.listBox.append(this.buildItem(opt, r.positions));
-    });
+    // rank() only orders/filters here; we render plain labels (no match highlighting).
+    this.results = rank(query, items).map((r) => byValue.get(r.item.value)!).filter(Boolean);
+    for (const opt of this.results) this.listBox.append(this.buildItem(opt));
     const first = this.listBox.getRowAtIndex(0);
     if (first) this.listBox.selectRow(first);
   }
 
-  private buildItem(opt: ComboOption, positions: number[]): InstanceType<typeof Gtk.ListBoxRow> {
-    const label = new Gtk.Label({ xalign: 0, useMarkup: true });
+  private buildItem(opt: ComboOption): InstanceType<typeof Gtk.ListBoxRow> {
+    const label = new Gtk.Label({ xalign: 0 });
     label.setName('ComboboxItem');
-    label.setMarkup(highlightMarkup(opt.label, positions));
+    label.setText(opt.label);
+    label.setEllipsize(Pango.EllipsizeMode.END); // keep rows within the trigger width
     this.styleLabel(label, opt.label);
     const row = new Gtk.ListBoxRow();
     row.setChild(label);
