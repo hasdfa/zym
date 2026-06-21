@@ -227,12 +227,12 @@ export class SdkSession {
    *  interactive client in headless mode and returns "did not answer"; the
    *  permission `updatedInput` cannot carry the answer either — both verified.)
    *  An empty selection mirrors the native "user did not answer" outcome. */
-  answerQuestion(id: string, answers: Array<{ header: string; labels: string[] }>): void {
+  answerQuestion(id: string, answers: Array<{ header: string; labels: string[]; notes?: string }>): void {
     if (id !== this.lastPermId) return; // stale / already answered
     const answered = answers.filter((a) => a.labels.length > 0);
     const message = answered.length === 0
       ? 'The user did not answer the questions.'
-      : `The user answered:\n${answered.map((a) => `- ${a.header}: ${a.labels.join(', ')}`).join('\n')}`;
+      : `The user answered:\n${answered.map((a) => `- ${a.header}: ${a.labels.join(', ')}${a.notes ? ` (note: ${a.notes})` : ''}`).join('\n')}`;
     const body = { id, behavior: 'deny', message };
     logPerm('←', body);
     writeAtomic(this.permResponseFile, JSON.stringify(body));

@@ -29,7 +29,8 @@ import { escapeMarkup, setMarkupSafe, clearChildren } from './proseMarkup.ts';
 import { iconSpan } from './icons.ts';
 import { truncateLines, summarizeInput, formatCount, progressLine } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
-import { permissionCard, questionCard } from './conversation/cards.ts';
+import { permissionCard } from './conversation/cards.ts';
+import { QuestionCard } from './conversation/QuestionCard.ts';
 import { SubagentView } from './conversation/SubagentView.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
@@ -936,7 +937,8 @@ export class AgentConversation implements Agent {
   }
 
   private addQuestionCard(req: QuestionRequest): void {
-    this.messages.append(questionCard(req, (answers) => this.session.answerQuestion(req.id, answers)));
+    const card = new QuestionCard(req, (answers) => this.session.answerQuestion(req.id, answers));
+    this.messages.append(card.root);
     this.scrollToBottom();
   }
 
