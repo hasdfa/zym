@@ -49,7 +49,9 @@ export class EditorPopover {
     this.chrome = opts.chrome ?? 0;
     this.popover = new Gtk.Popover();
     this.popover.setChild(child);
-    this.popover.setAutohide(false); // never steal focus from the editor
+    this.popover.setAutohide(false); // don't grab — dismissal is driven by the editor
+    this.popover.setCanFocus(false); // never move focus off the view (keeps keys flowing)
+    this.popover.setFocusable(false);
     this.popover.setHasArrow(false);
     this.popover.setPosition(opts.position === 'bottom' ? Gtk.PositionType.BOTTOM : Gtk.PositionType.TOP);
     if (opts.cssClass) this.popover.addCssClass(opts.cssClass);
@@ -62,24 +64,36 @@ export class EditorPopover {
    *  the point's column. GtkPopover centers on its anchor rect, so the rect is spanned to
    *  the card's measured width to land that left edge. Returns false if off-screen. */
   showAt(point: { row: number; column: number }, contentInset = 0): boolean {
-    const rect = this.model.pixelRectForBufferPosition(point);
-    if (!rect) return false;
-    // The popover takes the content's natural width (≥ the child's min) plus its chrome —
-    // measure so this holds for any content width.
-    const [min, nat] = this.child.measure(Gtk.Orientation.HORIZONTAL, -1);
-    const target = new Gdk.Rectangle();
-    target.x = rect.x - this.chrome - contentInset;
-    target.y = rect.y;
-    target.width = Math.max(min, nat) + 2 * this.chrome;
-    target.height = rect.height;
-    this.popover.setPointingTo(target);
-    this.popupSoon();
+    if (!this.model.pixelRectForBufferPosition(point)) return false; // off-screen → caller may retry
+    // Everything below touches GTK layout (measure() forces a size pass; popup() makes a
+    // surface) — run it on a libuv tick, never inside the promise-continuation microtask
+    // node-gtk drains under the GLib loop (callers like LSP hover/completion reach here
+    // after an `await`), which can freeze. Recompute the rect on the tick so it's current.
+    if (this.showId) clearTimeout(this.showId);
+    this.showId = setTimeout(() => {
+      this.showId = null;
+      const rect = this.model.pixelRectForBufferPosition(point);
+      if (!rect) return;
+      // The popover takes the content's natural width (≥ the child's min) plus its chrome.
+      const [min, nat] = this.child.measure(Gtk.Orientation.HORIZONTAL, -1);
+      const target = new Gdk.Rectangle();
+      target.x = rect.x - this.chrome - contentInset;
+      target.y = rect.y;
+      target.width = Math.max(min, nat) + 2 * this.chrome;
+      target.height = rect.height;
+      this.popover.setPointingTo(target);
+      this.popover.popup();
+    }, 0);
     return true;
   }
 
   /** Re-show at the last anchor (content changed in place, anchor unchanged). */
   show(): void {
-    this.popupSoon();
+    if (this.showId) clearTimeout(this.showId);
+    this.showId = setTimeout(() => {
+      this.showId = null;
+      this.popover.popup();
+    }, 0);
   }
 
   hide(): void {
@@ -92,16 +106,6 @@ export class EditorPopover {
 
   get visible(): boolean {
     return this.popover.getVisible();
-  }
-
-  // popup() must run on a libuv tick, not inside the promise-continuation microtask
-  // node-gtk drains under the GLib loop (which freezes); setTimeout(0) marshals it across.
-  private popupSoon(): void {
-    if (this.showId) clearTimeout(this.showId);
-    this.showId = setTimeout(() => {
-      this.showId = null;
-      this.popover.popup();
-    }, 0);
   }
 
   dispose(): void {

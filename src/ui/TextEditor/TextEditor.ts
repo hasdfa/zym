@@ -813,7 +813,6 @@ export class TextEditor implements DocumentHost {
     this.dismissSignature();
     this.hoverPopover.dispose(); // hide + unparent (a setParent'd popover must be unparented)
     this.signaturePopover.dispose();
-    this.completion?.dispose(); // unparents the completion popover from the view
     this.decorationMaterializeSub?.(); // drop the materialize re-projection subscription
     this.decorationMaterializeSub = null;
     this.syntax.dispose(); // detach buffer/view signal handlers + free the tree-sitter tree
@@ -1333,7 +1332,7 @@ export class TextEditor implements DocumentHost {
     // multi-cursor carets.
     this.completion = new CompletionController(
       this.editorModel,
-      this.view,
+      overlay,
       () => this.vimState.mode === 'insert',
       // Tree-sitter highlight code blocks in completion docs, like the hover card;
       // unlabeled fences fall back to this file's language.

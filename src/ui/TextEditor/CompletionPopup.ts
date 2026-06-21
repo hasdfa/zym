@@ -1,8 +1,7 @@
 /*
- * CompletionPopup — the autocompletion dropdown: a list of candidates anchored
- * just below the word via the shared `EditorPopover` (a chrome-less Gtk.Popover;
- * this panel is the visual card), optionally with a second pane to its right that
- * shows the selected item's documentation (LSP docs).
+ * CompletionPopup — the autocompletion dropdown: a list of candidates floated
+ * just below the cursor in the editor's `Gtk.Overlay`, optionally with a second
+ * pane to its right that shows the selected item's documentation (LSP docs).
  *
  * Keyboard-driven (the editor keeps focus; the `CompletionController` routes
  * Up/Down/Enter via a capture key controller), so the popup itself never takes
@@ -17,10 +16,9 @@ import { highlightMarkup } from '../Picker.ts';
 import { escapeMarkup } from '../proseMarkup.ts';
 import { iconLabel, completionKindGlyph } from '../icons.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
-import { EditorPopover } from './EditorPopover.ts';
-import type { EditorModel } from './EditorModel.ts';
-import type { SourceView } from '../../gi.ts';
 import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
+
+type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 const POPUP_BG = theme.ui.editor.background;
 const SELECTED_BG = theme.ui.surface.selected;
@@ -36,6 +34,8 @@ const ROW_PADDING_PX = 8;
 const ICON_WIDTH_PX = 18;
 const ICON_MARGIN_PX = 8;
 const LABEL_INSET_PX = BORDER_PX + ROW_PADDING_PX + ICON_WIDTH_PX + ICON_MARGIN_PX;
+// Slack for the divider + borders between the list and doc panes.
+const DOC_GAP_PX = 14;
 
 addStyles(`
   #CompletionPopup {
@@ -60,15 +60,6 @@ addStyles(`
   #CompletionPopup .completion-description { opacity: 0.45; margin-left: 0.75em; font-size: 0.9em; }
   #CompletionPopup separator.completion-divider { background-color: var(--border-color); }
   #CompletionPopup .completion-doc { padding: 6px 8px; }
-  /* The popover is only a positioner — the #CompletionPopup panel is the visual card, so
-     strip the popover's own background / border / shadow / padding (chrome = 0). */
-  .zym-completion-popover > contents {
-    background: none;
-    box-shadow: none;
-    border: none;
-    padding: 0;
-    min-width: 0;
-  }
 `);
 
 export class CompletionPopup {
@@ -78,7 +69,7 @@ export class CompletionPopup {
   private readonly divider: InstanceType<typeof Gtk.Separator>;
   private readonly docScroller: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly docLabel: InstanceType<typeof Gtk.Label>;
-  private readonly popover: EditorPopover;
+  private readonly host: Overlay;
   // Syntax-highlight a fenced code block to Pango markup (tree-sitter, supplied by
   // the editor) — same callback the LSP hover uses. Null/absent → plain mono code.
   private readonly highlightCode?: (code: string, lang: string | undefined) => string | null;
@@ -89,10 +80,10 @@ export class CompletionPopup {
   private docPaneSticky = false;
 
   constructor(
-    model: EditorModel,
-    view: SourceView,
+    host: Overlay,
     highlightCode?: (code: string, lang: string | undefined) => string | null,
   ) {
+    this.host = host;
     this.highlightCode = highlightCode;
     this.listBox = new Gtk.ListBox();
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
@@ -128,37 +119,40 @@ export class CompletionPopup {
     this.panel.append(this.listScroller);
     this.panel.append(this.divider);
     this.panel.append(this.docScroller);
-    // A cursor-anchored popover below the word, positioned by EditorPopover. The popover
-    // itself is chrome-less (chrome: 0) — the panel above is the visual card.
-    this.popover = new EditorPopover(model, view, this.panel, {
-      position: 'bottom',
-      cssClass: 'zym-completion-popover',
-    });
+    this.panel.setVisible(false);
+    host.addOverlay(this.panel);
   }
 
   get isOpen(): boolean {
     return this.shown;
   }
 
-  /** Show `entries` below `point`, the candidate labels lined up under the word being
-   *  completed (`contentInset = LABEL_INSET_PX` skips the row border/padding/icon column).
-   *  The popover slides to stay on-screen; the doc pane opens to the right, growing the
-   *  card rightward without moving the list (its left edge is anchored). */
-  showAt(entries: RankedCompletion[], point: { row: number; column: number }): void {
+  /** Show `entries` with the list's first row aligned to widget pixel `(x, y)`. */
+  showAt(entries: RankedCompletion[], x: number, y: number): void {
     this.entries = entries;
     this.rebuild();
-    this.popover.showAt(point, LABEL_INSET_PX);
+    let left = Math.max(0, Math.round(x) - LABEL_INSET_PX);
+    // The doc pane opens to the right when a candidate is selected. Reserve room
+    // for it and shift the popup left if the word is near the editor's right edge,
+    // so the doc pane doesn't end up clipped off-screen.
+    const overlayWidth = this.host.getWidth();
+    // Reserve doc-pane room when any entry has docs now or could gain them via a
+    // lazy resolve (LSP), so the popup doesn't shift once the pane opens.
+    const mayHaveDocs = entries.some((e) => e.item.documentation?.trim() || e.item.resolve);
+    const reserved = mayHaveDocs ? LIST_WIDTH_PX + DOC_GAP_PX + DOC_WIDTH_PX : LIST_WIDTH_PX;
+    if (overlayWidth > 0 && left + reserved > overlayWidth) {
+      left = Math.max(0, overlayWidth - reserved);
+    }
+    this.panel.setMarginStart(left);
+    this.panel.setMarginTop(Math.max(0, Math.round(y)));
+    this.panel.setVisible(true);
     this.shown = true;
   }
 
   hide(): void {
     if (!this.shown) return;
     this.shown = false;
-    this.popover.hide();
-  }
-
-  dispose(): void {
-    this.popover.dispose();
+    this.panel.setVisible(false);
   }
 
   /** Number of candidates. */
