@@ -64,13 +64,21 @@ addStyles(/* css */`
     border-radius: var(--popover-radius);
     background-color: var(--window-bg-color);
   }
+  /* Accent focus ring around the whole card while the prompt editor has focus
+     (toggled via .prompt-focused below). GTK draws the outline following the card's
+     border-radius. */
+  #AgentLauncher.prompt-focused {
+    outline: 2px solid var(--accent-color);
+    outline-offset: -1px;
+  }
   /* The prompt uses the large editor font size. */
   #AgentLauncherPrompt .zym-editor,
   #AgentLauncherPrompt .zym-placeholder {
     font: var(--t-font-monospace-large);
   }
   #AgentLauncherOptions {
-    padding: calc(4 * var(--t-spacing));
+    /* No top padding — the prompt's own bottom padding already sets the gap. */
+    padding: 0 calc(4 * var(--t-spacing)) calc(4 * var(--t-spacing));
     /* The card is monospace (for the prompt); the option controls read better in the
        UI (proportional) font. */
     font: var(--t-font-ui);
@@ -138,6 +146,12 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   promptContainer.setName('AgentLauncherPrompt');
   promptContainer.append(input.root);
   panel.append(promptContainer);
+
+  // Ring the whole card while the prompt editor (not the dropdowns) holds focus.
+  const promptFocus = new Gtk.EventControllerFocus();
+  promptFocus.on('enter', () => panel.addCssClass('prompt-focused'));
+  promptFocus.on('leave', () => panel.removeCssClass('prompt-focused'));
+  promptContainer.addController(promptFocus);
 
   // Options. The kind drives which models / permission modes are offered; the
   // Claude kinds share a list today, but changing the kind re-populates them.
