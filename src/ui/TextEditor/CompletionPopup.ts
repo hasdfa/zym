@@ -5,9 +5,8 @@
  *
  * Keyboard-driven (the editor keeps focus; the `CompletionController` routes
  * Up/Down/Enter via a capture key controller), so the popup itself never takes
- * focus — it just renders the items and tracks the selection. Following the
- * project's floating-UI rule it's a plain overlay card, not a `GtkPopover` (which
- * froze the UI). Positioned by margins + top-left alignment, like the hover card.
+ * focus — it just renders the items and tracks the selection. It's a plain overlay
+ * card, positioned by margins + top-left alignment, like the hover card.
  */
 import { Gtk, Pango } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';

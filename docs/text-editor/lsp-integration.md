@@ -123,8 +123,7 @@ These all work today, driven from the LSP core and surfaced through the editor:
 - **Hover** (`space l k` / vim `K`): `textDocument/hover` → markdown rendered
   to Pango (`ui/markdownMarkup.ts`, subset renderer) in a floating overlay
   card, bottom-aligned just above the cursor (a `Gtk.Overlay` child with
-  `valign=END` + margins — no height read; GtkPopover is avoided, it froze the
-  UI under node-gtk). Code blocks are syntax-highlighted by reusing the
+  `valign=END` + margins — no height read). Code blocks are syntax-highlighted by reusing the
   editor's tree-sitter grammars + queries + theme colors
   (`syntax/highlightToMarkup.ts`), in the editor monospace font; prose stays
   proportional. 3s timeout; dismissed on cursor-move/scroll. Command-triggered.

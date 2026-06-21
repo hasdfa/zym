@@ -64,7 +64,7 @@ All files under `src/ui/TextEditor/`.
 
 - **`CompletionPopup.ts`** — a keyboard-driven dropdown floated at the
   **start of the word** being completed in the editor's `Gtk.Overlay` (the
-  project's floating-card pattern, **not** a GtkPopover). Non-focusable
+  project's floating-card pattern). Non-focusable
   (`setCanTarget(false)`) so the editor keeps focus and typing flows.
   Painted with the theme background; selected row uses the theme's selected
   color; rows have no min-height (a single match is one row tall). Each row:

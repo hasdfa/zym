@@ -1,8 +1,7 @@
 /*
  * ContextPopover — the detailed breakdown shown when the footer's context gauge is
- * clicked. A `Gtk.Popover` (managed by the footer `Gtk.MenuButton`, the same path
- * the mode `Gtk.DropDown` uses successfully in this footer — not the manual
- * setParent+popup path that froze the UI, see node-gtk-popover-freeze) holding a
+ * clicked. A `Gtk.Popover` managed by the footer `Gtk.MenuButton` (the same path the
+ * mode `Gtk.DropDown` uses in this footer), holding a
  * two-column grid: the window total broken into input / cache-read / cache-write,
  * then model · cost · this-turn output.
  *
