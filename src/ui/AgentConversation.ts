@@ -32,6 +32,7 @@ import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { permissionCard } from './conversation/cards.ts';
 import { QuestionCard } from './conversation/QuestionCard.ts';
 import { SubagentView } from './conversation/SubagentView.ts';
+import { MonitorView } from './conversation/MonitorView.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
@@ -236,6 +237,8 @@ export class AgentConversation implements Agent {
   private readonly tasksPanel = new StickyListPanel('Tasks');
   // Spawned subagents (the `Agent` tool): inline button + running panel + page.
   private readonly subagentView: SubagentView;
+  // Shell monitors (the `Monitor` tool): inline button + running panel + page + cancel.
+  private readonly monitorView: MonitorView;
   private _costUsd: number | null = null;
   private _contextTokens: number | null = null;
   private _contextWindow = 1_000_000; // refined from result.modelUsage[model].contextWindow
@@ -347,11 +350,9 @@ export class AgentConversation implements Agent {
 
     // Subagents push pages onto this.root (the NavigationView, assigned next); the
     // push/pop arrows defer that lookup until a click.
-    this.subagentView = new SubagentView(
-      this.session,
-      { push: (page) => this.root.push(page), pop: () => this.root.pop() },
-      this.cwd,
-    );
+    const nav = { push: (page: InstanceType<typeof Adw.NavigationPage>) => this.root.push(page), pop: () => this.root.pop() };
+    this.subagentView = new SubagentView(this.session, nav, this.cwd);
+    this.monitorView = new MonitorView(this.session, nav);
 
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('quilx-conversation');
@@ -360,6 +361,7 @@ export class AgentConversation implements Agent {
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
     mainBox.append(inputCard);
     mainBox.append(this.subagentView.panel.root); // running subagents expand below the input card
+    mainBox.append(this.monitorView.panel.root); // running shell monitors, likewise
 
     // A NavigationView so a subagent's transcript can push its own page.
     this.root = new Adw.NavigationView();
@@ -539,6 +541,8 @@ export class AgentConversation implements Agent {
       this.session.onTaskProgress((p) => this.toolRows.get(p.id)?.onProgress?.(p)),
       // Shown by subagentView.spawn (on the Agent tool call); hidden on completion.
       this.session.onSubagentDone(({ id }) => this.subagentView.done(id)),
+      // Monitor status changes (running → killed/stopped/completed) refresh the panel.
+      this.session.onMonitorUpdate(({ id }) => this.monitorView.update(id)),
       this.session.onAssistantStart(() => {
         this.assistantRaw = '';
         this.assistantView = this.addMarkdownBlock('quilx-conversation-assistant', Gtk.Align.START);
@@ -565,6 +569,11 @@ export class AgentConversation implements Agent {
         if (this.handleTaskTool(id, name, input)) return; // TaskCreate/TaskUpdate → tasks panel, no row
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
         if (name === 'Agent') { this.endTurn(); this.messages.append(this.subagentView.spawn(id, input)); this.scrollToBottom(); return; }
+        if (name === 'Monitor') {
+          const mi = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+          const desc = typeof mi.description === 'string' ? mi.description : typeof mi.command === 'string' ? mi.command : 'monitor';
+          this.endTurn(); this.messages.append(this.monitorView.spawn(id, desc)); this.scrollToBottom(); return;
+        }
         this.recordChangedFile(name, input);
         this.endTurn(); // close the current message; post-tool text opens a fresh bubble
         this.addToolRow(id, name, input);

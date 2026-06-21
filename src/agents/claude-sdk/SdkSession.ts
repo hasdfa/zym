@@ -92,6 +92,16 @@ export interface SubagentInfo {
   messages: SubagentMessage[];
 }
 
+/** A shell monitor (the `Monitor` tool), keyed by its tool_use_id. `taskId` (from
+ *  task_started) is what `stopTask` cancels; `outputFile` arrives on completion. */
+export interface MonitorInfo {
+  id: string;
+  taskId: string | null;
+  description: string;
+  status: string;
+  outputFile: string | null;
+}
+
 /** Live progress for a subagent (Task) or background task, keyed by `id` (the
  *  originating tool_use_id). */
 export interface TaskProgress {
@@ -136,6 +146,9 @@ export class SdkSession {
   // Subagent transcripts, keyed by the spawning `Agent` tool's tool_use_id. Their
   // events (parent_tool_use_id set) are captured here, not shown in the main thread.
   private readonly subagents = new Map<string, SubagentInfo>();
+  // Shell monitors (the `Monitor` tool), keyed by tool_use_id; task_id maps back here.
+  private readonly monitors = new Map<string, MonitorInfo>();
+  private readonly taskToMonitor = new Map<string, string>();
   // The permission request/response file pair + its watcher. The server writes the
   // request atomically; we answer by writing the response atomically.
   private readonly permRequestFile: string;
@@ -286,6 +299,8 @@ export class SdkSession {
   onThinkingTokens(cb: (m: { tokens: number }) => void): Disposable { return this.emitter.on('thinking-tokens', cb as (v?: unknown) => void); }
   onTaskProgress(cb: (m: TaskProgress) => void): Disposable { return this.emitter.on('task-progress', cb as (v?: unknown) => void); }
   onSubagentStart(cb: (m: { id: string; agentType: string; description: string }) => void): Disposable { return this.emitter.on('subagent-start', cb as (v?: unknown) => void); }
+  onMonitorStart(cb: (m: { id: string; description: string }) => void): Disposable { return this.emitter.on('monitor-start', cb as (v?: unknown) => void); }
+  onMonitorUpdate(cb: (m: { id: string }) => void): Disposable { return this.emitter.on('monitor-update', cb as (v?: unknown) => void); }
   onSubagentUpdate(cb: (m: { id: string }) => void): Disposable { return this.emitter.on('subagent-update', cb as (v?: unknown) => void); }
   onSubagentDone(cb: (m: { id: string }) => void): Disposable { return this.emitter.on('subagent-done', cb as (v?: unknown) => void); }
   onUnhandled(cb: (m: { event: unknown }) => void): Disposable { return this.emitter.on('unhandled', cb as (v?: unknown) => void); }
@@ -377,7 +392,7 @@ export class SdkSession {
     if (event.type === 'system') {
       const sub = (event as { subtype?: string }).subtype;
       // Subagent / background-task lifecycle — live progress for the Task/Bash row.
-      if (sub === 'task_started' || sub === 'task_progress' || sub === 'task_notification') {
+      if (sub === 'task_started' || sub === 'task_progress' || sub === 'task_notification' || sub === 'task_updated') {
         this.onTaskEvent(event as unknown as Record<string, unknown>, sub);
         return true;
       }
@@ -399,6 +414,26 @@ export class SdkSession {
     const usage = (e.usage ?? {}) as { total_tokens?: number; tool_uses?: number; duration_ms?: number };
     const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
     const id = str(e.tool_use_id) ?? '';
+    const taskId = str(e.task_id);
+
+    // Monitor lifecycle (a `Monitor` tool — tracked by tool_use_id at spawn time).
+    if (subtype === 'task_started' && id && taskId && this.monitors.has(id)) {
+      this.monitors.get(id)!.taskId = taskId;
+      this.taskToMonitor.set(taskId, id);
+    }
+    if (subtype === 'task_updated' && taskId) {
+      const mid = this.taskToMonitor.get(taskId);
+      const status = (e.patch && typeof e.patch === 'object' ? (e.patch as { status?: unknown }).status : undefined);
+      if (mid && typeof status === 'string') { this.monitors.get(mid)!.status = status; this.emitter.emit('monitor-update', { id: mid }); }
+      return; // task_updated carries no usage — nothing more to surface
+    }
+    if (subtype === 'task_notification' && id && this.monitors.has(id)) {
+      const m = this.monitors.get(id)!;
+      if (str(e.status)) m.status = str(e.status)!;
+      if (str(e.output_file)) m.outputFile = str(e.output_file)!;
+      this.emitter.emit('monitor-update', { id });
+    }
+
     if (subtype === 'task_started' && id && str(e.task_type) === 'local_agent') {
       const info: SubagentInfo = { id, agentType: str(e.subagent_type) ?? 'agent', description: str(e.description) ?? '', prompt: str(e.prompt) ?? '', status: 'running', messages: [] };
       this.subagents.set(id, info);
@@ -453,6 +488,18 @@ export class SdkSession {
 
   /** A captured subagent transcript (for the subagent page), or undefined. */
   getSubagent(id: string): SubagentInfo | undefined { return this.subagents.get(id); }
+
+  /** A captured shell monitor (for the monitors panel/inspect page), or undefined. */
+  getMonitor(id: string): MonitorInfo | undefined { return this.monitors.get(id); }
+
+  /** Cancel a running task (e.g. a shell monitor) by its task_id via the control
+   *  protocol (`stop_task`) — verified against the CLI. */
+  stopTask(taskId: string): void {
+    if (!this.transport?.writable) return;
+    const message = { type: 'control_request', request_id: `quilx-${++this.controlReqId}`, request: { subtype: 'stop_task', task_id: taskId } };
+    logSend(message);
+    this.transport.send(message);
+  }
 
   // The per-message usage is the real context occupancy at that point (input +
   // both cache tiers); the aggregate result.usage sums every tool-loop request,
@@ -524,6 +571,13 @@ export class SdkSession {
         }
       } else if (block.type === 'tool_use') {
         const b = block as { id?: string; name?: string; input?: unknown };
+        if (b.name === 'Monitor' && b.id) {
+          const input = (b.input && typeof b.input === 'object' ? b.input : {}) as Record<string, unknown>;
+          const description = typeof input.description === 'string' ? input.description
+            : typeof input.command === 'string' ? input.command : 'monitor';
+          this.monitors.set(b.id, { id: b.id, taskId: null, description, status: 'running', outputFile: null });
+          this.emitter.emit('monitor-start', { id: b.id, description });
+        }
         this.emitter.emit('tool-use', { id: b.id ?? '', name: b.name ?? 'tool', input: b.input });
       }
     }
