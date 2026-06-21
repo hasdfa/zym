@@ -13,7 +13,7 @@
 import { Gtk } from '../gi.ts';
 import { quilx } from '../quilx.ts';
 import { addStyles } from '../styles.ts';
-import { TextEditor } from './TextEditor/TextEditor.ts';
+import { TextEditor, createInput } from './TextEditor/TextEditor.ts';
 
 addStyles(`
   /* The editor box and a pending-comment card share the same card chrome. */
@@ -113,7 +113,7 @@ export class DiffCommentBox {
     this.options = options;
     this.reviewing = !!options.reviewing;
 
-    this.input = new TextEditor({ buffer: { placeholder: 'Comment to agent…', initialText: options.initialText } });
+    this.input = createInput({ placeholder: 'Comment to agent…', initialText: options.initialText });
     this.input.root.setVexpand(true);
     this.input.root.setHexpand(true);
 
