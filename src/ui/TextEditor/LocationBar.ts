@@ -31,10 +31,11 @@ addStyles(`
 // The breadcrumb separator: a Nerd Font chevron, dimmed via the .crumbs color.
 const SEP = `<span font_family="${ICON_FONT_FAMILY}"> ${NERDFONT.NAV.CHEVRON_RIGHT} </span>`;
 
-/** A file path for display: shortened to the first base that contains it — the workspace cwd
- *  (relative), then the home dir (`~/…`), else the absolute path. */
-function displayPath(path: string): string {
-  const cwd = process.cwd();
+/** A file path for display: shortened to the first base that contains it — the workbench cwd
+ *  (relative), then the home dir (`~/…`), else the absolute path. The workbench cwd (not
+ *  `process.cwd()`) is the base so an editor in an agent worktree shortens against its own
+ *  root, rather than showing the long `…/.claude/worktree/…` prefix. */
+function displayPath(path: string, cwd: string): string {
   if (path === cwd) return Path.basename(path);
   if (path.startsWith(cwd + Path.sep)) return path.slice(cwd.length + 1);
   const home = Os.homedir();
@@ -48,7 +49,12 @@ export class LocationBar {
   private readonly pathLabel = new Gtk.Label({ xalign: 0 });
   private readonly crumbsLabel = new Gtk.Label({ xalign: 0, hexpand: true });
 
-  constructor() {
+  /** Resolves the workbench cwd to shorten paths against; read on each `setFile` so a
+   *  worktree re-root (which reassigns the workbench cwd) is reflected without re-wiring. */
+  private readonly cwd: () => string;
+
+  constructor(cwd: () => string) {
+    this.cwd = cwd;
     this.box.setName('LocationBar');
     this.pathLabel.addCssClass('path');
     this.pathLabel.setEllipsize(Pango.EllipsizeMode.MIDDLE);
@@ -69,7 +75,7 @@ export class LocationBar {
       return;
     }
     this.box.setVisible(true);
-    this.pathLabel.setText(displayPath(path));
+    this.pathLabel.setText(displayPath(path, this.cwd()));
   }
 
   /** Render the enclosing structural scopes, outermost first, chevron-separated and each in

@@ -645,6 +645,7 @@ export class AppWindow {
     const editor = new TextEditor({
       onClose: () => child?.close(),
       git: owner.git, // the owning workbench's repo draws the gutter (follows re-root)
+      cwd: () => owner.cwd, // the LocationBar shortens paths against the workbench's (live) root
       document,
       onReleaseDocument: () => this.documents.release(document),
     });

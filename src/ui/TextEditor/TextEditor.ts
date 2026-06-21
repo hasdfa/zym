@@ -228,6 +228,10 @@ export interface TextEditorOptions {
   buffer?: BufferEditorOptions;
   /** When given, draws a git change bar in the gutter (vs HEAD). File mode only. */
   git?: GitRepo;
+  /** Resolves the owning workbench's root directory — the base the LocationBar shortens the
+   *  file path against. A getter (not a value) so a worktree re-root, which reassigns the
+   *  workbench's cwd, is followed automatically. Defaults to `process.cwd()`. */
+  cwd?: () => string;
   /** The shared `Document` this view attaches to (from `quilx.documents`). When given,
    *  this view is one of N onto it and releases its ref on teardown via
    *  `onReleaseDocument`; when omitted, the editor owns a private scratch document. */
@@ -432,6 +436,10 @@ export class TextEditor implements DocumentHost {
   // The git repo for the change gutter — swapped via `setGitRepo` when this editor's
   // workbench re-roots into a worktree.
   private gitRepo: GitRepo | null;
+  // Resolves the owning workbench's root directory — the base the LocationBar shortens the
+  // file path against. A getter so a worktree re-root (which reassigns the workbench cwd) is
+  // followed without re-wiring.
+  private readonly workbenchCwd: () => string;
   private placeholderLabel: InstanceType<typeof Gtk.Label> | null = null;
 
   // File I/O, disk-watching, modified-state, title, and the LSP document all live on
@@ -465,6 +473,7 @@ export class TextEditor implements DocumentHost {
     this.bufferMode = options.buffer ?? null;
     this.peekMode = options.peek ?? false;
     this.gitRepo = options.git ?? null;
+    this.workbenchCwd = options.cwd ?? (() => process.cwd());
 
     // The backing this editor is a view onto: a multi-source `MultiBufferDocument` (the
     // search-results / continuous-diff surfaces), a shared registry `Document` (a file open in N
@@ -868,8 +877,9 @@ export class TextEditor implements DocumentHost {
 
   // --- Git gutter ------------------------------------------------------------
 
-  /** Re-point the change gutter at a different repo when this editor's workbench
-   *  re-roots into a worktree (a no-op in buffer mode or before a gutter exists). */
+  /** Re-point the change gutter at a different repo when this editor's workbench re-roots
+   *  into a worktree (a no-op in buffer mode or before a gutter exists). The LocationBar's
+   *  base cwd follows the re-root on its own — it reads the workbench cwd through a getter. */
   setGitRepo(git: GitRepo): void {
     this.gitRepo = git;
     this.gitGutter?.setGit(git);
@@ -1338,7 +1348,7 @@ export class TextEditor implements DocumentHost {
     // Location bar (file path + breadcrumb), pinned above the content. Main editors only;
     // it hides itself until a file is loaded and refreshes on cursor move / reparse.
     if (!this.embedded) {
-      this.locationBar = new LocationBar();
+      this.locationBar = new LocationBar(this.workbenchCwd);
       this.locationBar.widget.setVisible(false);
       outer.append(this.locationBar.widget);
       this.subs.add(
