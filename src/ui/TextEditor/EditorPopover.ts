@@ -115,23 +115,6 @@ export class EditorPopover {
     return true;
   }
 
-  /** Re-point at `point` with the child's *current* measured width, without re-popping —
-   *  for when the child resizes while shown (e.g. the completion doc pane opens). Synchronous
-   *  (the caller is already on a clean tick), so it lands in the same layout pass as the
-   *  resize — no one-frame slide. No-op while hidden. */
-  reposition(point: { row: number; column: number }, contentInset = 0): void {
-    if (!this.popover.getVisible()) return;
-    const rect = this.model.pixelRectForBufferPosition(point);
-    if (!rect) return;
-    const [min, nat] = this.child.measure(Gtk.Orientation.HORIZONTAL, -1);
-    const target = new Gdk.Rectangle();
-    target.x = rect.x - this.chrome - contentInset;
-    target.y = rect.y;
-    target.width = Math.max(min, nat) + 2 * this.chrome;
-    target.height = rect.height;
-    this.popover.setPointingTo(target);
-  }
-
   /** Re-show at the last anchor (content changed in place, anchor unchanged). */
   show(): void {
     this.wantShown = true;

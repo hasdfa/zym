@@ -144,10 +144,12 @@ export class CompletionPopup {
   }
 
   /** Re-anchor at the stored point: EditorPopover left-aligns by the panel's *current*
-   *  measured width, so calling this after the doc pane opens/closes keeps the list's left
-   *  edge put (the doc pane grows rightward) instead of the popover sliding to re-centre. */
+   *  measured width, so calling this after the doc pane opens keeps the list's left edge put
+   *  (the doc pane grows rightward) instead of the popover sliding to re-centre. Goes through
+   *  the deferred `showAt` — `updateDoc` can run inside the async doc-resolve continuation,
+   *  where synchronous GTK layout (measure) would freeze node-gtk. */
   private reanchor(): void {
-    if (this.shown && this.anchor) this.popover.reposition(this.anchor, LABEL_INSET_PX);
+    if (this.shown && this.anchor) this.popover.showAt(this.anchor, LABEL_INSET_PX);
   }
 
   hide(): void {
