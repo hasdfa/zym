@@ -38,7 +38,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space a a': 'agent:picker', // open the agent picker (agents, conversations, new)
   'space a l': 'workbench-list:focus', // focus the workbench sidebar
   'space a n': 'agent:new', // launch a new agent
-  'space a r': 'agent:resume', // resume the current stopped agent in place
+  'space a r': 'agent:rename', // rename the current agent
   'space a R': 'agent:resume-conversation', // resume a past conversation (picker)
   'space a c': 'agent:continue', // continue the latest conversation in this folder
   'space a b': 'agent:branch', // branch the current agent into a new forked agent
