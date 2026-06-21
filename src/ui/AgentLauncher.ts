@@ -129,19 +129,19 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     title: 'model',
     options: kindOptions.models,
     value: kindOptions.defaultModel,
-    width: 110,
+    width: 80,
   });
   const permissionCombo = new Combobox({
     title: 'permission',
     options: kindOptions.permissionModes,
     value: kindOptions.defaultPermissionMode,
-    width: 130,
+    width: 80,
   });
   const kindCombo = new Combobox({
     title: 'agent',
     options: listAgentKinds(),
     value: defaultKind,
-    width: 105,
+    width: 80,
     onChange: (value) => {
       const opts = AGENT_CONFIGS[value as AgentKind].options;
       modelCombo.setOptions(opts.models, opts.defaultModel);

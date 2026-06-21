@@ -45,8 +45,11 @@ addStyles(/* css */`
     background: transparent;
     box-shadow: none;
   }
-  #ComboboxList > row {
+  /* Strip the Adwaita entry-row inset so the trigger's label/value sit flush. */
+  #ComboboxList > row,
+  #ComboboxList > row > .header {
     min-height: 0;
+    padding: 0;
   }
   #ComboboxPopover > contents {
     padding: 0;
