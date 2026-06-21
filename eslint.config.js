@@ -23,6 +23,7 @@ export default tseslint.config(
       'node_modules/**',
       'assets/**',
       'img/**',
+      '.claude/**', // editor state + nested git worktrees, not this project's source
       'eslint-rules/**', // vendored upstream rule, kept verbatim
     ],
   },

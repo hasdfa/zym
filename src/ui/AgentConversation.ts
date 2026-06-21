@@ -25,7 +25,7 @@ import { TextEditor } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
 import { MarkdownView } from './markdown/MarkdownView.ts';
 import { toolMarkup, toolDetailMarkup, toolFilePath, describeTool } from './toolDisplay.ts';
-import { escapeMarkup, setMarkupSafe, clearChildren } from './proseMarkup.ts';
+import { escapeMarkup, setMarkupSafe } from './proseMarkup.ts';
 import { iconSpan } from './icons.ts';
 import { truncateLines, summarizeInput, formatCount, progressLine } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';

@@ -146,7 +146,7 @@ export class AppWindow {
   // state), disposed in disposeChild so a closed tab leaves no handlers behind.
   private readonly tabSubs = new Map<Widget, CompositeDisposable>();
   // Per-agent subscriptions (title/status/worktree/files), disposed in closeAgent.
-  private readonly agentSubs = new Map<AgentTerminal, CompositeDisposable>();
+  private readonly agentSubs = new Map<Agent, CompositeDisposable>();
   // Terminal tabs share the center panel with editors; tracked separately so the
   // active child can be resolved back to its Terminal (it has no vim state).
   private readonly terminals = new Map<Widget, Terminal>();
