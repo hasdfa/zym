@@ -269,6 +269,11 @@ export class AgentConversation implements Agent {
   // The permanent "session resumed" divider row (boundary between restored history
   // and the live continuation); its text drops the reconnect nudge once connected.
   private resumeNoteRow: InstanceType<typeof Gtk.Widget> | null = null;
+  // While true, keep the transcript pinned to the bottom as its height changes —
+  // enabled on resume so a restored conversation lands at the latest message even
+  // though its height settles over several layout passes. Released when the user
+  // scrolls up. See enableFollowBottom.
+  private followBottom = false;
   // True while rebuilding the transcript from a past session (see restoreTranscript):
   // tool rows render statically and changed-file notifications are suppressed.
   private replaying = false;
@@ -504,7 +509,24 @@ export class AgentConversation implements Agent {
       this.resumeNoteRow = divider;
       this.refreshResumeNote();
       if (this.deferredStart) this.setStatus('disconnected');
+      this.enableFollowBottom(); // land at the latest message once layout settles
     }
+  }
+
+  // Pin the transcript to the bottom as its height changes, until the user scrolls
+  // up. Restored content is appended before the widget is laid out, and its height
+  // settles over several frames (markdown wrapping/measuring), so a one-shot scroll
+  // lands short; following `changed` re-pins until the final height is reached.
+  private enableFollowBottom(): void {
+    if (this.followBottom) return;
+    this.followBottom = true;
+    const adj = this.scroller.getVadjustment();
+    adj.on('changed', () => { if (this.followBottom) adj.setValue(adj.getUpper() - adj.getPageSize()); });
+    adj.on('value-changed', () => {
+      // A user scroll away from the bottom releases the follow (a programmatic pin
+      // lands at the bottom, so it never trips this).
+      if (adj.getUpper() - adj.getPageSize() - adj.getValue() > 4) this.followBottom = false;
+    });
   }
 
   // Set the resume divider's text: while disconnected it nudges the user to send a
