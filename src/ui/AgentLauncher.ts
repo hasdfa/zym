@@ -34,6 +34,14 @@ const CARD_PADDING = 4 * theme.spacing;
 // the next open so a cancelled compose isn't lost. Cleared once submitted.
 let savedDraft = '';
 
+// The last-used launch options, persisted across launches within the session so they
+// don't reset each time. '' means "not chosen yet" → fall back to the kind's default
+// (for worktree, '' is the valid "create" choice).
+let savedModel = '';
+let savedPermission = '';
+let savedKind: AgentKind | '' = '';
+let savedWorktree = '';
+
 /** The worktree choice: create a fresh worktree, or work on an existing branch. */
 export type WorktreeChoice = { create: true } | { branch: string };
 
@@ -138,8 +146,16 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     marginTop: 110, // sit lower than the Picker's default — it's a taller compose card
     dim: true, // it's a focused compose surface — dim the rest of the window
     fade: true,
-    // Remember the (possibly unsent) prompt on any dismissal; submit clears it below.
-    onClose: () => { savedDraft = input.getText(); commandsSub?.dispose(); },
+    // Remember the (possibly unsent) prompt + the chosen options on any dismissal, so they
+    // persist to the next launch; submit clears the draft below (but keeps the options).
+    onClose: () => {
+      savedDraft = input.getText();
+      savedModel = modelDropdown.getValue();
+      savedPermission = permissionDropdown.getValue();
+      savedKind = kindDropdown.getValue() as AgentKind;
+      savedWorktree = worktreeDropdown.getValue();
+      commandsSub?.dispose();
+    },
   });
   const panel = card.panel;
   panel.setSizeRequest(CARD_WIDTH, -1);
@@ -159,15 +175,17 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   promptFocus.on('leave', () => panel.removeCssClass('prompt-focused'));
   promptContainer.addController(promptFocus);
 
-  // Options. The kind drives which models / permission modes are offered; the
-  // Claude kinds share a list today, but changing the kind re-populates them.
-  const kindOptions = AGENT_CONFIGS[defaultKind].options;
+  // Options, seeded from the last-used values (else the kind's defaults). The kind drives
+  // which models / permission modes are offered; the Claude kinds share a list today, but
+  // changing the kind re-populates them (to that kind's defaults).
+  const kind0 = savedKind || defaultKind;
+  const kindOptions = AGENT_CONFIGS[kind0].options;
 
-  const modelDropdown = new Combobox({ options: kindOptions.models, value: kindOptions.defaultModel });
-  const permissionDropdown = new Combobox({ options: kindOptions.permissionModes, value: kindOptions.defaultPermissionMode });
+  const modelDropdown = new Combobox({ options: kindOptions.models, value: savedModel || kindOptions.defaultModel });
+  const permissionDropdown = new Combobox({ options: kindOptions.permissionModes, value: savedPermission || kindOptions.defaultPermissionMode });
   const kindDropdown = new Combobox({
     options: listAgentKinds(),
-    value: defaultKind,
+    value: kind0,
     onChange: (value) => {
       const opts = AGENT_CONFIGS[value as AgentKind].options;
       modelDropdown.setOptions(opts.models, opts.defaultModel);
@@ -182,7 +200,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // load asynchronously.
   const worktreeDropdown = new Combobox({
     options: [{ value: '', label: 'create' }],
-    value: '',
+    value: savedWorktree,
     search: true,
     specialLabel: 'create',
   });
@@ -193,7 +211,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
       if (card.isClosed()) return;
       worktreeDropdown.setOptions(
         [{ value: '', label: 'create' }, ...branches.map((b) => ({ value: b, label: b }))],
-        '',
+        savedWorktree, // keep the last-used branch selected if it still exists
       );
     });
   }

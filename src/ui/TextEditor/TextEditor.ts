@@ -1254,22 +1254,34 @@ export class TextEditor implements DocumentHost {
       scrolled.setPropagateNaturalHeight(true);
       const padding = this.paddingOverride ?? INPUT_PADDING;
       // Cap at N *text* lines (line-heights + the top+bottom padding the natural height
-      // also includes) or a raw max height; past it the ScrolledWindow scrolls. The line
-      // height needs the resolved font, so (re)apply on map once it's known.
+      // also includes) or a raw max height; past it the ScrolledWindow scrolls.
+      const capValue = (): number | undefined =>
+        this.growMaxLines !== undefined
+          ? Math.round(this.growMaxLines * this.editorModel.getLineHeightInPixels() + 2 * padding)
+          : this.growMaxHeight;
       const applyCap = () => {
-        const cap =
-          this.growMaxLines !== undefined
-            ? Math.round(this.growMaxLines * this.editorModel.getLineHeightInPixels() + 2 * padding)
-            : this.growMaxHeight;
+        const cap = capValue();
         if (cap !== undefined) scrolled.setMaxContentHeight(cap);
       };
+      // A min-height *floor* from the line count, so the first (stale) natural-height
+      // allocation isn't collapsed — without it the input flickers from collapsed to its
+      // real height on the first frame. Only a floor: propagate-natural-height still gives
+      // the true height (≥ this, so wrapped lines and the exact size win), and it tracks
+      // edits so shrinking isn't blocked.
+      const applyFloor = () => {
+        const cap = capValue();
+        const h = Math.round(Math.max(1, this.editorModel.getLineCount()) * this.editorModel.getLineHeightInPixels() + 2 * padding);
+        scrolled.setMinContentHeight(cap !== undefined ? Math.min(h, cap) : h);
+      };
       applyCap();
-      // The view's *first* natural-height allocation comes out stale (collapsed) — the
-      // input stayed short until its first edit forced a relayout. Force that relayout
-      // ourselves on the next frame-clock tick after map (when it's realized + allocated),
-      // so it adopts its true height straight away.
+      applyFloor();
+      this.editorModel.onDidChangeText(applyFloor);
+      // The view's first natural-height allocation can still come out stale; force one
+      // relayout after map so propagate settles on the exact height (the floor only guards
+      // the very first frame).
       this.connect(this.view, 'map', () => {
         applyCap();
+        applyFloor();
         let frames = 0;
         (this.view as any).addTickCallback(() => { this.view.queueResize(); return ++frames < 2; });
       });
