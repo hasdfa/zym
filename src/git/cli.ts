@@ -327,9 +327,17 @@ export function unstageAll(root: string, onDone: GitDone): void {
   git(root, ['reset', '-q'], onDone);
 }
 
-/** Commit using a message file (`git commit -F`). */
-export function commit(root: string, messageFile: string, onDone: GitDone): void {
-  git(root, ['commit', '-F', messageFile], onDone);
+/** Commit using a message file (`git commit -F`); `amend` rewrites HEAD. */
+export function commit(root: string, messageFile: string, onDone: GitDone, amend = false): void {
+  const args = ['commit', '-F', messageFile];
+  if (amend) args.push('--amend');
+  git(root, args, onDone);
+}
+
+/** Full message of HEAD (`git log -1 --format=%B`); empty string on an unborn
+ *  branch or outside a repo. Used to prefill an amend's message. */
+export function lastCommitMessage(root: string, onDone: (message: string) => void): void {
+  git(root, ['log', '-1', '--format=%B'], (ok, stdout) => onDone(ok ? stdout : ''));
 }
 
 // --- branches ----------------------------------------------------------------

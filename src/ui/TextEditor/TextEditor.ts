@@ -20,6 +20,7 @@ import { EditorModel } from './EditorModel.ts';
 import { Document, type DocumentHost } from './Document.ts';
 import type { TextEditorSource } from './TextEditorSource.ts';
 import { InlayHintController } from './InlayHintController.ts';
+import { GitBlameController } from './GitBlameController.ts';
 import { attachVim } from './vim/index.ts';
 import { zym } from '../../zym.ts';
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
@@ -410,6 +411,7 @@ export class TextEditor implements DocumentHost {
   private lspDocument: LspDocument | null = null;
   private diagnostics!: DiagnosticsView;
   private inlayHints!: InlayHintController;
+  private blame!: GitBlameController;
   // Git change bar in the gutter; only present in file mode when a repo is given.
   private gitGutter: GitGutter | null = null;
   // The LSP hover card: a non-interactive overlay floated in `caretLayer` at the
@@ -761,18 +763,27 @@ export class TextEditor implements DocumentHost {
       (line) => this.document.viewLineForModelLine(this.buffer, line),
     );
     this.subs.add(zym.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
+    // Current-line git blame (toggled by `git:blame-toggle`), trailing the cursor line.
+    this.blame = new GitBlameController(
+      this.view,
+      () => this._currentFile,
+      () => this.editorModel.getCursorBufferPosition().row,
+      (viewRow) => this.document.modelLineForViewLine(this.buffer, viewRow),
+    );
     // A fold open/close shifts the view lines under the model-positioned decorations
     // (diagnostic squiggles + gutter + error lens, inlay hints) — re-place them at the
     // new view positions (cached, no LSP round-trip).
     this.syntax.onFoldsChanged(() => {
       this.diagnostics?.render();
       this.inlayHints?.rerender();
+      this.blame?.rerender();
     });
     // Signature help is a per-view concern (the active view shows the card while
     // typing); the document drives didChange, so this only triggers signature help.
     this.editorModel.onDidChangeText((event) => {
       this.maybeSignatureHelp(event);
       this.inlayHints.scheduleRefresh(); // hints shift as the text changes
+      this.blame?.invalidate(); // line→commit mapping drifts on edits; re-blame lazily
     });
     // The hover popover is anchored to a fixed cursor position; dismiss it once
     // the cursor moves or the view scrolls (both no-ops when nothing is showing).
@@ -780,6 +791,7 @@ export class TextEditor implements DocumentHost {
       this.dismissHover();
       if (this.signatureOverlay.visible) this.scheduleSignatureRequest();
       this.scheduleLocationBarUpdate();
+      this.blame?.onCursorMoved(); // re-place the current-line blame annotation
     });
     const hoverVadj = this.view.getVadjustment();
     if (hoverVadj)
@@ -821,6 +833,7 @@ export class TextEditor implements DocumentHost {
     else this.document.dispose();
     this.diagnostics?.dispose(); // undefined for a buffer-only editor (installLsp skipped)
     this.inlayHints?.dispose();
+    this.blame?.dispose();
     // The gutter holds a git.onChange subscription living in GitRepo.listeners; tab-close
     // DETACHES the root (never destroys it), so a `destroy` handler wouldn't fire. Dispose
     // it explicitly, else the subscription pins the gutter → view → buffer → this editor
@@ -942,6 +955,14 @@ export class TextEditor implements DocumentHost {
       'git:stage-hunk': { didDispatch: () => this.stageHunkAtCursor(), description: 'Stage the hunk under the cursor' },
       'git:unstage-hunk': { didDispatch: () => this.unstageHunkAtCursor(), description: 'Unstage the hunk under the cursor' },
       'git:revert-hunk': { didDispatch: () => this.revertHunkAtCursor(), description: 'Revert the hunk under the cursor' },
+      'git:blame-toggle': {
+        didDispatch: () => {
+          const on = this.blame.toggle();
+          zym.notifications.addTrace(on ? 'Line blame on' : 'Line blame off');
+        },
+        description: 'Toggle current-line git blame',
+        when: () => this._currentFile != null,
+      },
     });
   }
 
@@ -1824,6 +1845,7 @@ export class TextEditor implements DocumentHost {
     this.applySyntaxOrLongLineMode(content, path);
     this.diagnostics.render();
     this.inlayHints.scheduleRefresh();
+    this.blame?.invalidate(); // a (re)loaded file needs fresh blame
     this.gitGutter?.refresh();
   }
 
@@ -1858,6 +1880,7 @@ export class TextEditor implements DocumentHost {
     this.applyDetectedIndentation(this.getText());
     this.diagnostics?.render();
     this.inlayHints?.scheduleRefresh();
+    this.blame?.invalidate();
     this.gitGutter?.refresh();
     this.view.grabFocus();
   }

@@ -68,6 +68,14 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g d': 'git:continuous-diff', // "d"iff view: the continuous diff / staging surface
   'space g D': 'git:diff-current', // "D"iff just the current file (working tree vs HEAD)
   'space g c': 'git:start-commit', // "c"ommit staged changes (edit the message in a tab)
+  'space g C': 'git:commit-amend', // "C"ommit --amend the last commit (prefilled message)
+  // File-level staging from anywhere (not just the Source Control panel).
+  // "a"dd / "u"nstage sub-leaders, then "a"ll or "." for the current file.
+  'space g a a': 'git:stage-all', // "a"dd "a"ll (git add -A)
+  'space g a .': 'git:stage-current', // "a"dd the current file (git add <file>)
+  'space g u a': 'git:unstage-all', // "u"nstage "a"ll
+  'space g u .': 'git:unstage-current', // "u"nstage the current file
+  'space g B': 'git:blame-toggle', // "B"lame: toggle current-line authorship (editor only)
   // Hunk-level staging on the gutter hunk under the cursor (editor only): "s"tage,
   // "u"nstage (a staged/blue hunk), "r"evert (discard the unstaged change).
   'space h s': 'git:stage-hunk',
