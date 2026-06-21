@@ -1930,9 +1930,9 @@ export class TextEditor implements DocumentHost {
     this.save();
   }
 
-  /** Subscribe to title changes (the document's file / disk state changing). */
+  /** Subscribe to title changes (the document's file / disk state changing). Returns a disposer. */
   onTitleChange(callback: () => void) {
-    this.document.onTitleChange(callback);
+    return this.document.onTitleChange(callback);
   }
 
   /** Subscribe to modified-state changes (the document's modified flag toggling). Returns a
