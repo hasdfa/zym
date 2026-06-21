@@ -493,9 +493,9 @@ export class AgentConversation implements Agent {
     // carries a prompt — e.g. the worktree re-announce — still starts eagerly.
     this.deferredStart = !!options.resume && !options.prompt;
     if (options.resume?.sessionId) {
-      // A permanent "session resumed" divider marking the boundary between the
-      // restored history and the live continuation. While disconnected it also tells
-      // the user how to reconnect (a dim hollow dot reflects the not-yet-live state).
+      // A permanent divider marking the boundary between the restored history and
+      // the live continuation: "session disconnected …" until the first turn, then
+      // "session resumed" (a dim hollow dot reflects the not-yet-live state too).
       this.resumeNoteRow = this.addRow('zym-conversation-system');
       this.refreshResumeNote();
       if (this.deferredStart) this.setStatus('disconnected');
@@ -507,7 +507,7 @@ export class AgentConversation implements Agent {
   private refreshResumeNote(): void {
     if (!this.resumeNoteRow) return;
     const text = this.deferredStart
-      ? '── session resumed · send a message to continue ──'
+      ? '── session disconnected · send a message to resume ──'
       : '── session resumed ──';
     (this.resumeNoteRow as InstanceType<typeof Gtk.Label>).setText(text);
   }
