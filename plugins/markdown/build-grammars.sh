@@ -5,7 +5,7 @@
 # grammar build; the repo has no grammar-build machinery.
 #
 # Why the wasm is checked in: @tree-sitter-grammars/tree-sitter-markdown ships
-# only C sources (no wasm), and quilx loads grammars as wasm (web-tree-sitter).
+# only C sources (no wasm), and zym loads grammars as wasm (web-tree-sitter).
 # Re-run this to reproduce/refresh ./grammars/*.wasm.
 #
 # Requirements: the `tree-sitter` CLI (>= 0.24) and network. `tree-sitter build
@@ -36,4 +36,4 @@ done
 
 echo "Vendored into $DEST:"
 ls -l "$DEST"/*.wasm
-echo "Highlights queries live in ../queries/ (adapted to quilx's palette, authored — not from the package)."
+echo "Highlights queries live in ../queries/ (adapted to zym's palette, authored — not from the package)."

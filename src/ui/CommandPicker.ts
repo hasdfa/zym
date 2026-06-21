@@ -17,7 +17,7 @@ import { Gtk } from '../gi.ts';
 import { openPicker, escapeMarkup, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
 import { fonts } from '../fonts.ts';
 import { getActiveElements } from '../util/getActiveElements.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -50,14 +50,14 @@ export function formatCommandName(name: string, positions: number[]): string {
 
 export function openCommandPicker(host: Overlay): void {
   const elements = getActiveElements();
-  const commands = quilx.commands.getAvailableCommands(elements);
+  const commands = zym.commands.getAvailableCommands(elements);
   // Resolve a chosen name back to its element (to dispatch) and description.
   const byName = new Map(commands.map((c) => [c.name, c]));
   // Primary keystroke per command (computed once; highest-priority binding).
   // Shown verbatim, as written in the keymap (e.g. `space w`, `ctrl-shift-p`).
   const shortcutByName = new Map<string, string>();
   for (const c of commands) {
-    const [primary] = quilx.keymaps.keystrokesForCommand(c.name, elements);
+    const [primary] = zym.keymaps.keystrokesForCommand(c.name, elements);
     if (primary) shortcutByName.set(c.name, primary);
   }
   // The proportional UI font for descriptions (the picker itself is monospace).
@@ -104,7 +104,7 @@ export function openCommandPicker(host: Overlay): void {
     onSelect: (name) => {
       const command = byName.get(name);
       if (!command || command.enabled === false) return; // disabled — not applicable now
-      quilx.commands.dispatch(command.element, name);
+      zym.commands.dispatch(command.element, name);
     },
   });
 }

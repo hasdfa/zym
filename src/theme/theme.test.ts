@@ -11,8 +11,8 @@ import { adaptTheme, loadTheme } from './theme.ts';
 const base = (over: { ui?: unknown; syntax?: unknown } = {}) =>
   adaptTheme({ name: 't', appearance: 'dark', ui: over.ui as never, syntax: over.syntax as never });
 
-test('loadTheme("quilx") resolves the shipped palette into the nested model', () => {
-  const t = loadTheme('quilx');
+test('loadTheme("zym") resolves the shipped palette into the nested model', () => {
+  const t = loadTheme('zym');
   assert.equal(t.appearance, 'dark');
   assert.equal(t.ui.editor.foreground, '#f1f1f1');
   assert.equal(t.ui.editor.background, '#2d2d2d');

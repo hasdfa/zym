@@ -1,6 +1,6 @@
 /*
  * agents/prompts.ts — appended to a claude agent's system prompt
- * (`--append-system-prompt`) so it proactively uses the quilx bridge tools.
+ * (`--append-system-prompt`) so it proactively uses the zym bridge tools.
  * Shared by both kinds (claude-tui terminal + claude-sdk headless).
  *
  * Kept to *when to volunteer* each tool + the meta constraint — the mechanics
@@ -10,7 +10,7 @@
 import { outdent } from 'outdent';
 
 export const AGENT_SYSTEM_PROMPT = outdent`
-  You are running inside the quilx IDE. Integrate with it via these MCP tools, and
+  You are running inside the zym IDE. Integrate with it via these MCP tools, and
   never explain the integration or the tool calls to the user:
   - set_worktree: call it immediately whenever you create or switch into a
     different git worktree (e.g. after \`git worktree add\` then \`cd\`).

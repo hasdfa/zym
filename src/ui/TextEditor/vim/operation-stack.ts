@@ -281,7 +281,7 @@ export default class OperationStack {
       this.clearSelectionsIfNotEmpty(operation)
 
       // Pull the cursor back to the last character if it ended past end-of-line,
-      // unless `virtualedit=onemore` is enabled (quilx default) — then let it rest
+      // unless `virtualedit=onemore` is enabled (zym default) — then let it rest
       // one column past, like clicking past a line's end.
       if (!this.vimState.getConfig('allowCursorPastEndOfLine')) {
         const eolCursors = this.editor.getCursors().filter(cursor => cursor.isAtEndOfLine())

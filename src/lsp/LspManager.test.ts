@@ -10,7 +10,7 @@ import type { ActiveServer } from '../lang/types.ts';
 import { pathToUri } from './position.ts';
 
 function tmpTree(): string {
-  return Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-lsp-'));
+  return Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-lsp-'));
 }
 
 test('resolveRootDir picks the nearest dir with a root marker', () => {

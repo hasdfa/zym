@@ -1,5 +1,5 @@
 /*
- * ConfigEditor — an Adwaita preferences window over `quilx.config`.
+ * ConfigEditor — an Adwaita preferences window over `zym.config`.
  *
  * It reads the live config schema (`schemaEntries()`) and renders one row per
  * parameter, grouped by namespace. Group and row labels are the raw config keys
@@ -8,7 +8,7 @@
  * what you write in `config.json`. The widget is chosen
  * from the schema: a boolean is a switch, a number a spin row (bounded by the
  * schema's min/max), an `enum` a combo, a string an entry, and an array/object an
- * entry holding JSON. Editing a row writes through `quilx.config.set` and
+ * entry holding JSON. Editing a row writes through `zym.config.set` and
  * persists via `saveConfig`.
  *
  * The window stays in sync with the config the other way too: each row `observe`s
@@ -19,7 +19,7 @@
  * Opened per invocation via `openConfigEditor` and disposed when closed.
  */
 import { Adw, Gtk, type ApplicationWindow } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { saveConfig } from '../config/load.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { ConfigSchema, ConfigValue } from '../util/Config.ts';
@@ -71,7 +71,7 @@ class ConfigEditor {
   // Bucket schema keys by the part before their first dot (their namespace).
   private groupByNamespace(): Array<[string, Array<[string, ConfigSchema]>]> {
     const groups = new Map<string, Array<[string, ConfigSchema]>>();
-    for (const [key, schema] of quilx.config.schemaEntries()) {
+    for (const [key, schema] of zym.config.schemaEntries()) {
       const dot = key.indexOf('.');
       const namespace = dot === -1 ? 'general' : key.slice(0, dot);
       const list = groups.get(namespace) ?? [];
@@ -101,7 +101,7 @@ class ConfigEditor {
     this.setMeta(row, key, schema, true);
     row.on('notify::active', () => {
       if (this.syncing) return;
-      quilx.config.set(key, row.getActive());
+      zym.config.set(key, row.getActive());
       saveConfig();
     });
     this.observe(key, (v) => row.setActive(Boolean(v)));
@@ -114,7 +114,7 @@ class ConfigEditor {
     const upper = schema.maximum ?? (isInt ? 1_000_000 : 1e9);
     const step = isInt ? 1 : 0.1;
     const adjustment = new Gtk.Adjustment({
-      value: Number(quilx.config.get(key) ?? 0),
+      value: Number(zym.config.get(key) ?? 0),
       lower,
       upper,
       stepIncrement: step,
@@ -124,7 +124,7 @@ class ConfigEditor {
     this.setMeta(row, key, schema, true);
     adjustment.on('value-changed', () => {
       if (this.syncing) return;
-      quilx.config.set(key, adjustment.getValue());
+      zym.config.set(key, adjustment.getValue());
       saveConfig();
     });
     this.observe(key, (v) => adjustment.setValue(Number(v ?? 0)));
@@ -140,7 +140,7 @@ class ConfigEditor {
       if (this.syncing) return;
       const i = row.getSelected();
       if (i < 0 || i >= options.length) return;
-      quilx.config.set(key, options[i] as ConfigValue);
+      zym.config.set(key, options[i] as ConfigValue);
       saveConfig();
     });
     this.observe(key, (v) => {
@@ -165,16 +165,16 @@ class ConfigEditor {
         try {
           value = JSON.parse(row.getText());
         } catch {
-          quilx.notifications.addError(`Invalid JSON for ${key}`);
-          this.sync(() => row.setText(toText(quilx.config.get(key))));
+          zym.notifications.addError(`Invalid JSON for ${key}`);
+          this.sync(() => row.setText(toText(zym.config.get(key))));
           return;
         }
       } else {
         value = row.getText();
       }
-      if (!quilx.config.set(key, value)) {
-        quilx.notifications.addError(`Invalid value for ${key}`);
-        this.sync(() => row.setText(toText(quilx.config.get(key))));
+      if (!zym.config.set(key, value)) {
+        zym.notifications.addError(`Invalid value for ${key}`);
+        this.sync(() => row.setText(toText(zym.config.get(key))));
         return;
       }
       saveConfig();
@@ -199,7 +199,7 @@ class ConfigEditor {
   // Subscribe a row to its key. `observe` fires immediately, so this also seeds
   // the row's initial value. Updates run under the `syncing` guard.
   private observe(key: string, update: (value: ConfigValue | undefined) => void): void {
-    this.subs.add(quilx.config.observe(key, (v) => this.sync(() => update(v))));
+    this.subs.add(zym.config.observe(key, (v) => this.sync(() => update(v))));
   }
 
   private sync(fn: () => void): void {

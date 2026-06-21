@@ -12,7 +12,7 @@
     "skipLibCheck": true,
     "paths": {
       "node-gtk": ["../node_modules/.node-gtk-types/node-gtk.d.ts"],
-      "quilx/plugin-api": ["../src/plugin-api.ts"]
+      "zym/plugin-api": ["../src/plugin-api.ts"]
     }
   },
   "include": ["**/*", "../node_modules/.node-gtk-types/node-gtk.d.ts"],

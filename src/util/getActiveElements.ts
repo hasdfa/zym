@@ -12,12 +12,12 @@
  * working whenever focus is lost.
  */
 import type { Gtk } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
 export function getActiveElements(): Widget[] {
-  const window = quilx.window;
+  const window = zym.window;
   if (!window)
     return [];
 

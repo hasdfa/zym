@@ -1,5 +1,5 @@
 /*
- * NotificationLog — the persistent view of `quilx.notifications`. A scrollable
+ * NotificationLog — the persistent view of `zym.notifications`. A scrollable
  * list of every notification posted this session (newest at the bottom), the
  * counterpart to the transient toasts: toasts come and go, this is the history.
  *
@@ -11,7 +11,7 @@
  * The assembled, scrollable list is exposed via `root`.
  */
 import { Gtk } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Notification } from '../Notification.ts';
 import { iconLabel } from './icons.ts';
@@ -39,9 +39,9 @@ export class NotificationLog {
     this.root.setVexpand(true);
 
     // Backfill the existing history, then stay live.
-    for (const notification of quilx.notifications.getNotifications()) this.addRow(notification);
-    this.subs.add(quilx.notifications.onDidAddNotification((n) => this.addRow(n as Notification)));
-    this.subs.add(quilx.notifications.onDidClearNotifications(() => this.clearRows()));
+    for (const notification of zym.notifications.getNotifications()) this.addRow(notification);
+    this.subs.add(zym.notifications.onDidAddNotification((n) => this.addRow(n as Notification)));
+    this.subs.add(zym.notifications.onDidClearNotifications(() => this.clearRows()));
   }
 
   /** Move keyboard focus into the log (so its scoped bindings apply). */

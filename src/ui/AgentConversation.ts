@@ -12,14 +12,14 @@
  * container (keymap scoped to `#AgentConversationPrompt #TextEditor`).
  *
  * It implements the tool-agnostic `Agent` surface (../agents/types.ts), so it is a
- * first-class workbench owner registered in `quilx.agents` — the chrome reads
+ * first-class workbench owner registered in `zym.agents` — the chrome reads
  * `status` / `changedFiles` / etc., never the concrete class.
  */
 import { Gtk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { fonts } from '../fonts.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { TextEditor, createInput } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
@@ -52,36 +52,36 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
 // the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
 addStyles(`
-  .quilx-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
-  .quilx-conversation-transcript { padding: 12px; }
-  .quilx-conversation-row { padding: 6px 0; }
+  .zym-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
+  .zym-conversation-transcript { padding: 12px; }
+  .zym-conversation-row { padding: 6px 0; }
   /* User and assistant share the bubble shape; only the background differs. */
-  .quilx-conversation-user, .quilx-conversation-assistant {
+  .zym-conversation-user, .zym-conversation-assistant {
     padding: 14px 18px;
     margin: 8px 0;
     border-radius: 10px;
   }
-  .quilx-conversation-user { background: var(--t-ui-surface-selected); }
-  .quilx-conversation-assistant { background: var(--t-ui-surface-popover); }
-  .quilx-conversation-thinking { opacity: 0.55; font-style: italic; padding-left: 12px; }
-  .quilx-conversation-tool { opacity: 0.8; }
-  .quilx-conversation-toolrow { opacity: 0.85; }
+  .zym-conversation-user { background: var(--t-ui-surface-selected); }
+  .zym-conversation-assistant { background: var(--t-ui-surface-popover); }
+  .zym-conversation-thinking { opacity: 0.55; font-style: italic; padding-left: 12px; }
+  .zym-conversation-tool { opacity: 0.8; }
+  .zym-conversation-toolrow { opacity: 0.85; }
   /* File tools open their file via a flat button styled as an inline link. */
-  .quilx-conversation-toolbutton {
+  .zym-conversation-toolbutton {
     padding: 1px 4px; min-height: 0;
   }
-  .quilx-conversation-thinking-row { padding: 6px 12px; }
+  .zym-conversation-thinking-row { padding: 6px 12px; }
   /* A message queued while the agent is busy — a right-aligned bubble above the spinner. */
-  .quilx-conversation-pending {
+  .zym-conversation-pending {
     background: var(--t-ui-surface-selected);
     border-radius: 10px;
     padding: 6px 10px;
     margin: 0 12px;
   }
   /* Subagent transcript: the "view conversation" link + the pushed page's header. */
-  .quilx-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
-  .quilx-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
-  .quilx-conversation-result {
+  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
+  .zym-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
+  .zym-conversation-result {
     opacity: 0.7;
     background: var(--t-ui-surface-popover);
     padding: 4px 8px;
@@ -89,38 +89,38 @@ addStyles(`
     border-radius: 4px;
   }
   /* A Task (subagent) report renders as a fuller markdown card. */
-  .quilx-conversation-task-result {
+  .zym-conversation-task-result {
     background: var(--t-ui-surface-popover);
     border-left: 3px solid var(--t-ui-surface-selected);
     padding: 6px 10px;
     margin-top: 4px;
     border-radius: 4px;
   }
-  .quilx-conversation-tasks {
+  .zym-conversation-tasks {
     padding: 8px 12px;
     background: var(--t-ui-surface-popover);
     border-bottom: 1px solid var(--t-ui-border);
   }
-  .quilx-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
+  .zym-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
   /* The running-subagents panel sits below the input card → divider on top, not bottom. */
-  .quilx-conversation-subagents { border-top: 1px solid var(--t-ui-border); border-bottom: none; }
-  .quilx-conversation-system { opacity: 0.6; font-style: italic; }
-  .quilx-conversation-error { color: var(--t-ui-status-error); }
+  .zym-conversation-subagents { border-top: 1px solid var(--t-ui-border); border-bottom: none; }
+  .zym-conversation-system { opacity: 0.6; font-style: italic; }
+  .zym-conversation-error { color: var(--t-ui-status-error); }
   /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost. */
-  .quilx-conversation-unknown {
+  .zym-conversation-unknown {
     border-left: 2px solid var(--t-ui-status-warning);
     padding-left: 8px;
     background: var(--t-ui-surface-popover);
     border-radius: 4px;
   }
-  .quilx-conversation-unknown-body { opacity: 0.75; }
+  .zym-conversation-unknown-body { opacity: 0.75; }
   /* Agent-registered actions: a row of buttons just above the input card. The
      default action reads as the suggested (accent) button. */
-  .quilx-conversation-actions {
+  .zym-conversation-actions {
     padding: 6px 8px 0 8px;
   }
   /* The input + its status strip, as a bordered rounded card with its own bg. */
-  .quilx-conversation-input-card {
+  .zym-conversation-input-card {
     margin: var(--spacing);
     border: 1px solid var(--t-ui-border);
     border-radius: var(--card-radius);
@@ -133,49 +133,49 @@ addStyles(`
   #AgentConversationPrompt textview text {
     background: transparent;
   }
-  .quilx-conversation-footer {
+  .zym-conversation-footer {
     padding: 6px 12px;
     border-top: 1px solid var(--t-ui-border); /* divider between the input and the status strip */
   }
   /* The footer metadata (model name · context tokens) reads as muted secondary text. */
-  .quilx-conversation-footer-label { color: var(--t-ui-text-muted); }
+  .zym-conversation-footer-label { color: var(--t-ui-text-muted); }
   /* The detail popover: a compact two-column key/value grid. */
-  .quilx-context-popover { padding: 6px 4px; }
-  .quilx-context-popover-heading { font-weight: bold; margin-bottom: 2px; }
-  .quilx-context-popover-caption { color: var(--t-ui-text-muted); }
+  .zym-context-popover { padding: 6px 4px; }
+  .zym-context-popover-heading { font-weight: bold; margin-bottom: 2px; }
+  .zym-context-popover-caption { color: var(--t-ui-text-muted); }
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
-  .quilx-conversation-mode { min-height: 0; }
-  .quilx-cmode-default { color: var(--t-ui-text-muted); }
-  .quilx-cmode-acceptEdits { color: var(--t-ui-status-success); }
-  .quilx-cmode-auto { color: var(--t-ui-status-warning); }
-  .quilx-cmode-plan { color: var(--t-ui-status-info); }
-  .quilx-conversation-perm {
+  .zym-conversation-mode { min-height: 0; }
+  .zym-cmode-default { color: var(--t-ui-text-muted); }
+  .zym-cmode-acceptEdits { color: var(--t-ui-status-success); }
+  .zym-cmode-auto { color: var(--t-ui-status-warning); }
+  .zym-cmode-plan { color: var(--t-ui-status-info); }
+  .zym-conversation-perm {
     padding: 8px; margin: 6px 0;
     border: 1px solid var(--t-ui-surface-selected);
     border-radius: 6px;
   }
   /* AskUserQuestion: an interactive choice card (info-tinted while open). Split
      into a choice list (left) + a detail pane (right) for the focused choice. */
-  .quilx-conversation-question {
+  .zym-conversation-question {
     padding: 10px; margin: 6px 0;
     border: 1px solid var(--t-ui-status-info);
     border-radius: 6px;
   }
   /* Once answered the border is dropped — it's just a record of the choice. */
-  .quilx-conversation-question-answered { padding: 6px 0; margin: 6px 0; }
-  .quilx-conversation-question-h { font-weight: bold; opacity: 0.6; }
-  .quilx-conversation-question-split { }
-  .quilx-conversation-question-list { background: transparent; min-width: 150px; }
-  .quilx-conversation-question-opt { padding: 2px 4px; }
-  .quilx-conversation-question-detail {
+  .zym-conversation-question-answered { padding: 6px 0; margin: 6px 0; }
+  .zym-conversation-question-h { font-weight: bold; opacity: 0.6; }
+  .zym-conversation-question-split { }
+  .zym-conversation-question-list { background: transparent; min-width: 150px; }
+  .zym-conversation-question-opt { padding: 2px 4px; }
+  .zym-conversation-question-detail {
     padding: 2px 12px; opacity: 0.8;
     border-left: 1px solid var(--t-ui-border);
   }
   #AgentConversationPrompt { padding: 0; }
   /* The monospace bits (tool rows, JSON dumps) follow the font store. */
-  .quilx-conversation-tool,
-  .quilx-conversation-result,
-  .quilx-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
+  .zym-conversation-tool,
+  .zym-conversation-result,
+  .zym-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
 
 // The enter/alt-enter keymap is global (selector-scoped to our prompt), registered
@@ -184,7 +184,7 @@ let promptKeymapRegistered = false;
 function registerPromptKeymapOnce(): void {
   if (promptKeymapRegistered) return;
   promptKeymapRegistered = true;
-  quilx.keymaps.add('agent-conversation', {
+  zym.keymaps.add('agent-conversation', {
     '#AgentConversationPrompt #TextEditor': {
       enter: 'conversation:submit-prompt',
       'alt-enter': 'conversation:prompt-newline',
@@ -304,7 +304,7 @@ export class AgentConversation implements Agent {
     this.session = new SdkSession({ cwd: options.cwd, command: options.command });
 
     this.messages = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.messages.addCssClass('quilx-conversation-transcript');
+    this.messages.addCssClass('zym-conversation-transcript');
     this.scroller = new Gtk.ScrolledWindow({ vexpand: true });
     this.scroller.setChild(this.messages);
 
@@ -312,20 +312,20 @@ export class AgentConversation implements Agent {
     // message (a turn the user queued while the agent was busy) over a "Thinking…"
     // spinner row. The reveal is shown while working or while a message is pending.
     this.thinkingRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    this.thinkingRow.addCssClass('quilx-conversation-thinking-row');
+    this.thinkingRow.addCssClass('zym-conversation-thinking-row');
     const spinner = new Adw.Spinner();
     spinner.setSizeRequest(16, 16); // Adw.Spinner fills its allocation otherwise
     this.thinkingRow.append(spinner);
     this.thinkingLabel = new Gtk.Label({ label: 'Thinking…' });
-    this.thinkingLabel.addCssClass('quilx-conversation-system');
+    this.thinkingLabel.addCssClass('zym-conversation-system');
     this.thinkingRow.append(this.thinkingLabel);
 
     this.pendingBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, halign: Gtk.Align.END });
-    this.pendingBox.addCssClass('quilx-conversation-pending');
+    this.pendingBox.addCssClass('zym-conversation-pending');
     this.pendingBox.setVisible(false);
     this.pendingLabel = new Gtk.Label({ xalign: 1, wrap: true });
     const pendingHint = new Gtk.Label({ xalign: 1, label: 'Pending' });
-    pendingHint.addCssClass('quilx-conversation-system');
+    pendingHint.addCssClass('zym-conversation-system');
     this.pendingBox.append(this.pendingLabel);
     this.pendingBox.append(pendingHint);
 
@@ -353,14 +353,14 @@ export class AgentConversation implements Agent {
     this.statusIcon = createAgentStatusIcon(this);
     this.modeDropdown = Gtk.DropDown.newFromStrings(PERMISSION_CYCLE);
     this.modeDropdown.addCssClass('flat');
-    this.modeDropdown.addCssClass('quilx-conversation-mode');
+    this.modeDropdown.addCssClass('zym-conversation-mode');
     this.modeDropdown.on('notify::selected', () => {
       if (this.applyingMode) return;
       const mode = PERMISSION_CYCLE[this.modeDropdown.getSelected()];
       if (mode) this.session.setPermissionMode(mode);
     });
     this.footer = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 14 });
-    this.footer.addCssClass('quilx-conversation-footer');
+    this.footer.addCssClass('zym-conversation-footer');
     this.footer.append(this.statusIcon.widget);
     this.footer.append(this.modeDropdown);
     this.footer.append(this.modelContext.widget);
@@ -371,7 +371,7 @@ export class AgentConversation implements Agent {
     // setOverflow(HIDDEN), which clips children to the rounded border so the
     // TextEditor's square background corners don't escape the radius.
     const inputCard = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    inputCard.addCssClass('quilx-conversation-input-card');
+    inputCard.addCssClass('zym-conversation-input-card');
     inputCard.setOverflow(Gtk.Overflow.HIDDEN);
     inputCard.append(this.promptContainer);
     inputCard.append(this.footer);
@@ -386,11 +386,11 @@ export class AgentConversation implements Agent {
     // hidden until the agent registers any (see renderActions). A WrapBox so a long
     // row of actions wraps onto further lines instead of overflowing the width.
     this.actionsBar = new Adw.WrapBox({ childSpacing: 6, lineSpacing: 6 });
-    this.actionsBar.addCssClass('quilx-conversation-actions');
+    this.actionsBar.addCssClass('zym-conversation-actions');
     this.actionsBar.setVisible(false);
 
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
-    mainBox.addCssClass('quilx-conversation');
+    mainBox.addCssClass('zym-conversation');
     mainBox.append(this.tasksPanel.root);
     mainBox.append(this.scroller);
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
@@ -405,7 +405,7 @@ export class AgentConversation implements Agent {
     this.root.add(Adw.NavigationPage.new(mainBox, 'Conversation'));
 
     this.installCommands(); // after this.root exists (commands register on it)
-    quilx.agents.add(this); // join the registry → sidebar lists it
+    zym.agents.add(this); // join the registry → sidebar lists it
     this.wireSession();
   }
 
@@ -418,8 +418,8 @@ export class AgentConversation implements Agent {
       this.modeDropdown.setSelected(index);
       this.applyingMode = false;
     }
-    for (const m of PERMISSION_CYCLE) this.modeDropdown.removeCssClass(`quilx-cmode-${m}`);
-    this.modeDropdown.addCssClass(`quilx-cmode-${this._permissionMode}`);
+    for (const m of PERMISSION_CYCLE) this.modeDropdown.removeCssClass(`zym-cmode-${m}`);
+    this.modeDropdown.addCssClass(`zym-cmode-${this._permissionMode}`);
   }
 
   /** Spawn claude and send the launch prompt (if any). */
@@ -523,7 +523,7 @@ export class AgentConversation implements Agent {
     this.statusIcon.dispose();
     this.input.dispose();
     this.session.dispose();
-    quilx.agents.remove(this);
+    zym.agents.remove(this);
   }
 
   // --- input ------------------------------------------------------------------
@@ -533,7 +533,7 @@ export class AgentConversation implements Agent {
   private installCommands(): void {
     registerPromptKeymapOnce();
     this.subs.add(
-      quilx.commands.add(this.root, {
+      zym.commands.add(this.root, {
         'conversation:submit-prompt': {
           didDispatch: () => this.submit(),
           description: 'Submit the prompt to the agent',
@@ -632,7 +632,7 @@ export class AgentConversation implements Agent {
       this.session.onUserMessage(({ text }) => {
         this.endTurn();
         this.thinkingLabel.setText('Thinking…'); // reset the live token count for the new turn
-        this.addMarkdownBlock('quilx-conversation-user', Gtk.Align.END).setMarkdown(text);
+        this.addMarkdownBlock('zym-conversation-user', Gtk.Align.END).setMarkdown(text);
       }),
       // Live "Thinking… (N tokens)" while the model reasons before producing output.
       this.session.onThinkingTokens(({ tokens }) => {
@@ -646,12 +646,12 @@ export class AgentConversation implements Agent {
       this.session.onMonitorUpdate(({ id }) => this.monitorView.update(id)),
       this.session.onAssistantStart(() => {
         this.assistantRaw = '';
-        this.assistantView = this.addMarkdownBlock('quilx-conversation-assistant', Gtk.Align.START);
+        this.assistantView = this.addMarkdownBlock('zym-conversation-assistant', Gtk.Align.START);
       }),
       this.session.onAssistantText(({ delta }) => {
         if (!this.assistantView) {
           this.assistantRaw = '';
-          this.assistantView = this.addMarkdownBlock('quilx-conversation-assistant', Gtk.Align.START);
+          this.assistantView = this.addMarkdownBlock('zym-conversation-assistant', Gtk.Align.START);
         }
         this.assistantRaw += delta;
         this.assistantView.setMarkdown(this.assistantRaw);
@@ -660,7 +660,7 @@ export class AgentConversation implements Agent {
       this.session.onAssistantThinking(({ delta }) => {
         if (!this.thinkingView) {
           this.thinkingRaw = '';
-          this.thinkingView = this.addMarkdownBlock('quilx-conversation-thinking', Gtk.Align.START);
+          this.thinkingView = this.addMarkdownBlock('zym-conversation-thinking', Gtk.Align.START);
         }
         this.thinkingRaw += delta;
         this.thinkingView.setMarkdown(this.thinkingRaw);
@@ -696,7 +696,7 @@ export class AgentConversation implements Agent {
       this.session.onQuestion((req) => this.addQuestionCard(req)),
       this.session.onExit(() => {
         this.endTurn();
-        this.addRow('quilx-conversation-system').setText('── process exited ──');
+        this.addRow('zym-conversation-system').setText('── process exited ──');
         this.promptContainer.setSensitive(false);
       }),
     );
@@ -822,7 +822,7 @@ export class AgentConversation implements Agent {
   // A single wrapped, left-aligned row (thinking / tool / system).
   private addRow(cssClass: string): InstanceType<typeof Gtk.Label> {
     const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-    label.addCssClass('quilx-conversation-row');
+    label.addCssClass('zym-conversation-row');
     label.addCssClass(cssClass);
     this.messages.append(label);
     this.scrollToBottom();
@@ -831,13 +831,13 @@ export class AgentConversation implements Agent {
 
   // An error notice in the conversation flow (refusal / max-turns / API error).
   private addErrorRow(message: string): void {
-    const label = this.addRow('quilx-conversation-error');
+    const label = this.addRow('zym-conversation-error');
     setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
   }
 
   // A muted notice that the user interrupted the turn (ctrl-c).
   private addInterruptedRow(): void {
-    const label = this.addRow('quilx-conversation-system');
+    const label = this.addRow('zym-conversation-system');
     setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.STOP)}  Interrupted`, 'Interrupted');
   }
 
@@ -850,13 +850,13 @@ export class AgentConversation implements Agent {
     try { json = JSON.stringify(event, null, 2); } catch { json = String(event); }
 
     const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
-    row.addCssClass('quilx-conversation-row');
-    row.addCssClass('quilx-conversation-unknown');
+    row.addCssClass('zym-conversation-row');
+    row.addCssClass('zym-conversation-unknown');
 
     const header = new Gtk.Label({ xalign: 0, wrap: true });
     setMarkupSafe(header, `${iconSpan(NERDFONT.STATUS.WARNING, theme.ui.status.warning)}  unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
     const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-    body.addCssClass('quilx-conversation-unknown-body');
+    body.addCssClass('zym-conversation-unknown-body');
     body.setText(json);
 
     row.append(header);
@@ -872,7 +872,7 @@ export class AgentConversation implements Agent {
     if (name === 'Bash') { this.addBashRow(id, input); return; }
 
     const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    row.addCssClass('quilx-conversation-row');
+    row.addCssClass('zym-conversation-row');
 
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     const status = new Gtk.Label({ valign: Gtk.Align.START });
@@ -884,22 +884,22 @@ export class AgentConversation implements Agent {
       // the file path is a flat button that opens the file in the editor.
       const { icon, title, detail } = describeTool(name, input, this.cwd);
       const head = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-      head.addCssClass('quilx-conversation-toolrow');
+      head.addCssClass('zym-conversation-toolrow');
       setMarkupSafe(head, `${iconSpan(icon)}${title ? `  <b>${escapeMarkup(title)}</b>` : ''}`, title || name);
       header.append(head);
 
       const pathLabel = new Gtk.Label({ xalign: 0, wrap: true });
-      pathLabel.addCssClass('quilx-conversation-toolrow');
+      pathLabel.addCssClass('zym-conversation-toolrow');
       setMarkupSafe(pathLabel, toolDetailMarkup(detail, fonts.monospaceFamily), detail);
       const button = new Gtk.Button();
       button.addCssClass('flat');
-      button.addCssClass('quilx-conversation-toolbutton');
+      button.addCssClass('zym-conversation-toolbutton');
       button.setChild(pathLabel);
       button.on('clicked', () => this.onOpenFile!(filePath));
       header.append(button);
     } else {
       const tool = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, hexpand: true });
-      tool.addCssClass('quilx-conversation-toolrow');
+      tool.addCssClass('zym-conversation-toolrow');
       setMarkupSafe(tool, toolMarkup(name, input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${name} ${summarizeInput(input)}`);
       header.append(tool);
     }
@@ -922,7 +922,7 @@ export class AgentConversation implements Agent {
         onProgress: (p) => {
           if (!progress) {
             progress = new Gtk.Label({ xalign: 0, wrap: true });
-            progress.addCssClass('quilx-conversation-system');
+            progress.addCssClass('zym-conversation-system');
             resultBox.append(progress);
           }
           progress.setText(progressLine(p));
@@ -951,9 +951,9 @@ export class AgentConversation implements Agent {
     };
 
     const expander = new Gtk.Expander();
-    expander.addCssClass('quilx-conversation-row');
+    expander.addCssClass('zym-conversation-row');
     const label = new Gtk.Label({ xalign: 0, selectable: true, hexpand: true });
-    label.addCssClass('quilx-conversation-toolrow');
+    label.addCssClass('zym-conversation-toolrow');
     expander.setLabelWidget(label);
     const content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     expander.setChild(content);
@@ -979,7 +979,7 @@ export class AgentConversation implements Agent {
         const trimmed = text.trim();
         if (trimmed) {
           const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 40, 4000) });
-          out.addCssClass('quilx-conversation-result');
+          out.addCssClass('zym-conversation-result');
           content.append(out);
         }
         if (isError) {
@@ -992,7 +992,7 @@ export class AgentConversation implements Agent {
       onProgress: (p) => {
         if (!progress) {
           progress = new Gtk.Label({ xalign: 0, wrap: true });
-          progress.addCssClass('quilx-conversation-system');
+          progress.addCssClass('zym-conversation-system');
           content.append(progress);
         }
         progress.setText(progressLine(p));
@@ -1019,12 +1019,12 @@ export class AgentConversation implements Agent {
     if (!trimmed) return;
     if (name === 'Task' || name === 'Agent') {
       const view = new MarkdownView();
-      view.root.addCssClass('quilx-conversation-task-result');
+      view.root.addCssClass('zym-conversation-task-result');
       resultBox.append(view.root);
       view.setMarkdown(trimmed);
     } else {
       const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 8, 800) });
-      label.addCssClass('quilx-conversation-result');
+      label.addCssClass('zym-conversation-result');
       resultBox.append(label);
     }
   }

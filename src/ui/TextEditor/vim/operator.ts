@@ -241,7 +241,7 @@ class Operator extends Base {
     // `mutateSelections` iterates). Accumulate the rows and flush them once, on
     // the last (bottom) row, as a single blockwise-typed register value — paste
     // reconstructs the columns from it. (Upstream leans on Atom's per-selection
-    // clipboard + native multi-cursor here; quilx has neither, so it stores the
+    // clipboard + native multi-cursor here; zym has neither, so it stores the
     // whole block in the register.)
     if (wise === 'blockwise') {
       if (!this.blockwiseRegisterRows) this.blockwiseRegisterRows = []

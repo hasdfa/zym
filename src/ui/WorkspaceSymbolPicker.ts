@@ -15,7 +15,7 @@ import { Gtk } from '../gi.ts';
 import { openLocationPicker } from './LocationPicker.ts';
 import { escapeMarkup, type PickerItem } from './Picker.ts';
 import { symbolKindGlyph, Icons } from './icons.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { LspDocument, WorkspaceSymbolResult } from '../lsp/LspManager.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -37,7 +37,7 @@ export function openWorkspaceSymbolPicker(
     // The server filters and ranks; show its results as-is rather than re-filtering.
     localFilter: false,
     fetch: (query, onResult, onError) => {
-      quilx.lsp
+      zym.lsp
         .workspaceSymbols(doc, query)
         .then((symbols) => {
           byValue.clear();

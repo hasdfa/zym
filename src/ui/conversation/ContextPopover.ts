@@ -29,7 +29,7 @@ export class ContextPopover {
 
   constructor() {
     const grid = new Gtk.Grid({ columnSpacing: 18, rowSpacing: 4 });
-    grid.addCssClass('quilx-context-popover');
+    grid.addCssClass('zym-context-popover');
 
     this.heading(grid, 'Context window');
     this.field(grid, 'input', 'Input');
@@ -65,15 +65,15 @@ export class ContextPopover {
 
   private heading(grid: InstanceType<typeof Gtk.Grid>, text: string): void {
     const label = new Gtk.Label({ label: text, xalign: 0 });
-    label.addCssClass('quilx-context-popover-heading');
+    label.addCssClass('zym-context-popover-heading');
     grid.attach(label, 0, this.row++, 2, 1);
   }
 
   private field(grid: InstanceType<typeof Gtk.Grid>, key: string, name: string): void {
     const caption = new Gtk.Label({ label: name, xalign: 0 });
-    caption.addCssClass('quilx-context-popover-caption');
+    caption.addCssClass('zym-context-popover-caption');
     const value = new Gtk.Label({ label: '—', xalign: 1, hexpand: true });
-    value.addCssClass('quilx-context-popover-value');
+    value.addCssClass('zym-context-popover-value');
     value.setAttributes(tnum());
     grid.attach(caption, 0, this.row, 1, 1);
     grid.attach(value, 1, this.row, 1, 1);

@@ -28,8 +28,8 @@ export interface PluginManifest {
   name: string;
   description?: string;
   version?: string;
-  /** Minimum quilx version required. Activation is skipped with a warning if unmet. */
-  minQuilxVersion?: string;
+  /** Minimum zym version required. Activation is skipped with a warning if unmet. */
+  minZymVersion?: string;
 }
 
 /** Language-layer contributions (detection + tree-sitter grammar + LSP servers). */

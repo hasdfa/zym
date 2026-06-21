@@ -33,7 +33,7 @@ Export a `Plugin` (`src/plugin/types.ts`): manifest fields plus
 disposable-tracked, so `deactivate` is rarely needed.
 
 ```ts
-import type { Plugin, PluginContext, ServerDef } from 'quilx/plugin-api';
+import type { Plugin, PluginContext, ServerDef } from 'zym/plugin-api';
 
 export const fooPlugin: Plugin = {
   id: 'foo',
@@ -74,7 +74,7 @@ plugin is relocatable). For a tree-sitter grammar:
   the css/ recipe; `tree-sitter build --wasm` uses wasi-sdk, web-tree-sitter
   0.20.x needs ABI ≤14 — don't regenerate `parser.c` with a 0.25+ CLI).
 - **queries** — `queries/<lang>/highlights.scm` and `queries/<lang>/folds.scm`.
-  Adapt from the grammar's upstream `highlights.scm` to quilx's capture palette
+  Adapt from the grammar's upstream `highlights.scm` to zym's capture palette
   (compare against an existing plugin's queries; the `grammar.test.ts` asserts
   the core captures exist).
 
@@ -153,8 +153,8 @@ status list in [index.md](index.md) (the *Plugin system* section).
 
 ## Checklist
 
-- [ ] `plugins/<id>/package.json` with `name: "@quilx/plugin-<id>"`, `version`, `main`, `peerDependencies: { quilx: "^0.1.0" }`.
-- [ ] `plugins/<id>/index.ts` exports `<id>Plugin` (`Plugin`); imports from `quilx/plugin-api`.
+- [ ] `plugins/<id>/package.json` with `name: "@zym/plugin-<id>"`, `version`, `main`, `peerDependencies: { zym: "^0.1.0" }`.
+- [ ] `plugins/<id>/index.ts` exports `<id>Plugin` (`Plugin`); imports from `zym/plugin-api`.
 - [ ] Language: `registerLanguage` (+ `lspId` if it differs), `registerGrammar`,
       `registerServer`.
 - [ ] Assets under the plugin dir, referenced via `ctx.resolve`.

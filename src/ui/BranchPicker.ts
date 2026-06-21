@@ -6,12 +6,12 @@
  * `openRenameBranchPicker` is an entry-only picker whose action renames the
  * current branch. All go through the git facade (`git.ts`); HEAD/working-tree changes make the
  * branch button and gutters update via `GitRepo.onChange`. Results surface
- * through `quilx.notifications`.
+ * through `zym.notifications`.
  */
 import { Gtk } from '../gi.ts';
 import { openPicker, highlightMarkup } from './Picker.ts';
 import { Icons } from './icons.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { repoRoot, listBranches, type GitRepo, type GitOpResult } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -123,7 +123,7 @@ function pickOtherBranch(
   listBranches(root, (all) => {
     const branches = all.filter((b) => b !== current);
     if (branches.length === 0) {
-      quilx.notifications.addInfo('No other branches');
+      zym.notifications.addInfo('No other branches');
       return;
     }
     openPicker({
@@ -141,7 +141,7 @@ function pickOtherBranch(
 // the mutation promise's `.then`.
 function report(success: string): (result: GitOpResult) => void {
   return (result) => {
-    if (result.isOk()) quilx.notifications.addSuccess(success);
-    else quilx.notifications.addError('Git operation failed', { detail: result.unwrapErr().message.trim() });
+    if (result.isOk()) zym.notifications.addSuccess(success);
+    else zym.notifications.addError('Git operation failed', { detail: result.unwrapErr().message.trim() });
   };
 }

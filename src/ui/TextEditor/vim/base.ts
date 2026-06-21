@@ -1,14 +1,14 @@
 /*
  * Base — superclass of every vim operation (operators, motions, text-objects).
  *
- * Vendored from xedel/vim-mode-plus's lib/base.js with these quilx adaptations:
+ * Vendored from xedel/vim-mode-plus's lib/base.js with these zym adaptations:
  *   - ESM instead of CommonJS (`require` → `import`, `module.exports` → `export`);
  *   - the base↔vim-state import cycle is broken: the upstream `static
- *     registerCommand()` (the only user of VimState here) is dropped, since quilx
- *     registers commands through `quilx.commands`/`quilx.keymaps` separately;
+ *     registerCommand()` (the only user of VimState here) is dropped, since zym
+ *     registers commands through `zym.commands`/`zym.keymaps` separately;
  *   - lazy class loading via `json/file-table.json` is replaced by an eager
  *     registry: operation modules call `Klass.register()` at import time and
- *     `getClass` is a plain lookup (quilx has no startup-time pressure to defer).
+ *     `getClass` is a plain lookup (zym has no startup-time pressure to defer).
  *
  * Everything else — the count/repeat machinery and the vimState proxy getters —
  * is preserved so vendored operation subclasses port unchanged.
@@ -181,7 +181,7 @@ export class Base {
   }
 
   instanceof (klassName: string): boolean {
-    // Unlike upstream (which lazy-loads every class), quilx registers operations
+    // Unlike upstream (which lazy-loads every class), zym registers operations
     // eagerly and only those that are ported. Treat an unregistered class name as
     // "not an instance" rather than throwing, so checks against not-yet-ported
     // operations (e.g. Search, Change) simply return false.

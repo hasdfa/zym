@@ -13,7 +13,7 @@
  * offsets), so they work regardless of the underlying entry widget.
  */
 import { Gtk } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { CommandMap } from '../CommandManager.ts';
 import type { Disposable } from '../util/eventKit.ts';
 
@@ -87,7 +87,7 @@ let keymapRegistered = false;
 function registerReadlineKeymapOnce(): void {
   if (keymapRegistered) return;
   keymapRegistered = true;
-  quilx.keymaps.add('readline', {
+  zym.keymaps.add('readline', {
     [`.${READLINE_INPUT_CLASS}`]: {
       'ctrl-a': 'readline:beginning-of-line',
       'ctrl-e': 'readline:end-of-line',
@@ -113,5 +113,5 @@ function registerReadlineKeymapOnce(): void {
 export function enableReadline(entry: InstanceType<typeof Gtk.Widget>): Disposable {
   entry.addCssClass(READLINE_INPUT_CLASS);
   registerReadlineKeymapOnce();
-  return quilx.commands.add(entry, readlineCommands(entry as unknown as Editable));
+  return zym.commands.add(entry, readlineCommands(entry as unknown as Editable));
 }

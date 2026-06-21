@@ -15,11 +15,11 @@ export class StickyListPanel {
   /** `title` heads the panel; extra `cssClasses` layer onto the base styling. */
   constructor(title: string, ...cssClasses: string[]) {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.addCssClass('quilx-conversation-tasks');
+    this.root.addCssClass('zym-conversation-tasks');
     for (const c of cssClasses) this.root.addCssClass(c);
     this.root.setVisible(false);
     const header = new Gtk.Label({ xalign: 0, label: title });
-    header.addCssClass('quilx-conversation-tasks-header');
+    header.addCssClass('zym-conversation-tasks-header');
     this.list = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
     this.root.append(header);
     this.root.append(this.list);

@@ -1,5 +1,5 @@
 /*
- * The HTML plugin — quilx's third bundled language. It rounds out the
+ * The HTML plugin — zym's third bundled language. It rounds out the
  * contribution model with the piece the first two plugins didn't exercise
  * together: a grammar with *cross-language injections* whose guests are owned by
  * other plugins. HTML's <script> blocks are re-highlit by the TypeScript plugin's
@@ -8,7 +8,7 @@
  *
  * Both grammars ship in the bundled `tree-sitter-wasms` pack (like TypeScript's),
  * so nothing is built here — only the highlight/fold queries are authored
- * (adapted to quilx's palette). The CSS grammar is registered WITHOUT file
+ * (adapted to zym's palette). The CSS grammar is registered WITHOUT file
  * detection (no `.css` opens as CSS): it exists only so HTML's <style> injection
  * resolves. A future CSS plugin can add `registerLanguage`/servers on top of the
  * same `css` grammar id with no change here.

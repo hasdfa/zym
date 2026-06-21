@@ -2,7 +2,7 @@
  * Theme — loads a theme authored in *our own* format (a format we own; see
  * theme.schema.json) and normalizes it into the shape the editor consumes (nested
  * UI chrome colors + a flat syntax capture → color map). Themes live as JSON next
- * to this module (e.g. quilx.json), are loaded through `loadTheme`, and the active
+ * to this module (e.g. zym.json), are loaded through `loadTheme`, and the active
  * theme is exported as `theme`. See docs/theming.md.
  *
  * On disk a theme is one file: `{ name, appearance, ui, syntax }`, and the
@@ -377,7 +377,7 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
 }
 
 /** The active theme. */
-export const theme = loadTheme('quilx');
+export const theme = loadTheme('zym');
 
 /**
  * The theme's `ui.*` color tokens as CSS custom-property declarations — one per leaf,

@@ -32,8 +32,8 @@ test('Task labels the subagent and uses the description', () => {
 });
 
 test('MCP tool name is prettified', () => {
-  const v = describeTool('mcp__quilx__set_worktree', { path: '/x' });
-  assert.equal(v.title, 'quilx · set_worktree');
+  const v = describeTool('mcp__zym__set_worktree', { path: '/x' });
+  assert.equal(v.title, 'zym · set_worktree');
 });
 
 test('Skill shows the skill name and args', () => {

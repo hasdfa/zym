@@ -64,9 +64,9 @@ formatting is deferred to a separate tool. The one type-aware rule,
 
 ### Data & storage
 
-App data follows XDG: config in `$XDG_CONFIG_HOME/quilx`, state (sessions,
-frecency) in `$XDG_STATE_HOME/quilx`, caches (LSP installs, generated GtkSource
-schemes) in `$XDG_CACHE_HOME/quilx` — never `/tmp`. Tests get throwaway dirs via
+App data follows XDG: config in `$XDG_CONFIG_HOME/zym`, state (sessions,
+frecency) in `$XDG_STATE_HOME/zym`, caches (LSP installs, generated GtkSource
+schemes) in `$XDG_CACHE_HOME/zym` — never `/tmp`. Tests get throwaway dirs via
 `src/util/testTmp.ts` (`tmpDir(prefix)`), removed on process exit.
 
 ### Configuration
@@ -79,7 +79,7 @@ schema-generated preferences window. See [config.md](config.md).
 
 ## System integration
 
-quilx tracks the desktop's appearance and fonts and follows OS font/theme changes
+zym tracks the desktop's appearance and fonts and follows OS font/theme changes
 at runtime (no restart). Fonts already react live; the core open work is making
 the **theme palette** follow OS light/dark via a swappable `theme` + a
 `theme:changed` event, gated on `core.followSystemColorScheme`. See
@@ -191,7 +191,7 @@ multi-root are the open plans. See [session-management.md](session-management.md
 
 ## Agents
 
-Run coding agents inside quilx via two interchangeable rendering kinds —
+Run coding agents inside zym via two interchangeable rendering kinds —
 `claude-tui` (the CLI's terminal UI in a Vte tab, the default) and `claude-sdk`
 (headless `claude -p` stream-json rendered in native GTK widgets) — over a shared
 workbench / list / lifecycle / worktree spine. Root ownership lives on a

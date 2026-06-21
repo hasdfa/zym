@@ -6,7 +6,7 @@
  * chosen, the same idea behind editor quick-open ordering.
  *
  * Storage mirrors the session store: one JSON file under the XDG state dir
- * (`$XDG_STATE_HOME/quilx/frecency.json`, falling back to `~/.local/state`),
+ * (`$XDG_STATE_HOME/zym/frecency.json`, falling back to `~/.local/state`),
  * written atomically. Reads are forgiving — a missing or corrupt file just
  * starts from empty, so a bad file never blocks a picker.
  */
@@ -51,7 +51,7 @@ export class FrecencyStore {
    */
   constructor(stateDir?: string) {
     const base = stateDir ?? process.env.XDG_STATE_HOME ?? Path.join(Os.homedir(), '.local', 'state');
-    this.path = Path.join(base, 'quilx', 'frecency.json');
+    this.path = Path.join(base, 'zym', 'frecency.json');
   }
 
   /** Record that `key` was chosen in `namespace`, just now. Persists immediately. */

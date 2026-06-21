@@ -115,7 +115,7 @@ the new config).
 
 A configured server only runs if its command is actually installed. `LspManager`
 resolves each candidate's command via `lsp/which.ts` (`resolveCommand`) over: the
-quilx-managed install dir (`managedBinDir`), then project `node_modules/.bin`
+zym-managed install dir (`managedBinDir`), then project `node_modules/.bin`
 from the server's root dir upward (`nodeModulesBinDirs`), then PATH — and
 **drops** servers that don't resolve (memoized per command+root). So an optional
 server the user hasn't installed is skipped rather than spawned → ENOENT →
@@ -131,7 +131,7 @@ often sit in `node_modules/.bin` (those don't speak LSP over stdio).
 
 A `ServerDef.install` spec is `{ via:'npm', package }` (`package` may be several
 space-separated specs) or a raw `{ command }` escape hatch. `lsp/installer.ts`
-installs into a managed dir (`$XDG_DATA_HOME/quilx/lsp/<server>/`, npm bins under
+installs into a managed dir (`$XDG_DATA_HOME/zym/lsp/<server>/`, npm bins under
 its `node_modules/.bin`), never the user's global env or project.
 
 Triggers when a needed server is missing:

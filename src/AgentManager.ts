@@ -1,14 +1,14 @@
 /*
  * AgentManager — the application-wide registry of running terminal agents.
  *
- * Exposed as `quilx.agents`. Each Agent registers itself on launch and
+ * Exposed as `zym.agents`. Each Agent registers itself on launch and
  * deregisters when its process exits, so other parts of the app (a future agent
  * sidebar, status indicators, "focus next agent" commands) can enumerate the
  * live agents and react as they come and go.
  */
 import { Emitter, type Disposable } from './util/eventKit.ts';
-// Type-only: avoids a runtime import cycle (quilx → AgentManager → Agent
-// → quilx); the import is erased by type-stripping.
+// Type-only: avoids a runtime import cycle (zym → AgentManager → Agent
+// → zym); the import is erased by type-stripping.
 import type { Agent } from './agents/types.ts';
 
 export class AgentManager {

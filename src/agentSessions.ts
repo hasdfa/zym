@@ -37,7 +37,7 @@ export interface AgentSession {
    *  none (then the caller falls back to the project cwd). */
   cwd: string | null;
   /** A worktree the agent moved into *dynamically* mid-session (announced via the
-   *  set_worktree bridge tool), recorded by quilx as a sidecar — distinct from
+   *  set_worktree bridge tool), recorded by zym as a sidecar — distinct from
    *  `cwd` (Claude's launch dir, where `--resume` must run). When it differs from
    *  `cwd`, resume nudges the agent to `cd` back here. Null when it never moved. */
   effectiveCwd: string | null;
@@ -50,14 +50,14 @@ export interface AgentSession {
 const HEAD_BYTES = 64 * 1024;
 
 // Where Claude Code persists each session's terminal title (one file per session
-// id, contents being the title string, e.g. "quilx | Plan: Agents"). This is the
+// id, contents being the title string, e.g. "zym | Plan: Agents"). This is the
 // terminal-title skill's title, distinct from the in-transcript `/rename` title.
 const TITLES_DIR = Path.join(Os.homedir(), '.claude', 'terminal_titles');
 
 /** Claude Code's transcript directory for `cwd`. Claude encodes the cwd into the
  *  dir name by replacing every non-alphanumeric character with `-`, one dash per
- *  char — so a worktree at `…/quilx/.claude/worktrees/x` becomes
- *  `-…-quilx--claude-worktrees-x` (note the `/.` → `--`). */
+ *  char — so a worktree at `…/zym/.claude/worktrees/x` becomes
+ *  `-…-zym--claude-worktrees-x` (note the `/.` → `--`). */
 export function transcriptDir(cwd: string): string {
   const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-');
   return Path.join(Os.homedir(), '.claude', 'projects', encoded);
@@ -115,9 +115,9 @@ export function listResumableSessions(roots: string[]): AgentSession[] {
 
 // Sidecar (next to the transcript) recording a worktree the agent moved into
 // dynamically — Claude's own cwd doesn't change on a Bash-tool `cd`, so the
-// transcript can't tell us; quilx writes it on the set_worktree announce.
+// transcript can't tell us; zym writes it on the set_worktree announce.
 function worktreeSidecar(dir: string, id: string): string {
-  return Path.join(dir, `${id}.quilx-worktree`);
+  return Path.join(dir, `${id}.zym-worktree`);
 }
 
 /** Record (or clear) the worktree an agent dynamically moved into, as a sidecar

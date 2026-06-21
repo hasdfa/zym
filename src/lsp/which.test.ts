@@ -17,7 +17,7 @@ test('nodeModulesBinDirs walks from the root dir up to the filesystem root', () 
 });
 
 test('resolveCommand finds an executable in extraDirs before PATH, else null', () => {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-which-'));
+  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-which-'));
   const bin = Path.join(dir, 'my-lsp');
   Fs.writeFileSync(bin, '#!/bin/sh\n');
   Fs.chmodSync(bin, 0o755);

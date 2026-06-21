@@ -20,7 +20,7 @@ const SAMPLE = Array.from({ length: 60 }, (_, i) => `line ${String(i + 1).padSta
 const LINES = [4, 8, 12, 16, 20]; // anchor lines for the blocks
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.poc.churn', flags: Gio.ApplicationFlags.NON_UNIQUE });
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.poc.churn', flags: Gio.ApplicationFlags.NON_UNIQUE });
 
 function makeCard(label: string): any {
   const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });

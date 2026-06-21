@@ -26,7 +26,7 @@ export interface PageNav {
 
 export class SubagentView {
   /** The running-subagents panel; mount `panel.root` in the layout. */
-  readonly panel = new StickyListPanel('Subagents', 'quilx-conversation-subagents');
+  readonly panel = new StickyListPanel('Subagents', 'zym-conversation-subagents');
   private readonly running = new Map<string, { agentType: string; description: string; status: 'running' | 'completed' }>();
 
   private readonly session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>;
@@ -46,7 +46,7 @@ export class SubagentView {
     const type = typeof i.subagent_type === 'string' ? i.subagent_type : 'agent';
     const desc = typeof i.description === 'string' ? i.description : '';
     const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    row.addCssClass('quilx-conversation-row');
+    row.addCssClass('zym-conversation-row');
     row.append(this.linkButton(id, NERDFONT.TOOL.SUBAGENT, type, desc));
     // Show it in the running panel right away (driven by the spawn, not the later
     // task_started, so it's robust); hidden again on completion.
@@ -68,7 +68,7 @@ export class SubagentView {
     setMarkupSafe(label, `${iconSpan(glyph, color)}  <b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
     const button = new Gtk.Button({ halign: Gtk.Align.START });
     button.addCssClass('flat');
-    button.addCssClass('quilx-conversation-subagent-link');
+    button.addCssClass('zym-conversation-subagent-link');
     button.setChild(label);
     button.on('clicked', () => this.pushPage(id));
     return button;
@@ -86,7 +86,7 @@ export class SubagentView {
   // Push a page rendering the subagent's captured transcript; live-updates while running.
   private pushPage(id: string): void {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-    box.addCssClass('quilx-conversation-transcript');
+    box.addCssClass('zym-conversation-transcript');
     const scroller = new Gtk.ScrolledWindow({ vexpand: true });
     scroller.setChild(box);
 
@@ -97,24 +97,24 @@ export class SubagentView {
       // The instruction the main agent gave the subagent, at the top (a user turn).
       if (info.prompt) {
         const promptView = new MarkdownView();
-        promptView.root.addCssClass('quilx-conversation-user');
+        promptView.root.addCssClass('zym-conversation-user');
         box.append(promptView.root);
         promptView.setMarkdown(info.prompt);
       }
       for (const m of info.messages) {
         if (m.kind === 'text') {
           const view = new MarkdownView();
-          view.root.addCssClass('quilx-conversation-assistant');
+          view.root.addCssClass('zym-conversation-assistant');
           box.append(view.root);
           view.setMarkdown(m.text);
         } else {
           const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-          label.addCssClass('quilx-conversation-toolrow');
+          label.addCssClass('zym-conversation-toolrow');
           setMarkupSafe(label, toolMarkup(m.name, m.input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${m.name} ${summarizeInput(m.input)}`);
           box.append(label);
           if (m.result && m.result.text.trim()) {
             const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(m.result.text.trim(), 12, 1200) });
-            out.addCssClass('quilx-conversation-result');
+            out.addCssClass('zym-conversation-result');
             out.setMarginStart(22);
             box.append(out);
           }
@@ -130,11 +130,11 @@ export class SubagentView {
     back.addCssClass('flat');
     back.on('clicked', () => this.nav.pop());
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    header.addCssClass('quilx-conversation-subagent-header');
+    header.addCssClass('zym-conversation-subagent-header');
     header.append(back);
     header.append(new Gtk.Label({ label: title }));
     const page = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    page.addCssClass('quilx-conversation');
+    page.addCssClass('zym-conversation');
     page.append(header);
     page.append(scroller);
 

@@ -1,7 +1,7 @@
 # Vendored Markdown tree-sitter grammars
 
 `tree-sitter-markdown.wasm` (block) and `tree-sitter-markdown-inline.wasm`
-(inline) — the split grammar quilx's Markdown highlighting uses (the block
+(inline) — the split grammar zym's Markdown highlighting uses (the block
 grammar injects the inline grammar into `inline` nodes, and fenced code blocks
 into the fence language's grammar; see `docs/text-editor/syntax-injection.md`).
 
@@ -14,4 +14,4 @@ into the fence language's grammar; see `docs/text-editor/syntax-injection.md`).
 
 The highlights queries (`../queries/markdown*/highlights.scm`) are adapted from
 [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) (Apache-2.0)
-to quilx's capture-name palette; they're authored, not copied from the package.
+to zym's capture-name palette; they're authored, not copied from the package.

@@ -9,7 +9,7 @@
 import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
 import { openUrl } from './openUrl.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { repoRoot } from '../git.ts';
 import { fetchFailedChecks } from '../github.ts';
 
@@ -23,7 +23,7 @@ export function openGithubFailedCIPicker(host: Overlay, cwd: string): void {
   }
   fetchFailedChecks(root, (checks) => {
     if (checks.length === 0) {
-      quilx.notifications.addInfo('No failed CI runs');
+      zym.notifications.addInfo('No failed CI runs');
       return;
     }
     if (checks.length === 1) {

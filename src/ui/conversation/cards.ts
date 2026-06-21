@@ -13,10 +13,10 @@ type Box = InstanceType<typeof Gtk.Box>;
  *  removes the card from the transcript afterwards. */
 export function permissionCard(req: PermissionRequest, decide: (allow: boolean) => void): Box {
   const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-  card.addCssClass('quilx-conversation-perm');
+  card.addCssClass('zym-conversation-perm');
   const title = new Gtk.Label({ xalign: 0, label: `Allow ${req.toolName}?` });
   const detail = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: summarizeInput(req.input) });
-  detail.addCssClass('quilx-conversation-tool');
+  detail.addCssClass('zym-conversation-tool');
   const buttons = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
   const allow = new Gtk.Button({ label: 'Allow' });
   const deny = new Gtk.Button({ label: 'Deny' });

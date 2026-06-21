@@ -2,7 +2,7 @@
  * default.ts — the built-in keymap, as declarative data.
  *
  * Shape: `{ selector: { keystroke: 'command:name' } }`, exactly the input
- * `quilx.keymaps.add` takes. A quilx component is targeted by its name with an
+ * `zym.keymaps.add` takes. A zym component is targeted by its name with an
  * `#id` selector (`#Panel`, `#FileTree`, `#TextEditor.insert-mode`, …); a raw GTK
  * widget by its type tag (`GtkText`). The keystroke's command must be
  * registered by some component (commands live with their owner — e.g. Panel
@@ -244,7 +244,7 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   // clipboard chords. `ctrl-c` / `ctrl-v` are taken by the shell (SIGINT / the
   // child), so copy/paste use the shifted variants, bound here so they're caught
   // before insert mode hands the key to the child.
-  '.quilx-terminal': {
+  '.zym-terminal': {
     'ctrl-shift-c': 'terminal:copy',
     'ctrl-shift-v': 'terminal:paste',
   },
@@ -253,7 +253,7 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   // the app (leader / window-nav); `i` enters insert mode to type into the child.
   // Insert mode types directly; Escape returns to normal, and `ctrl-[` still sends
   // a literal Escape to the child (the usual ctrl-[ ≡ Escape, kept reachable).
-  '.quilx-terminal.terminal-normal': {
+  '.zym-terminal.terminal-normal': {
     i: 'terminal:insert-mode',
     a: 'terminal:insert-mode',
   },
@@ -270,7 +270,7 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   '#AgentConversation': {
     'ctrl-d ctrl-d': 'agent:close',
   },
-  '.quilx-terminal.terminal-insert': {
+  '.zym-terminal.terminal-insert': {
     escape: 'terminal:normal-mode',
     'ctrl-[': 'terminal:send-escape',
     // Insert mode is a raw terminal: release `ctrl-w …` (window navigation) so the

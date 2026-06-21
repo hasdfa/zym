@@ -54,7 +54,7 @@ export class LspClient {
    * to spawn (e.g. the command is not on PATH).
    */
   start(): void {
-    // Resolve order: quilx-managed install dir, then the project's
+    // Resolve order: zym-managed install dir, then the project's
     // node_modules/.bin (a repo-local server + any child tools it shells out to),
     // then the inherited PATH (global installs).
     const PATH = [managedBinDir(this.spec.name), ...nodeModulesBinDirs(this.rootDir), process.env.PATH ?? '']

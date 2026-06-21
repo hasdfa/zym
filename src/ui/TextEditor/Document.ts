@@ -24,7 +24,7 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Adw, Gio, GtkSource, type SourceBuffer } from '../../gi.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { Point } from '../../text/Point.ts';
 import type { LspDocument, DocumentEdit } from '../../lsp/LspManager.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
@@ -223,7 +223,7 @@ export class Document implements TextEditorSource {
    *  didOpen instead, so it's skipped). No-op for a buffer-only document (no file). */
   private lspDidChange(changes: DocumentEdit[]): void {
     if (this.syncing || !this._currentFile) return;
-    quilx.lsp.didChange(this.lspDocument, changes);
+    zym.lsp.didChange(this.lspDocument, changes);
   }
 
   // --- Views -----------------------------------------------------------------
@@ -427,7 +427,7 @@ export class Document implements TextEditorSource {
     this._syntax = null;
     // Only close an LSP doc we actually opened — a lazily-assigned, never-shown document
     // has a path but never ran didOpen.
-    if (this.contentLoaded) quilx.lsp.didClose(this.lspDocument);
+    if (this.contentLoaded) zym.lsp.didClose(this.lspDocument);
   }
 
   // --- File operations -------------------------------------------------------
@@ -460,7 +460,7 @@ export class Document implements TextEditorSource {
       // Close the old LSP doc before replacing content (a reload re-opens with the new
       // text). A first load — even when the path is already assigned (lazy open) — has
       // nothing open yet, so this is gated on the content having actually been loaded.
-      if (this.contentLoaded) quilx.lsp.didClose(this.lspDocument);
+      if (this.contentLoaded) zym.lsp.didClose(this.lspDocument);
       this.host?.willReplaceContent(!!opts.silent);
       const content = Fs.readFileSync(path, 'utf8');
       this.setText(content); // re-syncs every view + clears modified
@@ -469,7 +469,7 @@ export class Document implements TextEditorSource {
       this.diskMtimeMs = this.statMtimeMs(path);
       this.setDiskState('synced');
       this.watchFile(path);
-      quilx.lsp.didOpen(this.lspDocument);
+      zym.lsp.didOpen(this.lspDocument);
       this.host?.didLoad(content, path, !!opts.silent);
       this.emitTitleChange();
     } catch (error) {
@@ -534,10 +534,10 @@ export class Document implements TextEditorSource {
       const pathChanged = path !== this._currentFile;
       this._currentFile = path;
       if (pathChanged || wasDeleted) this.watchFile(path);
-      quilx.lsp.didSave(this.lspDocument);
+      zym.lsp.didSave(this.lspDocument);
       this.host?.didSave(path);
       this.emitTitleChange();
-      quilx.notifications.addTrace(`Saved ${Path.basename(path)}`);
+      zym.notifications.addTrace(`Saved ${Path.basename(path)}`);
     } catch (error) {
       this.host?.showBanner(`Could not save: ${(error as Error).message}`, 'error');
     }

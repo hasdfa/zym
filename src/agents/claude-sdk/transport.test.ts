@@ -33,7 +33,7 @@ rl.on('line', (line) => {
 `;
 
 function writeFakeClaude(): string {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-claude-sdk-'));
+  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-claude-sdk-'));
   const file = Path.join(dir, 'fake-claude.cjs');
   Fs.writeFileSync(file, FAKE_CLAUDE);
   return file;

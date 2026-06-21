@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://quilx.dev/schema/theme/v1.json",
-  "title": "quilx theme",
-  "description": "A quilx editor theme. One theme per file; loaded by src/theme/theme.ts. See docs/theming.md.",
+  "$id": "https://zym.dev/schema/theme/v1.json",
+  "title": "zym theme",
+  "description": "A zym editor theme. One theme per file; loaded by src/theme/theme.ts. See docs/theming.md.",
   "type": "object",
   "required": ["name", "appearance"],
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "$schema": { "type": "string" },
     "name": {
       "type": "string",
-      "description": "Theme id; the file is loaded by this name (e.g. \"quilx\" ← quilx.json)."
+      "description": "Theme id; the file is loaded by this name (e.g. \"zym\" ← zym.json)."
     },
     "appearance": {
       "enum": ["light", "dark"],

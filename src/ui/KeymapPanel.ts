@@ -6,7 +6,7 @@
  * higher-priority one for the same selector + keystroke (e.g. a user override of
  * a default) are dimmed.
  *
- * It reads `quilx.keymaps.getAllBindings()` and refreshes on
+ * It reads `zym.keymaps.getAllBindings()` and refreshes on
  * `onBindingsChanged`, so a live `keymap.json` edit updates it. Built on a
  * `Gtk.Grid` so the columns align; the scrollable table is exposed via `root`.
  */
@@ -14,7 +14,7 @@ import { Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { Key } from '../keymap/Key.ts';
 import type { BindingInfo } from '../KeymapManager.ts';
 
@@ -78,7 +78,7 @@ export class KeymapPanel {
 
     this.refresh();
     // Live-refresh on registration changes (e.g. a user keymap.json edit).
-    this.subscriptions.push(quilx.keymaps.onBindingsChanged(() => this.refresh()));
+    this.subscriptions.push(zym.keymaps.onBindingsChanged(() => this.refresh()));
     // While a multi-key sequence is in progress, narrow the table to the
     // bindings whose keystroke extends the queued prefix (and back to all when
     // the queue clears). Mirrors the which-key hint, but over the full table.
@@ -86,7 +86,7 @@ export class KeymapPanel {
     // expensive, this fires on every queued key, and there is one of these
     // panels per workbench — refreshing hidden ones would stall typing.
     this.subscriptions.push(
-      quilx.keymaps.onPendingChanged(() => {
+      zym.keymaps.onPendingChanged(() => {
         if (this.root.getMapped()) this.refresh();
       }),
     );
@@ -118,9 +118,9 @@ export class KeymapPanel {
       this.grid.attach(label, col, 0, 1, 1);
     });
 
-    const queue = quilx.keymaps.queuedKeystrokes;
+    const queue = zym.keymaps.queuedKeystrokes;
     const bindings = this.sorted(
-      quilx.keymaps.getAllBindings().filter((b) => matchesQueue(b.keystroke, queue)),
+      zym.keymaps.getAllBindings().filter((b) => matchesQueue(b.keystroke, queue)),
     );
 
     // Highest priority wins per (selector, keystroke); lower ones are shadowed.
@@ -151,7 +151,7 @@ export class KeymapPanel {
   }
 
   private addRow(binding: BindingInfo, row: number, overridden: boolean): void {
-    const description = quilx.commands.descriptionFor(binding.command) ?? '';
+    const description = zym.commands.descriptionFor(binding.command) ?? '';
     const source = SOURCE_LABELS[binding.source] ?? binding.source;
 
     const mono = fonts.monospaceFamily;

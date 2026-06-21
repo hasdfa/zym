@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /*
- * quilx permission-prompt MCP server — the tool claude calls (via
- * `--permission-prompt-tool mcp__quilxPerm__approve`) when it needs the user to
+ * zym permission-prompt MCP server — the tool claude calls (via
+ * `--permission-prompt-tool mcp__zymPerm__approve`) when it needs the user to
  * approve a tool use in a headless `claude-sdk` session (see SdkSession.ts).
  *
  * It bridges that call to the editor over a file pair (the same atomic
  * tmp+rename channel the status hooks use): on a `tools/call` it writes the
- * request to $QUILX_PERM_REQUEST, polls $QUILX_PERM_RESPONSE for the editor's
+ * request to $ZYM_PERM_REQUEST, polls $ZYM_PERM_RESPONSE for the editor's
  * decision (matched by id), and returns that decision in the shape claude's
  * permission-prompt-tool expects — a content text block holding JSON of either
  * `{"behavior":"allow","updatedInput":{…}}` or `{"behavior":"deny","message":"…"}`.
@@ -17,8 +17,8 @@ import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
-const REQUEST_FILE = process.env.QUILX_PERM_REQUEST;
-const RESPONSE_FILE = process.env.QUILX_PERM_RESPONSE;
+const REQUEST_FILE = process.env.ZYM_PERM_REQUEST;
+const RESPONSE_FILE = process.env.ZYM_PERM_RESPONSE;
 const PROTOCOL_VERSION = '2024-11-05';
 const POLL_MS = 100;
 
@@ -26,7 +26,7 @@ const TOOLS = [
   {
     name: 'approve',
     description:
-      'Ask the quilx editor to approve or deny a tool use. The editor surfaces a ' +
+      'Ask the zym editor to approve or deny a tool use. The editor surfaces a ' +
       'permission card to the user and returns their decision.',
     inputSchema: {
       type: 'object',
@@ -93,7 +93,7 @@ function handle(msg) {
   const { id, method, params } = msg;
   switch (method) {
     case 'initialize':
-      reply(id, { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: 'quilxPerm', version: '1.0.0' } });
+      reply(id, { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: 'zymPerm', version: '1.0.0' } });
       return;
     case 'tools/list':
       reply(id, { tools: TOOLS });

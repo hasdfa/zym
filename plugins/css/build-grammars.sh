@@ -10,7 +10,7 @@
 # vendored grammar, since `tree-sitter-wasms` omits it.
 #
 # Why the wasm is checked in: `tree-sitter-scss` ships only C sources (no wasm),
-# and quilx loads grammars as wasm (web-tree-sitter). Re-run this to refresh it.
+# and zym loads grammars as wasm (web-tree-sitter). Re-run this to refresh it.
 #
 # Requirements: the `tree-sitter` CLI (>= 0.24) and network. `tree-sitter build
 # --wasm` auto-downloads wasi-sdk into ~/.cache/tree-sitter on first run — no
@@ -38,4 +38,4 @@ echo "Building $PKG.wasm (ABI $abi) …"
 
 echo "Vendored into $DEST:"
 ls -l "$DEST"/*.wasm
-echo "Highlights/folds queries live in ../queries/ (authored against quilx's palette, not from the package)."
+echo "Highlights/folds queries live in ../queries/ (authored against zym's palette, not from the package)."

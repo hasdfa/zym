@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /*
- * quilx agent↔editor bridge — a minimal stdio MCP server exposing tools the
- * coding agent calls to talk to the quilx editor it runs inside.
+ * zym agent↔editor bridge — a minimal stdio MCP server exposing tools the
+ * coding agent calls to talk to the zym editor it runs inside.
  *
  *   - `set_worktree` writes the agent's current git worktree path to
- *     `$QUILX_STATUS_FILE.cwd` (atomic tmp+rename) — the same IPC-file channel the
+ *     `$ZYM_STATUS_FILE.cwd` (atomic tmp+rename) — the same IPC-file channel the
  *     status hooks use (see assets/hooks/agent-status.sh). The editor watches it
  *     and re-roots the agent's workbench (file tree, Source Control, branch).
  *   - `set_actions` writes a list of runnable actions (label + shell command) to
- *     `$QUILX_ACTIONS_FILE` (atomic). The editor surfaces them as buttons in the
+ *     `$ZYM_ACTIONS_FILE` (atomic). The editor surfaces them as buttons in the
  *     conversation and as editor commands the user runs to verify the agent's work.
  *
  * Each tool is advertised only when its IPC file is configured (via the matching
@@ -20,14 +20,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 
-const STATUS_FILE = process.env.QUILX_STATUS_FILE;
-const ACTIONS_FILE = process.env.QUILX_ACTIONS_FILE;
+const STATUS_FILE = process.env.ZYM_STATUS_FILE;
+const ACTIONS_FILE = process.env.ZYM_ACTIONS_FILE;
 const PROTOCOL_VERSION = '2024-11-05';
 
 const SET_WORKTREE = {
   name: 'set_worktree',
   description:
-    'Tell the quilx editor which git worktree you are now working in, so it re-roots ' +
+    'Tell the zym editor which git worktree you are now working in, so it re-roots ' +
     'its file tree and Source Control to match. Call this immediately after you create ' +
     'or switch into a worktree (e.g. after `git worktree add <path>` then `cd <path>`). ' +
     'Pass the absolute path of the worktree root.',
@@ -44,7 +44,7 @@ const SET_ACTIONS = {
   name: 'set_actions',
   description:
     'Register runnable actions the user can trigger to run, test, or review your work ' +
-    'outside this chat (e.g. start the dev server, run the suite, open the app). quilx ' +
+    'outside this chat (e.g. start the dev server, run the suite, open the app). zym ' +
     'shows each as a button in the conversation and as an editor command, running its ' +
     'command in your working directory. Replaces the whole set on each call; pass an ' +
     'empty `actions` list to clear them. List the most useful action first — it is ' +
@@ -163,7 +163,7 @@ function handle(msg) {
       reply(id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'quilx', version: '1.0.0' },
+        serverInfo: { name: 'zym', version: '1.0.0' },
       });
       return;
     case 'tools/list':

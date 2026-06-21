@@ -2,7 +2,7 @@
  * load.ts — register the keymaps at startup.
  *
  * Layers two sources by priority: the built-in `DEFAULT_KEYMAP` (priority 0) and
- * an optional user keymap (priority 100) read from `$XDG_CONFIG_HOME/quilx/
+ * an optional user keymap (priority 100) read from `$XDG_CONFIG_HOME/zym/
  * keymap.json` (falling back to `~/.config`). The user file uses the same
  * `{ selector: { keystroke: command } }` shape and, being higher priority, wins
  * when it binds the same keystroke as a default.
@@ -15,7 +15,7 @@ import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Gio } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { parseSelector } from '../util/selectors.ts';
 import { Key } from '../keymap/Key.ts';
 import { Disposable } from '../util/eventKit.ts';
@@ -39,10 +39,10 @@ let userKeymapDisposable: Disposable | null = null;
 // (mirrors config/load.ts's SEED).
 const SEED = '{}\n';
 
-/** Absolute path to the user keymap file (`$XDG_CONFIG_HOME/quilx/keymap.json`). */
+/** Absolute path to the user keymap file (`$XDG_CONFIG_HOME/zym/keymap.json`). */
 export function userKeymapPath(): string {
   const configHome = process.env.XDG_CONFIG_HOME || Path.join(Os.homedir(), '.config');
-  return Path.join(configHome, 'quilx', 'keymap.json');
+  return Path.join(configHome, 'zym', 'keymap.json');
 }
 
 /**
@@ -119,7 +119,7 @@ function reloadUserKeymap(): void {
     validateKeymap('user', userKeymap);
     // Untrusted JSON (its `command` may be missing); validation above has already
     // warned, and a binding with no command resolves to nothing at dispatch.
-    userKeymapDisposable = quilx.keymaps.add(
+    userKeymapDisposable = zym.keymaps.add(
       'user-keymap',
       userKeymap as RegisterableKeymap,
       USER_PRIORITY,
@@ -130,7 +130,7 @@ function reloadUserKeymap(): void {
 
 // Warn on keystrokes bound to more than one command at the same selector+priority.
 function reportConflicts(): void {
-  for (const c of quilx.keymaps.findConflicts()) {
+  for (const c of zym.keymaps.findConflicts()) {
     console.warn(
       `[keymap] "${c.keystroke}" on ${c.selectorKey} (priority ${c.priority}) is bound to ` +
         `multiple commands: ${c.commands.join(', ')}`,
@@ -146,7 +146,7 @@ function reportConflicts(): void {
  */
 export function loadKeymaps(): Disposable {
   validateKeymap('default', DEFAULT_KEYMAP);
-  quilx.keymaps.add('default-keymap', DEFAULT_KEYMAP, DEFAULT_PRIORITY);
+  zym.keymaps.add('default-keymap', DEFAULT_KEYMAP, DEFAULT_PRIORITY);
 
   reloadUserKeymap();
 

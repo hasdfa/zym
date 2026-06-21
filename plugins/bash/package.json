@@ -1,10 +1,10 @@
 {
-  "name": "@quilx/plugin-bash",
+  "name": "@zym/plugin-bash",
   "version": "0.1.0",
-  "description": "Bash / shell support for quilx",
+  "description": "Bash / shell support for zym",
   "type": "module",
   "main": "./index.ts",
   "peerDependencies": {
-    "quilx": "^0.1.0"
+    "zym": "^0.1.0"
   }
 }

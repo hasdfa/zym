@@ -2,7 +2,7 @@
  * The plugin layer's public surface: the application-wide `plugins` registry,
  * `registerBuiltinPlugins` (bundled plugins), and `loadUserPlugins` (out-of-repo
  * discovery). Built-ins live under `plugins/<id>/` (repo root). User plugins are
- * scanned from `$XDG_DATA_HOME/quilx/plugins/`, each a directory with a
+ * scanned from `$XDG_DATA_HOME/zym/plugins/`, each a directory with a
  * `package.json` + `main` entry that exports a `Plugin`.
  *
  * Lifecycle (see `src/index.ts`):
@@ -14,7 +14,7 @@ import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PluginRegistry } from './PluginRegistry.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { typescriptPlugin } from '../../plugins/typescript/index.ts';
 import { markdownPlugin } from '../../plugins/markdown/index.ts';
 import { htmlPlugin } from '../../plugins/html/index.ts';
@@ -31,8 +31,8 @@ export { PluginRegistry } from './PluginRegistry.ts';
 export type { PluginInfo } from './PluginRegistry.ts';
 export type { Plugin, PluginManifest, PluginContext } from './types.ts';
 
-/** The current quilx version — checked against a plugin's `minQuilxVersion`. */
-export const QUILX_VERSION = '0.1.0';
+/** The current zym version — checked against a plugin's `minZymVersion`. */
+export const ZYM_VERSION = '0.1.0';
 
 /** The application-wide plugin registry. */
 export const plugins = new PluginRegistry();
@@ -40,7 +40,7 @@ export const plugins = new PluginRegistry();
 /** Directory holding the bundled plugins (`plugins/` at repo root). */
 const BUILTINS_DIR = Path.resolve(Path.dirname(fileURLToPath(import.meta.url)), '../../plugins');
 
-/** Register the plugins quilx ships with (inactive until `plugins.activateAll`). */
+/** Register the plugins zym ships with (inactive until `plugins.activateAll`). */
 export function registerBuiltinPlugins(): void {
   plugins.register(typescriptPlugin, Path.join(BUILTINS_DIR, 'typescript'));
   plugins.register(markdownPlugin, Path.join(BUILTINS_DIR, 'markdown'));
@@ -54,10 +54,10 @@ export function registerBuiltinPlugins(): void {
   plugins.register(colorPreviewPlugin, Path.join(BUILTINS_DIR, 'color-preview'));
 }
 
-/** `$XDG_DATA_HOME/quilx/plugins` — the directory scanned for user plugins. */
+/** `$XDG_DATA_HOME/zym/plugins` — the directory scanned for user plugins. */
 function userPluginsDir(): string {
   const dataHome = process.env.XDG_DATA_HOME || Path.join(Os.homedir(), '.local', 'share');
-  return Path.join(dataHome, 'quilx', 'plugins');
+  return Path.join(dataHome, 'zym', 'plugins');
 }
 
 /**
@@ -138,7 +138,7 @@ function isPlugin(value: unknown): value is Plugin {
  * that want to skip disabled plugins before calling `plugins.activateAll`.
  */
 export function disabledPluginIds(): Set<string> {
-  const list = quilx.config.get('plugins.disabled');
+  const list = zym.config.get('plugins.disabled');
   if (!Array.isArray(list)) return new Set();
   return new Set(list.filter((v): v is string => typeof v === 'string'));
 }

@@ -10,7 +10,7 @@
  * asynchronously via the returned handle's `setItems`.
  */
 import { Gtk, Pango } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
@@ -367,7 +367,7 @@ let pickerKeymapRegistered = false;
 function registerPickerKeymapOnce(): void {
   if (pickerKeymapRegistered) return;
   pickerKeymapRegistered = true;
-  quilx.keymaps.add('picker', {
+  zym.keymaps.add('picker', {
     '#Picker': {
       down: 'core:down',
       KP_Down: 'core:down',
@@ -781,7 +781,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
   // The KeymapManager's capture-phase controller runs ahead of the focused entry,
   // so these keys move the selection rather than the entry's cursor.
   registerPickerKeymapOnce();
-  commandsSub = quilx.commands.add(panel, {
+  commandsSub = zym.commands.add(panel, {
     'core:down': () => move(1),
     'core:up': () => move(-1),
     'core:cancel': () => close(),

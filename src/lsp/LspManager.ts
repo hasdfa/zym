@@ -11,7 +11,7 @@
  *  - route published diagnostics into a `DiagnosticsStore` keyed by file path
  *  - answer requests (definition/references/hover) against the *primary* server
  *    (the language server; ungrouped linters contribute diagnostics only),
- *    resolving the LSP target back to a quilx `Point`
+ *    resolving the LSP target back to a zym `Point`
  *
  * This layer is GTK-free: it talks to editors through the small `LspDocument`
  * interface, so the GTK `TextEditor` wiring is a thin adapter added later. The
@@ -64,7 +64,7 @@ export interface LspDocument {
 
 /**
  * One text edit in pre-edit coordinates, for incremental document sync. `start`
- * is where the replaced range began (quilx `Point`); `oldText` is what was there
+ * is where the replaced range began (zym `Point`); `oldText` is what was there
  * (used to derive the replaced range's end); `newText` is the replacement. The
  * editor adapter maps its buffer-change events to these, keeping this layer
  * GTK-free.
@@ -806,7 +806,7 @@ export class LspManager {
     });
   }
 
-  // Whether a server's command resolves (quilx-managed dir, then project
+  // Whether a server's command resolves (zym-managed dir, then project
   // node_modules/.bin, then PATH), memoized per (command, rootDir). The first time
   // it's found missing, `handleMissing` decides what to do about it (once).
   private isInstalled(server: ServerDef, rootDir: string): boolean {
@@ -1016,7 +1016,7 @@ function firstLocation(result: Definition | LocationLink[] | null): Location | n
 }
 
 /**
- * Convert an LSP location (uri + start position) to a quilx target, reading the
+ * Convert an LSP location (uri + start position) to a zym target, reading the
  * target file's line for accurate encoding conversion. Uses `doc` when the
  * target is the same file already in the editor.
  */

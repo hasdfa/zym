@@ -308,7 +308,7 @@ const SAMPLE = `// tree-sitter highlighting + folding POC
 import { readFile } from 'node:fs/promises';
 
 const CONFIG = {
-  name: 'quilx',
+  name: 'zym',
   version: '0.1.0',
   features: ['highlight', 'fold'],
 };
@@ -343,7 +343,7 @@ console.log('ready', editor);
 `;
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.poc' });
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.poc' });
 
 app.on('activate', () => {
   buildEditor(); // construct widgets now that the application is running
@@ -366,7 +366,7 @@ app.on('activate', () => {
   scrolled.setChild(view);
 
   const window = new Adw.ApplicationWindow({ application: app });
-  window.setTitle('quilx POC — Ctrl+Space folds at cursor (or click ▾/▸)');
+  window.setTitle('zym POC — Ctrl+Space folds at cursor (or click ▾/▸)');
   window.setDefaultSize(720, 640);
   window.setContent(scrolled);
   window.on('close-request', () => { loop.quit(); app.quit(); return false; });

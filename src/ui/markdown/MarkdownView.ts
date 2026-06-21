@@ -26,31 +26,31 @@ const COPY_GLYPH = NERDFONT.ACTION.COPY;
 // Colors as CSS variables (--t-ui-*); code blocks read the font store's monospace
 // family (--t-font-monospace-family). See docs/styling.md.
 addStyles(`
-  .quilx-md { }
-  .quilx-md-code {
+  .zym-md { }
+  .zym-md-code {
     background: var(--t-ui-surface-popover);
     padding: 8px 10px;
     border-radius: 6px;
     font-family: var(--t-font-monospace-family);
   }
-  .quilx-md-quote {
+  .zym-md-quote {
     border-left: 3px solid var(--t-ui-border);
     padding-left: 10px;
     opacity: 0.85;
   }
-  .quilx-md-table { }
-  .quilx-md-th { font-weight: bold; padding: 3px 10px 3px 0; }
-  .quilx-md-cell { padding: 3px 10px 3px 0; }
-  .quilx-md-copy { padding: 2px 6px; margin: 4px; min-height: 0; min-width: 0; opacity: 0.45; }
-  .quilx-md-copy:hover { opacity: 1; }
+  .zym-md-table { }
+  .zym-md-th { font-weight: bold; padding: 3px 10px 3px 0; }
+  .zym-md-cell { padding: 3px 10px 3px 0; }
+  .zym-md-copy { padding: 2px 6px; margin: 4px; min-height: 0; min-width: 0; opacity: 0.45; }
+  .zym-md-copy:hover { opacity: 1; }
   
   /* Breathing room between blocks. */
-  .quilx-md-heading { margin-top: 6px; margin-bottom: 2px; }
-  .quilx-md-para { margin: 2px 0; }
-  .quilx-md-code { margin: 4px 0; }
-  .quilx-md-table { margin: 4px 0; }
-  .quilx-md-list { margin: 2px 0; }
-  .quilx-md-quote { margin: 4px 0; }
+  .zym-md-heading { margin-top: 6px; margin-bottom: 2px; }
+  .zym-md-para { margin: 2px 0; }
+  .zym-md-code { margin: 4px 0; }
+  .zym-md-table { margin: 4px 0; }
+  .zym-md-list { margin: 2px 0; }
+  .zym-md-quote { margin: 4px 0; }
 `);
 
 const LINE_HEIGHT = 1.3
@@ -63,7 +63,7 @@ export class MarkdownView {
 
   constructor() {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-    this.root.addCssClass('quilx-md');
+    this.root.addCssClass('zym-md');
   }
 
   /** Replace the rendered content with `md`.
@@ -80,7 +80,7 @@ export class MarkdownView {
       if (flow.length === 0) return;
       const markup = flow.join('\n\n');
       const label = markupLabel(markup, markup);
-      label.addCssClass('quilx-md-flow');
+      label.addCssClass('zym-md-flow');
       this.root.append(label);
       flow = [];
     };
@@ -150,7 +150,7 @@ function renderCode(lang: string | undefined, code: string): Widget {
   // A small copy button in the top-right corner.
   const copy = new Gtk.Button();
   copy.addCssClass('flat');
-  copy.addCssClass('quilx-md-copy');
+  copy.addCssClass('zym-md-copy');
   copy.setChild(iconLabel(COPY_GLYPH));
   copy.setTooltipText('Copy');
   copy.setHalign(Gtk.Align.END);
@@ -158,7 +158,7 @@ function renderCode(lang: string | undefined, code: string): Widget {
   copy.on('clicked', () => { clipboard.write(code); copy.setTooltipText('Copied'); });
 
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-  box.addCssClass('quilx-md-code');
+  box.addCssClass('zym-md-code');
   box.append(label);
 
   // Overlay the button so it doesn't take a header row.
@@ -174,14 +174,14 @@ function renderTable(
   rows: string[][],
 ): Widget {
   const grid = new Gtk.Grid({ columnSpacing: 0, rowSpacing: 0 });
-  grid.addCssClass('quilx-md-table');
+  grid.addCssClass('zym-md-table');
   grid.setHalign(Gtk.Align.START);
   headers.forEach((header, col) => {
-    grid.attach(cell(header, aligns[col], 'quilx-md-th'), col, 0, 1, 1);
+    grid.attach(cell(header, aligns[col], 'zym-md-th'), col, 0, 1, 1);
   });
   rows.forEach((cells, r) => {
     for (let col = 0; col < headers.length; col++) {
-      grid.attach(cell(cells[col] ?? '', aligns[col], 'quilx-md-cell'), col, r + 1, 1, 1);
+      grid.attach(cell(cells[col] ?? '', aligns[col], 'zym-md-cell'), col, r + 1, 1, 1);
     }
   });
   return grid;

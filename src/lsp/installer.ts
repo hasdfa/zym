@@ -1,8 +1,8 @@
 /*
- * Server installer — obtains a missing LSP server's binary into a quilx-managed
+ * Server installer — obtains a missing LSP server's binary into a zym-managed
  * directory, so we never touch the user's global env or their project.
  *
- * Layout: each server installs under `$XDG_DATA_HOME/quilx/lsp/<server>/`. For an
+ * Layout: each server installs under `$XDG_DATA_HOME/zym/lsp/<server>/`. For an
  * npm source that means `npm install <pkg>` there, landing the binary in
  * `<server>/node_modules/.bin/` — which `which.ts`/`LspManager` add to the server
  * search path and `LspClient` prepends to the spawned PATH. A raw `{ command }`
@@ -14,10 +14,10 @@ import * as Path from 'node:path';
 import * as Fs from 'node:fs';
 import type { ServerDef, InstallSpec } from '../lang/types.ts';
 
-/** Root of the managed install tree (`$XDG_DATA_HOME/quilx/lsp`). */
+/** Root of the managed install tree (`$XDG_DATA_HOME/zym/lsp`). */
 export function managedRoot(): string {
   const dataHome = process.env.XDG_DATA_HOME || Path.join(Os.homedir(), '.local', 'share');
-  return Path.join(dataHome, 'quilx', 'lsp');
+  return Path.join(dataHome, 'zym', 'lsp');
 }
 
 /** The managed install dir for one server. */

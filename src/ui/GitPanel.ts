@@ -7,7 +7,7 @@
  * works too: a click selects, a double-click opens the file. Reads and
  * mutations go through the git facade (`git.ts`, node `git` CLI); the panel refreshes on its
  * own operations and on `GitRepo.onChange` (external edits). Failures surface
- * through `quilx.notifications`.
+ * through `zym.notifications`.
  *
  * The commit message is edited in a normal editor tab (see AppWindow.onCommit);
  * this widget just presents status. The assembled panel is exposed via `root`.
@@ -17,7 +17,7 @@ import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import type { GitRepo } from '../git.ts';
@@ -160,7 +160,7 @@ export class GitPanel {
   // --- Commands (vim-style; bindings live in the central keymap) --------------
 
   private registerCommands(): void {
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'core:down': { didDispatch: () => this.move(+1), description: 'Move down' },
       'core:up': { didDispatch: () => this.move(-1), description: 'Move up' },
       'core:top': { didDispatch: () => this.selectIndex(0), description: 'Go to the top' }, // `g g`
@@ -211,7 +211,7 @@ export class GitPanel {
   // lists them with a trailing slash); opening one isn't implemented yet.
   private open(change: GitChange): void {
     if (change.relPath.endsWith('/')) {
-      quilx.notifications.addTrace(`Opening a directory is not implemented: ${change.relPath}`);
+      zym.notifications.addTrace(`Opening a directory is not implemented: ${change.relPath}`);
       return;
     }
     this.onOpenFile(change.path);
@@ -233,7 +233,7 @@ export class GitPanel {
 
   // Mutation callback: report failures; the change set refresh follows.
   private readonly done: GitDone = (ok, _out, err) => {
-    if (!ok) quilx.notifications.addError('Git operation failed', { detail: err.trim() });
+    if (!ok) zym.notifications.addError('Git operation failed', { detail: err.trim() });
     this.refresh();
   };
 

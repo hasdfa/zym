@@ -1,4 +1,4 @@
-; Bash / shell highlights — authored for quilx's capture palette (see `theme.syntax`;
+; Bash / shell highlights — authored for zym's capture palette (see `theme.syntax`;
 ; the highlighter does longest-prefix fallback, and the per-character winner is the
 ; highest-priority capture, so unknown captures degrade gracefully). Compiles
 ; against tree-sitter-bash (bundled by tree-sitter-wasms).

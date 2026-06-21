@@ -239,7 +239,7 @@ const SAMPLE = Array.from(
 function runGui(): void {
   const loop = GLib.MainLoop.new(null, false);
   const app = new Adw.Application({
-    applicationId: 'com.github.romgrk.quilx.poc.docmodel',
+    applicationId: 'com.github.romgrk.zym.poc.docmodel',
     flags: Gio.ApplicationFlags.NON_UNIQUE,
   });
 
@@ -304,7 +304,7 @@ function runGui(): void {
       paned.setPosition(440);
 
       const window = new Adw.ApplicationWindow({ application: app });
-      window.setTitle('quilx POC — A2 document-model (Ctrl+Z undo · Ctrl+Y redo · Ctrl+F fold THIS pane)');
+      window.setTitle('zym POC — A2 document-model (Ctrl+Z undo · Ctrl+Y redo · Ctrl+F fold THIS pane)');
       window.setDefaultSize(940, 560);
       window.setContent(paned);
       window.on('close-request', () => { loop.quit(); app.quit(); return false; });

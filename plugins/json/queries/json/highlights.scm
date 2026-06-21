@@ -1,4 +1,4 @@
-; JSON highlights — authored for quilx's capture palette (see `theme.syntax`;
+; JSON highlights — authored for zym's capture palette (see `theme.syntax`;
 ; the highlighter does longest-prefix fallback, so unknown captures degrade
 ; gracefully). Compiles against tree-sitter-json (bundled by tree-sitter-wasms).
 

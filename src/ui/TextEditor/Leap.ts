@@ -29,7 +29,7 @@
 import { Gdk, Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 import type { EditorModel } from './EditorModel.ts';
@@ -50,11 +50,11 @@ addStyles(`
      background, so it reads as the character having been swapped for a label.
      Monospace family (from the font store) with its own bold weight + the
      inherited editor size, so it overlays the concealed character cleanly. */
-  .quilx-leap-mark { font-family: var(--t-font-monospace-family); font-weight: bold; }
-  .quilx-leap-label { color: var(--t-ui-status-error); }
+  .zym-leap-mark { font-family: var(--t-font-monospace-family); font-weight: bold; }
+  .zym-leap-label { color: var(--t-ui-status-error); }
   /* Paged-out placeholders share the label color; the dot glyph (and lighter
      weight) is what marks them as not-yet-labeled. */
-  .quilx-leap-dot { color: var(--t-ui-status-error); font-weight: normal; }
+  .zym-leap-dot { color: var(--t-ui-status-error); font-weight: normal; }
 `);
 
 /** Request shape handed over by the vim layer's leap motion via `setLeapInput`. */
@@ -95,9 +95,9 @@ export class Leap {
       return;
     }
     this.active = true;
-    const bidirectional = quilx.config.get('vim-mode-plus.leapBidirectional') !== false;
+    const bidirectional = zym.config.get('vim-mode-plus.leapBidirectional') !== false;
     const range = this.visibleRange();
-    if (quilx.config.get('vim-mode-plus.leapDimEditor') !== false) this.dim(range);
+    if (zym.config.get('vim-mode-plus.leapDimEditor') !== false) this.dim(range);
     try {
       const reverse = bidirectional ? false : Boolean(request.reverse);
       const cursor = this.editor.getCursorBufferPosition();
@@ -176,8 +176,8 @@ export class Leap {
 
     const widget = this.markWidget(poolIndex);
     widget.setLabel(glyph);
-    widget.removeCssClass(isDot ? 'quilx-leap-label' : 'quilx-leap-dot');
-    widget.addCssClass(isDot ? 'quilx-leap-dot' : 'quilx-leap-label');
+    widget.removeCssClass(isDot ? 'zym-leap-label' : 'zym-leap-dot');
+    widget.addCssClass(isDot ? 'zym-leap-dot' : 'zym-leap-label');
     const rect = this.editor.pixelRectForBufferPosition(at);
     if (!rect) {
       widget.setVisible(false);
@@ -245,7 +245,7 @@ export class Leap {
     let widget = this.markPool[i];
     if (!widget) {
       widget = new Gtk.Label({ label: '' });
-      widget.addCssClass('quilx-leap-mark');
+      widget.addCssClass('zym-leap-mark');
       widget.setCanTarget(false);
       widget.setHalign(Gtk.Align.START);
       widget.setValign(Gtk.Align.START);

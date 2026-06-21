@@ -1,6 +1,6 @@
 # Agents
 
-Run coding agents (Claude today, other tools later) inside quilx. **Two
+Run coding agents (Claude today, other tools later) inside zym. **Two
 rendering implementations** share one workbench / list / lifecycle /
 worktree spine — they differ only in how a turn is displayed:
 
@@ -84,7 +84,7 @@ What already exists and is reused, not rebuilt:
     manager/sidebar/picker stay tool-agnostic.
   - Features: turn loop; thinking + token meter; tool rows with nerdfont icons
     (Bash highlighted + one-line crop); permission gating via the bundled stdio
-    MCP `assets/mcp/quilxPermission.mjs` (`--permission-prompt-tool`, atomic
+    MCP `assets/mcp/zymPermission.mjs` (`--permission-prompt-tool`, atomic
     file IPC) → native allow/deny card; **interrupt** (control_request, on
     `ctrl-c`); **subagents** (captured per-`Agent`-tool transcript, inline
     button + sticky panel + pushed `Adw.NavigationView` page, kept out of the
@@ -99,7 +99,7 @@ What already exists and is reused, not rebuilt:
   - **Deferred:** conversation resume + session serialize for sdk
     (`serialize()` returns null → not persisted across editor restart);
     token-level live streaming.
-- **`src/AgentManager.ts` — `quilx.agents`** — the registry: `add`/`remove`/
+- **`src/AgentManager.ts` — `zym.agents`** — the registry: `add`/`remove`/
   `getAgents` (launch order) + `onDidAddAgent`/`onDidRemoveAgent`.
   The agent list / sidebar is `WorkbenchList` (not a separate `AgentList`).
 - **`src/ui/WorkbenchList.ts`** — the contents of the **WorkbenchSidebar** (the
@@ -215,7 +215,7 @@ the picker (the `R` key in the list).
 indicator, sans colour.
 
 **Attention notifications** — `AppWindow.notifyAgentAttention` posts an in-app
-`quilx.notifications` toast (click → reveal) when an agent goes **waiting**
+`zym.notifications` toast (click → reveal) when an agent goes **waiting**
 (needs input) or **working→idle** (finished) while its tab isn't the active
 panel child. Still todo: an **attention badge/count** on the sidebar header
 (number of `waiting` agents) and desktop notifications when the window is
@@ -325,8 +325,8 @@ between worktrees*, while telling agents apart *within* a worktree still relies
 on the per-agent baselines above.
 
 Design decisions that govern this: full per-workbench root (not a scoped MVP
-view); the **agent** creates worktrees (`git worktree add`), quilx only detects
-+ re-roots — no quilx-side `worktree add/remove`; association is **both**
+view); the **agent** creates worktrees (`git worktree add`), zym only detects
++ re-roots — no zym-side `worktree add/remove`; association is **both**
 launch-time (pick an existing worktree) and dynamic (the agent moves into one
 mid-session); dynamic detection is **cooperative** (the agent announces via an
 MCP tool) with a hook **validator** that warns if it changes worktree without
@@ -354,10 +354,10 @@ can re-root independently. Pieces and how they connect:
 - **Agent → editor bridge** (cooperative dynamic detection). Data flow for a
   worktree the agent creates mid-session:
   1. agent runs `git worktree add … && cd …`, then calls the **`set_worktree`**
-     MCP tool (bundled stdio server `assets/mcp/quilxBridge.mjs`, wired via
+     MCP tool (bundled stdio server `assets/mcp/zymBridge.mjs`, wired via
      `--mcp-config` + pre-allowed in `--settings`, instructed by
      `--append-system-prompt`).
-  2. the bridge writes the path to `$QUILX_STATUS_FILE.cwd` (atomic) — the same
+  2. the bridge writes the path to `$ZYM_STATUS_FILE.cwd` (atomic) — the same
      IPC channel as the status hooks.
   3. `ClaudeSession` watches `.cwd` → `host.onCwd` →
      `AgentTerminal.setEffectiveCwd` (recomputes `worktree`, fires
@@ -368,7 +368,7 @@ can re-root independently. Pieces and how they connect:
      `GitGutter.setGit`, tracked via `editorOwners`), rebinds chrome if active,
      and refreshes the sidebar branch line (`WorkbenchList.refreshAgent`).
 - **Validator** (safety net) — a `PostToolUse(Bash)` hook greps for `git
-  worktree add <path>` and writes it to `$QUILX_STATUS_FILE.wtcreate`; if the
+  worktree add <path>` and writes it to `$ZYM_STATUS_FILE.wtcreate`; if the
   agent settles to idle without a matching `set_worktree`, `AppWindow` warns
   once.
 - **Sidebar branch line** — two-line agent rows (name / branch). The branch
@@ -389,7 +389,7 @@ can re-root independently. Pieces and how they connect:
   set_worktree; Claude's own cwd never changed, so the transcript still says
   the launch dir) are handled by a sidecar: on each announce
   `recordSessionWorktree` writes `effectiveCwd` next to the transcript
-  (`<id>.quilx-worktree`); on resume we still spawn in the launch cwd (so
+  (`<id>.zym-worktree`); on resume we still spawn in the launch cwd (so
   `--resume` resolves) but inject a terse prompt telling the agent to **only**
   call `set_worktree(<W>)` and then stop — re-rooting the editor without
   kicking off work (Tier 1: cooperative, via the announce loop; no touching
@@ -397,7 +397,7 @@ can re-root independently. Pieces and how they connect:
 
 Key files: `git.ts` (pool), `git/cli.ts` (`listWorktrees`), `Workbench.ts`,
 `AppWindow.ts` (build/activate/re-root), `claudeAgent.ts` +
-`assets/mcp/quilxBridge.mjs` + `assets/hooks/agent-status.sh`
+`assets/mcp/zymBridge.mjs` + `assets/hooks/agent-status.sh`
 (bridge/validator), `AgentTerminal.ts`, `FileTree.ts`/`GitPanel.ts`/
 `GitGutter.ts` (`setRoot`/`setGit`), `WorkbenchList.ts`.
 
@@ -412,8 +412,8 @@ stores `cwd`).
 
 ## Editor integration (MCP tools)
 
-An agent running inside quilx can call back into the editor through bundled MCP
-tools (`assets/mcp/quilxBridge.mjs`; both kinds get every tool):
+An agent running inside zym can call back into the editor through bundled MCP
+tools (`assets/mcp/zymBridge.mjs`; both kinds get every tool):
 
 - **`set_worktree(path)`**: update the workbench's cwd to this worktree.
 - **`set_actions([{ label, command, terminal? }])`**: register runnable actions 
@@ -465,7 +465,7 @@ exists, so it's cheap and high-value; the rest are bigger or more speculative.
   `AgentTerminal.status` / `onDidChangeStatus`; no parallel state.
 - **Refresh** via the manager's events (`onDidAddAgent`/`onDidRemoveAgent`) +
   each agent's `onDidChangeStatus`; no manual cross-component pokes.
-- **Feedback** through `quilx.notifications`, consistent with git ops.
+- **Feedback** through `zym.notifications`, consistent with git ops.
 - **Commands first, bindings central** (`src/keymaps/default.ts`), vim bare
   keys while the panel is focused — like FileTree.
 - **Destructive ops** (kill, worktree discard) confirm first, never implicit.
@@ -495,13 +495,13 @@ exists, so it's cheap and high-value; the rest are bigger or more speculative.
       *agents/claude-sdk.md*)
 - [ ] **Retire the file-based IPC.** Every agent→editor channel today round-trips
       through atomic-rename files watched by `Gio.FileMonitor` — status hooks
-      (`$QUILX_STATUS_FILE.*`), the permission server
+      (`$ZYM_STATUS_FILE.*`), the permission server
       (`permission.{req,res}`), and the bridge tools (`set_worktree` →
       `.cwd`, `set_actions` → `actions.json`). It's used because the bridge/perm
-      MCP servers are *grandchild* processes (quilx → claude → server) with no
+      MCP servers are *grandchild* processes (zym → claude → server) with no
       direct pipe back, but it spreads watchers + temp files across the tree and
       can't carry rich/bidirectional data cleanly. Replace with one channel: have
-      quilx host an in-process MCP server over a local socket the spawned servers
+      zym host an in-process MCP server over a local socket the spawned servers
       (and hooks) connect to — the WebSocket/JSON-RPC transport the
       `feat/ide-integration` branch already builds for `claude --ide` is the
       natural carrier. Collapses the bridge, permission prompt, and status

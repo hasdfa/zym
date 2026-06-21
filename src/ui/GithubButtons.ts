@@ -22,7 +22,7 @@ import { Gtk } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { openUrl } from './openUrl.ts';
 import { repoRoot } from '../git.ts';
 import { escapeMarkup } from './proseMarkup.ts';
@@ -159,7 +159,7 @@ export class GithubButtons {
   // --- commands --------------------------------------------------------------
 
   private registerCommands(): void {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'github:repository-open': { didDispatch: () => this.openOrNotify(this.repoUrl, 'GitHub repository'), description: 'Open the repository on GitHub' },
       'github:actions-open': { didDispatch: () => this.openOrNotify(this.actionsUrl, 'GitHub repository'), description: 'Open GitHub Actions' },
       'github:issues-open': { didDispatch: () => this.openOrNotify(this.issuesUrl, 'GitHub repository'), description: 'Open GitHub issues' },
@@ -172,11 +172,11 @@ export class GithubButtons {
 
   private createPr(): void {
     if (!this.repoDir) {
-      quilx.notifications.addInfo('No GitHub repository available');
+      zym.notifications.addInfo('No GitHub repository available');
       return;
     }
     createPullRequestWeb(this.repoDir, (ok, stderr) => {
-      if (!ok) quilx.notifications.addError('Could not create pull request', { detail: stderr.trim() });
+      if (!ok) zym.notifications.addError('Could not create pull request', { detail: stderr.trim() });
     });
   }
 
@@ -245,6 +245,6 @@ export class GithubButtons {
 
   private openOrNotify(url: string | null, label: string): void {
     if (url) this.open(url);
-    else quilx.notifications.addInfo(`No ${label} available`);
+    else zym.notifications.addInfo(`No ${label} available`);
   }
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../../gi.ts';
-import { quilx } from '../../../quilx.ts';
+import { zym } from '../../../zym.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { Point } from '../../../text/Point.ts';
 import { attachVim } from './index.ts';
@@ -22,12 +22,12 @@ test('attachVim registers per-view commands that dispatch to its VimState', () =
 
   // Dispatch the command bound to this view instance — the keymap layer does the
   // same once a keystroke is matched.
-  const dispatched = quilx.commands.dispatch(view, 'vim-mode-plus:activate-insert-mode');
+  const dispatched = zym.commands.dispatch(view, 'vim-mode-plus:activate-insert-mode');
   assert.ok(dispatched);
   assert.equal(vimState.mode, 'insert');
   assert.equal(view.getEditable(), true);
 
-  quilx.commands.dispatch(view, 'vim-mode-plus:activate-normal-mode');
+  zym.commands.dispatch(view, 'vim-mode-plus:activate-normal-mode');
   assert.equal(vimState.mode, 'normal');
   assert.equal(view.getEditable(), false);
 });
@@ -40,7 +40,7 @@ test('visual-block I/A are registered commands that column-insert', () => {
   vimState.operationStack.run('MoveDown'); // block over rows 0-1, column 1
   // `I` in visual mode dispatches this command (registered for visual:I). Before
   // the fix it was unregistered, so `I` fell through to the normal-mode binding.
-  assert.ok(quilx.commands.dispatch(view, 'vim-mode-plus:insert-at-start-of-target'));
+  assert.ok(zym.commands.dispatch(view, 'vim-mode-plus:insert-at-start-of-target'));
   assert.equal(vimState.mode, 'insert');
   editor.insertText('X');
   vimState.operationStack.run('ActivateNormalMode');
@@ -50,7 +50,7 @@ test('visual-block I/A are registered commands that column-insert', () => {
   editor.setCursorBufferPosition(new Point(0, 2));
   vimState.operationStack.run('ActivateBlockwiseVisualMode');
   vimState.operationStack.run('MoveDown');
-  assert.ok(quilx.commands.dispatch(view, 'vim-mode-plus:insert-at-end-of-target'));
+  assert.ok(zym.commands.dispatch(view, 'vim-mode-plus:insert-at-end-of-target'));
   assert.equal(vimState.mode, 'insert');
   editor.insertText('Y');
   vimState.operationStack.run('ActivateNormalMode');
@@ -63,7 +63,7 @@ test('commands are isolated per editor instance', () => {
   const vimA = attachVim(a.editor);
   const vimB = attachVim(b.editor);
 
-  quilx.commands.dispatch(a.view, 'vim-mode-plus:activate-insert-mode');
+  zym.commands.dispatch(a.view, 'vim-mode-plus:activate-insert-mode');
   assert.equal(vimA.mode, 'insert');
   assert.equal(vimB.mode, 'normal'); // editor B unaffected
 });

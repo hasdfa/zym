@@ -5,7 +5,7 @@
 // keymap, so they never run. They are neutralized when those features are ported.
 import { Range } from '../../../text/Range.ts'
 import { Base } from './base.ts'
-import { quilx } from '../../../quilx.ts'
+import { zym } from '../../../zym.ts'
 import type { Point } from '../../../text/Point.ts'
 
 // Some commands here (scroll/redraw opt-in dialogs, tab switching) still reference
@@ -510,7 +510,7 @@ class CopyFromLineBelow extends CopyFromLineAbove {
 
 // Insert-mode editing: ctrl-w deletes the word before the cursor, ctrl-u deletes
 // back to the line's first non-blank (or column 0). Upstream maps these to Atom's
-// editor commands; quilx implements them directly.
+// editor commands; zym implements them directly.
 class DeleteToPreviousWordBoundary extends InsertMode {
   execute (): void {
     this.editor.transact(() => {
@@ -550,7 +550,7 @@ class DeleteToBeginningOfInsertLine extends InsertMode {
 class RecordMacro extends MiscCommand {
   async execute (): Promise<void> {
     // TODO(vim-ts): macro record methods not yet on KeymapManager
-    const km = quilx.keymaps as any
+    const km = zym.keymaps as any
     if (km.isRecordingMacro()) {
       // TODO(vim-ts): recordingMacroRegister not yet on VimState
       this.vimState.saveMacro((this.vimState as any).recordingMacroRegister, km.stopMacroRecord())

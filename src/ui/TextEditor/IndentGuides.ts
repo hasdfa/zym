@@ -14,7 +14,7 @@
 import { Gdk, Gtk, type SourceView } from '../../gi.ts';
 import { Point } from '../../text/Point.ts';
 import { theme } from '../../theme/theme.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import type { EditorModel } from './EditorModel.ts';
 
 const LINE_WIDTH = 1;
@@ -63,7 +63,7 @@ export class IndentGuides {
     bind('getVadjustment', 'notify::vadjustment');
     bind('getHadjustment', 'notify::hadjustment');
     this.buffer.on('changed', redraw); // indentation may have changed
-    quilx.config.observe('editor.indentGuides', (v) => {
+    zym.config.observe('editor.indentGuides', (v) => {
       this.enabled = v !== false;
       redraw();
     });

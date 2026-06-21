@@ -13,7 +13,7 @@ import {
 // Each test gets its own temp state dir, so the on-disk format is exercised for
 // real without touching the user's actual sessions.
 function makeManager(): { manager: SessionManager; dir: string } {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-session-'));
+  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-session-'));
   return { manager: new SessionManager(dir), dir };
 }
 

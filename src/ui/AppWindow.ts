@@ -77,7 +77,7 @@ import { openGithubIssuePicker } from './GithubIssuePicker.ts';
 import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { type SessionParticipant, type TabState, type WorkspaceState, type SessionState, type PanelNode } from '../SessionManager.ts';
 import { SessionController } from '../SessionController.ts';
 import { type Notification } from '../Notification.ts';
@@ -141,7 +141,7 @@ export class AppWindow {
   // Open documents (text model + undo + file I/O), ref-counted. Editor tabs are views
   // onto these — a split or the see-definition peek shares one document (A2 model).
   private readonly documents = new DocumentRegistry();
-  // Per-editor `quilx.workspace` registration (drives plugin `observeTextEditors`);
+  // Per-editor `zym.workspace` registration (drives plugin `observeTextEditors`);
   // disposed when the tab closes (see disposeChild).
   private readonly editorRegistrations = new Map<Widget, Disposable>();
   // Tab-lifetime subscriptions on the editor/terminal source (title + modified
@@ -227,7 +227,7 @@ export class AppWindow {
   // Background git fetch interval timer (null when disabled).
   private autoFetchTimer: NodeJS.Timeout | null = null;
 
-  // Watches the user config file and syncs edits into quilx.config; cancelled on
+  // Watches the user config file and syncs edits into zym.config; cancelled on
   // close.
   private readonly configWatcher: DisposableLike;
   // Watches the user keymap file and re-registers it live; cancelled on close.
@@ -260,8 +260,8 @@ export class AppWindow {
     this.github = openGithubService(this.workbench.git, {
       cwd: this.workbench.cwd,
       remoteNames: () => {
-        const upstream = (quilx.config.get('git.remotes.upstream') as string) || 'upstream';
-        const origin = (quilx.config.get('git.remotes.origin') as string) || 'origin';
+        const upstream = (zym.config.get('git.remotes.upstream') as string) || 'upstream';
+        const origin = (zym.config.get('git.remotes.origin') as string) || 'origin';
         return [upstream, origin];
       },
     });
@@ -373,7 +373,7 @@ export class AppWindow {
     // toast; only `trace` (the debug level) is log-only, so traces never interrupt.
     // The manager retains the full history for the log regardless.
     const TOAST_TYPES = new Set(['info', 'success', 'warning', 'error', 'fatal']);
-    quilx.notifications.onDidAddNotification((n) => {
+    zym.notifications.onDidAddNotification((n) => {
       const notification = n as Notification;
       if (TOAST_TYPES.has(notification.getType())) this.notificationToasts.show(notification);
     });
@@ -392,13 +392,13 @@ export class AppWindow {
 
     // Publish the window on the global registry and start the keymap manager's
     // CAPTURE-phase key controller.
-    quilx.window = this.window;
+    zym.window = this.window;
     // Expose file-opening app-wide (reveal-if-open by default — see openFile).
-    quilx.workspace.setOpener((path, options) => {
+    zym.workspace.setOpener((path, options) => {
       const editor = this.openFile(path);
       if (options?.cursor) editor.restoreCursor(options.cursor);
     });
-    quilx.keymaps.initialize();
+    zym.keymaps.initialize();
     // which-key hint: shows the continuations after a queued prefix (e.g. Space).
     this.whichKey = new WhichKey(this.contentOverlay);
     // Components register their commands; the keymap (bindings) is loaded
@@ -420,12 +420,12 @@ export class AppWindow {
     // Configure language servers from `lsp.*` config (and on live edits).
     this.configureLsp();
     for (const key of ['lsp.enable', 'lsp.disabledLanguages', 'lsp.servers', 'lsp.autoInstall']) {
-      quilx.config.onDidChange(key, () => this.configureLsp());
+      zym.config.onDidChange(key, () => this.configureLsp());
     }
 
     // Surface major LSP events (server start/ready/exit/failure) in the
     // notification log; trace-level so they stay out of the way.
-    quilx.lsp.onNotice(({ level, message, detail, action, replaceKey, sticky, loading }) => {
+    zym.lsp.onNotice(({ level, message, detail, action, replaceKey, sticky, loading }) => {
       const text = `LSP: ${message}`;
       // `detail` is the short reason shown under the message in the toast/log
       // (the `description` field only appears when a log entry is expanded); an
@@ -439,11 +439,11 @@ export class AppWindow {
         ...(sticky ? { dismissable: true } : {}),
         ...(loading ? { loading: true } : {}),
       };
-      if (level === 'error') quilx.notifications.addError(text, opts);
-      else if (level === 'warning') quilx.notifications.addWarning(text, opts);
-      else if (level === 'success') quilx.notifications.addSuccess(text, opts);
-      else if (level === 'info') quilx.notifications.addInfo(text, opts);
-      else quilx.notifications.addTrace(text, opts);
+      if (level === 'error') zym.notifications.addError(text, opts);
+      else if (level === 'warning') zym.notifications.addWarning(text, opts);
+      else if (level === 'success') zym.notifications.addSuccess(text, opts);
+      else if (level === 'info') zym.notifications.addInfo(text, opts);
+      else zym.notifications.addTrace(text, opts);
     });
 
     // Bind the header git chrome (branch button, GitHub model/buttons) and the
@@ -459,8 +459,8 @@ export class AppWindow {
     // window open while the dialog decides; the dialog drives the actual quit.
     this.window.on('close-request', () => {
       if (this.quitting) return false;
-      const modified = quilx.session.collectModified();
-      if (modified.length === 0 || quilx.config.get('session.promptOnExitWhenModified') !== true) {
+      const modified = zym.session.collectModified();
+      if (modified.length === 0 || zym.config.get('session.promptOnExitWhenModified') !== true) {
         this.teardownAndQuit();
         return false;
       }
@@ -571,7 +571,7 @@ export class AppWindow {
    * Open `path` in a center tab and focus it — revealing an already-open editor
    * for the file (in any split) instead of opening a duplicate tab. This is the
    * single funnel every file-open goes through, so reveal-if-open is the default
-   * everywhere; it's also exposed app-wide as `quilx.workspace.openFile`.
+   * everywhere; it's also exposed app-wide as `zym.workspace.openFile`.
    */
   private openFile(path: string): TextEditor {
     return this.openFileIn(path, this.targetPanelForNewFile());
@@ -653,7 +653,7 @@ export class AppWindow {
     });
     this.editors.set(editor.root, editor);
     this.editorOwners.set(editor.root, owner);
-    this.participants.set(editor.root, quilx.session.registerParticipant(editor));
+    this.participants.set(editor.root, zym.session.registerParticipant(editor));
     // Lazy open: assign the file now (title/dedup/serialize go live) but defer the read,
     // parse, highlight, and LSP until this tab is first shown — a background or
     // session-restored tab does no work until it's selected. The editor's activate()
@@ -664,7 +664,7 @@ export class AppWindow {
       unsavedText: restore.unsavedText,
       // Announce to the workspace so editor-observing plugins (color preview, …) can
       // attach; registered after load so their first pass sees the file's content.
-      onActivate: () => this.editorRegistrations.set(editor.root, quilx.workspace.addTextEditor(editor)),
+      onActivate: () => this.editorRegistrations.set(editor.root, zym.workspace.addTextEditor(editor)),
     });
     return {
       widget: editor.root,
@@ -702,7 +702,7 @@ export class AppWindow {
   // closing the moment the script exits.
   private runScript(name: string): void {
     const cwd = this.workbench.cwd;
-    const detect = quilx.config.get('scriptRunner.detectPackageManager');
+    const detect = zym.config.get('scriptRunner.detectPackageManager');
     const pm = detect ? detectPackageManager(cwd) : 'npm';
     const shell = process.env.SHELL || '/bin/bash';
     const run = `${pm} run ${name}`;
@@ -784,7 +784,7 @@ export class AppWindow {
   private openAgent(
     options: { kind?: AgentKind; prompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[] } = {},
   ): Agent {
-    const kind = options.kind ?? (options.resume ? 'claude-tui' : resolveAgentKind(quilx.config.get('agent.implementation')));
+    const kind = options.kind ?? (options.resume ? 'claude-tui' : resolveAgentKind(zym.config.get('agent.implementation')));
     const cwd = options.cwd ?? process.cwd();
     const agent = AGENT_CONFIGS[kind].create({
       cwd, command: options.command, prompt: options.prompt, resume: options.resume, title: options.title,
@@ -800,7 +800,7 @@ export class AppWindow {
     this.agentChildren.set(agent.root, child);
     this.updateViewedAgent(); // the agent's tab is now the active one — mark it viewed
     // A running agent reports as modified, so it's consulted before exit.
-    this.participants.set(agent.root, quilx.session.registerParticipant(agent));
+    this.participants.set(agent.root, zym.session.registerParticipant(agent));
     // The agent's tab carries a status glyph prefix + attention highlight.
     const agentSubs = new CompositeDisposable();
     this.agentSubs.set(agent, agentSubs);
@@ -829,7 +829,7 @@ export class AppWindow {
     const seenFiles = new Set<string>(agent.changedFiles);
     agentSubs.add(new Disposable(agent.onDidChangeFiles(() => {
       workbench.git.refresh(); // the agent's own workbench root, not the active one
-      const autoOpen = quilx.config.get('agent.autoOpenChangedFiles') === true;
+      const autoOpen = zym.config.get('agent.autoOpenChangedFiles') === true;
       for (const path of agent.changedFiles) {
         if (seenFiles.has(path)) continue;
         seenFiles.add(path);
@@ -851,7 +851,7 @@ export class AppWindow {
     for (const agent of [this.activeAgent, this.lastAgent]) {
       if (agent && !agent.exited) return agent;
     }
-    return quilx.agents.getAgents().find((agent) => !agent.exited) ?? null;
+    return zym.agents.getAgents().find((agent) => !agent.exited) ?? null;
   }
 
   // The editor context the send-to-agent commands push: the current selection, or
@@ -878,7 +878,7 @@ export class AppWindow {
     if (!text) return;
     const agent = this.targetAgent();
     if (!agent) {
-      quilx.notifications.addWarning('No running agent to send to');
+      zym.notifications.addWarning('No running agent to send to');
       return;
     }
     this.deliverToAgent(agent, text, options);
@@ -944,7 +944,7 @@ export class AppWindow {
   // forward-compat; restore currently only relaunches the agent (see restoreAgent).
   private serializeAgentWorkspaces(): WorkspaceState[] {
     const out: WorkspaceState[] = [];
-    for (const agent of quilx.agents.getAgents()) {
+    for (const agent of zym.agents.getAgents()) {
       const workbench = this.workbenches.get(agent);
       const state = agent.serialize();
       if (!workbench || !state || state.kind !== 'agent') continue;
@@ -967,7 +967,7 @@ export class AppWindow {
     const a = ws.agent;
     if (!a) return;
     // Don't duplicate an agent that's already open (explicit restore over a live session).
-    if (a.sessionId && quilx.agents.getAgents().some((ag) => ag.sessionId === a.sessionId)) return;
+    if (a.sessionId && zym.agents.getAgents().some((ag) => ag.sessionId === a.sessionId)) return;
     let agent: Agent;
     if (a.sessionId) {
       const session = listResumableSessions(this.agentSessionRoots()).find((s) => s.id === a.sessionId);
@@ -993,10 +993,10 @@ export class AppWindow {
   // Resume a past conversation: pick one of the project's saved sessions (newest
   // first, excluding any currently live) and reopen it as `claude --resume <id>`.
   private resumeAgentPicker(): void {
-    const live = new Set(quilx.agents.getAgents().map((a) => a.sessionId).filter(Boolean));
+    const live = new Set(zym.agents.getAgents().map((a) => a.sessionId).filter(Boolean));
     const sessions = listResumableSessions(this.agentSessionRoots()).filter((s) => !live.has(s.id));
     if (sessions.length === 0) {
-      quilx.notifications.addInfo('No past conversations to resume');
+      zym.notifications.addInfo('No past conversations to resume');
       return;
     }
     const byId = new Map(sessions.map((s) => [s.id, s]));
@@ -1064,7 +1064,7 @@ export class AppWindow {
 
   /** Reveal the agent `delta` steps from the active one (wraps; first if none). */
   private focusAdjacentAgent(delta: number): void {
-    const agents = quilx.agents.getAgents();
+    const agents = zym.agents.getAgents();
     if (agents.length === 0) return;
     const index = this.activeAgent ? agents.indexOf(this.activeAgent) : -1;
     const next = agents[(((index + delta) % agents.length) + agents.length) % agents.length];
@@ -1078,9 +1078,9 @@ export class AppWindow {
     if (this.workbench.center.activePanel.activeChild === agent.root) return;
     const reveal = () => this.showAgent(agent);
     if (current === 'waiting') {
-      quilx.notifications.addWarning(`${agent.title} needs your input`, { onDidClick: reveal });
+      zym.notifications.addWarning(`${agent.title} needs your input`, { onDidClick: reveal });
     } else if (current === 'idle' && previous === 'working') {
-      quilx.notifications.addTrace(`${agent.title} finished`, { onDidClick: reveal });
+      zym.notifications.addTrace(`${agent.title} finished`, { onDidClick: reveal });
     }
   }
 
@@ -1119,7 +1119,7 @@ export class AppWindow {
     if (!agent) return;
     const sessionId = agent.sessionId;
     if (!sessionId) {
-      quilx.notifications.addWarning('No conversation to branch yet');
+      zym.notifications.addWarning('No conversation to branch yet');
       return;
     }
     this.openAgent({
@@ -1144,7 +1144,7 @@ export class AppWindow {
   private openAgentChanges(agent: Agent): void {
     const files = agent.changedFiles;
     if (files.length === 0) {
-      quilx.notifications.addInfo(`${agent.title} hasn't edited any files yet`);
+      zym.notifications.addInfo(`${agent.title} hasn't edited any files yet`);
       return;
     }
     this.showAgent(agent); // this.workbench is now the agent's
@@ -1222,7 +1222,7 @@ export class AppWindow {
     this.terminals.delete(agent.root);
     this.conversations.get(agent.root)?.dispose(); // headless agent: kill child + IPC watchers
     this.conversations.delete(agent.root);
-    quilx.agents.remove(agent);
+    zym.agents.remove(agent);
   }
 
   // Prompt for a new display name (pinned over the CLI's reported title). Reuses
@@ -1371,7 +1371,7 @@ export class AppWindow {
   // Step the active workbench by `step` (−1 / +1) through the workbench-list order
   // ([user, …agents]), wrapping around. No-op when the user is the only person.
   private cycleWorkbench(step: number): void {
-    const owners: Array<'user' | Agent> = ['user', ...quilx.agents.getAgents()];
+    const owners: Array<'user' | Agent> = ['user', ...zym.agents.getAgents()];
     if (owners.length < 2) return;
     const current = owners.indexOf(this.workbench.owner);
     const next = (current + step + owners.length) % owners.length;
@@ -1456,7 +1456,7 @@ export class AppWindow {
     const path = agent.unannouncedWorktree;
     if (!path) return;
     agent.clearUnannouncedWorktree();
-    quilx.notifications.addWarning(`${agent.title} switched worktree without telling the editor`, {
+    zym.notifications.addWarning(`${agent.title} switched worktree without telling the editor`, {
       detail:
         `It created a worktree (${path}) but didn't call the set_worktree tool, so its file tree ` +
         'and Source Control still point at the old root.',
@@ -1673,7 +1673,7 @@ export class AppWindow {
   // falls back to the file-tree dock, and from the file tree `pane:focus-right`
   // returns to it.
   private registerPaneCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'pane:split-right': { didDispatch: () => this.splitPane('right'), description: 'Split the pane to the right' },
       'pane:split-down': { didDispatch: () => this.splitPane('down'), description: 'Split the pane downward' },
       'pane:close': { didDispatch: () => this.closePane(), description: 'Close the active pane' },
@@ -1745,7 +1745,7 @@ export class AppWindow {
   // --- LSP commands ----------------------------------------------------------
 
   private registerLspCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'lsp:go-to-definition': { didDispatch: () => void this.goto('definition'), description: 'Go to definition' },
       'lsp:peek-definition': { didDispatch: () => void this.peekDefinition(), description: 'Peek definition (inline)' },
       'lsp:go-to-declaration': { didDispatch: () => void this.goto('declaration'), description: 'Go to declaration' },
@@ -1766,10 +1766,10 @@ export class AppWindow {
     });
   }
 
-  // Pick a language server to install (into the quilx-managed dir). Already-
+  // Pick a language server to install (into the zym-managed dir). Already-
   // installed and in-progress servers are shown dimmed with a status note.
   private installServerPicker() {
-    const items = quilx.lsp.installableServers().map((s) => {
+    const items = zym.lsp.installableServers().map((s) => {
       const status = s.installing ? 'installing…' : s.installed ? 'installed' : 'not installed';
       const text = `${s.name}  ${status}`;
       return {
@@ -1782,7 +1782,7 @@ export class AppWindow {
       host: this.overlay,
       placeholder: 'Install language server',
       items,
-      onSelect: (name) => void quilx.lsp.installByName(name),
+      onSelect: (name) => void zym.lsp.installByName(name),
     });
   }
 
@@ -1897,11 +1897,11 @@ export class AppWindow {
 
   // Apply `lsp.*` config to the language-server manager.
   private configureLsp() {
-    quilx.lsp.configure({
-      enable: quilx.config.get('lsp.enable') as boolean,
-      disabledLanguages: quilx.config.get('lsp.disabledLanguages') as string[],
-      serverOverrides: quilx.config.get('lsp.servers') as LspConfig['serverOverrides'],
-      autoInstall: quilx.config.get('lsp.autoInstall') as boolean,
+    zym.lsp.configure({
+      enable: zym.config.get('lsp.enable') as boolean,
+      disabledLanguages: zym.config.get('lsp.disabledLanguages') as string[],
+      serverOverrides: zym.config.get('lsp.servers') as LspConfig['serverOverrides'],
+      autoInstall: zym.config.get('lsp.autoInstall') as boolean,
     });
   }
 
@@ -1910,7 +1910,7 @@ export class AppWindow {
   private async goto(kind: NavigationKind) {
     const editor = this.activeEditor;
     if (!editor) return;
-    const target = await quilx.lsp.goto(editor.lsp, kind);
+    const target = await zym.lsp.goto(editor.lsp, kind);
     if (!target) return;
     this.openOrFocusFile(target.path, [target.point.row, target.point.column]);
   }
@@ -1924,7 +1924,7 @@ export class AppWindow {
       editor.closePeek();
       return;
     }
-    const target = await quilx.lsp.goto(editor.lsp, 'definition');
+    const target = await zym.lsp.goto(editor.lsp, 'definition');
     if (!target) return;
 
     // If the definition's file is already open, peek a *live* read-only view onto its
@@ -1960,9 +1960,9 @@ export class AppWindow {
   private async findReferences() {
     const editor = this.activeEditor;
     if (!editor) return;
-    const refs = await quilx.lsp.references(editor.lsp);
+    const refs = await zym.lsp.references(editor.lsp);
     if (refs.length === 0) {
-      quilx.notifications.addInfo('No references found');
+      zym.notifications.addInfo('No references found');
       return;
     }
     openReferencesPicker(this.overlay, refs, (path, cursor) => this.openOrFocusFile(path, cursor));
@@ -1973,8 +1973,8 @@ export class AppWindow {
   private workspaceSymbolPicker() {
     const editor = this.activeEditor;
     if (!editor) return;
-    if (!quilx.lsp.canWorkspaceSymbols(editor.lsp)) {
-      quilx.notifications.addInfo('No workspace symbol support for this file');
+    if (!zym.lsp.canWorkspaceSymbols(editor.lsp)) {
+      zym.notifications.addInfo('No workspace symbol support for this file');
       return;
     }
     openWorkspaceSymbolPicker(this.overlay, editor.lsp, this.workbench.cwd, (path, cursor) =>
@@ -1987,8 +1987,8 @@ export class AppWindow {
   private async documentSymbolPicker() {
     const editor = this.activeEditor;
     if (!editor) return;
-    if (!quilx.lsp.canDocumentSymbols(editor.lsp)) {
-      quilx.notifications.addInfo('No document symbol support for this file');
+    if (!zym.lsp.canDocumentSymbols(editor.lsp)) {
+      zym.notifications.addInfo('No document symbol support for this file');
       return;
     }
     await openDocumentSymbolPicker(this.overlay, editor.lsp, (cursor) => {
@@ -2001,9 +2001,9 @@ export class AppWindow {
   private async codeActionMenu() {
     const editor = this.activeEditor;
     if (!editor || !editor.currentFile) return;
-    const actions = await quilx.lsp.codeActions(editor.lsp);
+    const actions = await zym.lsp.codeActions(editor.lsp);
     if (actions.length === 0) {
-      quilx.notifications.addInfo('No code actions available');
+      zym.notifications.addInfo('No code actions available');
       return;
     }
     openPicker({
@@ -2019,18 +2019,18 @@ export class AppWindow {
   private async runCodeAction(editor: TextEditor, action: Command | CodeAction) {
     const isBareCommand = typeof (action as Command).command === 'string' && !('kind' in action) && !('edit' in action);
     if (isBareCommand) {
-      quilx.notifications.addWarning(`LSP: "${action.title}" needs command execution (not yet supported)`);
+      zym.notifications.addWarning(`LSP: "${action.title}" needs command execution (not yet supported)`);
       return;
     }
-    const resolved = await quilx.lsp.resolveCodeAction(editor.lsp, action as CodeAction);
+    const resolved = await zym.lsp.resolveCodeAction(editor.lsp, action as CodeAction);
     if (!resolved.edit) {
-      quilx.notifications.addWarning(`LSP: "${action.title}" needs command execution (not yet supported)`);
+      zym.notifications.addWarning(`LSP: "${action.title}" needs command execution (not yet supported)`);
       return;
     }
-    const encoding = quilx.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16';
+    const encoding = zym.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16';
     const { resourceOps } = this.applyWorkspaceEdit(resolved.edit, encoding);
     if (resourceOps > 0) {
-      quilx.notifications.addWarning(`LSP: "${action.title}" includes ${resourceOps} file operation(s) not yet applied`);
+      zym.notifications.addWarning(`LSP: "${action.title}" includes ${resourceOps} file operation(s) not yet applied`);
     }
   }
 
@@ -2038,8 +2038,8 @@ export class AppWindow {
   private renamePrompt() {
     const editor = this.activeEditor;
     if (!editor || !editor.currentFile) return;
-    if (!quilx.lsp.canRename(editor.lsp)) {
-      quilx.notifications.addInfo('Rename is not available here');
+    if (!zym.lsp.canRename(editor.lsp)) {
+      zym.notifications.addInfo('Rename is not available here');
       return;
     }
     openPicker({
@@ -2059,7 +2059,7 @@ export class AppWindow {
     if (!editor) return;
     const names = editor.tagNamesAtCursor();
     if (!names) {
-      quilx.notifications.addInfo('Not on a JSX/HTML tag');
+      zym.notifications.addInfo('Not on a JSX/HTML tag');
       return;
     }
     openPicker({
@@ -2078,15 +2078,15 @@ export class AppWindow {
 
   private async runRename(editor: TextEditor, newName: string) {
     if (!newName) return;
-    const edit = await quilx.lsp.rename(editor.lsp, newName);
+    const edit = await zym.lsp.rename(editor.lsp, newName);
     if (!edit) {
-      quilx.notifications.addInfo('Rename produced no changes');
+      zym.notifications.addInfo('Rename produced no changes');
       return;
     }
-    const encoding = quilx.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16';
+    const encoding = zym.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16';
     const { applied, resourceOps } = this.applyWorkspaceEdit(edit, encoding);
-    if (resourceOps > 0) quilx.notifications.addWarning(`Rename: ${resourceOps} file operation(s) not yet applied`);
-    else quilx.notifications.addInfo(`Renamed across ${applied} file${applied === 1 ? '' : 's'}`);
+    if (resourceOps > 0) zym.notifications.addWarning(`Rename: ${resourceOps} file operation(s) not yet applied`);
+    else zym.notifications.addInfo(`Renamed across ${applied} file${applied === 1 ? '' : 's'}`);
   }
 
   // Format the active document and apply the edits to its buffer.
@@ -2094,15 +2094,15 @@ export class AppWindow {
     const editor = this.activeEditor;
     if (!editor || !editor.currentFile) return;
     const options = {
-      tabSize: (quilx.config.get('editor.tabLength') as number) ?? 2,
-      insertSpaces: (quilx.config.get('editor.insertSpaces') as boolean) ?? true,
+      tabSize: (zym.config.get('editor.tabLength') as number) ?? 2,
+      insertSpaces: (zym.config.get('editor.insertSpaces') as boolean) ?? true,
     };
-    const edits = await quilx.lsp.format(editor.lsp, options);
+    const edits = await zym.lsp.format(editor.lsp, options);
     if (edits.length === 0) {
-      quilx.notifications.addInfo('No formatting changes');
+      zym.notifications.addInfo('No formatting changes');
       return;
     }
-    editor.applyLspEdits(edits, quilx.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16');
+    editor.applyLspEdits(edits, zym.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16');
   }
 
   /**
@@ -2152,7 +2152,7 @@ export class AppWindow {
   // Window-level file/edit operations, surfaced in the command palette and (for
   // most) on the space leader. Handlers only; bindings live in the central keymap.
   private registerWindowCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'file:open': { didDispatch: () => this.openDialog(), description: 'Open a file (dialog)' },
       'file:find': {
         didDispatch: () => openFilePicker(this.overlay, this.workbench.cwd, (path) => this.openFile(path)),
@@ -2257,7 +2257,7 @@ export class AppWindow {
         description: 'Open the file/line under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff() !== null,
       },
-      'app:quit': { didDispatch: () => this.onQuit(), description: 'Quit quilx' },
+      'app:quit': { didDispatch: () => this.onQuit(), description: 'Quit zym' },
       'command-palette:toggle': { didDispatch: () => openCommandPicker(this.overlay), description: 'Show all commands' },
     });
   }
@@ -2389,7 +2389,7 @@ export class AppWindow {
     this.continuousDiffViews.set(view.root, view); // disposeChild tears it down on close
     // Consult the diff on window close (unsaved edits OR unsent review comments). disposeChild
     // disposes this registration with the tab.
-    this.participants.set(view.root, quilx.session.registerParticipant(view));
+    this.participants.set(view.root, zym.session.registerParticipant(view));
     view.onModifiedChange(() => child.setTitle(title())); // show the unsaved marker on edit/save
     view.onReviewChange(() => child.setTitle(title())); // show the accumulated-review count
     child.select();
@@ -2399,7 +2399,7 @@ export class AppWindow {
   // Terminal command: open a shell in a new center-panel tab. Handler only;
   // bound to `space t` in the central keymap.
   private registerTerminalCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'terminal:new': { didDispatch: () => this.openTerminal(), description: 'Open a new terminal' },
       'scripts:run': {
         didDispatch: () => openScriptRunner(this.overlay, this.workbench.cwd, (name) => this.runScript(name)),
@@ -2486,7 +2486,7 @@ export class AppWindow {
   // blocking), so the branch button's spinner reflects progress automatically;
   // the result is surfaced as a toast.
   private registerGitCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       // Git commands only apply inside a repository (a resolvable branch).
       'git:fetch': { didDispatch: () => this.runGit(() => this.workbench.git.fetch(), 'Fetch'), description: 'Fetch from the remote', when: () => this.workbench.git.getBranch() !== null },
       'git:pull': { didDispatch: () => this.runGit(() => this.workbench.git.pull(), 'Pull'), description: 'Pull from upstream (fast-forward)', when: () => this.workbench.git.getBranch() !== null },
@@ -2567,9 +2567,9 @@ export class AppWindow {
   private async runGit(op: () => Promise<GitOpResult>, label: string, onSuccess?: () => void) {
     const result = await op();
     if (result.isOk()) {
-      quilx.notifications.addTrace(`${label} succeeded`);
+      zym.notifications.addTrace(`${label} succeeded`);
       onSuccess?.();
-    } else quilx.notifications.addError(`${label} failed`);
+    } else zym.notifications.addError(`${label} failed`);
   }
 
   // Like `runGit`, but surfaces progress as a single in-place toast: a sticky
@@ -2581,17 +2581,17 @@ export class AppWindow {
     label: string,
     replaceKey: string,
   ) {
-    quilx.notifications.addInfo(`${label}…`, { replaceKey, loading: true, dismissable: true });
+    zym.notifications.addInfo(`${label}…`, { replaceKey, loading: true, dismissable: true });
     const result = await op();
-    if (result.isOk()) quilx.notifications.addSuccess(`${label} succeeded`, { replaceKey });
-    else quilx.notifications.addError(`${label} failed`, { replaceKey });
+    if (result.isOk()) zym.notifications.addSuccess(`${label} succeeded`, { replaceKey });
+    else zym.notifications.addError(`${label} failed`, { replaceKey });
   }
 
   // Stash the working-tree changes (visible success, since it's a manual action).
   private async stashChanges() {
     const result = await this.workbench.git.stash();
-    if (result.isOk()) quilx.notifications.addSuccess('Stashed changes');
-    else quilx.notifications.addError('Stash failed', { detail: result.unwrapErr().message.trim() });
+    if (result.isOk()) zym.notifications.addSuccess('Stashed changes');
+    else zym.notifications.addError('Stash failed', { detail: result.unwrapErr().message.trim() });
   }
 
   // Start a commit: open the message file (`.git/COMMIT_EDITMSG`) in an editor
@@ -2604,7 +2604,7 @@ export class AppWindow {
       try {
         Fs.writeFileSync(msgPath, ''); // fresh, empty message
       } catch (error) {
-        quilx.notifications.addError('Could not start commit', { detail: (error as Error).message });
+        zym.notifications.addError('Could not start commit', { detail: (error as Error).message });
         return;
       }
       const editor = this.openFile(msgPath);
@@ -2613,7 +2613,7 @@ export class AppWindow {
   }
 
   // Finalize a commit when its message tab closes: commit the saved message, or
-  // abort if it is empty. Routed through quilx.notifications.
+  // abort if it is empty. Routed through zym.notifications.
   private finishCommit(repo: string, msgPath: string) {
     let message = '';
     try {
@@ -2622,12 +2622,12 @@ export class AppWindow {
       // file gone — nothing to commit
     }
     if (!message.trim()) {
-      quilx.notifications.addInfo('Commit aborted (empty message)');
+      zym.notifications.addInfo('Commit aborted (empty message)');
       return;
     }
     void this.workbench.git.commit(msgPath).then((result) => {
-      if (result.isOk()) quilx.notifications.addSuccess('Committed');
-      else quilx.notifications.addError('Commit failed', { detail: result.unwrapErr().message.trim() });
+      if (result.isOk()) zym.notifications.addSuccess('Committed');
+      else zym.notifications.addError('Commit failed', { detail: result.unwrapErr().message.trim() });
     });
   }
 
@@ -2641,7 +2641,7 @@ export class AppWindow {
       // Sticky + a shared `replaceKey` so the prompt persists until acted on and
       // clicking Pull transforms this same toast into pulling…→pulled (mirrors the
       // LSP install flow).
-      quilx.notifications.addInfo(`Upstream is ahead by ${behind} ${commits}`, {
+      zym.notifications.addInfo(`Upstream is ahead by ${behind} ${commits}`, {
         detail: 'Your branch is behind its upstream — pull to update.',
         replaceKey: PULL_NOTICE_KEY,
         dismissable: true,
@@ -2656,7 +2656,7 @@ export class AppWindow {
   // drives the branch button and `checkUpstream`. `git.autoFetchMinutes` of 0
   // disables it. (Read once at startup.)
   private startAutoFetch() {
-    const minutes = Number(quilx.config.get('git.autoFetchMinutes') ?? 0);
+    const minutes = Number(zym.config.get('git.autoFetchMinutes') ?? 0);
     if (!(minutes > 0)) return;
     this.autoFetchTimer = setInterval(() => {
       if (this.workbench.git.getBranch() !== null) void this.workbench.git.fetch();
@@ -2667,36 +2667,36 @@ export class AppWindow {
   // only; bindings (`space n`, and `c` while the log is focused) live in the
   // central keymap.
   private registerNotificationCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'notifications:toggle-log': { didDispatch: () => this.toggleNotificationLog(), description: 'Toggle the notification log' },
-      'notifications:clear': { didDispatch: () => quilx.notifications.clear(), description: 'Clear notifications' },
+      'notifications:clear': { didDispatch: () => zym.notifications.clear(), description: 'Clear notifications' },
       // Run the default action of the most recent notification that has one.
-      'notifications:activate': { didDispatch: () => quilx.notifications.activateLast(), description: 'Run the latest notification’s action' },
+      'notifications:activate': { didDispatch: () => zym.notifications.activateLast(), description: 'Run the latest notification’s action' },
       // Demo commands (command palette only): post one notification of each
       // severity so the toast styling and the log can be exercised by hand.
       'notifications:test-info': {
         didDispatch: () =>
-          quilx.notifications.addInfo('Info notification', {
+          zym.notifications.addInfo('Info notification', {
             detail: 'Click me to run a default action.',
-            onDidClick: () => quilx.notifications.addSuccess('Default action ran'),
+            onDidClick: () => zym.notifications.addSuccess('Default action ran'),
           }),
         description: 'Post a test info notification',
       },
       'notifications:test-success': {
-        didDispatch: () => quilx.notifications.addSuccess('Success notification', { detail: 'Something worked.' }),
+        didDispatch: () => zym.notifications.addSuccess('Success notification', { detail: 'Something worked.' }),
         description: 'Post a test success notification',
       },
       'notifications:test-warning': {
-        didDispatch: () => quilx.notifications.addWarning('Warning notification', { detail: 'Something looks off.' }),
+        didDispatch: () => zym.notifications.addWarning('Warning notification', { detail: 'Something looks off.' }),
         description: 'Post a test warning notification',
       },
       'notifications:test-error': {
-        didDispatch: () => quilx.notifications.addError('Error notification', { detail: 'Something failed.' }),
+        didDispatch: () => zym.notifications.addError('Error notification', { detail: 'Something failed.' }),
         description: 'Post a test error notification',
       },
       'notifications:test-fatal': {
         didDispatch: () =>
-          quilx.notifications.addFatalError('Fatal notification', {
+          zym.notifications.addFatalError('Fatal notification', {
             detail: 'Something failed badly.',
             dismissable: true,
           }),
@@ -2709,7 +2709,7 @@ export class AppWindow {
   // config.json, or the user keymap.json in an editor tab. Handlers only; the
   // `space , …` bindings live in the central keymap.
   private registerConfigCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'config:open-editor': { didDispatch: () => openConfigEditor(this.window), description: 'Open preferences' },
       'config:open-as-text': { didDispatch: () => this.openFile(configPath()), description: 'Open config.json' },
       'keymap:open-as-text': { didDispatch: () => this.openFile(ensureUserKeymap()), description: 'Edit the user keymap (keymap.json)' },
@@ -2719,7 +2719,7 @@ export class AppWindow {
   // Session: save or restore the workspace session explicitly. Autosave covers the
   // common case; these are manual controls (command palette / keymap).
   private registerSessionCommands() {
-    quilx.commands.add('#AppWindow', {
+    zym.commands.add('#AppWindow', {
       'session:save': {
         didDispatch: () => {
           this.sessionController.saveNow();
@@ -3079,7 +3079,7 @@ export class AppWindow {
   // The toast is rendered by the manager bridge (NotificationToasts) in the
   // constructor.
   private toast(message: string) {
-    quilx.notifications.addInfo(message);
+    zym.notifications.addInfo(message);
   }
 }
 

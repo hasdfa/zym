@@ -13,7 +13,7 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Gtk } from '../gi.ts';
 import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { plugins, registerBuiltinPlugins } from '../plugin/index.ts';
 import { preloadGrammars, getGrammar, langIdForPath } from '../syntax/grammar.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
@@ -22,7 +22,7 @@ import { Range } from '../text/Range.ts';
 import { Point } from '../text/Point.ts';
 
 Gtk.init();
-quilx.lsp.configure({ enable: false }); // no language servers spawned in the headless test
+zym.lsp.configure({ enable: false }); // no language servers spawned in the headless test
 
 let hasJs = false;
 before(async () => {

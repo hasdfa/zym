@@ -29,11 +29,11 @@ export class ModelContext {
 
   constructor() {
     this.modelLabel = new Gtk.Label({ xalign: 0, hexpand: true });
-    this.modelLabel.addCssClass('quilx-conversation-footer-label');
+    this.modelLabel.addCssClass('zym-conversation-footer-label');
 
     // The gauge: token count + circular fill, in a MenuButton opening the popover.
     this.tokensLabel = new Gtk.Label({ xalign: 1 });
-    this.tokensLabel.addCssClass('quilx-conversation-footer-label');
+    this.tokensLabel.addCssClass('zym-conversation-footer-label');
     const gauge = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     gauge.append(this.tokensLabel);
     gauge.append(this.ring.widget);

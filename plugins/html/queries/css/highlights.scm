@@ -1,4 +1,4 @@
-; CSS — quilx palette (Zed capture names). Registered as an injection-only grammar
+; CSS — zym palette (Zed capture names). Registered as an injection-only grammar
 ; so HTML <style> blocks get highlit; a future CSS plugin can add `.css` detection
 ; on top of this same grammar with no change here.
 

@@ -5,14 +5,14 @@
  * `TextEditor:not(.mini) Box` is parsed into a list of `Rule`s; `matchesRule`
  * then walks a focused widget's ancestor chain to decide whether a rule applies.
  *
- * Adaptations for quilx:
+ * Adaptations for zym:
  *   - both an `#id` selector and a bare tag are matched against the widget's GTK
  *     name (`getName()`); `:not()`/class fragments match its CSS classes
  *     (`getCssClasses()`). A widget's name defaults to its node-gtk type name
- *     (e.g. "GtkText", "GtkSourceView"), but quilx components override it with
+ *     (e.g. "GtkText", "GtkSourceView"), but zym components override it with
  *     their JS class name (`widget.setName('Panel')` — e.g. the editor view is
  *     a `GtkSourceView` renamed to `TextEditor`). The convention is to target a
- *     quilx component with `#id` (`#Panel`, `#TextEditor.insert-mode`) and a raw
+ *     zym component with `#id` (`#Panel`, `#TextEditor.insert-mode`) and a raw
  *     GTK widget by its type tag (e.g. `GtkText`);
  *   - the debug `console.log` at module load was removed and `translateTag`
  *     reduced to an identity passthrough (the Atom `atom-*` tag aliases don't
@@ -261,7 +261,7 @@ function getValue(node: any): string {
 }
 
 export function translateTag(tag: string): string {
-  // Extension point for selector tag aliases. quilx selectors use node-gtk
+  // Extension point for selector tag aliases. zym selectors use node-gtk
   // widget class names directly, so this is currently an identity mapping.
   return tag;
 }

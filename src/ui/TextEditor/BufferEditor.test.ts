@@ -8,13 +8,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk } from '../../gi.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { TextEditor, createInput } from './TextEditor.ts';
 import { Range } from '../../text/Range.ts';
 import { Point } from '../../text/Point.ts';
 
 Gtk.init();
-quilx.lsp.configure({ enable: false });
+zym.lsp.configure({ enable: false });
 
 test('buffer-only: initialText is the text; edits write through; no backing file', () => {
   const editor = new TextEditor({ buffer: { initialText: 'hello\nworld' } });
@@ -64,19 +64,19 @@ test('softWrap: an embedded editor defaults to no wrap, but the option forces it
   on.dispose();
 });
 
-test('createInput: buffer-only, soft-wrapped, tagged with the quilx-input class', () => {
+test('createInput: buffer-only, soft-wrapped, tagged with the zym-input class', () => {
   const editor = createInput({ placeholder: 'Message…' });
   assert.equal(editor.currentFile, null, 'an input is buffer-only (no file)');
   const view = (editor as any).view as InstanceType<typeof Gtk.Widget>;
-  assert.ok(view.hasCssClass('quilx-input'), 'tagged with the quilx-input class');
+  assert.ok(view.hasCssClass('zym-input'), 'tagged with the zym-input class');
   assert.equal((editor as any).view.getWrapMode(), Gtk.WrapMode.WORD_CHAR, 'inputs soft-wrap by default');
   editor.dispose();
 });
 
-test('createInput: a custom cssClass joins quilx-input; softWrap can be turned off', () => {
+test('createInput: a custom cssClass joins zym-input; softWrap can be turned off', () => {
   const editor = createInput({ cssClass: 'agent-prompt', softWrap: false });
   const view = (editor as any).view as InstanceType<typeof Gtk.Widget>;
-  assert.ok(view.hasCssClass('quilx-input'), 'still carries the shared class');
+  assert.ok(view.hasCssClass('zym-input'), 'still carries the shared class');
   assert.ok(view.hasCssClass('agent-prompt'), 'plus the caller-specific class');
   assert.equal((editor as any).view.getWrapMode(), Gtk.WrapMode.NONE, 'softWrap:false opts back out');
   editor.dispose();

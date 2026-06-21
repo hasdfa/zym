@@ -1438,7 +1438,7 @@ const PAIR_MEMBER_BY_BRACKET: Record<string, {member: string, open: boolean}> = 
 
 // Search as a motion (`/` `?` in operator-pending / visual mode), so an operator
 // can target a search match: `d/foo`, `c?bar`, `y/baz`. Unlike upstream's
-// search-input mini-editor, quilx drives the host's SearchBar via the multi-char
+// search-input mini-editor, zym drives the host's SearchBar via the multi-char
 // `focusInput` bridge (VimState.setSearchInput → TextEditor → SearchBar). The bar
 // previews live; on confirm it hands back the seated match's *start* (with the
 // cursor restored to the origin), which `moveCursor` then moves to — an exclusive
@@ -1483,7 +1483,7 @@ class SearchBackwards extends SearchBase {
 }
 
 // Leap (leap.nvim-style two-character labeled jump), as a motion so it composes
-// with operators (`d g s`), visual mode, and dot-repeat. Like SearchBase, quilx
+// with operators (`d g s`), visual mode, and dot-repeat. Like SearchBase, zym
 // drives the host (TextEditor's Leap) through the multi-char
 // `focusInput` bridge (VimState.setLeapInput): the host reads the 2 search chars,
 // labels the matches, reads the chosen label, and hands back the target's *start*

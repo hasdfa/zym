@@ -1,6 +1,6 @@
 
 <h1 align="center">
-  quilx
+  zym
 </h1>
 
 <p align="center">
@@ -13,7 +13,7 @@ A keyboard-driven, modern code editor — blending the best from neovim, atom, z
 
 *Beta state. Tested on Linux; might not run on macOS or Windows yet.*
 
-![quilx running a coding agent side by side with the editor, file tree, and a fuzzy command palette](img/demo-agent-workflow.png)
+![zym running a coding agent side by side with the editor, file tree, and a fuzzy command palette](img/demo-agent-workflow.png)
 
 ## Highlights
 
@@ -40,7 +40,7 @@ fuzzy command palette, and drive everything without leaving the keyboard.
 
 ### Code intelligence (LSP)
 
-Language servers power completion, hover docs, and diagnostics — and quilx
+Language servers power completion, hover docs, and diagnostics — and zym
 offers to install a missing server for you.
 
 ![Autocomplete popup with documentation for the selected entry](img/demo-lsp-autocomplete.png)
@@ -89,25 +89,25 @@ A file tree and a live git status view sit side by side in the left dock.
 ## Install
 
 ```
-pnpm add -g github:romgrk/quilx
+pnpm add -g github:romgrk/zym
 ```
 
 ## Usage
 
 ```sh
-quilx [file]
+zym [file]
 ```
 
 ## Keybindings
 
-quilx is organized around a **`space` leader**: press `space`, then a mnemonic. Press `space ?` to see the keymap panel.
+zym is organized around a **`space` leader**: press `space`, then a mnemonic. Press `space ?` to see the keymap panel.
 
 Bindings live in [`src/keymaps/default.ts`](src/keymaps/default.ts). To override
-them, drop a `~/.config/quilx/keymap.json` (the same
+them, drop a `~/.config/zym/keymap.json` (the same
 `{ "selector": { "keystroke": "command" } }` shape) — user bindings take priority
 over the defaults.
 
-Selectors target a **quilx component** by name with an `#id`: `#AppWindow`,
+Selectors target a **zym component** by name with an `#id`: `#AppWindow`,
 `#Panel`, `#FileTree`, `#TextEditor.insert-mode`, etc.
 
 A binding's value may also pass arguments to its command, using
@@ -130,14 +130,14 @@ the global leader prefix:
 
 ## Notifications
 
-Modeled on Atom's `NotificationManager`, quilx separates *posting* a notification
-from *showing* it. Subsystems post through the global hub, `quilx.notifications`,
+Modeled on Atom's `NotificationManager`, zym separates *posting* a notification
+from *showing* it. Subsystems post through the global hub, `zym.notifications`,
 which keeps every notification for the session; views render from it.
 
 ```js
-quilx.notifications.addInfo('Saved');
-quilx.notifications.addWarning('Untracked files hidden');
-quilx.notifications.addError('Push failed', { detail: 'rejected: non-fast-forward' });
+zym.notifications.addInfo('Saved');
+zym.notifications.addWarning('Untracked files hidden');
+zym.notifications.addError('Push failed', { detail: 'rejected: non-fast-forward' });
 ```
 
 There are five severities — `addInfo`, `addSuccess`, `addWarning`, `addError`,
@@ -162,9 +162,9 @@ the log too.
 
 ## Agents
 
-quilx can host terminal-based coding agents (such as `claude`) right inside the
+zym can host terminal-based coding agents (such as `claude`) right inside the
 workbench. An agent is a terminal like any other, except it runs the agent CLI
-instead of a login shell and is tracked in the global registry `quilx.agents`.
+instead of a login shell and is tracked in the global registry `zym.agents`.
 When the agent process exits the pane is *not* torn down — a "process exited"
 notice is printed and the agent stays listed, flipped to an `exited` status, so
 you can read its final output.
@@ -186,14 +186,14 @@ Running agents appear in the workbench list:
 
 Activating a row reveals and focuses that agent's terminal.
 
-For a `claude` agent the live status is driven by **Claude Code hooks**: quilx
+For a `claude` agent the live status is driven by **Claude Code hooks**: zym
 launches `claude` with a per-session `--settings` block whose hooks write a status
 word to a file the terminal watches (via a `Gio` file monitor). The reporter
 script is bundled at [`assets/hooks/agent-status.sh`](assets/hooks/agent-status.sh).
 
 ## Configuration
 
-Settings live in `~/.config/quilx/config.json` (or `$XDG_CONFIG_HOME/quilx/`),
+Settings live in `~/.config/zym/config.json` (or `$XDG_CONFIG_HOME/zym/`),
 created automatically on first launch. The file is a flat map of dotted keys to
 values:
 
@@ -231,4 +231,4 @@ The baseline keys:
 
 The tree-sitter highlight queries under `src/syntax/queries/` are vendored from
 [Zed](https://github.com/zed-industries/zed) (`crates/grammars/src/`), which are
-licensed GPL-3.0 — bundling them is why quilx is distributed under the GPL.
+licensed GPL-3.0 — bundling them is why zym is distributed under the GPL.

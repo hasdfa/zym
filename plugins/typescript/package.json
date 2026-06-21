@@ -1,10 +1,10 @@
 {
-  "name": "@quilx/plugin-typescript",
+  "name": "@zym/plugin-typescript",
   "version": "0.1.0",
-  "description": "TypeScript / JavaScript / TSX support for quilx",
+  "description": "TypeScript / JavaScript / TSX support for zym",
   "type": "module",
   "main": "./index.ts",
   "peerDependencies": {
-    "quilx": "^0.1.0"
+    "zym": "^0.1.0"
   }
 }

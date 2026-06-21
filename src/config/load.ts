@@ -1,9 +1,9 @@
 /*
  * load.ts — create and watch the user config file.
  *
- * At startup this ensures `$XDG_CONFIG_HOME/quilx/config.json` (falling back to
+ * At startup this ensures `$XDG_CONFIG_HOME/zym/config.json` (falling back to
  * `~/.config`) exists — creating the directory and seeding an empty `{}` if
- * absent — then applies its contents to the global `quilx.config` and installs a
+ * absent — then applies its contents to the global `zym.config` and installs a
  * Gio file monitor so live edits sync straight back into the store.
  *
  * The file is a flat map of dotted config keys to values, mirroring the schema
@@ -17,7 +17,7 @@ import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Gio } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { ConfigValue } from '../util/Config.ts';
 import { Disposable } from '../util/eventKit.ts';
 
@@ -30,10 +30,10 @@ const SEED = '{}\n';
 
 function configDir(): string {
   const configHome = process.env.XDG_CONFIG_HOME || Path.join(Os.homedir(), '.config');
-  return Path.join(configHome, 'quilx');
+  return Path.join(configHome, 'zym');
 }
 
-/** Absolute path to the user config file (`$XDG_CONFIG_HOME/quilx/config.json`). */
+/** Absolute path to the user config file (`$XDG_CONFIG_HOME/zym/config.json`). */
 export function configPath(): string {
   return Path.join(configDir(), 'config.json');
 }
@@ -67,11 +67,11 @@ function readConfig(path: string): Record<string, unknown> | null {
 function applyConfig(parsed: Record<string, unknown>, previous: Set<string>): Set<string> {
   const applied = new Set<string>();
   for (const [key, value] of Object.entries(parsed)) {
-    if (quilx.config.set(key, value as ConfigValue)) applied.add(key);
+    if (zym.config.set(key, value as ConfigValue)) applied.add(key);
     else console.warn(`[config] rejected value for "${key}": ${JSON.stringify(value)}`);
   }
   for (const key of previous) {
-    if (!applied.has(key)) quilx.config.unset(key);
+    if (!applied.has(key)) zym.config.unset(key);
   }
   return applied;
 }
@@ -85,11 +85,11 @@ function applyConfig(parsed: Record<string, unknown>, previous: Set<string>): Se
  */
 export function saveConfig(): void {
   const overrides: Record<string, ConfigValue> = {};
-  for (const [key] of quilx.config.schemaEntries()) {
-    if (!quilx.config.has(key)) continue;
-    const value = quilx.config.get(key);
+  for (const [key] of zym.config.schemaEntries()) {
+    if (!zym.config.has(key)) continue;
+    const value = zym.config.get(key);
     if (value === undefined) continue;
-    if (JSON.stringify(value) === JSON.stringify(quilx.config.getDefault(key))) continue;
+    if (JSON.stringify(value) === JSON.stringify(zym.config.getDefault(key))) continue;
     overrides[key] = value;
   }
   const path = configPath();
@@ -101,7 +101,7 @@ export function saveConfig(): void {
 }
 
 /**
- * Ensure the user config exists, apply it to `quilx.config`, and watch it for
+ * Ensure the user config exists, apply it to `zym.config`, and watch it for
  * live edits. Returns a Disposable that stops the watcher.
  */
 export function loadConfig(): Disposable {

@@ -48,7 +48,7 @@ test('bundled Rust grammar: loads, queries compile, highlights core captures', a
     'struct Point { x: f64, y: f64 }',
     '',
     'fn main() {',
-    '    let name = "quilx";',
+    '    let name = "zym";',
     '    let ok = true;',
     '    println!("{}", name);',
     '}',

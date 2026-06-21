@@ -235,7 +235,7 @@ tab and the gutter.
 opens `.git/COMMIT_EDITMSG` in a **normal editor tab**; **saving + closing
 the tab commits** (`git commit -F .git/COMMIT_EDITMSG`). This reuses the
 full editor (vim, chrome) with zero `TextEditor` changes and keeps the
-message git-native. Result/failures surface through `quilx.notifications`;
+message git-native. Result/failures surface through `zym.notifications`;
 on success the lists refresh.
 
 Not done: amend, sign-off, amend-prefill from `git log -1 --format=%B`,
@@ -317,8 +317,8 @@ other providers.
 
 ## Config: default git workflow
 
-Config keys registered in `src/quilx.ts` (same mechanism as `editor.*`),
-read via `quilx.config.get`:
+Config keys registered in `src/zym.ts` (same mechanism as `editor.*`),
+read via `zym.config.get`:
 
 | Key                    | Type   | Default      | Description                                              |
 | ---------------------- | ------ | ------------ | -------------------------------------------------------- |
@@ -332,13 +332,13 @@ auto-fetch interval) can be added as we iterate.
 ## Shared concerns
 
 - **Errors & feedback**: every mutation reports through
-  `quilx.notifications` (success info / failure error). `AppWindow` also
+  `zym.notifications` (success info / failure error). `AppWindow` also
   offers `git:pull` when the branch falls behind upstream.
 - **Commands first, bindings central**: each component registers its
   handlers; key bindings live in `src/keymaps/default.ts` (vim bare keys
   while the relevant list/panel is focused).
 - **Theming**: reuse the semantic colors wired for diffs/sync
-  (`.quilx-diff-added/-removed`, the `theme.ui.success/error/warning`
+  (`.zym-diff-added/-removed`, the `theme.ui.success/error/warning`
   keys).
 - **Destructive ops** (discard, force) confirm first and never run
   implicitly.

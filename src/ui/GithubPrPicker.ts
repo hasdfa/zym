@@ -12,7 +12,7 @@
 import { Gtk } from '../gi.ts';
 import { openPicker, type PickerItem } from './Picker.ts';
 import { proseMarkup, escapeMarkup } from './proseMarkup.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { repoRoot } from '../git.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { Icons } from './icons.ts';
@@ -90,8 +90,8 @@ export function switchToGithubPrPicker(host: Overlay, cwd: string, git: GitRepo)
       // `git.checkoutPullRequest` runs `gh pr checkout` with busy + refresh
       // coordination (it can take seconds — switches branch, fetches forks).
       void git.checkoutPullRequest(pr.number).then((result) => {
-        if (result.isOk()) quilx.notifications.addSuccess(`Switched to PR #${pr.number}`);
-        else quilx.notifications.addError('Could not switch to pull request', { detail: result.unwrapErr().message.trim() });
+        if (result.isOk()) zym.notifications.addSuccess(`Switched to PR #${pr.number}`);
+        else zym.notifications.addError('Could not switch to pull request', { detail: result.unwrapErr().message.trim() });
       });
     },
   });

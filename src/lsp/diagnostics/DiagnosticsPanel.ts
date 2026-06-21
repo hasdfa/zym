@@ -11,7 +11,7 @@
  * The list widget is exposed via `root`.
  */
 import * as Path from 'node:path';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { LocationList } from '../../ui/LocationList.ts';
@@ -41,7 +41,7 @@ export class DiagnosticsPanel {
     this.root = this.list.root;
 
     this.rebuild();
-    this.subs.add(quilx.lsp.diagnostics.onDidUpdate(() => this.rebuild()));
+    this.subs.add(zym.lsp.diagnostics.onDidUpdate(() => this.rebuild()));
   }
 
   /** Move keyboard focus into the list. */
@@ -58,7 +58,7 @@ export class DiagnosticsPanel {
   // Rebuild the whole list from the store. Diagnostic volumes are modest, so a
   // full rebuild on each update is simpler than diffing and plenty fast.
   private rebuild(): void {
-    const store = quilx.lsp.diagnostics;
+    const store = zym.lsp.diagnostics;
     const items = [];
     for (const path of store.paths(this.accept).sort()) {
       for (const { diagnostic } of store.get(path)) {

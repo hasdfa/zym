@@ -42,7 +42,7 @@ test('bundled JSON grammar: loads, queries compile, highlights keys + values', a
   const src = [
     '// a comment',
     '{',
-    '  "name": "quilx",',
+    '  "name": "zym",',
     '  "count": 42,',
     '  "ok": true,',
     '  "nope": false,',

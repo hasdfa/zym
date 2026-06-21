@@ -1,4 +1,4 @@
-; Python highlights — authored for quilx's capture palette (see `theme.syntax`;
+; Python highlights — authored for zym's capture palette (see `theme.syntax`;
 ; the highlighter does longest-prefix fallback, so unknown captures degrade
 ; gracefully). Compiles against tree-sitter-python (bundled by tree-sitter-wasms).
 

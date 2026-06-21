@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource, Gdk } from '../../../gi.ts';
-import { quilx } from '../../../quilx.ts';
+import { zym } from '../../../zym.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { attachVim } from './index.ts';
 
@@ -21,12 +21,12 @@ function focusedEditor(text: string) {
 
   const win = new Gtk.Window();
   win.setChild(view);
-  quilx.window = win as never;
+  zym.window = win as never;
   win.present();
   view.grabFocus();
 
   const press = async (keyval: number) => {
-    quilx.keymaps.onWindowKeyPressEvent(keyval, 0, 0);
+    zym.keymaps.onWindowKeyPressEvent(keyval, 0, 0);
     await tick(); // let async ops (readChar for the register letter) settle
   };
   const type = async (chars: string) => {

@@ -1,6 +1,6 @@
 /*
- * Public plugin API — every type a quilx plugin needs.
- * External plugins: import type { Plugin, PluginContext } from 'quilx/plugin-api'
+ * Public plugin API — every type a zym plugin needs.
+ * External plugins: import type { Plugin, PluginContext } from 'zym/plugin-api'
  * Bundled plugins: import type { ... } from '../../src/plugin-api.ts'
  */
 export type { Plugin, PluginManifest, PluginContext, PluginLanguages } from './plugin/types.ts';

@@ -33,7 +33,7 @@ import { DiffCommentBox, buildCommentCard } from './DiffCommentBox.ts';
 import type { BlockDecorationSpec, BlockDecorationSet, BlockDecorationAnchor } from './TextEditor/BlockDecorationSet.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import * as Path from 'node:path';
 
 /** A review comment composed on a row/selection of the diff, to hand to the agent. */
@@ -321,9 +321,9 @@ export class ContinuousDiffView {
   }
 
   private applyStaging(mode: 'stage' | 'unstage'): void {
-    if (!this.repo) return void quilx.notifications.addTrace('Not in a git repository');
+    if (!this.repo) return void zym.notifications.addTrace('Not in a git repository');
     const ctx = this.caretFileContext();
-    if (!ctx) return void quilx.notifications.addTrace('No change under the cursor');
+    if (!ctx) return void zym.notifications.addTrace('No change under the cursor');
     const { path, headLines, indexLines, worktreeLines, worktreeRow } = ctx;
     const relPath = Path.relative(this.repo, path);
 
@@ -334,7 +334,7 @@ export class ContinuousDiffView {
       // the caret's worktree row indexes them directly.
       hunk = computeHunks(indexLines, worktreeLines).find((h) => hunkContainsBufferRow(h, worktreeRow));
       opts = { cached: true };
-      if (!hunk) return void quilx.notifications.addTrace('No unstaged change under the cursor');
+      if (!hunk) return void zym.notifications.addTrace('No unstaged change under the cursor');
     } else {
       // Staged hunks live in the HEAD→index diff (index coords); map the caret's worktree row into
       // index coords to find the one under the cursor (mirrors GitGutter).
@@ -342,11 +342,11 @@ export class ContinuousDiffView {
       const indexRow = wToIndex[Math.min(worktreeRow, wToIndex.length - 1)] ?? indexLines.length - 1;
       hunk = computeHunks(headLines, indexLines).find((h) => hunkContainsBufferRow(h, indexRow));
       opts = { cached: true, reverse: true };
-      if (!hunk) return void quilx.notifications.addTrace('No staged change under the cursor');
+      if (!hunk) return void zym.notifications.addTrace('No staged change under the cursor');
     }
 
     const done: GitDone = (ok, _out, err) => {
-      if (!ok) return void quilx.notifications.addError(`Failed to ${mode} hunk`, { detail: err.trim() });
+      if (!ok) return void zym.notifications.addError(`Failed to ${mode} hunk`, { detail: err.trim() });
       this.gitRepo?.refresh(); // let the Source Control panel pick up the new index state
       this.fetchIndexText([path], () => this.refreshMarkers()); // re-read the index → repaint markers
     };
@@ -663,7 +663,7 @@ export class ContinuousDiffView {
     if (existing) return this.editPending(existing);
 
     const target = this.buildCommentTarget();
-    if (!target) return void quilx.notifications.addTrace('No diff line under the cursor');
+    if (!target) return void zym.notifications.addTrace('No diff line under the cursor');
     const { anchorRow, cardAnchor, ...rest } = target;
 
     const box = new DiffCommentBox({
@@ -741,14 +741,14 @@ export class ContinuousDiffView {
   private setReviewMode(on: boolean): void {
     if (this.reviewMode === on) return;
     this.reviewMode = on;
-    quilx.notifications.addTrace(`Review mode ${on ? 'on' : 'off'}`);
+    zym.notifications.addTrace(`Review mode ${on ? 'on' : 'off'}`);
     this.emitReview();
   }
 
   /** Send all accumulated comments to the agent as one review message, then clear them. */
   submitReview(): void {
     if (!this.onSend) return;
-    if (this.pending.length === 0) return void quilx.notifications.addTrace('No review comments to send');
+    if (this.pending.length === 0) return void zym.notifications.addTrace('No review comments to send');
     this.onSend(formatDiffReview(this.pending.map((p) => p.comment), this.cwd ?? process.cwd()));
     this.pending.length = 0;
     this.installOverlays(this.dmb); // drop the inline cards
@@ -758,7 +758,7 @@ export class ContinuousDiffView {
   /** Drop the accumulated comment whose card sits on the cursor's line (to fix a mistake). */
   removeCommentAtCursor(): void {
     const p = this.pending.find((p) => this.anchorViewRow(p.anchor) === this.cursorRow());
-    if (!p) return void quilx.notifications.addTrace('No review comment on this line');
+    if (!p) return void zym.notifications.addTrace('No review comment on this line');
     this.removePending(p.id);
   }
 

@@ -1,5 +1,5 @@
 /*
- * Vim wiring — connects the vendored vim core to quilx's command/keymap system.
+ * Vim wiring — connects the vendored vim core to zym's command/keymap system.
  *
  * `attachVim` builds one VimState per editor and registers its commands against
  * that editor's view *instance* (so a keystroke dispatches to the right editor's
@@ -12,7 +12,7 @@
  * class name, and both the command name (`vim-mode-plus:<dasherized>`) and the
  * keymap entry are derived from it.
  */
-import { quilx } from '../../../quilx.ts';
+import { zym } from '../../../zym.ts';
 import type { CommandRef } from '../../../KeymapManager.ts';
 import type { EditorModel } from '../EditorModel.ts';
 import VimState from './vim-state.ts';
@@ -92,7 +92,7 @@ const MOTION_BINDINGS: Record<string, string> = {
   '+': 'MoveToFirstCharacterOfLineDown',
   'g _': 'MoveToLastNonblankCharacterOfLineAndDown',
   // `space` is intentionally left UNMAPPED. Upstream vim-mode-plus binds it to
-  // MoveRight, but quilx reserves `space` as the leader key, so the editor must
+  // MoveRight, but zym reserves `space` as the leader key, so the editor must
   // never consume it. Do not add a `space`/`' '` binding here (or anywhere in
   // this file's tables).
 };
@@ -529,7 +529,7 @@ function registerKeymapsOnce(): void {
   if (keymapsRegistered) return;
   keymapsRegistered = true;
 
-  quilx.keymaps.add('vim-mode-plus', {
+  zym.keymaps.add('vim-mode-plus', {
     // Mode-entry keys (i/a) are normal-only; v/V activate visual from normal too.
     // Surround sequences (ys/ds/cs) start here; their operator targets resolve
     // through the operator-pending text-object bindings below.
@@ -587,7 +587,7 @@ function registerKeymapsOnce(): void {
   // `j`/`k` → display-line motion in normal & visual mode, at a higher priority so
   // it overrides the buffer-line `j`/`k` bound above. Operator-pending is left out
   // on purpose, so `dj`/`dk` stay linewise.
-  quilx.keymaps.add(
+  zym.keymaps.add(
     'vim-mode-plus-display-lines',
     {
       '#TextEditor.normal-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
@@ -691,6 +691,6 @@ export function attachVim(editor: EditorModel): VimState {
   commands[commandName('MoveDown')] = (_event, _element, count) => runWithCount('MoveDown', count);
   commands[commandName('MoveUp')] = (_event, _element, count) => runWithCount('MoveUp', count);
 
-  quilx.commands.add(editor.view, commands);
+  zym.commands.add(editor.view, commands);
   return vimState;
 }

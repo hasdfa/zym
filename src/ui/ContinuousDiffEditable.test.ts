@@ -12,14 +12,14 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Gtk, Gdk, GLib } from '../gi.ts';
 import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
 import { ContinuousDiffView } from './ContinuousDiffView.ts';
 import { Range } from '../text/Range.ts';
 import { Point } from '../text/Point.ts';
 
 Gtk.init();
-quilx.lsp.configure({ enable: false });
+zym.lsp.configure({ enable: false });
 
 // Drive the GLib main loop (the ONLY loop the app runs) with BLOCKING iterations until `done()`
 // or a frame budget elapses — so the frame clock actually dispatches its ticks (a non-blocking
@@ -239,7 +239,7 @@ test('editable diff: `O` on an excerpt-first line re-diffs under the GLib loop (
 
   const win = new Gtk.Window({ defaultWidth: 600, defaultHeight: 400 });
   win.setChild(mbv.root);
-  quilx.window = win as never;
+  zym.window = win as never;
   win.present();
   mbv.editor.sourceView.grabFocus();
   pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
@@ -247,7 +247,7 @@ test('editable diff: `O` on an excerpt-first line re-diffs under the GLib loop (
 
   mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
   // `O` via the real key dispatch (vim insert-above-with-newline).
-  quilx.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
+  zym.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
   // Let the frame clock dispatch — the re-diff runs on a tick callback (it would NEVER run under a
   // microtask here). The caret leaves row 0 only once the re-diff reflows the view.
   pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 2);
@@ -272,7 +272,7 @@ test('editable diff: re-diff reconciles the header/gap bands in place (no teardo
 
   const win = new Gtk.Window({ defaultWidth: 600, defaultHeight: 400 });
   win.setChild(mbv.root);
-  quilx.window = win as never;
+  zym.window = win as never;
   win.present();
   mbv.editor.sourceView.grabFocus();
   pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
@@ -288,7 +288,7 @@ test('editable diff: re-diff reconciles the header/gap bands in place (no teardo
   for (const h of [header, gap]) { const r = h.remove.bind(h); h.remove = () => { removes++; return r(); }; }
 
   mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
-  quilx.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
+  zym.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
   pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 2);
 
   assert.equal(adds, 0, 'no bands added across the re-diff (reused in place)');
@@ -310,7 +310,7 @@ test('editable diff: the gutter bottom-aligns an excerpt-first row, top-aligns t
   const mbv = new ContinuousDiffView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
   const win = new Gtk.Window({ defaultWidth: 600, defaultHeight: 400 });
   win.setChild(mbv.root);
-  quilx.window = win as never;
+  zym.window = win as never;
   win.present();
   mbv.editor.sourceView.grabFocus();
   pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());

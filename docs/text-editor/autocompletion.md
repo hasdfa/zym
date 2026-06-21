@@ -103,7 +103,7 @@ All files under `src/ui/TextEditor/`.
 
 - **Wiring** — `TextEditor` builds the controller in its overlay
   (`buildEditorArea`) and registers both sources: `createBufferWordsSource`
-  over the buffer text, and `createLspCompletionSource(quilx.lsp, …)` over
+  over the buffer text, and `createLspCompletionSource(zym.lsp, …)` over
   the file's `lspDocument`. It passes a tree-sitter `highlightCode` callback
   for doc-pane code fences and dismisses on leave-insert. The LSP source
   no-ops for a fileless buffer or until a server is up.

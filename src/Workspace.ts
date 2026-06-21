@@ -1,6 +1,6 @@
 /*
  * Workspace — the app-wide entry point for opening files, exposed as
- * `quilx.workspace`. The concrete implementation lives in AppWindow (it owns the
+ * `zym.workspace`. The concrete implementation lives in AppWindow (it owns the
  * center panel tree); AppWindow installs it via `setOpener` on construction. This
  * indirection lets any component (lists, panels, future plugins) open a file
  * without threading an `onOpenFile` callback through its constructor.
@@ -93,7 +93,7 @@ export class Workspace {
    */
   openFile(path: string, options?: OpenFileOptions): void {
     if (!this.opener) {
-      console.warn('quilx.workspace.openFile called before an opener was registered');
+      console.warn('zym.workspace.openFile called before an opener was registered');
       return;
     }
     this.opener(path, options);

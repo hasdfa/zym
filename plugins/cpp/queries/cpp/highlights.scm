@@ -1,4 +1,4 @@
-; C++ highlights — authored for quilx's capture palette (see `theme.syntax`; the
+; C++ highlights — authored for zym's capture palette (see `theme.syntax`; the
 ; highlighter does longest-prefix fallback, so unknown captures degrade
 ; gracefully, and the theme's per-capture priority resolves overlaps). Compiles
 ; against tree-sitter-cpp (bundled by tree-sitter-wasms), a C superset, so the C

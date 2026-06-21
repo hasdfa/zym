@@ -37,8 +37,8 @@ let bare: string;
 let repo: GitRepo;
 
 before(async () => {
-  dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-'));
-  bare = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-bare-'));
+  dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-git-'));
+  bare = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-git-bare-'));
   execFileSync('git', ['init', '--bare'], { cwd: bare });
 
   G(dir, 'init', '-b', 'main');
@@ -104,7 +104,7 @@ test('getTrackedPaths lists tracked files only (absolute)', () => {
 });
 
 test('untracked insertions: text counted (incl. no trailing newline), binary → 0', async () => {
-  const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-u-'));
+  const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-git-u-'));
   try {
     execFileSync('git', ['init', '-b', 'main'], { cwd: d });
     Fs.writeFileSync(Path.join(d, 'multi.txt'), 'a\nb\nc'); // 3 lines, no trailing \n
@@ -120,7 +120,7 @@ test('untracked insertions: text counted (incl. no trailing newline), binary →
 });
 
 test('a coordinated mutation sets busy synchronously, clears + notifies + applies on completion', async () => {
-  const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-git-op-'));
+  const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-git-op-'));
   try {
     const g = (...args: string[]) => execFileSync('git', args, { cwd: d, encoding: 'utf8' });
     g('init', '-b', 'main');
@@ -160,7 +160,7 @@ test('a coordinated mutation sets busy synchronously, clears + notifies + applie
 });
 
 test('outside a repo: null/empty, never throws', () => {
-  const plain = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-nogit-'));
+  const plain = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-nogit-'));
   try {
     const r = openGitRepo(plain);
     assert.equal(r.getBranch(), null);

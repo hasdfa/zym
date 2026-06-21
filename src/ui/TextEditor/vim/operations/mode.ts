@@ -3,7 +3,7 @@
  *
  * `ActivateInsertMode` and `InsertAfter` come from the vendored
  * `operator-insert.js`. `ActivateNormalMode` lives in upstream's
- * `misc-command.js` (not vendored yet), so a minimal quilx version is provided
+ * `misc-command.js` (not vendored yet), so a minimal zym version is provided
  * here until that file lands; it self-registers on import.
  */
 import { Base } from '../base.ts'

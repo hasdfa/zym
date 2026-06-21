@@ -11,13 +11,13 @@
  *    one gutter markup string rather than this view owning its own renderer.
  *
  * Ranges arrive as LSP ranges (in the producing server's position encoding) and
- * are converted to quilx `Range`s via `EditorModel` + `position.lspToRange`.
+ * are converted to zym `Range`s via `EditorModel` + `position.lspToRange`.
  * Re-renders whenever the store updates for this editor's file.
  */
 import { type SourceView } from '../../gi.ts';
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { CompositeDisposable } from '../../util/eventKit.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { ICON_FONT_FAMILY } from '../../fonts.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
@@ -74,12 +74,12 @@ export class DiagnosticsView {
     this.annotations = new VirtualText(view);
 
     this.subscriptions.add(
-      quilx.lsp.diagnostics.onDidUpdate((path) => {
+      zym.lsp.diagnostics.onDidUpdate((path) => {
         if (path === this.getPath()) this.render();
       }),
     );
     // Re-render when the error-lens toggle changes.
-    this.subscriptions.add(quilx.config.observe('editor.errorLens', () => this.render()));
+    this.subscriptions.add(zym.config.observe('editor.errorLens', () => this.render()));
   }
 
   /** Re-apply squiggles + gutter glyphs + error-lens annotations for the current
@@ -90,7 +90,7 @@ export class DiagnosticsView {
     const underlines: Underline[] = [];
     // line → the worst diagnostic to trail (message + severity) + how many share the line.
     const lensByLine = new Map<number, { message: string; severity: number; count: number }>();
-    const entries = path ? quilx.lsp.diagnostics.get(path) : [];
+    const entries = path ? zym.lsp.diagnostics.get(path) : [];
     // LSP ranges are in MODEL (file) coordinates; encode columns off the MODEL line,
     // then translate to VIEW space — folds collapse text so view lines/cols diverge
     // from the model's (a diagnostic inside a fold maps onto its placeholder line).
@@ -118,7 +118,7 @@ export class DiagnosticsView {
     this.gutter.redrawGutter();
 
     // Error lens: the worst message per line, trailing the line (`+N` when several).
-    if (quilx.config.get('editor.errorLens') !== false) {
+    if (zym.config.get('editor.errorLens') !== false) {
       this.annotations.setAnnotations(
         [...lensByLine.entries()].map(([line, lens]) => ({
           line,

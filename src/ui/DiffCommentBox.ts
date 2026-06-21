@@ -11,7 +11,7 @@
  *   - `escape`/`q` (normal mode) cancels → `onCancel()`.
  */
 import { Gtk } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { TextEditor, createInput } from './TextEditor/TextEditor.ts';
 
@@ -52,7 +52,7 @@ let keymapRegistered = false;
 function registerKeymapOnce(): void {
   if (keymapRegistered) return;
   keymapRegistered = true;
-  quilx.keymaps.add('diff-comment', {
+  zym.keymaps.add('diff-comment', {
     '#DiffCommentInput #TextEditor': {
       enter: 'diff-comment:submit',
       'alt-enter': 'diff-comment:newline',
@@ -135,7 +135,7 @@ export class DiffCommentBox {
     this.root.append(this.input.root);
     this.root.append(footer);
 
-    this.commands = quilx.commands.add(this.root, {
+    this.commands = zym.commands.add(this.root, {
       'diff-comment:submit': {
         didDispatch: () => options.onSubmit(this.input.getText()),
         description: 'Send / add the diff comment',

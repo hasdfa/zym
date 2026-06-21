@@ -67,7 +67,7 @@ pair, and the per-paragraph `PangoLayout`.
 Build multi-cursor and block-select on top, the way GNOME Builder does
 (`ide-cursor.c`): a list of virtual cursors, each its own mark pair, extra
 carets drawn over the text, every edit replayed per cursor. Rectangular
-selection is a column of virtual cursors. In quilx this lands on the existing
+selection is a column of virtual cursors. In zym this lands on the existing
 seam: `EditorModel.getCursors()`/`getSelections()` are N-element over
 `MarkerLayer`, and the vim layer (which iterates those arrays) gets
 multi-cursor largely for free. Pros: keeps the entire built stack (vim,

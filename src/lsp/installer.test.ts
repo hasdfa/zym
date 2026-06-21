@@ -7,7 +7,7 @@ test('managed dirs nest the server under the install root, bins in node_modules/
   const root = managedRoot();
   assert.equal(managedServerDir('eslint'), Path.join(root, 'eslint'));
   assert.equal(managedBinDir('eslint'), Path.join(root, 'eslint', 'node_modules', '.bin'));
-  assert.ok(root.endsWith(Path.join('quilx', 'lsp')));
+  assert.ok(root.endsWith(Path.join('zym', 'lsp')));
 });
 
 test('npm install invocation: single package, with version, and multiple packages', () => {

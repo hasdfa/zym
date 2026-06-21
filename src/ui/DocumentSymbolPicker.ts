@@ -16,7 +16,7 @@ import { Gtk } from '../gi.ts';
 import { openLocationPicker } from './LocationPicker.ts';
 import { escapeMarkup, type PickerItem } from './Picker.ts';
 import { symbolKindGlyph, Icons } from './icons.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { LspDocument, DocumentSymbolResult } from '../lsp/LspManager.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -29,9 +29,9 @@ export async function openDocumentSymbolPicker(
   const path = doc.getPath();
   if (!path) return;
 
-  const symbols = await quilx.lsp.documentSymbols(doc);
+  const symbols = await zym.lsp.documentSymbols(doc);
   if (symbols.length === 0) {
-    quilx.notifications.addInfo('No symbols in this document');
+    zym.notifications.addInfo('No symbols in this document');
     return;
   }
 

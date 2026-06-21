@@ -1,10 +1,10 @@
 {
-  "name": "@quilx/plugin-color-preview",
+  "name": "@zym/plugin-color-preview",
   "version": "0.1.0",
-  "description": "Inline color preview for quilx",
+  "description": "Inline color preview for zym",
   "type": "module",
   "main": "./index.ts",
   "peerDependencies": {
-    "quilx": "^0.1.0"
+    "zym": "^0.1.0"
   }
 }

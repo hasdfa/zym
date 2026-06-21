@@ -37,7 +37,7 @@ test('injection: a fenced ```ts block in Markdown is painted by the TypeScript g
     await preloadGrammars();
 
     const md = '# Title\n\nSome **bold** and `code`.\n\n```ts\nconst answer = 42\n```\n';
-    const tmp = Path.join(Os.tmpdir(), `quilx-inj-${process.pid}.md`);
+    const tmp = Path.join(Os.tmpdir(), `zym-inj-${process.pid}.md`);
     Fs.writeFileSync(tmp, md);
 
     const buffer = new GtkSource.Buffer();
@@ -104,7 +104,7 @@ test('injection: HTML-block markdown highlights (grammar libc shims present)',
       '',
       'A **bold** word after the block.',
     ].join('\n') + '\n';
-    const tmp = Path.join(Os.tmpdir(), `quilx-htmlblock-${process.pid}.md`);
+    const tmp = Path.join(Os.tmpdir(), `zym-htmlblock-${process.pid}.md`);
     Fs.writeFileSync(tmp, md);
 
     const buffer = new GtkSource.Buffer();

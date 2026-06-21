@@ -1,6 +1,6 @@
 # Lifecycle & disposal
 
-How quilx tears things down — load-bearing, not hygiene. A missed teardown
+How zym tears things down — load-bearing, not hygiene. A missed teardown
 pins a whole subsystem (or a `TextEditor` per file ever opened) alive. Read
 this before adding a component that owns a GObject, handler, timer, or child.
 

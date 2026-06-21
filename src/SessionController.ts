@@ -7,13 +7,13 @@
  * callbacks. That split keeps all GTK widget wiring in AppWindow and all the
  * session bookkeeping here, so the contended window class stays thin.
  *
- * Storage and format live in `quilx.session` (SessionManager); this is the layer
+ * Storage and format live in `zym.session` (SessionManager); this is the layer
  * that walks the live workbench into a `SessionState` and back. Agents are
  * recorded but not relaunched on restore (an opt-in relaunch is a later phase);
  * files whose path no longer exists are skipped and surfaced as one notification.
  */
 import * as Fs from 'node:fs';
-import { quilx } from './quilx.ts';
+import { zym } from './zym.ts';
 import { SESSION_VERSION, type SessionState, type TabState, type WorkspaceState } from './SessionManager.ts';
 import type { PanelGroup, RestoredChild } from './ui/PanelGroup.ts';
 import type { FileTree } from './ui/FileTree.ts';
@@ -98,8 +98,8 @@ export class SessionController {
   saveNow(): void {
     try {
       const state = this.serialize();
-      quilx.session.save(state);
-      quilx.session.writeBuffers(state, this.opts.collectUnsaved?.() ?? []);
+      zym.session.save(state);
+      zym.session.writeBuffers(state, this.opts.collectUnsaved?.() ?? []);
     } catch (error) {
       console.warn(`[session] save failed: ${(error as Error).message}`);
     }
@@ -109,9 +109,9 @@ export class SessionController {
 
   /** Schedule a debounced autosave, if `session.autosave` is enabled. */
   scheduleAutosave(): void {
-    if (quilx.config.get('session.autosave') !== true) return;
+    if (zym.config.get('session.autosave') !== true) return;
     if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
-    const ms = Math.max(0, Number(quilx.config.get('session.autosaveDebounceMs') ?? 1000));
+    const ms = Math.max(0, Number(zym.config.get('session.autosaveDebounceMs') ?? 1000));
     this.autosaveTimer = setTimeout(() => {
       this.autosaveTimer = null;
       this.saveNow();
@@ -124,7 +124,7 @@ export class SessionController {
       clearTimeout(this.autosaveTimer);
       this.autosaveTimer = null;
     }
-    if (quilx.config.get('session.autosave') === true) this.saveNow();
+    if (zym.config.get('session.autosave') === true) this.saveNow();
   }
 
   // --- Restore ---------------------------------------------------------------
@@ -135,7 +135,7 @@ export class SessionController {
    * are skipped and reported; agents are recorded-only (not relaunched yet).
    */
   restore(): boolean {
-    const state = quilx.session.load(this.opts.root);
+    const state = zym.session.load(this.opts.root);
     if (!state) return false;
     // workspaces[0] is the primary (user) root; the rest are agent workbenches.
     const user = state.workspaces[0];
@@ -158,7 +158,7 @@ export class SessionController {
 
     if (this.missing.length > 0) {
       const n = this.missing.length;
-      quilx.notifications.addWarning(`${n} file${n === 1 ? '' : 's'} could not be reopened`, {
+      zym.notifications.addWarning(`${n} file${n === 1 ? '' : 's'} could not be reopened`, {
         detail: 'They no longer exist on disk and were skipped while restoring the session.',
       });
     }
@@ -167,13 +167,13 @@ export class SessionController {
 
   /** Should a bare launch (no explicit file arg) restore a saved session? */
   shouldRestoreOnLaunch(): boolean {
-    return quilx.config.get('session.restoreOnLaunch') === true && quilx.session.load(this.opts.root) !== null;
+    return zym.config.get('session.restoreOnLaunch') === true && zym.session.load(this.opts.root) !== null;
   }
 
   /** The saved window geometry for this root, without a full restore — so the host
    *  can size the window before mapping it (GTK4 ignores resize once shown). */
   loadWindow(): SessionState['window'] {
-    return quilx.session.load(this.opts.root)?.window;
+    return zym.session.load(this.opts.root)?.window;
   }
 
   // Rebuild one tab. Files that vanished are skipped (and counted); terminals are
@@ -188,7 +188,7 @@ export class SessionController {
         // Restore unsaved edits from the buffer cache when this tab was dirty.
         const unsavedText =
           tab.dirty && this.restoringState
-            ? quilx.session.readBuffer(this.restoringState, tab.path) ?? undefined
+            ? zym.session.readBuffer(this.restoringState, tab.path) ?? undefined
             : undefined;
         return this.opts.createEditorTab(tab.path, { cursor: tab.cursor, scroll: tab.scroll, unsavedText });
       }

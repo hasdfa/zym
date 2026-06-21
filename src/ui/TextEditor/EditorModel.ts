@@ -6,12 +6,12 @@
  * from vim-mode-plus) instead thinks in `Point`s and `Range`s and asks the
  * editor high-level questions ("what's the text on row 4?", "clip this position
  * into the buffer"). EditorModel is that translation layer: a first-class,
- * idiomatic API expressed in quilx `Point`/`Range`, backed by the live buffer.
+ * idiomatic API expressed in zym `Point`/`Range`, backed by the live buffer.
  *
  * Positions are zero-based `(row, column)` where column is a **codepoint** offset
  * within the line (matching `GtkTextIter` line offsets, and the convention
  * `lsp/position.ts` converts to/from). This is the single column convention for
- * quilx Points — anything mapping a JS string offset (which is UTF-16) to a Point
+ * zym Points — anything mapping a JS string offset (which is UTF-16) to a Point
  * must count codepoints, not code units, so surrogate pairs (non-BMP, e.g. emoji)
  * count as one column. Cursors/selections, mutation, scanning, and markers build
  * on the `Point`↔`TextIter` bridge established here.

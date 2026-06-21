@@ -1,5 +1,5 @@
 // Vendored from xedel/vim-mode-plus's lib/register-manager.js — ESM conversion.
-// `atom.clipboard` is replaced by quilx's GTK-backed `clipboard` (see
+// `atom.clipboard` is replaced by zym's GTK-backed `clipboard` (see
 // ./clipboard.ts); register logic is otherwise unchanged.
 import { normalizeIndent } from './utils.ts'
 import clipboard, { primaryClipboard } from './clipboard.ts'

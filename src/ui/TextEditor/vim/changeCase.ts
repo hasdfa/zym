@@ -3,7 +3,7 @@
  * operator-transform-string's `ChangeCase` operators reach for.
  *
  * Upstream depends on the full `change-case` library (camelCase, snakeCase, …);
- * quilx only wires the case operators that don't need it — gU (upperCase), gu
+ * zym only wires the case operators that don't need it — gU (upperCase), gu
  * (lowerCase), g~ (swapCase) — so we provide just those plus the `lowerCaseFirst`
  * helper `ChangeCase.getNewText` uses to derive the function name from the class
  * name. The fancier transforms can adopt the real package if they're ever bound.

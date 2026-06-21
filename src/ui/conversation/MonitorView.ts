@@ -18,7 +18,7 @@ import type { PageNav } from './SubagentView.ts';
 type Widget = InstanceType<typeof Gtk.Widget>;
 
 export class MonitorView {
-  readonly panel = new StickyListPanel('Monitors', 'quilx-conversation-subagents');
+  readonly panel = new StickyListPanel('Monitors', 'zym-conversation-subagents');
   private readonly ids = new Set<string>();
   private readonly session: Pick<SdkSession, 'getMonitor' | 'onMonitorUpdate' | 'stopTask'>;
   private readonly nav: PageNav;
@@ -33,7 +33,7 @@ export class MonitorView {
   spawn(id: string, description: string): Widget {
     this.ids.add(id);
     const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    row.addCssClass('quilx-conversation-row');
+    row.addCssClass('zym-conversation-row');
     row.append(this.openButton(id, description));
     this.render();
     return row;
@@ -49,7 +49,7 @@ export class MonitorView {
     setMarkupSafe(label, `${iconSpan(NERDFONT.TOOL.MONITOR, color)}  <b>Monitor</b>  ${escapeMarkup(description)}`, `Monitor ${description}`);
     const button = new Gtk.Button({ halign: Gtk.Align.START, hexpand: true });
     button.addCssClass('flat');
-    button.addCssClass('quilx-conversation-subagent-link');
+    button.addCssClass('zym-conversation-subagent-link');
     button.setChild(label);
     button.on('clicked', () => this.pushPage(id));
     return button;
@@ -79,7 +79,7 @@ export class MonitorView {
   // Inspect page: status + captured output (read from the monitor's output file).
   private pushPage(id: string): void {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-    box.addCssClass('quilx-conversation-transcript');
+    box.addCssClass('zym-conversation-transcript');
     const scroller = new Gtk.ScrolledWindow({ vexpand: true });
     scroller.setChild(box);
 
@@ -93,7 +93,7 @@ export class MonitorView {
       let output = '';
       if (m.outputFile) { try { output = Fs.readFileSync(m.outputFile, 'utf8'); } catch { /* not readable yet */ } }
       const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: output.trim() ? truncateLines(output.trim(), 200, 8000) : 'No output captured yet.' });
-      body.addCssClass('quilx-conversation-result');
+      body.addCssClass('zym-conversation-result');
       box.append(body);
     };
     render();
@@ -105,11 +105,11 @@ export class MonitorView {
     back.addCssClass('flat');
     back.on('clicked', () => this.nav.pop());
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    header.addCssClass('quilx-conversation-subagent-header');
+    header.addCssClass('zym-conversation-subagent-header');
     header.append(back);
     header.append(new Gtk.Label({ label: title }));
     const page = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    page.addCssClass('quilx-conversation');
+    page.addCssClass('zym-conversation');
     page.append(header);
     page.append(scroller);
 

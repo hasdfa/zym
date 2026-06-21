@@ -1,6 +1,6 @@
 # Vim mode
 
-Custom modal editing ported from Atom's vim-mode-plus, driven by quilx's
+Custom modal editing ported from Atom's vim-mode-plus, driven by zym's
 `CommandManager`/`KeymapManager` over an `EditorModel` shim (see
 `src/ui/TextEditor/vim/`). It replaces `GtkSource.VimIMContext` and is the
 default (no flag).

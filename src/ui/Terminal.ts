@@ -19,7 +19,7 @@ import {
 } from '../gi.ts';
 import { fonts } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { Key } from '../keymap/Key.ts';
 import type { TabState } from '../SessionManager.ts';
 
@@ -36,7 +36,7 @@ export type TerminalMode = 'normal' | 'insert';
 // the mode is visible (the keyboard is acting on the app, not the child). `:focus`
 // (not `-within`) because normal mode focuses the container itself, not the Vte.
 addStyles(`
-  .quilx-terminal.terminal-normal:focus {
+  .zym-terminal.terminal-normal:focus {
     outline: 1px solid var(--t-ui-surface-selected);
     outline-offset: -1px;
   }
@@ -95,12 +95,12 @@ export class Terminal {
   // --- Terminal widget -------------------------------------------------------
 
   // The focusable container hosting the Vte. It carries the selector identity
-  // (name + `.quilx-terminal`) and the mode classes, and is what the keymap
+  // (name + `.zym-terminal`) and the mode classes, and is what the keymap
   // manager / window focus see (the Vte is its only child).
   private createContainer(terminal: VteTerminal): InstanceType<typeof Gtk.Box> {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     box.setName('Terminal'); // selector identity for command/keymap rules
-    box.addCssClass('quilx-terminal'); // shared selector for both Terminal & AgentTerminal
+    box.addCssClass('zym-terminal'); // shared selector for both Terminal & AgentTerminal
     box.setFocusable(true); // so normal mode can hold focus instead of the Vte
     box.append(terminal);
     return box;
@@ -248,7 +248,7 @@ export class Terminal {
   // Wire the modal behaviour: register the mode commands, apply the initial mode,
   // and keep the mode in lockstep with where focus actually sits.
   private setupModalInput(): void {
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'terminal:insert-mode': { didDispatch: () => this.setMode('insert'), description: 'Terminal: enter insert mode (type into the child)' },
       'terminal:normal-mode': { didDispatch: () => this.setMode('normal'), description: 'Terminal: enter normal mode (app shortcuts)' },
       'terminal:send-escape': { didDispatch: () => this.feedChild('\x1b'), description: 'Terminal: send Escape to the child' },
@@ -262,7 +262,7 @@ export class Terminal {
     // back instead of sending it. Deliver it to the child now — but only while
     // we're the focused terminal in insert mode, so normal-mode keys stay with
     // the app and a background terminal never steals the keystroke.
-    const fallthrough = quilx.keymaps.onFallthrough((keys) => this.handleFallthrough(keys));
+    const fallthrough = zym.keymaps.onFallthrough((keys) => this.handleFallthrough(keys));
     this.terminal.on('destroy', () => fallthrough.dispose());
 
     // Whenever the Vte actually holds the keyboard, we are in insert mode — keeping

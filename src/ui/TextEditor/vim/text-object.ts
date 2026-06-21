@@ -624,7 +624,7 @@ function unionConjoinedFoldRange (foldRange: Range, foldRanges: Range[], {useTre
 class Function extends TextObject {
   wise: Wise = "linewise"
 
-  // quilx: function detection comes from the tree-sitter tree (SyntaxController),
+  // zym: function detection comes from the tree-sitter tree (SyntaxController),
   // surfaced via EditorModel.getFunctionRange — not Atom's languageMode/scope APIs.
   // `af` is the whole definition; `if` is the body statements.
   getRange (selection: Selection): Range | null | undefined {
@@ -744,7 +744,7 @@ class Entire extends TextObject {
 }
 
 // `is` / `as` — sentence. (vim-mode-plus ships only the sentence *motion*; this
-// is a quilx addition.) A sentence ends at `.`/`!`/`?` (plus any closing
+// is a zym addition.) A sentence ends at `.`/`!`/`?` (plus any closing
 // brackets/quotes) followed by whitespace, or at a blank line / buffer edge.
 // `is` runs to the terminating punctuation; `as` includes the trailing gap.
 class Sentence extends TextObject {

@@ -17,7 +17,7 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Gdk, GdkPixbuf, Gtk } from '../../src/gi.ts';
-import { quilx } from '../../src/quilx.ts';
+import { zym } from '../../src/zym.ts';
 import { Disposable } from '../../src/util/eventKit.ts';
 import type { PluginContext } from '../../src/plugin/types.ts';
 import type { TextEditor } from '../../src/ui/TextEditor/index.ts';
@@ -126,7 +126,7 @@ export function activateImagePreview(ctx: PluginContext, markdownFileTypes: read
     let timer: NodeJS.Timeout | null = null;
 
     const refresh = (): void => {
-      const enabled = quilx.config.get('markdown.imagePreview') !== false;
+      const enabled = zym.config.get('markdown.imagePreview') !== false;
       const specs: BlockDecorationSpec[] = [];
       if (enabled) {
         const ordinals = new Map<string, number>();
@@ -153,7 +153,7 @@ export function activateImagePreview(ctx: PluginContext, markdownFileTypes: read
     };
 
     const sub = editor.model.onDidChangeText(schedule);
-    const configSub = quilx.config.observe('markdown.imagePreview', () => refresh());
+    const configSub = zym.config.observe('markdown.imagePreview', () => refresh());
     refresh(); // initial paint of the loaded content
 
     return new Disposable(() => {

@@ -19,7 +19,7 @@ const SAMPLE = Array.from({ length: 30 }, (_, i) => `const line${i} = ${i} + som
 const DEF_FILE = `export function someValue(n: number): number {\n  const doubled = n * 2;\n  if (doubled > 10) return doubled - 1;\n  return doubled;\n}\n`;
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'dev.quilx.peekdemo', flags: Gio.ApplicationFlags.NON_UNIQUE });
+const app = new Adw.Application({ applicationId: 'dev.zym.peekdemo', flags: Gio.ApplicationFlags.NON_UNIQUE });
 
 let editor: TextEditor;
 

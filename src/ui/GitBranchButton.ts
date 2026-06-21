@@ -34,7 +34,7 @@ const COLOR_DANGER = theme.ui.status.error;
 
 // The conflict icon is error-colored.
 addStyles(`
-  .quilx-conflict { color: var(--t-ui-status-error); }
+  .zym-conflict { color: var(--t-ui-status-error); }
 `);
 
 // A "+N"/"-M"/"↑N"/"↓M" count, as an inline markup span: a smaller, coloured run
@@ -84,7 +84,7 @@ export class GitBranchButton {
     this.root = new Gtk.Button();
     this.root.setName('GitBranchButton'); // selector identity for command/keymap rules
     this.root.addCssClass('flat');
-    this.root.addCssClass('quilx-branch');
+    this.root.addCssClass('zym-branch');
     this.root.setChild(box);
     this.root.setTooltipText('Switch branch');
     this.root.setVisible(false); // shown once a branch is resolved
@@ -116,8 +116,8 @@ export class GitBranchButton {
     // of the branch glyph, and changes the tooltip.
     const conflicts = this.repo.hasConflicts();
     this.icon.setText(conflicts ? CONFLICT_GLYPH : BRANCH_GLYPH);
-    if (conflicts) this.icon.addCssClass('quilx-conflict');
-    else this.icon.removeCssClass('quilx-conflict');
+    if (conflicts) this.icon.addCssClass('zym-conflict');
+    else this.icon.removeCssClass('zym-conflict');
     this.root.setTooltipText(conflicts ? 'Merge conflicts — resolve them' : 'Switch branch');
 
     // Swap the branch icon for a spinner while a git operation is running.

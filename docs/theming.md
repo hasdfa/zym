@@ -1,6 +1,6 @@
 # Theming
 
-How a quilx theme is authored, loaded, and consumed. The format is **ours**
+How a zym theme is authored, loaded, and consumed. The format is **ours**
 — a schema we own (`src/theme/theme.schema.json`). The loader
 (`src/theme/theme.ts`) is the single boundary: it reads a theme file and
 resolves it into the internal `Theme` shape every consumer reads via
@@ -21,12 +21,12 @@ sheets) lives in [styling.md](styling.md) → Colors.
 ## The file format
 
 One theme per file, `src/theme/<name>.json`, loaded by name
-(`loadTheme('quilx')`). Shape:
+(`loadTheme('zym')`). Shape:
 
 ```jsonc
 {
   "$schema": "./theme.schema.json",
-  "name": "quilx",
+  "name": "zym",
   "appearance": "dark",          // light | dark
   "ui": {                        // concern-grouped nested colors (mirrors ThemeUi 1:1)
     "editor": { "foreground": "#f1f1f1", "background": "#2d2d2d", "lineNumber": "#888888" },
@@ -134,7 +134,7 @@ part of owning the theme format.
 
 ## Future work
 
-- **A light theme** — author `quilx-light.json` (`appearance: "light"`) to
+- **A light theme** — author `zym-light.json` (`appearance: "light"`) to
   exercise the lighten path and unblock OS light/dark following (see
   [system-integration.md](system-integration.md) → "Theme follows
   appearance").

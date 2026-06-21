@@ -108,7 +108,7 @@ drop-in degrades gracefully.
 ### Queries
 
 `queries/markdown*/highlights.scm` are adapted from nvim-treesitter
-(Apache-2.0) to quilx's capture-name palette (`@keyword`/`@string`/`@type`/…),
+(Apache-2.0) to zym's capture-name palette (`@keyword`/`@string`/`@type`/…),
 so the structural tokens get theme colors. The **injections** are declared in
 TS on the `GrammarDef` (not an `injections.scm`), so only `highlights.scm` is
 needed per grammar.

@@ -169,11 +169,11 @@ class ActivateInsertModeBase extends Operator {
       }
       this.vimState.register.set('.', {text: textByUserInput}) // Last inserted text
 
-      // quilx: there is no native multi-cursor, so the just-typed text only
+      // zym: there is no native multi-cursor, so the just-typed text only
       // reached the primary selection. Replicate it to the block's other cursors
       // — this is plain Vim's blockwise-insert behavior, which mirrors the typed
       // text to every row on leaving insert mode. Then collapse to one cursor,
-      // since quilx doesn't keep persistent multi-cursors.
+      // since zym doesn't keep persistent multi-cursors.
       if (!wasReplicating && textByUserInput && this.editor.getSelections().length > 1) {
         for (const selection of this.editor.getSelections()) {
           if (selection.isPrimary) continue
@@ -215,7 +215,7 @@ class ActivateInsertMode extends ActivateInsertModeBase {
 class ActivateReplaceMode extends ActivateInsertMode {
   // Activates insert mode with the `replace` submode (the execute path calls
   // `activateMode('insert', 'replace')`); the host (TextEditor) implements the
-  // overwrite-on-type and backspace-restore against that submode, since quilx
+  // overwrite-on-type and backspace-restore against that submode, since zym
   // routes insert-mode keystrokes through GtkSourceView, not Atom's text events.
 
   repeatInsert (selection: Selection, text: string): void {

@@ -1,4 +1,4 @@
-; HTML — quilx palette (Zed capture names). Only the markup structure is styled
+; HTML — zym palette (Zed capture names). Only the markup structure is styled
 ; here; the contents of <script> and <style> are re-highlit by the injected
 ; JavaScript / CSS grammars (see the plugin's injections).
 

@@ -17,7 +17,7 @@ let dir: string;
 let wt: string;
 
 before(() => {
-  dir = Fs.realpathSync(Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-wt-')));
+  dir = Fs.realpathSync(Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-wt-')));
   G(dir, 'init', '-b', 'main');
   G(dir, 'config', 'user.email', 'test@example.com');
   G(dir, 'config', 'user.name', 'Test');
@@ -61,7 +61,7 @@ test('worktreeInfo flags a linked worktree and its branch', () => {
 });
 
 test('listWorktrees is empty outside a repository', () => {
-  const tmp = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-norepo-'));
+  const tmp = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-norepo-'));
   try {
     assert.deepEqual(listWorktrees(tmp), []);
   } finally {

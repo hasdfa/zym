@@ -18,10 +18,10 @@ Core pieces:
   that is also a complete binding, e.g. `y` vs `y s`), CAPTURE-phase
   controller on the window.
 - **`src/util/selectors.ts`** — selectors match the widget's GTK name
-  (`getName()`): `#Component` (a quilx component), a type tag (`GtkText`),
+  (`getName()`): `#Component` (a zym component), a type tag (`GtkText`),
   and `.class` / `:not(.class)` fragments.
 - **`src/keymaps/default.ts`** + **`load.ts`** — the built-in keymap as
-  data, plus an optional user `~/.config/quilx/keymap.json` layered at
+  data, plus an optional user `~/.config/zym/keymap.json` layered at
   higher priority, validated at load.
 - **`src/ui/CommandPicker.ts`** — the command palette (fuzzy over name +
   description, muted `prefix:`, right-aligned description and primary

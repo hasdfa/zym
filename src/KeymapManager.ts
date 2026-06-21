@@ -5,10 +5,10 @@
  * application window receives every key press; keystrokes are normalized to
  * `Key`s and matched (supporting multi-key sequences like "ctrl-k ctrl-s")
  * against the keymaps registered for the focused widget and its ancestors. A
- * full match is dispatched through `quilx.commands`; a partial match queues the
+ * full match is dispatched through `zym.commands`; a partial match queues the
  * keystrokes and swallows the event until the sequence completes or breaks.
  *
- * Adaptation for quilx: references the `quilx` global (window + commands)
+ * Adaptation for zym: references the `zym` global (window + commands)
  * instead of xedel's `xedel` global; otherwise behavior is preserved.
  */
 import { Disposable } from './util/eventKit.ts';
@@ -17,7 +17,7 @@ import { unreachable } from './util/assert.ts';
 import { parseSelector, matchesRule, elementMatchKeys, type Rule } from './util/selectors.ts';
 import { getActiveElements } from './util/getActiveElements.ts';
 import { GLib, Gtk } from './gi.ts';
-import { quilx } from './quilx.ts';
+import { zym } from './zym.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
@@ -176,7 +176,7 @@ export class KeymapManager {
     this.controller = new Gtk.EventControllerKey();
     this.controller.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     this.controller.on('key-pressed', this.onWindowKeyPressEvent);
-    quilx.window!.addController(this.controller);
+    zym.window!.addController(this.controller);
   }
 
   addListener(listener: Listener): Disposable {
@@ -606,11 +606,11 @@ export class KeymapManager {
 
       let didDispatch: boolean;
       if (typeof effect === 'function') {
-        didDispatch = quilx.commands.dispatch(element, effect);
+        didDispatch = zym.commands.dispatch(element, effect);
       } else if (typeof effect === 'string') {
-        didDispatch = quilx.commands.dispatchAlongChain(elements, effect);
+        didDispatch = zym.commands.dispatchAlongChain(elements, effect);
       } else {
-        didDispatch = quilx.commands.dispatchAlongChain(elements, effect.command, ...(effect.args ?? []));
+        didDispatch = zym.commands.dispatchAlongChain(elements, effect.command, ...(effect.args ?? []));
       }
       if (!didDispatch)
         continue;

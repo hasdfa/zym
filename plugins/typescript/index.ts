@@ -1,5 +1,5 @@
 /*
- * The TypeScript plugin — quilx's first plugin, and the reference for the
+ * The TypeScript plugin — zym's first plugin, and the reference for the
  * contribution model. It bundles everything that makes the TS/JS family a
  * first-class language: detection, tree-sitter grammars (vendored under
  * `queries/`), and the LSP server candidates (flow / tsserver / deno / eslint)

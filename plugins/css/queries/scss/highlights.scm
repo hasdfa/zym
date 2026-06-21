@@ -1,4 +1,4 @@
-; SCSS highlights — authored for quilx's capture palette. A CSS superset: adds
+; SCSS highlights — authored for zym's capture palette. A CSS superset: adds
 ; `$variables`, `#{interpolation}`, `%placeholders`, and the SCSS at-rules
 ; (`@mixin`/`@include`/`@function`/`@if`/`@each`/`@use`/…). Compiles against the
 ; vendored tree-sitter-scss grammar (./grammars/tree-sitter-scss.wasm).

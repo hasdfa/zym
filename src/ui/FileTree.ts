@@ -12,7 +12,7 @@ import { Gio, GObject, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { Disposable } from '../util/eventKit.ts';
 import type { GitRepo, FileGitStatus } from '../git.ts';
 import { fileIconGlyph } from './fileIcons.ts';
@@ -20,7 +20,7 @@ import { fileIconGlyph } from './fileIcons.ts';
 // The file-tree filters are global config (so they can be set in config.json and
 // observed live). Defaults: both on — hide dotfiles and untracked files. The
 // `.`/`,` keys toggle these values; each FileTree observes them (see ctor).
-const treeConfig = quilx.config.scope('fileTree').register({
+const treeConfig = zym.config.scope('fileTree').register({
   hideHidden: {
     type: 'boolean',
     default: true,
@@ -453,7 +453,7 @@ export class FileTree {
   // --- Navigation ----------------------------------------------------------
 
   private registerCommands(): void {
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'core:down': { didDispatch: () => this.move(+1), description: 'Move down' },
       'core:up': { didDispatch: () => this.move(-1), description: 'Move up' },
       'core:top': { didDispatch: () => this.select(0), description: 'Go to the top' }, // `g g`

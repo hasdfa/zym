@@ -2,7 +2,7 @@
  * CommandManager — registers named commands against widgets (by selector or by
  * instance) and dispatches them to the right widget along the focus chain.
  *
- * Ported from xedel's commands-manager.js. Adaptations for quilx:
+ * Ported from xedel's commands-manager.js. Adaptations for zym:
  *   - `getSource` is reduced to a monotonic counter: the original walked the
  *     stack to derive a "file:line" source id, but a `finally` block always
  *     overwrote it with the counter, so the stack walk was dead code;

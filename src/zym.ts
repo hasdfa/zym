@@ -1,15 +1,15 @@
 /*
- * quilx — the global application registry (analog to Atom's `atom` /
+ * zym — the global application registry (analog to Atom's `atom` /
  * xedel's `xedel`).
  *
  * It holds the singletons the command/keymap subsystem reaches for: the command
  * manager, the keymap manager, and the active application window. The managers
  * and their helpers (`getActiveElements`, `KeymapManager`) import this singleton
- * directly; it is also attached to `globalThis.quilx` so it can be inspected
+ * directly; it is also attached to `globalThis.zym` so it can be inspected
  * from the console and to mirror the Atom-style global.
  *
- * The window is wired in once by `AppWindow` (`quilx.window = …`) after it is
- * constructed, before `quilx.keymaps.initialize()`.
+ * The window is wired in once by `AppWindow` (`zym.window = …`) after it is
+ * constructed, before `zym.keymaps.initialize()`.
  */
 import type { ApplicationWindow } from './gi.ts';
 import { CommandManager } from './CommandManager.ts';
@@ -24,7 +24,7 @@ import { Config, type ConfigSchema } from './util/Config.ts';
 /*
  * The application-wide config schema (Atom's `core.*` / `editor.*`). This is the
  * general, non-vim baseline; subsystems contribute their own namespaced
- * parameters at load time via `quilx.config.scope(namespace).register(...)` —
+ * parameters at load time via `zym.config.scope(namespace).register(...)` —
  * see `ui/TextEditor/vim/settings.ts`, which registers under `vim-mode-plus`.
  */
 const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
@@ -181,7 +181,7 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     type: 'boolean',
     default: false,
     description:
-      'Automatically install a missing language server (into a quilx-managed dir) when a file needs it — shown as an info notification — instead of prompting with an Install button.',
+      'Automatically install a missing language server (into a zym-managed dir) when a file needs it — shown as an info notification — instead of prompting with an Install button.',
   },
   'plugins.disabled': {
     type: 'array',
@@ -204,7 +204,7 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   },
 };
 
-class Quilx {
+class Zym {
   window: ApplicationWindow | null = null;
   readonly commands = new CommandManager();
   readonly keymaps = new KeymapManager();
@@ -216,11 +216,11 @@ class Quilx {
   readonly workspace = new Workspace();
 }
 
-export const quilx = new Quilx();
+export const zym = new Zym();
 
 declare global {
    
-  var quilx: Quilx;
+  var zym: Zym;
 }
 
-(globalThis as { quilx?: Quilx }).quilx = quilx;
+(globalThis as { zym?: Zym }).zym = zym;

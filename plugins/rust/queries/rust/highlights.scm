@@ -1,4 +1,4 @@
-; Rust highlights — authored for quilx's capture palette (see `theme.syntax`;
+; Rust highlights — authored for zym's capture palette (see `theme.syntax`;
 ; the highlighter does longest-prefix fallback, so unknown captures degrade
 ; gracefully). Compiles against tree-sitter-rust (bundled by tree-sitter-wasms).
 

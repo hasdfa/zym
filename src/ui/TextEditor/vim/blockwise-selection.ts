@@ -4,7 +4,7 @@
  * ESM conversion only (`require`→`import`, `module.exports`→`export default`).
  * Manages a visual-block (ctrl-v) selection as one real selection per block row:
  * the first row reuses the passed (primary) selection, the rest are created via
- * `editor.addSelectionForBufferRange` (quilx's multi-selection — secondary
+ * `editor.addSelectionForBufferRange` (zym's multi-selection — secondary
  * selections backed by their own marks, painted as decorations). The operators
  * then iterate `editor.getSelections()` and mutate each row, unchanged.
  */

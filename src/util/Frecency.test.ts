@@ -47,7 +47,7 @@ test('records persist across instances sharing a state dir', () => {
 
 test('a corrupt store file is tolerated as empty', () => {
   const dir = tmpDir();
-  const path = Path.join(dir, 'quilx', 'frecency.json');
+  const path = Path.join(dir, 'zym', 'frecency.json');
   Fs.mkdirSync(Path.dirname(path), { recursive: true });
   Fs.writeFileSync(path, 'not json{');
   const store = new FrecencyStore(dir);

@@ -39,7 +39,7 @@ const oldText = oldPath ? Fs.readFileSync(oldPath, 'utf8') : SAMPLE_OLD;
 const newText = newPath ? Fs.readFileSync(newPath, 'utf8') : SAMPLE_NEW;
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'dev.quilx.diffdemo', flags: Gio.ApplicationFlags.NON_UNIQUE });
+const app = new Adw.Application({ applicationId: 'dev.zym.diffdemo', flags: Gio.ApplicationFlags.NON_UNIQUE });
 
 app.on('activate', () => {
   registerBundledFonts();

@@ -8,7 +8,7 @@ import { WorkspaceWatcher, type FileChange } from './workspaceWatcher.ts';
 const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
 
 test('WorkspaceWatcher reports create / change / delete, and ignores node_modules', async () => {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-watch-'));
+  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-watch-'));
   Fs.mkdirSync(Path.join(dir, 'node_modules'));
   const changes: FileChange[] = [];
   const watcher = new WorkspaceWatcher(dir, (batch) => changes.push(...batch));

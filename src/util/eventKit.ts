@@ -1,5 +1,5 @@
 /*
- * eventKit.ts — quilx's event/lifecycle primitives.
+ * eventKit.ts — zym's event/lifecycle primitives.
  *
  * A small, self-contained equivalent of the `event-kit` package: a `Disposable`
  * (an undoable action), a `CompositeDisposable` (a bag of them disposed

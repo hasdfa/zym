@@ -13,7 +13,7 @@ Gtk.init();
 // A real on-disk file so `Document.loadFile` can set `currentFile` (dedup is by the
 // document's live file, not the path passed to acquire).
 function tempFile(name: string, contents = ''): string {
-  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'quilx-docreg-'));
+  const dir = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-docreg-'));
   const file = Path.join(dir, name);
   Fs.writeFileSync(file, contents);
   return file;

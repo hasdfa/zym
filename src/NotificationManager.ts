@@ -2,7 +2,7 @@
  * NotificationManager — the application-wide notification hub.
  *
  * Ported from Atom's `src/notification-manager.js` and exposed as
- * `quilx.notifications`. Subsystems post notifications through the typed
+ * `zym.notifications`. Subsystems post notifications through the typed
  * `addInfo` / `addSuccess` / `addWarning` / `addError` / `addFatalError`
  * helpers; views (the toast overlay today, a log panel later) subscribe via
  * `onDidAddNotification` and render them.

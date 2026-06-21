@@ -15,7 +15,7 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Gtk } from '../../gi.ts';
 import { tmpDir as makeTmpDir } from '../../util/testTmp.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { plugins, registerBuiltinPlugins } from '../../plugin/index.ts';
 import { preloadGrammars } from '../../syntax/grammar.ts';
 import { DocumentRegistry } from './DocumentRegistry.ts';
@@ -24,7 +24,7 @@ import { Range } from '../../text/Range.ts';
 import { Point } from '../../text/Point.ts';
 
 Gtk.init();
-quilx.lsp.configure({ enable: false });
+zym.lsp.configure({ enable: false });
 
 before(async () => {
   try { registerBuiltinPlugins(); } catch { /* already registered */ }

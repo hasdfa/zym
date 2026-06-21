@@ -1,10 +1,10 @@
 {
-  "name": "@quilx/plugin-cpp",
+  "name": "@zym/plugin-cpp",
   "version": "0.1.0",
-  "description": "C / C++ support for quilx",
+  "description": "C / C++ support for zym",
   "type": "module",
   "main": "./index.ts",
   "peerDependencies": {
-    "quilx": "^0.1.0"
+    "zym": "^0.1.0"
   }
 }

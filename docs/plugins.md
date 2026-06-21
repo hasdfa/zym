@@ -35,9 +35,9 @@ manages disposables itself. This mirrors Atom: `activate()` + a
 | `ctx.languages.registerLanguage(def)` | file-type detection | `LanguageRegistry` |
 | `ctx.languages.registerGrammar(langId, def)` | tree-sitter grammar (wasm + `highlightsPath` + fold types) | `LanguageRegistry` (+ grammar cache) |
 | `ctx.languages.registerServer(langId, def)` | an LSP server candidate | `LanguageRegistry` |
-| `ctx.registerKeymap(keymap, priority?)` | key bindings (`{ selector: { keystroke: command } }`) | `quilx.keymaps` |
-| `ctx.registerCommands(target, commands)` | commands on a `#id`/widget | `quilx.commands` |
-| `ctx.registerConfig(schema)` | config-schema entries (full dotted keys) | `quilx.config` |
+| `ctx.registerKeymap(keymap, priority?)` | key bindings (`{ selector: { keystroke: command } }`) | `zym.keymaps` |
+| `ctx.registerCommands(target, commands)` | commands on a `#id`/widget | `zym.commands` |
+| `ctx.registerConfig(schema)` | config-schema entries (full dotted keys) | `zym.config` |
 | `ctx.registerStyles(css)` | a stylesheet | `styles` (StyleManager) |
 | `ctx.observeTextEditors(cb)` | per-editor behavior/decorations (`cb(editor)→Disposable?`, run for every open + future editor) | `Workspace` editor registry |
 | `ctx.add(disposable)` | escape hatch for anything else | — |
@@ -53,7 +53,7 @@ relocatable. A grammar's wasm may be an absolute path or a
 already open and each one opened later, and the Disposable it returns is
 torn down when that editor closes *or* the plugin deactivates. Backed by
 an editor registry on `Workspace`
-(`quilx.workspace.addTextEditor`/`observeTextEditors`); the AppWindow
+(`zym.workspace.addTextEditor`/`observeTextEditors`); the AppWindow
 registers/deregisters each file editor over its tab lifecycle. The
 editor it hands back exposes `editor.decorations` (the `TextDecorations`
 tag surface, with a `layer.tint(range, {background, foreground?,
@@ -102,7 +102,7 @@ disposable-aware:
   absolute path the plugin resolves itself.
 
 Keymaps and commands are already disposable-returning
-(`quilx.keymaps.add`, `quilx.commands.add`).
+(`zym.keymaps.add`, `zym.commands.add`).
 
 ## Bundled plugins
 

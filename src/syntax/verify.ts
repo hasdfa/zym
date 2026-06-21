@@ -2,7 +2,7 @@
  * Headless check for the SyntaxController integration: parse a JS buffer,
  * confirm highlighting captures + fold regions, exercise the vim `za` key path,
  * and prove folding shrinks the rendered height. Uses a unique app id so it
- * isn't deduped into an already-running quilx instance.
+ * isn't deduped into an already-running zym instance.
  *
  *   node src/syntax/verify.ts
  */
@@ -14,7 +14,7 @@ import { preloadGrammars } from './grammar.ts';
 await preloadGrammars(); // before the GLib loop, like the real entry point
 
 const SAMPLE = `import { readFile } from 'node:fs/promises';
-const CONFIG = { name: 'quilx', features: ['highlight', 'fold'] };
+const CONFIG = { name: 'zym', features: ['highlight', 'fold'] };
 async function loadDocument(path) {
   const text = await readFile(path, 'utf8');
   if (text.length === 0) {
@@ -31,7 +31,7 @@ class Editor {
 `;
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.verify' });
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.verify' });
 
 app.on('activate', () => {
   const buffer = new GtkSource.Buffer();

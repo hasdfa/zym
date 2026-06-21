@@ -2,12 +2,12 @@
 
 A *session* is the working state of one project root: which
 files/terminals/agents are open, how they're laid out, and where the
-cursors sit — distinct from `quilx.config`, which is global app
+cursors sit — distinct from `zym.config`, which is global app
 settings. State is persisted so it can be restored on demand, and
 unsaved work is never lost on exit.
 
 The core is implemented: `SessionManager` (`src/SessionManager.ts`,
-storage/format, exposed as `quilx.session`) + `SessionController`
+storage/format, exposed as `zym.session`) + `SessionController`
 (`src/SessionController.ts`, per-window policy), wired from
 `src/ui/AppWindow.ts`. The one large unbuilt feature is **named
 sessions** (its own section below).
@@ -21,7 +21,7 @@ These shape everything below:
 
 - **Storage = central XDG state dir**, keyed by root path — *not*
   in-repo. A session lives at
-  `$XDG_STATE_HOME/quilx/sessions/<filename>.json` (falling back to
+  `$XDG_STATE_HOME/zym/sessions/<filename>.json` (falling back to
   `~/.local/state`). Clean, never pollutes the project, and the
   natural home for a future "open another project's session" picker.
 - **Naming/identity:** the filename is a **hash of the primary root**
@@ -40,7 +40,7 @@ These shape everything below:
     requires a first-class **modified-status API/hook** that widgets
     expose (see below) — the centerpiece of this work, not an
     afterthought.
-- **An explicit file arg suppresses restore.** `quilx foo.ts` means
+- **An explicit file arg suppresses restore.** `zym foo.ts` means
   "just open this"; restore never fires implicitly off a launch.
   Restore is always the user asking for it.
 
@@ -66,7 +66,7 @@ These shape everything below:
   discriminated unions.
 - **One main component per file** under `src/ui` / `src/`,
   camel-cased.
-- **Atom-derived spine.** `quilx` mirrors `atom`; `Config` mirrors
+- **Atom-derived spine.** `zym` mirrors `atom`; `Config` mirrors
   `atom.config`; `eventKit` provides `Emitter`/`Disposable`. The
   serialize/deserialize seam below deliberately mirrors Atom's
   `serialize()` + `atom.deserializers` so the shape is familiar to the
@@ -85,7 +85,7 @@ These shape everything below:
     relaunch-only.
 - **`FileTree` (left dock)** — `rootPath` + which directories are
   expanded.
-- **`AgentManager` (`quilx.agents`)** — the live agent registry.
+- **`AgentManager` (`zym.agents`)** — the live agent registry.
 - **Docks** — notification log visible/hidden; left-paned split
   position.
 
@@ -97,7 +97,7 @@ AppWindow holds the maps that tie widgets to tabs (`editors`,
 
 ### 1. Serialize / deserialize (saving & restoring shape)
 
-A small registry on **`SessionManager` (`quilx.session`)**, mirroring
+A small registry on **`SessionManager` (`zym.session`)**, mirroring
 `atom.deserializers` (actual signatures):
 
 ```ts
@@ -105,7 +105,7 @@ interface Serializable<T> {
   serialize(): T | null;            // null → "don't persist me" (e.g. an empty tab)
 }
 
-// quilx.session
+// zym.session
 registerDeserializer(kind: string, build: (state: TabState) => unknown | null): Disposable;
 deserialize(state: TabState): unknown | null;
 ```
@@ -149,7 +149,7 @@ interface SessionParticipant {
 - **`Terminal`** (plain shell) → default *not* modified; never blocks
   exit.
 
-`quilx.session.collectModified()` walks the registered participants;
+`zym.session.collectModified()` walks the registered participants;
 AppWindow's `close-request` consults it.
 
 ## Storage format
@@ -199,7 +199,7 @@ workspace drives `FileTree`/`GitRepo`/`GitBranchButton`/title — no
 format change.
 
 `SessionManager` resolves the path
-(`<state>/quilx/sessions/<slug(name) ?? hash(primaryRoot)>.json`),
+(`<state>/zym/sessions/<slug(name) ?? hash(primaryRoot)>.json`),
 reads/writes via sync `Fs` (mkdir -p, atomic temp+rename), and
 validates `version`. Loading is keyed by the current root's hash
 (`load(root)`), so a session is only ever loaded for its own root —
@@ -215,7 +215,7 @@ Naming/identity).
   `close-request`.
 - **Restore** is explicit: `session:restore` rebuilds the saved layout
   for the current cwd (notifying on anything it had to skip).
-  `session.restoreOnLaunch` (default off) lets a bare `quilx` launch
+  `session.restoreOnLaunch` (default off) lets a bare `zym` launch
   auto-restore; an explicit file arg always suppresses it.
 - **Exit prompt**: `close-request` calls `collectModified()`. If
   non-empty (and `session.promptOnExitWhenModified`, default on),
@@ -235,7 +235,7 @@ session.promptOnExitWhenModified: boolean  // default true
 session.autosaveDebounceMs: integer        // default 1000
 ```
 
-Registered on `quilx.config` like the rest; editable via the existing
+Registered on `zym.config` like the rest; editable via the existing
 `ConfigEditor` for free.
 
 ## Commands

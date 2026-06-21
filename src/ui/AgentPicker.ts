@@ -1,6 +1,6 @@
 /*
  * Agent picker — a quick-switcher over agents and conversations, in one fuzzy list:
- *   - the currently-open agents (`quilx.agents`), each with a status indicator
+ *   - the currently-open agents (`zym.agents`), each with a status indicator
  *     (shared with the WorkbenchList sidebar) — selecting one reveals its terminal;
  *   - the project's resumable past conversations (newest first, excluding any
  *     already open) — selecting one resumes it as a fresh agent;
@@ -19,7 +19,7 @@ import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import * as Path from 'node:path';
 import { agentStatusMarkup, agentWorktreeMarkup } from './agentStatusIcon.ts';
 import { listResumableSessions, relativeTime, type AgentSession } from '../agentSessions.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { Agent } from '../agents/types.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -50,7 +50,7 @@ export function openAgentPicker(host: Overlay, options: AgentPickerOptions): voi
   // Open agents first, in launch order. Track their session ids so a resumable
   // conversation that's already open isn't also listed below.
   const liveSessions = new Set<string>();
-  quilx.agents.getAgents().forEach((agent, i) => {
+  zym.agents.getAgents().forEach((agent, i) => {
     const value = `agent:${i}`;
     byValue.set(value, { kind: 'agent', agent });
     items.push({ value, text: agent.title });

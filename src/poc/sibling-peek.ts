@@ -115,7 +115,7 @@ function reposition() {
 }
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.poc.peek', flags: Gio.ApplicationFlags.NON_UNIQUE });
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.poc.peek', flags: Gio.ApplicationFlags.NON_UNIQUE });
 
 app.on('activate', () => {
  try {
@@ -171,7 +171,7 @@ app.on('activate', () => {
   view.on('map', () => setTimeout(() => { if (!peek) showPeek(); }, 32));
 
   const window = new Adw.ApplicationWindow({ application: app });
-  window.setTitle('quilx POC — sibling-overlay peek (Ctrl+Space; type in the peek vs the file)');
+  window.setTitle('zym POC — sibling-overlay peek (Ctrl+Space; type in the peek vs the file)');
   window.setDefaultSize(680, 560);
   window.setContent(overlay);
   window.on('close-request', () => { loop.quit(); app.quit(); return false; });

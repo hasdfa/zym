@@ -21,7 +21,7 @@ import { Document, type DocumentHost } from './Document.ts';
 import type { TextEditorSource } from './TextEditorSource.ts';
 import { InlayHintController } from './InlayHintController.ts';
 import { attachVim } from './vim/index.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
 import { DiagnosticsView } from '../../lsp/diagnostics/DiagnosticsView.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
@@ -61,13 +61,13 @@ import {
 } from '../../gi.ts';
 
 addStyles(`
-  .quilx-editor {
+  .zym-editor {
     font: var(--t-font-monospace);
     color: var(--t-ui-editor-foreground);
     caret-color: var(--t-ui-editor-foreground);
   }
   /* Pending-command preview ("showcmd"), floated in the editor's bottom-right. */
-  .quilx-showcmd {
+  .zym-showcmd {
     font: var(--t-font-monospace);
     background-color: var(--t-ui-editor-background);
     color: var(--t-ui-editor-foreground);
@@ -77,29 +77,29 @@ addStyles(`
     border-radius: 4px;
   }
   /* Hollow caret shown over the cursor's character while the editor is unfocused. */
-  .quilx-unfocused-caret {
+  .zym-unfocused-caret {
     border: 1.5px solid var(--t-ui-text-muted);
     border-radius: 1px;
   }
   /* Filled caret block for positions with no glyph to reverse-video (empty line,
      past end-of-line, end-of-buffer). */
-  .quilx-block-caret {
+  .zym-block-caret {
     background-color: var(--t-ui-editor-foreground);
     border-radius: 1px;
   }
   /* Beam caret for extra (multi-cursor) carets in insert mode — a thin vertical
      bar, like the primary insert-mode caret. */
-  .quilx-beam-caret {
+  .zym-beam-caret {
     background-color: var(--t-ui-editor-foreground);
   }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
-  .quilx-placeholder {
+  .zym-placeholder {
     font: var(--t-font-monospace);
     color: var(--t-ui-text-muted);
     opacity: 0.6;
   }
   /* LSP hover card: a floating tooltip over the editor. */
-  .quilx-hover {
+  .zym-hover {
     background-color: var(--t-ui-surface-popover);
     color: var(--t-ui-editor-foreground);
     border: 1px solid alpha(var(--t-ui-editor-foreground), 0.2);
@@ -111,17 +111,17 @@ addStyles(`
      the UI background so it isn't garish; text/buttons keep the normal foreground.
      Compact buttons keep the bar slim. Two variants: warning (disk change) and
      error (load/save failure). */
-  .quilx-banner-warning,
-  .quilx-banner-error {
+  .zym-banner-warning,
+  .zym-banner-error {
     color: var(--t-ui-editor-foreground);
     padding: 2px 8px;
   }
-  .quilx-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-warning), 0.25); }
-  .quilx-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-error),   0.25); }
-  .quilx-banner-warning label,
-  .quilx-banner-error   label { font-weight: bold; }
-  .quilx-banner-warning button,
-  .quilx-banner-error   button {
+  .zym-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-warning), 0.25); }
+  .zym-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-error),   0.25); }
+  .zym-banner-warning label,
+  .zym-banner-error   label { font-weight: bold; }
+  .zym-banner-warning button,
+  .zym-banner-error   button {
     color: var(--t-ui-editor-foreground);
     min-height: 0;
     padding: 1px 8px;
@@ -154,7 +154,7 @@ function hasLongLine(text: string, threshold: number): boolean {
 // label fills this width and wraps. HOVER_GAP keeps the card clear of the cursor.
 const HOVER_WIDTH_PX = 300;
 const HOVER_GAP = 4;
-// Left inset of a `.quilx-hover` card's text (1px border + 8px padding); the
+// Left inset of a `.zym-hover` card's text (1px border + 8px padding); the
 // signature card shifts left by this so its text lines up with the code column.
 const CARD_CONTENT_INSET_PX = 9;
 // Settle the autopair `()` insert + cursor move before requesting signature help.
@@ -180,7 +180,7 @@ let searchKeymapsRegistered = false;
 function registerSearchKeymapsOnce(): void {
   if (searchKeymapsRegistered) return;
   searchKeymapsRegistered = true;
-  quilx.keymaps.add('editor-search', {
+  zym.keymaps.add('editor-search', {
     '#TextEditor.normal-mode': {
       '/': 'editor:search-forward',
       '?': 'editor:search-backward',
@@ -204,7 +204,7 @@ let editingKeymapsRegistered = false;
 function registerEditingKeymapsOnce(): void {
   if (editingKeymapsRegistered) return;
   editingKeymapsRegistered = true;
-  quilx.keymaps.add('editor-editing', {
+  zym.keymaps.add('editor-editing', {
     '#TextEditor.normal-mode': {
       'y d': 'editor:duplicate-line-below',
       'y u': 'editor:duplicate-line-above',
@@ -232,7 +232,7 @@ export interface TextEditorOptions {
    *  file path against. A getter (not a value) so a worktree re-root, which reassigns the
    *  workbench's cwd, is followed automatically. Defaults to `process.cwd()`. */
   cwd?: () => string;
-  /** The shared `Document` this view attaches to (from `quilx.documents`). When given,
+  /** The shared `Document` this view attaches to (from `zym.documents`). When given,
    *  this view is one of N onto it and releases its ref on teardown via
    *  `onReleaseDocument`; when omitted, the editor owns a private scratch document. */
   document?: Document;
@@ -249,8 +249,8 @@ export interface TextEditorOptions {
    *  editor; when omitted, a file editor follows (and live-tracks) the config and an
    *  embedded/buffer editor defaults off. Use it for inputs that should always wrap. */
   softWrap?: boolean;
-  /** Extra CSS class set on the inner view, alongside `quilx-editor`. Lets styles and
-   *  keymaps target a specific flavour of editor (e.g. `quilx-input`) — keymap selectors
+  /** Extra CSS class set on the inner view, alongside `zym-editor`. Lets styles and
+   *  keymaps target a specific flavour of editor (e.g. `zym-input`) — keymap selectors
    *  match on CSS classes (see util/selectors.ts). */
   cssClass?: string;
 }
@@ -278,7 +278,7 @@ export interface BufferEditorOptions {
 export interface InputEditorOptions extends BufferEditorOptions {
   /** Soft-wrap long lines. Defaults to `true` for inputs (wrapping, not h-scroll). */
   softWrap?: boolean;
-  /** Extra CSS class on the view, added alongside the shared `quilx-input` class — so a
+  /** Extra CSS class on the view, added alongside the shared `zym-input` class — so a
    *  given input (e.g. the agent prompt) can be targeted by its own styles/keymaps. */
   cssClass?: string;
   /** Close request, passed through to the editor. */
@@ -546,8 +546,8 @@ export class TextEditor implements DocumentHost {
     this.editorModel.setIndentSource((row) => this.syntax.indentLevelForRow(row));
     // Default indentation from config; `loadFile` detects and overrides per file.
     this.editorModel.setIndentation({
-      useSpaces: quilx.config.get('editor.insertSpaces') !== false,
-      width: (quilx.config.get('editor.tabLength') as number) || TAB_WIDTH,
+      useSpaces: zym.config.get('editor.insertSpaces') !== false,
+      width: (zym.config.get('editor.tabLength') as number) || TAB_WIDTH,
     });
     // Let motions see/reveal folds (the fold state lives in SyntaxController).
     this.editorModel.setFoldProvider({
@@ -677,7 +677,7 @@ export class TextEditor implements DocumentHost {
 
   private installSearch() {
     registerSearchKeymapsOnce();
-    quilx.commands.add(this.view, {
+    zym.commands.add(this.view, {
       'editor:search-forward': { didDispatch: () => this.searchBar.open(false), description: 'Search forward' },
       'editor:search-backward': { didDispatch: () => this.searchBar.open(true), description: 'Search backward' },
       // n/N outside the bar repeat the last search (no-op when none is active).
@@ -760,7 +760,7 @@ export class TextEditor implements DocumentHost {
       () => this.lspDocument ?? null,
       (line) => this.document.viewLineForModelLine(this.buffer, line),
     );
-    this.subs.add(quilx.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
+    this.subs.add(zym.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
     // A fold open/close shifts the view lines under the model-positioned decorations
     // (diagnostic squiggles + gutter + error lens, inlay hints) — re-place them at the
     // new view positions (cached, no LSP round-trip).
@@ -837,7 +837,7 @@ export class TextEditor implements DocumentHost {
   // uses the settled cursor, and a null result (cursor left the call) hides it.
   private maybeSignatureHelp(event: { changes: { newText: string }[] }) {
     if (this.vimState.mode !== 'insert' || !this.lspDocument) return;
-    const triggers = quilx.lsp.signatureHelpTriggerCharacters(this.lspDocument);
+    const triggers = zym.lsp.signatureHelpTriggerCharacters(this.lspDocument);
     const typed = event.changes.map((c) => c.newText).join('');
     const typedTrigger = [...typed].some((ch) => triggers.includes(ch));
     if (!this.signatureOverlay.visible && !typedTrigger) return;
@@ -857,7 +857,7 @@ export class TextEditor implements DocumentHost {
   private requestSignatureHelp() {
     if (!this.lspDocument) return;
     const seq = ++this.signatureSeq;
-    void quilx.lsp.signatureHelp(this.lspDocument).then((help) => {
+    void zym.lsp.signatureHelp(this.lspDocument).then((help) => {
       if (seq !== this.signatureSeq) return; // superseded by a newer keystroke
       if (help && help.signatures.length > 0) this.showSignature(help);
       else this.dismissSignature();
@@ -938,7 +938,7 @@ export class TextEditor implements DocumentHost {
     // Hunk-level staging on the hunk under the cursor (gutter bars). Bound to the
     // `space h …` leader; the gutter does the index `git apply`, revert is an
     // in-buffer edit (so it's a single undo).
-    quilx.commands.add(this.view, {
+    zym.commands.add(this.view, {
       'git:stage-hunk': { didDispatch: () => this.stageHunkAtCursor(), description: 'Stage the hunk under the cursor' },
       'git:unstage-hunk': { didDispatch: () => this.unstageHunkAtCursor(), description: 'Unstage the hunk under the cursor' },
       'git:revert-hunk': { didDispatch: () => this.revertHunkAtCursor(), description: 'Revert the hunk under the cursor' },
@@ -959,9 +959,9 @@ export class TextEditor implements DocumentHost {
   private stageHunkAtCursor(): void {
     this.withHunkGutter((gutter, row) => {
       const hunk = gutter.unstagedHunkAtRow(row);
-      if (!hunk) return quilx.notifications.addTrace('No unstaged hunk under the cursor');
+      if (!hunk) return zym.notifications.addTrace('No unstaged hunk under the cursor');
       gutter.stageHunk(hunk, (ok, error) => {
-        if (!ok) quilx.notifications.addError('Failed to stage hunk', { detail: error.trim() });
+        if (!ok) zym.notifications.addError('Failed to stage hunk', { detail: error.trim() });
       });
     });
   }
@@ -969,9 +969,9 @@ export class TextEditor implements DocumentHost {
   private unstageHunkAtCursor(): void {
     this.withHunkGutter((gutter, row) => {
       const hunk = gutter.stagedHunkAtRow(row);
-      if (!hunk) return quilx.notifications.addTrace('No staged hunk under the cursor');
+      if (!hunk) return zym.notifications.addTrace('No staged hunk under the cursor');
       gutter.unstageHunk(hunk, (ok, error) => {
-        if (!ok) quilx.notifications.addError('Failed to unstage hunk', { detail: error.trim() });
+        if (!ok) zym.notifications.addError('Failed to unstage hunk', { detail: error.trim() });
       });
     });
   }
@@ -982,7 +982,7 @@ export class TextEditor implements DocumentHost {
   private revertHunkAtCursor(): void {
     this.withHunkGutter((gutter, row) => {
       const hunk = gutter.unstagedHunkAtRow(row);
-      if (!hunk) return quilx.notifications.addTrace('No unstaged hunk under the cursor');
+      if (!hunk) return zym.notifications.addTrace('No unstaged hunk under the cursor');
       const startRow = hunk.newStart;
       const endRow = hunk.newStart + hunk.newLines.length; // exclusive
       // Restored text: the index lines, each newline-terminated. A pure deletion
@@ -1023,7 +1023,7 @@ export class TextEditor implements DocumentHost {
    */
   async hover() {
     if (!this.lspDocument) return; // buffer-only editor, no language server
-    const markdown = await quilx.lsp.hover(this.lspDocument);
+    const markdown = await zym.lsp.hover(this.lspDocument);
     this.dismissHover();
     if (!markdown) return;
     const rect = this.editorModel.pixelRectForBufferPosition(this.editorModel.getCursorBufferPosition());
@@ -1151,7 +1151,7 @@ export class TextEditor implements DocumentHost {
 
   private createView(buffer: SourceBuffer): SourceView {
     const view = new GtkSource.View({ buffer });
-    view.addCssClass('quilx-editor'); // monospace font applied via CSS (font store)
+    view.addCssClass('zym-editor'); // monospace font applied via CSS (font store)
     if (this.cssClass) for (const c of this.cssClass.split(/\s+/)) if (c) view.addCssClass(c);
     view.setAutoIndent(true);
     view.setTabWidth(TAB_WIDTH);
@@ -1182,13 +1182,13 @@ export class TextEditor implements DocumentHost {
     // `editor.softWrap` config for a file editor (live-toggled); otherwise off for an
     // embedded editor (diff panes, search results — they never wrapped). Inputs created
     // via `createInput()` pass `softWrap: true` to wrap regardless of the config.
-    const configDefault = this.embedded ? false : quilx.config.get('editor.softWrap') !== false;
+    const configDefault = this.embedded ? false : zym.config.get('editor.softWrap') !== false;
     let wrapEnabled = this.softWrapOverride ?? configDefault;
     this.applyWrap = () =>
       view.setWrapMode(this.longLineMode || !wrapEnabled ? Gtk.WrapMode.NONE : Gtk.WrapMode.WORD_CHAR);
     if (this.softWrapOverride === undefined && !this.embedded) {
       this.subs.add(
-        quilx.config.observe('editor.softWrap', (v) => {
+        zym.config.observe('editor.softWrap', (v) => {
           wrapEnabled = v !== false;
           this.applyWrap();
         }),
@@ -1212,7 +1212,7 @@ export class TextEditor implements DocumentHost {
     // fixed margin (set in createView) and opts out.
     if (!this.embedded) {
       const vadj = scrolled.getVadjustment();
-      let pastEndEnabled = quilx.config.get('editor.scrollPastEnd') !== false;
+      let pastEndEnabled = zym.config.get('editor.scrollPastEnd') !== false;
       let lastMargin = -1;
       let pendingId: NodeJS.Timeout | null = null;
       const applyPastEnd = () => {
@@ -1243,7 +1243,7 @@ export class TextEditor implements DocumentHost {
         }),
       );
       this.subs.add(
-        quilx.config.observe('editor.scrollPastEnd', (v) => {
+        zym.config.observe('editor.scrollPastEnd', (v) => {
           pastEndEnabled = v !== false;
           applyPastEnd();
         }),
@@ -1269,14 +1269,14 @@ export class TextEditor implements DocumentHost {
     // The search/replace bar floats at the top-right; it adds itself to `overlay`.
     this.searchBar = new SearchBar(overlay, this.search, this.view);
 
-    this.showcmdLabel.addCssClass('quilx-showcmd');
+    this.showcmdLabel.addCssClass('zym-showcmd');
     this.showcmdLabel.setHalign(Gtk.Align.END);
     this.showcmdLabel.setValign(Gtk.Align.END);
     this.showcmdLabel.setVisible(false);
     this.showcmdLabel.setCanTarget(false); // never steal clicks
     overlay.addOverlay(this.showcmdLabel);
 
-    this.caret.addCssClass('quilx-unfocused-caret');
+    this.caret.addCssClass('zym-unfocused-caret');
     this.caret.setCanTarget(false);
     this.caretLayer.setCanTarget(false);
     this.caretLayer.put(this.caret, 0, 0);
@@ -1319,7 +1319,7 @@ export class TextEditor implements DocumentHost {
     // Buffer-words completion is disabled for now (kept for reference / quick re-enable):
     // this.completion.addSource(createBufferWordsSource(() => this.editorModel.getText()));
     void createBufferWordsSource; // keep the import live while the source is disabled
-    this.completion.addSource(createLspCompletionSource(quilx.lsp, () => this.lspDocument ?? null));
+    this.completion.addSource(createLspCompletionSource(zym.lsp, () => this.lspDocument ?? null));
     this.vimState.onDidActivateMode(({ mode }: { mode: string }) => {
       if (mode !== 'insert') this.completion.dismiss();
     });
@@ -1329,19 +1329,19 @@ export class TextEditor implements DocumentHost {
     // cursor, growing upward) without us needing to read its height. Prose stays
     // in the proportional UI font; only code spans are monospace (<tt>). Fixed
     // width (the label fills + wraps to it).
-    this.hoverOverlay = new OverlayDecoration(this.editorModel, { cssClass: 'quilx-hover', widthPx: HOVER_WIDTH_PX, gapPx: HOVER_GAP });
+    this.hoverOverlay = new OverlayDecoration(this.editorModel, { cssClass: 'zym-hover', widthPx: HOVER_WIDTH_PX, gapPx: HOVER_GAP });
     this.hoverOverlay.content.append(this.hoverLabel);
     this.hoverOverlay.attach(overlay);
 
     // The signature-help card reuses the hover card's look (floated above the cursor).
-    this.signatureOverlay = new OverlayDecoration(this.editorModel, { cssClass: 'quilx-hover', widthPx: HOVER_WIDTH_PX, gapPx: HOVER_GAP });
+    this.signatureOverlay = new OverlayDecoration(this.editorModel, { cssClass: 'zym-hover', widthPx: HOVER_WIDTH_PX, gapPx: HOVER_GAP });
     this.signatureOverlay.content.append(this.signatureLabel);
     this.signatureOverlay.attach(overlay);
 
     // Buffer-only mode: a greyed placeholder over the empty buffer, and no minimap.
     if (this.bufferMode?.placeholder) {
       this.placeholderLabel = new Gtk.Label({ label: this.bufferMode.placeholder });
-      this.placeholderLabel.addCssClass('quilx-placeholder');
+      this.placeholderLabel.addCssClass('zym-placeholder');
       this.placeholderLabel.setHalign(Gtk.Align.START);
       this.placeholderLabel.setValign(Gtk.Align.START);
       this.placeholderLabel.setMarginStart(8);
@@ -1361,7 +1361,7 @@ export class TextEditor implements DocumentHost {
       const minimap = new GtkSource.Map();
       minimap.setView(this.view);
       box.append(minimap);
-      this.subs.add(quilx.config.observe('editor.minimap', (v) => minimap.setVisible(v === true)));
+      this.subs.add(zym.config.observe('editor.minimap', (v) => minimap.setVisible(v === true)));
     }
 
     // Unified info banner: disk-change warnings, load errors, and save errors all use
@@ -1392,7 +1392,7 @@ export class TextEditor implements DocumentHost {
       this.locationBar.widget.setVisible(false);
       outer.append(this.locationBar.widget);
       this.subs.add(
-        quilx.config.observe('editor.locationBar', (v) => this.applyLocationBarConfig(v !== false)),
+        zym.config.observe('editor.locationBar', (v) => this.applyLocationBarConfig(v !== false)),
       );
       const reparseUnsub = this.document.documentSyntax?.onDidReparse(() => this.scheduleLocationBarUpdate());
       if (reparseUnsub) this.subs.add(new Disposable(reparseUnsub));
@@ -1475,8 +1475,8 @@ export class TextEditor implements DocumentHost {
     const width = cell.width > 1 ? cell.width : Math.max(2, Math.round(cell.height * 0.5));
     this.caret.setSizeRequest(width, cell.height);
     this.caretLayer.move(this.caret, winX, winY);
-    this.caret.removeCssClass(kind === 'filled' ? 'quilx-unfocused-caret' : 'quilx-block-caret');
-    this.caret.addCssClass(kind === 'filled' ? 'quilx-block-caret' : 'quilx-unfocused-caret');
+    this.caret.removeCssClass(kind === 'filled' ? 'zym-unfocused-caret' : 'zym-block-caret');
+    this.caret.addCssClass(kind === 'filled' ? 'zym-block-caret' : 'zym-unfocused-caret');
     this.caret.setVisible(true);
   }
 
@@ -1513,8 +1513,8 @@ export class TextEditor implements DocumentHost {
       const width = beam ? 1 : cell.width > 1 ? cell.width : Math.max(2, Math.round(cell.height * 0.5));
       widget.setSizeRequest(width, cell.height);
       this.caretLayer.move(widget, beam ? winX - 1 : winX, winY);
-      widget.removeCssClass(beam ? 'quilx-block-caret' : 'quilx-beam-caret');
-      widget.addCssClass(beam ? 'quilx-beam-caret' : 'quilx-block-caret');
+      widget.removeCssClass(beam ? 'zym-block-caret' : 'zym-beam-caret');
+      widget.addCssClass(beam ? 'zym-beam-caret' : 'zym-block-caret');
       widget.setVisible(true);
     }
     for (let i = carets.length; i < this.extraCarets.length; i++) this.extraCarets[i].setVisible(false);
@@ -1532,7 +1532,7 @@ export class TextEditor implements DocumentHost {
     // removed when this view goes away — otherwise each opened editor leaks a
     // listener that runs on every keystroke for the life of the process.
     this.subs.add(
-      quilx.keymaps.addListener((key) => {
+      zym.keymaps.addListener((key) => {
         if (!(this.view as any).hasFocus() || this.vimState.mode === 'insert') return false;
         if (!key.isModifier() && key.string && key.string.charCodeAt(0) >= 0x20) {
           this.setShowcmd(this.showcmd + key.string);
@@ -1550,7 +1550,7 @@ export class TextEditor implements DocumentHost {
     const stack = this.vimState.operationStack;
     const register = (this.vimState as any).__register;
     return (
-      quilx.keymaps.queuedKeystrokes.length === 0 &&
+      zym.keymaps.queuedKeystrokes.length === 0 &&
       stack.isEmpty() &&
       !stack.hasCount() &&
       !register?.name
@@ -1569,7 +1569,7 @@ export class TextEditor implements DocumentHost {
   private installEditingCommands() {
     registerEditingKeymapsOnce();
     // Registered per-view so the keystroke duplicates the focused editor's line.
-    quilx.commands.add(this.view, {
+    zym.commands.add(this.view, {
       'editor:duplicate-line-below': { didDispatch: () => this.editorModel.duplicateLineBelow(), description: 'Duplicate the current line below' },
       'editor:duplicate-line-above': { didDispatch: () => this.editorModel.duplicateLineAbove(), description: 'Duplicate the current line above' },
     });
@@ -1582,7 +1582,7 @@ export class TextEditor implements DocumentHost {
     // these commands on this view, which drive the SyntaxController fold machinery
     // (tree-sitter folds, or a diff pane's unchanged-run folds). Registered per-view
     // so a keystroke folds the focused editor.
-    quilx.commands.add(this.view, {
+    zym.commands.add(this.view, {
       'fold:toggle': { didDispatch: () => this.placeCaretInRevealedFold(this.syntax.toggleFoldAtCursor()), description: 'Toggle the fold at the cursor' },
       'fold:open': { didDispatch: () => this.placeCaretInRevealedFold(this.syntax.setFoldAtCursor(false)), description: 'Open the fold at the cursor' },
       'fold:close': { didDispatch: () => this.syntax.setFoldAtCursor(true), description: 'Close the fold at the cursor' },
@@ -1658,7 +1658,7 @@ export class TextEditor implements DocumentHost {
         if (!ch || ch < 0x20) return false;
         return this.replaceModeOverwrite(String.fromCharCode(ch));
       }
-      if (quilx.config.get('editor.autoCloseBrackets') === false) return false;
+      if (zym.config.get('editor.autoCloseBrackets') === false) return false;
       if (keyval === Gdk.KEY_BackSpace) return handleAutoPairBackspace(this.editorModel);
       const code = Gdk.keyvalToUnicode(keyval);
       if (!code) return false;
@@ -1725,7 +1725,7 @@ export class TextEditor implements DocumentHost {
   private applyDetectedIndentation(content: string): void {
     const detected = detectIndentation(content);
     if (!detected) return;
-    const width = detected.width ?? ((quilx.config.get('editor.tabLength') as number) || TAB_WIDTH);
+    const width = detected.width ?? ((zym.config.get('editor.tabLength') as number) || TAB_WIDTH);
     this.editorModel.setIndentation({ useSpaces: detected.useSpaces, width });
   }
 
@@ -1892,9 +1892,9 @@ export class TextEditor implements DocumentHost {
 
   /** @internal Show a persistent info banner above the content. */
   showBanner(message: string, kind: 'error' | 'warning', action?: { label: string; onClick: () => void }): void {
-    this.bannerBox.removeCssClass('quilx-banner-warning');
-    this.bannerBox.removeCssClass('quilx-banner-error');
-    this.bannerBox.addCssClass(`quilx-banner-${kind}`);
+    this.bannerBox.removeCssClass('zym-banner-warning');
+    this.bannerBox.removeCssClass('zym-banner-error');
+    this.bannerBox.addCssClass(`zym-banner-${kind}`);
     this.bannerLabel.setLabel(message);
     this.bannerAction = action?.onClick ?? null;
     this.bannerButton.setLabel(action?.label ?? '');
@@ -2039,7 +2039,7 @@ export class TextEditor implements DocumentHost {
  * defaults so callers don't repeat them:
  *   - buffer-only mode (no file, LSP, line numbers, or minimap);
  *   - soft-wrap on (wraps instead of h-scrolling), overridable;
- *   - a `quilx-input` CSS class so styles and keymaps can target inputs as a group
+ *   - a `zym-input` CSS class so styles and keymaps can target inputs as a group
  *     (and an optional `cssClass` for one specific input).
  * The buffer knobs (placeholder, initialText, onSubmit, readOnly, …) pass straight
  * through. Prefer this over `new TextEditor({ buffer: … })` for embedded inputs.
@@ -2049,7 +2049,7 @@ export function createInput(options: InputEditorOptions = {}): TextEditor {
   return new TextEditor({
     buffer,
     softWrap,
-    cssClass: cssClass ? `quilx-input ${cssClass}` : 'quilx-input',
+    cssClass: cssClass ? `zym-input ${cssClass}` : 'zym-input',
     onClose,
   });
 }

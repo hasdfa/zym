@@ -60,7 +60,7 @@ function toggleBlock() {
 }
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.poc.inline', flags: Gio.ApplicationFlags.NON_UNIQUE });
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.poc.inline', flags: Gio.ApplicationFlags.NON_UNIQUE });
 
 app.on('activate', () => {
  try {
@@ -95,7 +95,7 @@ app.on('activate', () => {
   const scrolled = new Gtk.ScrolledWindow();
   scrolled.setChild(view);
   const window = new Adw.ApplicationWindow({ application: app });
-  window.setTitle('quilx POC — BlockDecorations (Ctrl+Space toggle, click the card)');
+  window.setTitle('zym POC — BlockDecorations (Ctrl+Space toggle, click the card)');
   window.setDefaultSize(640, 520);
   window.setContent(scrolled);
   window.on('close-request', () => { loop.quit(); app.quit(); return false; });

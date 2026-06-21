@@ -17,7 +17,7 @@ import { Gtk, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 
 export interface LocationItem {
@@ -141,7 +141,7 @@ export class LocationList {
     // The keymap (`#LocationList`) binds j/k/g g/G/l to these — shared by every
     // LocationList instance.
     this.subs.add(
-      quilx.commands.add(this.root, {
+      zym.commands.add(this.root, {
         'core:down': { didDispatch: () => this.moveSelection(1), description: 'Move down' },
         'core:up': { didDispatch: () => this.moveSelection(-1), description: 'Move up' },
         'core:top': { didDispatch: () => this.selectIndex(0), description: 'Go to the top' },

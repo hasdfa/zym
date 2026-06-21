@@ -7,14 +7,14 @@
  * rebuilding the list, so expanded state is preserved.
  *
  * Keyboard bindings (j/k/o/space) are declared in src/keymaps/default.ts under
- * the #PluginManagerPanel selector and dispatched via the quilx command system.
+ * the #PluginManagerPanel selector and dispatched via the zym command system.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Adw, Gtk } from '../gi.ts';
 import { plugins, disabledPluginIds } from '../plugin/index.ts';
 import { saveConfig } from '../config/load.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { PluginInfo } from '../plugin/PluginRegistry.ts';
 
 function esc(text: string): string {
@@ -52,7 +52,7 @@ export class PluginManagerPanel {
     this.root.setHexpand(true);
     this.root.setVexpand(true);
 
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'plugin-manager:focus-next':      { didDispatch: () => this.moveFocus(1),            description: 'Focus next plugin row' },
       'plugin-manager:focus-prev':      { didDispatch: () => this.moveFocus(-1),           description: 'Focus previous plugin row' },
       'plugin-manager:toggle-expander': { didDispatch: () => this.toggleFocusedExpander(), description: 'Expand or collapse the focused plugin' },
@@ -174,12 +174,12 @@ export class PluginManagerPanel {
     const disabled = disabledPluginIds();
     if (enable) {
       disabled.delete(id);
-      quilx.config.set('plugins.disabled', [...disabled]);
+      zym.config.set('plugins.disabled', [...disabled]);
       saveConfig();
       await plugins.activate(id);
     } else {
       disabled.add(id);
-      quilx.config.set('plugins.disabled', [...disabled]);
+      zym.config.set('plugins.disabled', [...disabled]);
       saveConfig();
       await plugins.deactivate(id);
     }

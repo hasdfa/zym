@@ -1,9 +1,9 @@
 /*
  * SessionManager — persists and restores the working state of a project root.
  *
- * Exposed as `quilx.session`. A *session* is everything that makes up "where I
+ * Exposed as `zym.session`. A *session* is everything that makes up "where I
  * was": the split layout, the open files/terminals/agents, cursors, and file-tree
- * expansion — as opposed to `quilx.config`, which is global app settings. See
+ * expansion — as opposed to `zym.config`, which is global app settings. See
  * docs/session-management.md for the full design.
  *
  * This module is the storage + format spine. It is deliberately free of any GTK
@@ -12,7 +12,7 @@
  * UI layer (AppWindow), which registers them here.
  *
  * Storage: one JSON file per session under the XDG state dir
- * (`$XDG_STATE_HOME/quilx/sessions/`, falling back to `~/.local/state`). The file
+ * (`$XDG_STATE_HOME/zym/sessions/`, falling back to `~/.local/state`). The file
  * name is a hash of the primary root, unless the session is explicitly named (then
  * a slug of the name). The raw hash is never user-visible — `label()` resolves a
  * display string as `name ?? basename(primaryRoot)`. Writes are atomic
@@ -121,7 +121,7 @@ export class SessionManager {
    */
   constructor(stateDir?: string) {
     const base = stateDir ?? process.env.XDG_STATE_HOME ?? Path.join(Os.homedir(), '.local', 'state');
-    this.stateDir = Path.join(base, 'quilx', 'sessions');
+    this.stateDir = Path.join(base, 'zym', 'sessions');
   }
 
   // --- Deserializer registry -------------------------------------------------

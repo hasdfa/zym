@@ -6,7 +6,7 @@
  * conversation and as editor commands (`agent:action-run-default` / picker).
  *
  * The agent registers them by calling the bundled bridge MCP tool `set_actions`
- * (assets/mcp/quilxBridge.mjs), which writes the raw JSON to an IPC file; both
+ * (assets/mcp/zymBridge.mjs), which writes the raw JSON to an IPC file; both
  * agent hosts (claude-tui's `ClaudeSession`, claude-sdk's `SdkSession`) read that
  * file and `parseActions` it into the normalized shape below before surfacing it.
  * The first action is the default (no explicit flag).

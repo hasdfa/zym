@@ -155,13 +155,13 @@ export class ScrollManager {
  * paragraph) and preset occurrence (`g o` toggles persistent markers any later
  * operator restricts itself to). Ported from vim-mode-plus's OccurrenceManager.
  *
- * Adaptations to quilx's primitives:
+ * Adaptations to zym's primitives:
  *  - Atom's `decorateMarkerLayer` is replaced by a TextDecorations layer
- *    re-synced (`renderMarkers`) whenever the marker set changes — quilx markers
+ *    re-synced (`renderMarkers`) whenever the marker set changes — zym markers
  *    move with edits but don't carry their own decoration.
- *  - quilx's `MarkerLayer.findMarkers` only filters by `containsBufferPosition`,
+ *  - zym's `MarkerLayer.findMarkers` only filters by `containsBufferPosition`,
  *    so range-intersection queries iterate the markers directly.
- *  - quilx markers don't auto-invalidate on edit, so the upstream
+ *  - zym markers don't auto-invalidate on edit, so the upstream
  *    invalidated-marker sweep is dropped; markers are cleared by `resetPatterns`
  *    when an occurrence operation finishes.
  */
@@ -275,7 +275,7 @@ export class OccurrenceManager {
     return this.markerLayer.getMarkerCount();
   }
 
-  // Occurrence markers intersecting `selection`. quilx's findMarkers can't do a
+  // Occurrence markers intersecting `selection`. zym's findMarkers can't do a
   // range query, so iterate all markers and test intersection directly.
   getMarkersIntersectsWithSelection(selection: { getBufferRange(): Range }, exclusive = false): Marker[] {
     const range = shrinkRangeEndToBeforeNewLine(selection.getBufferRange());
@@ -334,7 +334,7 @@ export class OccurrenceManager {
       for (const $selection of this.vimState.swrap.getSelections(editor)) $selection.applyWise('linewise');
 
       // Merging adjacent linewise selections destroys some; migrate their
-      // mutation onto the survivor that swallowed them. quilx selections don't
+      // mutation onto the survivor that swallowed them. zym selections don't
       // emit a destroy event, so snapshot ranges before the merge and detect
       // the merged-away selections by set difference afterward.
       const { mutationsBySelection } = this.vimState.mutationManager;

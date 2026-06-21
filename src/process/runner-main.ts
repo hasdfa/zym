@@ -1,7 +1,7 @@
 /*
  * process/runner-main.ts — the process-runner child (see runner.ts for the why).
  *
- * Why it exists: the main quilx process is a long-lived node-gtk process that
+ * Why it exists: the main zym process is a long-lived node-gtk process that
  * accrues a large resident set (1+ GiB). On this platform node spawns children
  * with a plain `fork()` (libuv's posix_spawn fast path isn't compiled into the
  * prebuilt binary), so every subprocess copies the parent's page tables — tens

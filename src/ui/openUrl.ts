@@ -3,12 +3,12 @@
  * failure through the notification manager. Shared by the GitHub buttons/pickers.
  */
 import { Gio } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 
 export function openUrl(url: string): void {
   try {
     Gio.AppInfo.launchDefaultForUri(url, null);
   } catch (error) {
-    quilx.notifications.addError('Could not open link', { detail: (error as Error).message });
+    zym.notifications.addError('Could not open link', { detail: (error as Error).message });
   }
 }

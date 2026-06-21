@@ -19,8 +19,8 @@ drives through a small `LspDocument` interface.
   (e.g. `plugins/typescript/`), not fetched at runtime. See
   [language-config.md](language-config.md) for the registry design and why.
 - **Server install (optional).** `ServerDef.install` (npm package, or a raw
-  `command`) installs a missing binary into a quilx-managed dir
-  (`$XDG_DATA_HOME/quilx/lsp/<server>/`), never the user's env/project. The
+  `command`) installs a missing binary into a zym-managed dir
+  (`$XDG_DATA_HOME/zym/lsp/<server>/`), never the user's env/project. The
   managed `node_modules/.bin` is searched and put on the spawn `PATH`
   (`lsp/installer.ts`, `lsp/which.ts`). Missing servers are skipped (not
   crash-looped); the warning names the exact missing binary.
@@ -99,7 +99,7 @@ The language layer (`src/lang/`) holds the contribution model; the LSP core
 
 ### Wiring
 
-`quilx.lsp` singleton + `lsp.*` config schema (`quilx.ts`: `lsp.enable`,
+`zym.lsp` singleton + `lsp.*` config schema (`zym.ts`: `lsp.enable`,
 `lsp.disabledLanguages`, `lsp.servers` overrides, `lsp.autoInstall`).
 `TextEditor` implements `LspDocument` and drives
 didOpen/didChange/didSave/didClose. `AppWindow` registers the `lsp:*`

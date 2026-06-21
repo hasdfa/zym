@@ -9,7 +9,7 @@
  * than re-rendering), permission requests, and the session id.
  *
  * Permissions: claude is launched with `--permission-prompt-tool`, pointed at a
- * tiny stdio MCP server (assets/mcp/quilxPermission.mjs) we provide. When claude
+ * tiny stdio MCP server (assets/mcp/zymPermission.mjs) we provide. When claude
  * needs approval it calls that tool; the server hands the request to us over a
  * file pair (the same atomic tmp+rename + Gio.FileMonitor channel the claude-tui
  * hooks use), we surface it (status → `waiting`), and `respondPermission` writes
@@ -37,14 +37,14 @@ const FileProto = (Gio.File as any).prototype;
 // The bundled permission-prompt MCP server. This file is at src/agents/claude-sdk/,
 // so three `..` reach the repo root.
 const PERMISSION_SCRIPT = Path.join(
-  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxPermission.mjs',
+  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'zymPermission.mjs',
 );
 
 // The bundled agent↔editor bridge MCP server. The sdk runs it only for its
 // `set_actions` tool (it has no live worktree re-rooting), so it passes only
-// QUILX_ACTIONS_FILE — the bridge then advertises just that tool.
+// ZYM_ACTIONS_FILE — the bridge then advertises just that tool.
 const BRIDGE_SCRIPT = Path.join(
-  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxBridge.mjs',
+  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'zymBridge.mjs',
 );
 
 /** A permission request surfaced from claude (status goes `waiting` until answered). */
@@ -192,7 +192,7 @@ export class SdkSession {
 
   constructor(options: SdkSessionOptions) {
     this.options = options;
-    const dir = Path.join(process.env.XDG_RUNTIME_DIR || Os.tmpdir(), 'quilx', 'sdk', randomUUID());
+    const dir = Path.join(process.env.XDG_RUNTIME_DIR || Os.tmpdir(), 'zym', 'sdk', randomUUID());
     Fs.mkdirSync(dir, { recursive: true });
     this.permRequestFile = Path.join(dir, 'permission.req');
     this.permResponseFile = Path.join(dir, 'permission.res');
@@ -203,18 +203,18 @@ export class SdkSession {
     // status + actions files so its set_worktree / set_actions tools write there.
     this.mcpConfig = JSON.stringify({
       mcpServers: {
-        quilxPerm: {
+        zymPerm: {
           command: process.execPath,
           args: [PERMISSION_SCRIPT],
           env: {
-            QUILX_PERM_REQUEST: this.permRequestFile,
-            QUILX_PERM_RESPONSE: this.permResponseFile,
+            ZYM_PERM_REQUEST: this.permRequestFile,
+            ZYM_PERM_RESPONSE: this.permResponseFile,
           },
         },
-        quilx: {
+        zym: {
           command: process.execPath,
           args: [BRIDGE_SCRIPT],
-          env: { QUILX_STATUS_FILE: this.statusFile, QUILX_ACTIONS_FILE: this.actionsFile },
+          env: { ZYM_STATUS_FILE: this.statusFile, ZYM_ACTIONS_FILE: this.actionsFile },
         },
       },
     });
@@ -233,10 +233,10 @@ export class SdkSession {
       // Use `default` (asks) so the permission-prompt-tool is actually exercised;
       // claude calls our tool for any operation the mode would gate.
       '--permission-mode', 'default',
-      '--permission-prompt-tool', 'mcp__quilxPerm__approve',
+      '--permission-prompt-tool', 'mcp__zymPerm__approve',
       // Pre-allow the bridge tools so announcing a worktree / registering actions
       // never prompts the user.
-      '--allowedTools', 'mcp__quilx__set_worktree,mcp__quilx__set_actions',
+      '--allowedTools', 'mcp__zym__set_worktree,mcp__zym__set_actions',
       '--append-system-prompt', AGENT_SYSTEM_PROMPT,
       '--mcp-config', this.mcpConfig,
       ...base.slice(1),
@@ -315,7 +315,7 @@ export class SdkSession {
     if (!this.transport?.writable) return false;
     if (this._status !== 'working' && this._status !== 'waiting') return false;
     this.interrupting = true;
-    const requestId = `quilx-${++this.controlReqId}`;
+    const requestId = `zym-${++this.controlReqId}`;
     this.interruptReqId = requestId;
     const message = { type: 'control_request', request_id: requestId, request: { subtype: 'interrupt' } };
     logSend(message);
@@ -332,7 +332,7 @@ export class SdkSession {
    *  control_request on stdin; claude acks with a control_response. */
   setPermissionMode(mode: AgentMode): void {
     if (!this.transport?.writable || mode === this._permissionMode) return;
-    const message = { type: 'control_request', request_id: `quilx-${++this.controlReqId}`, request: { subtype: 'set_permission_mode', mode } };
+    const message = { type: 'control_request', request_id: `zym-${++this.controlReqId}`, request: { subtype: 'set_permission_mode', mode } };
     logSend(message);
     this.transport.send(message);
     this.setMode(mode); // optimistic; the control_response confirms it
@@ -557,7 +557,7 @@ export class SdkSession {
    *  protocol (`stop_task`) — verified against the CLI. */
   stopTask(taskId: string): void {
     if (!this.transport?.writable) return;
-    const message = { type: 'control_request', request_id: `quilx-${++this.controlReqId}`, request: { subtype: 'stop_task', task_id: taskId } };
+    const message = { type: 'control_request', request_id: `zym-${++this.controlReqId}`, request: { subtype: 'stop_task', task_id: taskId } };
     logSend(message);
     this.transport.send(message);
   }
@@ -812,7 +812,7 @@ function writeAtomic(file: string, text: string): void {
 // --- logging of every JSON interaction (console + an optional debug file) ----
 //
 // The console mirror is always on (the primary way to watch the stream live).
-// The JSONL debug file is opt-in via `QUILX_SDK_DEBUG` — out-of-band inspection
+// The JSONL debug file is opt-in via `ZYM_SDK_DEBUG` — out-of-band inspection
 // (UX analysis of what the stream carries). Off by default so unit-test runs of
 // this module don't pollute the file with fake-transport turns. DEBUG ONLY —
 // remove (file + console) before merge.
@@ -822,8 +822,8 @@ const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
 
 // Append-only JSONL: one {t, dir, payload} record per interaction. Only written
-// when QUILX_SDK_DEBUG is set (any non-empty value); the path is then logged once.
-const DEBUG_LOG_FILE = process.env.QUILX_SDK_DEBUG ? Path.join(Os.tmpdir(), 'quilx-sdk-debug.jsonl') : null;
+// when ZYM_SDK_DEBUG is set (any non-empty value); the path is then logged once.
+const DEBUG_LOG_FILE = process.env.ZYM_SDK_DEBUG ? Path.join(Os.tmpdir(), 'zym-sdk-debug.jsonl') : null;
 if (DEBUG_LOG_FILE) console.log(`${DIM}[claude] debug log → ${DEBUG_LOG_FILE}${RESET}`);
 function fileLog(dir: string, payload: unknown): void {
   if (!DEBUG_LOG_FILE) return;

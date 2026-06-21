@@ -18,7 +18,7 @@ import * as Path from 'node:path';
 import { openPicker, highlightSegment, escapeMarkup, type PickerItem } from './Picker.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { LsColors, type LsColorStyle } from '../util/lsColors.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { Gtk } from '../gi.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -36,7 +36,7 @@ interface FileItem extends PickerItem {
 export function openFileOpener(host: Overlay, dir: string, onChoose: (path: string) => void): void {
   // Color file names like `ls --color`, from $LS_COLORS, when enabled (and the
   // variable is exported into the app's environment).
-  const lsColors = quilx.config.get('ui.lsColors') === true ? LsColors.fromEnv() : null;
+  const lsColors = zym.config.get('ui.lsColors') === true ? LsColors.fromEnv() : null;
   openPicker({
     host,
     placeholder: 'Open file…',

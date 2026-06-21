@@ -16,7 +16,7 @@ import { AppWindow } from './ui/AppWindow.ts';
 import { installStyles } from './styles.ts';
 import { registerBundledFonts, fonts } from './fonts.ts';
 
-const APP_ID = 'com.github.romgrk.quilx';
+const APP_ID = 'com.github.romgrk.zym';
 
 export class Application {
   private readonly loop = GLib.MainLoop.new(null, false);

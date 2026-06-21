@@ -32,7 +32,7 @@ import type { AgentAction } from '../agents/actions.ts';
 import { ActionProcesses } from '../agents/ActionProcesses.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { theme } from '../theme/theme.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { TabState } from '../SessionManager.ts';
 
 export type { AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
@@ -128,7 +128,7 @@ export class AgentTerminal extends Terminal implements Agent {
     // in the agent list as "exited") and leave the widget in place, printing a
     // notice instead. A second child-exited handler avoids touching `this` in the
     // super() call.
-    quilx.agents.add(this);
+    zym.agents.add(this);
     this.terminal.on('child-exited', () => this.onChildExited());
     this.driver?.watch(this.agentHost());
   }
@@ -457,7 +457,7 @@ function agentName(command: string[]): string {
 
 /** The configured agent argv (`agent.command`), falling back to `['claude']`. */
 function resolveAgentCommand(): string[] {
-  const value = quilx.config.get('agent.command');
+  const value = zym.config.get('agent.command');
   if (Array.isArray(value) && value.length > 0) return value.map(String);
   return ['claude'];
 }

@@ -84,7 +84,7 @@ type Widget = InstanceType<typeof Gtk.Widget>;
 
 /**
  * The host-facing surface every agent implementation exposes, so the registry
- * (`quilx.agents`), the workbench owner machinery, the sidebar (`WorkbenchList`),
+ * (`zym.agents`), the workbench owner machinery, the sidebar (`WorkbenchList`),
  * and the picker stay tool-agnostic — they hold `Agent`, never a concrete class.
  * Both the terminal `AgentTerminal` and the headless `AgentConversation` implement it.
  *

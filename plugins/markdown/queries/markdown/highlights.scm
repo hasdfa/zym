@@ -1,4 +1,4 @@
-; Markdown (block) — quilx palette + markup.* styling. Inline spans and fenced
+; Markdown (block) — zym palette + markup.* styling. Inline spans and fenced
 ; code are highlit by injected grammars (see the plugin's injections).
 
 ; Per-level headings (h1 biggest → h6); scale is set per level in theme.syntaxStyle.

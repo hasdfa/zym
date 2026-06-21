@@ -8,7 +8,7 @@
 import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
 import { Icons } from './icons.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { repoRoot, listStashes, type GitRepo, type GitOpResult } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -36,7 +36,7 @@ export function openStashPicker(host: Overlay, cwd: string, action: StashAction,
   }
   listStashes(root, (stashes) => {
     if (stashes.length === 0) {
-      quilx.notifications.addInfo('No stashes');
+      zym.notifications.addInfo('No stashes');
       return;
     }
     // value = stash ref ("stash@{N}"); the description is what's matched/shown.
@@ -55,8 +55,8 @@ export function openStashPicker(host: Overlay, cwd: string, action: StashAction,
         const ref = refByLabel.get(label);
         if (!ref) return;
         void RUN[action](git, ref).then((result) => {
-          if (result.isOk()) quilx.notifications.addSuccess(`Stash ${PAST[action]}`);
-          else quilx.notifications.addError(`Stash ${action} failed`, { detail: result.unwrapErr().message.trim() });
+          if (result.isOk()) zym.notifications.addSuccess(`Stash ${PAST[action]}`);
+          else zym.notifications.addError(`Stash ${action} failed`, { detail: result.unwrapErr().message.trim() });
         });
       },
     });

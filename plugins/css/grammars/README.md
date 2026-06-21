@@ -1,6 +1,6 @@
 # Vendored SCSS tree-sitter grammar
 
-`tree-sitter-scss.wasm` — the grammar quilx's SCSS highlighting/folding uses. SCSS
+`tree-sitter-scss.wasm` — the grammar zym's SCSS highlighting/folding uses. SCSS
 is a CSS superset (nesting, `$variables`, `#{interpolation}`, `@mixin`/`@include`,
 `@if`/`@each`/`@for`, `@use`/`@forward`, …), so it needs its own grammar.
 
@@ -15,4 +15,4 @@ ships `tree-sitter-css.wasm`, which the plugin loads by module specifier.
 - **ABI 14**, so it loads in the pinned `web-tree-sitter` 0.20.x.
 
 The highlight/fold queries (`../queries/{css,scss}/*.scm`) are authored against
-quilx's capture-name palette (see `theme.syntax`), not copied from the package.
+zym's capture-name palette (see `theme.syntax`), not copied from the package.

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-// quilx.ts instantiates a KeymapManager at load; import it first so the class is
-// defined before that runs (KeymapManager ↔ quilx is a circular import).
-import './quilx.ts';
+// zym.ts instantiates a KeymapManager at load; import it first so the class is
+// defined before that runs (KeymapManager ↔ zym is a circular import).
+import './zym.ts';
 import { KeymapManager, preemptsChord } from './KeymapManager.ts';
 
 test('getAllBindings flattens registered bindings with source, selector and priority', () => {

@@ -190,7 +190,7 @@ signal params — `get-child-position`'s `GdkRectangle*`).
    `data:`) images are deferred (async network).
 2. **See-definition / peek** (`Peek`) — the `lsp:peek-definition` command
    (`space l p`, toggles) in `AppWindow.peekDefinition` fetches the LSP
-   definition (`quilx.lsp.goto`) and shows a full-width nested read-only
+   definition (`zym.lsp.goto`) and shows a full-width nested read-only
    `TextEditor` below the symbol's line, height-capped with internal
    scroll, Escape to close. Two paths: if the definition's file is already
    open, peek a live read-only `TextEditor` onto its shared `Document`

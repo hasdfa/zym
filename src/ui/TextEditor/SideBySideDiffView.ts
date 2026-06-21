@@ -10,7 +10,7 @@
  * assembled widget is `root`. See docs/text-editor/diff.md.
  */
 import { Gtk, type SourceView } from '../../gi.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { TextEditor } from './TextEditor.ts';
 import { DiffGutter } from './DiffGutter.ts';
 import { DiffLineNumberGutter, sideLineLabels } from './DiffLineNumberGutter.ts';
@@ -33,7 +33,7 @@ let diffKeymapsRegistered = false;
 function registerDiffKeymapsOnce(): void {
   if (diffKeymapsRegistered) return;
   diffKeymapsRegistered = true;
-  quilx.keymaps.add('diff-view', {
+  zym.keymaps.add('diff-view', {
     '#SideBySideDiff #TextEditor': { tab: 'diff:focus-other-pane' },
   });
 }
@@ -99,7 +99,7 @@ export class SideBySideDiffView {
 
     // `Tab` switches focus between the panes — via the command/keymap system, not a
     // raw controller, so it stays consistent with the rest of the app's bindings.
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'diff:focus-other-pane': { didDispatch: () => this.toggleFocus(), description: 'Focus the other diff pane' },
     });
     registerDiffKeymapsOnce();

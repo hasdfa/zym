@@ -53,7 +53,7 @@ export interface InjectionDef {
 /** Tree-sitter grammar binding for a language. */
 export interface GrammarDef {
   /** The grammar `.wasm`: an absolute path, or a module specifier resolved
-   *  against quilx's `node_modules` (e.g. `tree-sitter-wasms/out/…`). */
+   *  against zym's `node_modules` (e.g. `tree-sitter-wasms/out/…`). */
   wasm: string;
   /** Absolute path to the highlights query file (`…/highlights.scm`). Plugins
    *  vendor this alongside their code (`ctx.resolve('queries/…/highlights.scm')`). */
@@ -72,7 +72,7 @@ export interface GrammarDef {
  * How to obtain a server's binary when it isn't installed. Structured sources
  * (e.g. `npm`) let the editor own the install location and map package→binary;
  * `{ command }` is a raw escape hatch for anything that doesn't fit. Installs go
- * into a quilx-managed dir (see `lsp/installer.ts`), never the user's env/project.
+ * into a zym-managed dir (see `lsp/installer.ts`), never the user's env/project.
  */
 export type InstallSpec =
   | { via: 'npm'; package: string; version?: string }

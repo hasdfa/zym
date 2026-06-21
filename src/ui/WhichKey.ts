@@ -1,7 +1,7 @@
 /*
  * WhichKey — a transient hint showing the continuations available after a
  * keymap prefix (e.g. the keys you can press after `Space`). It subscribes to
- * `quilx.keymaps.onPendingChanged`: when a prefix is queued it shows, after a
+ * `zym.keymaps.onPendingChanged`: when a prefix is queued it shows, after a
  * short delay, a card listing each remaining key and the command it runs; when
  * the sequence completes or breaks it hides.
  *
@@ -13,7 +13,7 @@ import { Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { PendingBinding } from '../KeymapManager.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -46,7 +46,7 @@ export class WhichKey {
     this.host = host;
     // which-key interface is disabled for now — don't subscribe to pending
     // prefix changes so the hint card never shows.
-    // quilx.keymaps.onPendingChanged((pending) => this.update(pending));
+    // zym.keymaps.onPendingChanged((pending) => this.update(pending));
   }
 
   private update(pending: PendingBinding[] | null): void {
@@ -89,7 +89,7 @@ export class WhichKey {
     );
     box.append(key);
 
-    const label = quilx.commands.descriptionFor(binding.command) ?? binding.command;
+    const label = zym.commands.descriptionFor(binding.command) ?? binding.command;
     const cmd = new Gtk.Label({ xalign: 0, useMarkup: true });
     cmd.setMarkup(`<span alpha="65%">${escapeMarkup(label)}</span>`);
     box.append(cmd);

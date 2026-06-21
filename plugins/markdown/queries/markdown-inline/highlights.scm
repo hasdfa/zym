@@ -1,4 +1,4 @@
-; Markdown inline — quilx palette + markup.* styling.
+; Markdown inline — zym palette + markup.* styling.
 (code_span) @markup.raw
 [ (emphasis_delimiter) (code_span_delimiter) ] @punctuation
 (emphasis) @markup.emphasis

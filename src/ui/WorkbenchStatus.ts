@@ -13,13 +13,13 @@
  *    no server is running. Clicking opens the notification log (where LSP
  *    notices land). The tooltip names the servers.
  *
- * Reads live from `quilx.lsp` (the diagnostics store and the server status it now
+ * Reads live from `zym.lsp` (the diagnostics store and the server status it now
  * exposes) and refreshes on their change events. The assembled widget is `root`.
  */
 import { Gtk } from '../gi.ts';
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { Icons, iconLabel } from './icons.ts';
@@ -55,9 +55,9 @@ const DIAG_ANIM_MS = 200;
 // Both buttons get the same horizontal padding so the pill and the icon match.
 addStyles(`
   #WorkbenchStatus button { min-width: 0; padding-left: 6px; padding-right: 6px; }
-  #WorkbenchStatus .quilx-lsp-ready { color: var(--t-ui-text-muted); }
-  #WorkbenchStatus .quilx-lsp-failed { color: var(--t-ui-status-error); }
-  #WorkbenchStatus .quilx-status-count { font-size: var(--font-size-small); }
+  #WorkbenchStatus .zym-lsp-ready { color: var(--t-ui-text-muted); }
+  #WorkbenchStatus .zym-lsp-failed { color: var(--t-ui-status-error); }
+  #WorkbenchStatus .zym-status-count { font-size: var(--font-size-small); }
 `);
 
 export interface WorkbenchStatusOptions {
@@ -101,7 +101,7 @@ export class WorkbenchStatus {
     // spans share a baseline), wrapped in a revealer so each content change
     // fades+slides (opacity + width), inside a flat button.
     this.diagnosticsLabel = new Gtk.Label({ useMarkup: true });
-    this.diagnosticsLabel.addCssClass('quilx-status-count'); // small secondary-text size
+    this.diagnosticsLabel.addCssClass('zym-status-count'); // small secondary-text size
     this.diagnosticsRevealer = new Gtk.Revealer({
       transitionType: Gtk.RevealerTransitionType.FADE_SLIDE_RIGHT,
       transitionDuration: DIAG_ANIM_MS,
@@ -132,12 +132,12 @@ export class WorkbenchStatus {
     this.root.append(this.diagnosticsButton);
     this.root.append(this.lspButton);
 
-    this.subs.add(quilx.lsp.diagnostics.onDidUpdate(() => this.scheduleDiagnostics()));
-    this.subs.add(quilx.lsp.onDidChangeServers(() => this.refreshLsp()));
+    this.subs.add(zym.lsp.diagnostics.onDidUpdate(() => this.scheduleDiagnostics()));
+    this.subs.add(zym.lsp.onDidChangeServers(() => this.refreshLsp()));
     // observe() fires immediately (initial render — unmapped, so it snaps without
     // animation) and again whenever the config key is edited.
     this.subs.add(
-      quilx.config.observe('diagnostics.statusSeverities', (value) => {
+      zym.config.observe('diagnostics.statusSeverities', (value) => {
         this.enabledSeverities = new Set(Array.isArray(value) ? value.map(String) : []);
         this.syncDiagnostics();
       }),
@@ -165,7 +165,7 @@ export class WorkbenchStatus {
   // The target pill content for the current diagnostics, or null when clean. Only
   // the configured severities (with a non-zero count) appear, in severity order.
   private diagnosticsTarget(): { markup: string; tooltip: string } | null {
-    const counts = quilx.lsp.diagnostics.countsBySeverity(this.options.ownsPath);
+    const counts = zym.lsp.diagnostics.countsBySeverity(this.options.ownsPath);
     const shown = DIAG_SEVERITIES.filter((s) => this.enabledSeverities.has(s.key) && (counts[s.severity] ?? 0) > 0);
     if (shown.length === 0) return null;
     const markup = shown.map((s) => countMarkup(counts[s.severity]!, severityStyle(s.severity))).join(DIAG_SEPARATOR);
@@ -227,10 +227,10 @@ export class WorkbenchStatus {
   // Aggregate the per-server states into one indicator: spinner (starting/
   // installing) > error (a server failed) > ready glyph > hidden (nothing up).
   private refreshLsp(): void {
-    const all = quilx.lsp.serverStates();
+    const all = zym.lsp.serverStates();
     // Scope to the active workbench's servers (its worktree's project roots).
     const states = this.options.ownsServer ? all.filter((s) => this.options.ownsServer!(s.rootDir)) : all;
-    const starting = quilx.lsp.isInstalling || states.some((s) => s.state === 'starting');
+    const starting = zym.lsp.isInstalling || states.some((s) => s.state === 'starting');
     const failed = states.filter((s) => s.state === 'failed').map((s) => s.name);
     const ready = states.filter((s) => s.state === 'ready').map((s) => s.name);
 
@@ -244,7 +244,7 @@ export class WorkbenchStatus {
       this.lspIcon.setVisible(false);
       this.lspSpinner.setVisible(true);
       this.lspSpinner.start();
-      this.lspButton.setTooltipText(quilx.lsp.isInstalling ? 'Installing language server…' : 'Starting language server…');
+      this.lspButton.setTooltipText(zym.lsp.isInstalling ? 'Installing language server…' : 'Starting language server…');
       return;
     }
     this.lspSpinner.stop();
@@ -253,15 +253,15 @@ export class WorkbenchStatus {
 
     if (failed.length > 0) {
       this.lspIcon.setText(Icons.error);
-      this.lspIcon.removeCssClass('quilx-lsp-ready');
-      this.lspIcon.addCssClass('quilx-lsp-failed');
+      this.lspIcon.removeCssClass('zym-lsp-ready');
+      this.lspIcon.addCssClass('zym-lsp-failed');
       this.lspButton.setTooltipText(`Language server failed: ${failed.join(', ')}`);
       return;
     }
 
     this.lspIcon.setText(LSP_GLYPH);
-    this.lspIcon.removeCssClass('quilx-lsp-failed');
-    this.lspIcon.addCssClass('quilx-lsp-ready');
+    this.lspIcon.removeCssClass('zym-lsp-failed');
+    this.lspIcon.addCssClass('zym-lsp-ready');
     this.lspButton.setTooltipText(`Language server${ready.length === 1 ? '' : 's'}: ${ready.join(', ')}`);
   }
 

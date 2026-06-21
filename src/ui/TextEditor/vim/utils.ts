@@ -390,7 +390,7 @@ function getLineTextToBufferPosition (editor: EditorModel, {row, column}: {row: 
 }
 
 function getCodeFoldRanges (editor: EditorModel): Range[] {
-  // quilx: foldable ranges come from the tree-sitter fold model (SyntaxController),
+  // zym: foldable ranges come from the tree-sitter fold model (SyntaxController),
   // surfaced via EditorModel — not Atom's tokenizedBuffer.
   return editor.getFoldableRanges()
 }
@@ -1231,7 +1231,7 @@ function normalizeIndent (text: string, editor: EditorModel, targetRange: RangeL
 }
 
 function atomVersionSatisfies (_condition: string): boolean {
-  // No Atom version gate in quilx; treat all version checks as satisfied.
+  // No Atom version gate in zym; treat all version checks as satisfied.
   return true
 }
 

@@ -16,13 +16,13 @@ import * as Path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
 import { Gtk } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
 import { ContinuousDiffView } from './ContinuousDiffView.ts';
 import { invalidateRepoRoot } from '../git.ts';
 
 Gtk.init();
-quilx.lsp.configure({ enable: false });
+zym.lsp.configure({ enable: false });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(cond: () => boolean, tries = 150, ms = 20): Promise<boolean> {

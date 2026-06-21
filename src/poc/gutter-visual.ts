@@ -26,7 +26,7 @@ const Graphene = gi.require('Graphene', '1.0');
 const fontDir = Path.join(Path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'fonts');
 
 const loop = GLib.MainLoop.new(null, false);
-const app = new Adw.Application({ applicationId: 'com.github.romgrk.quilx.guttervisual' });
+const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.guttervisual' });
 
 app.on('activate', async () => {
   // Register the bundled Nerd Font AFTER GTK init (like registerBundledFonts) so the

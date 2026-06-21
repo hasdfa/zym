@@ -1,7 +1,7 @@
 /*
  * PluginContextImpl — the concrete `PluginContext` handed to a plugin's
  * `activate`. It wraps the application singletons (the `languages` registry,
- * `quilx.keymaps` / `quilx.commands` / `quilx.config`, the style manager) and
+ * `zym.keymaps` / `zym.commands` / `zym.config`, the style manager) and
  * records every contribution as a Disposable in a bag the `PluginRegistry`
  * disposes on deactivation.
  *
@@ -13,7 +13,7 @@ import { Disposable, CompositeDisposable, type DisposableLike } from '../util/ev
 import type { TextEditor } from '../ui/TextEditor/index.ts';
 import { languages } from '../lang/index.ts';
 import { clearGrammar } from '../syntax/grammar.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { styles } from '../styles.ts';
 import type { Gtk } from '../gi.ts';
 import type { LanguageDef, GrammarDef, ServerDef } from '../lang/types.ts';
@@ -70,17 +70,17 @@ export class PluginContextImpl implements PluginContext {
   }
 
   registerKeymap(keymap: KeymapBySelector, priority = 0): Disposable {
-    return this.track(quilx.keymaps.add(`plugin:${this.id}`, keymap, priority));
+    return this.track(zym.keymaps.add(`plugin:${this.id}`, keymap, priority));
   }
 
   registerCommands(target: string | Widget, commands: CommandMap): Disposable {
-    return this.track(quilx.commands.add(target, commands));
+    return this.track(zym.commands.add(target, commands));
   }
 
   registerConfig(schema: Record<string, ConfigSchema>): Disposable {
-    quilx.config.addSchema(schema);
+    zym.config.addSchema(schema);
     return this.track(new Disposable(() => {
-      for (const key of Object.keys(schema)) quilx.config.removeSchema(key);
+      for (const key of Object.keys(schema)) zym.config.removeSchema(key);
     }));
   }
 
@@ -89,7 +89,7 @@ export class PluginContextImpl implements PluginContext {
   }
 
   observeTextEditors(callback: (editor: TextEditor) => DisposableLike | void): Disposable {
-    return this.track(quilx.workspace.observeTextEditors(callback));
+    return this.track(zym.workspace.observeTextEditors(callback));
   }
 
   /** Dispose every tracked contribution (called by the registry on deactivate). */

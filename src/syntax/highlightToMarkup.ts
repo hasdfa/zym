@@ -13,7 +13,7 @@
 import { getGrammar, createParser, type Grammar } from './grammar.ts';
 import { theme } from '../theme/theme.ts';
 
-// Fence/info-string language → quilx grammar id (we only ship typescript + tsx;
+// Fence/info-string language → zym grammar id (we only ship typescript + tsx;
 // tsx is the superset for JS/JSX). Unknown languages get no highlighting.
 const LANG_ALIASES: Record<string, string> = {
   ts: 'typescript',

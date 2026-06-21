@@ -35,17 +35,17 @@ const AGENT_MODES = new Set<AgentMode>([
 const FileProto = (Gio.File as any).prototype;
 
 // The bundled hook reporter (assets/hooks/agent-status.sh), invoked by claude's
-// hooks to write the session status to QUILX_STATUS_FILE. This file lives at
+// hooks to write the session status to ZYM_STATUS_FILE. This file lives at
 // src/agents/claude-tui/, so three `..` reach the repo root.
 const HOOK_SCRIPT = Path.join(
   Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'hooks', 'agent-status.sh',
 );
 
-// The bundled agent↔editor MCP bridge (assets/mcp/quilxBridge.mjs), exposing the
+// The bundled agent↔editor MCP bridge (assets/mcp/zymBridge.mjs), exposing the
 // `set_worktree` / `set_actions` tools the agent calls to talk to the editor. Run
 // by claude as an MCP stdio server via --mcp-config.
 const BRIDGE_SCRIPT = Path.join(
-  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'quilxBridge.mjs',
+  Path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assets', 'mcp', 'zymBridge.mjs',
 );
 
 export class ClaudeSession implements AgentDriver {
@@ -86,7 +86,7 @@ export class ClaudeSession implements AgentDriver {
       return null; // resume + status hooks are claude-only
     }
     const id = randomUUID();
-    const dir = Path.join(process.env.XDG_RUNTIME_DIR || Os.tmpdir(), 'quilx', 'agents');
+    const dir = Path.join(process.env.XDG_RUNTIME_DIR || Os.tmpdir(), 'zym', 'agents');
     const statusFile = Path.join(dir, id);
     try {
       Fs.mkdirSync(dir, { recursive: true });
@@ -102,10 +102,10 @@ export class ClaudeSession implements AgentDriver {
 
     const run = (state: string) => `sh ${shellQuote(HOOK_SCRIPT)} ${state}`;
     const settings = {
-      env: { QUILX_AGENT_ID: id, QUILX_STATUS_FILE: statusFile },
+      env: { ZYM_AGENT_ID: id, ZYM_STATUS_FILE: statusFile },
       // Pre-allow the bridge tools so announcing a worktree / registering actions
       // never prompts the user.
-      permissions: { allow: ['mcp__quilx__set_worktree', 'mcp__quilx__set_actions'] },
+      permissions: { allow: ['mcp__zym__set_worktree', 'mcp__zym__set_actions'] },
       hooks: {
         SessionStart: [{ hooks: [{ type: 'command', command: run('idle') }] }],
         UserPromptSubmit: [{ hooks: [{ type: 'command', command: run('working') }] }],
@@ -125,14 +125,14 @@ export class ClaudeSession implements AgentDriver {
       },
     };
     // The agent↔editor bridge as an MCP stdio server: claude spawns it (node +
-    // the bundled script), and it inherits QUILX_STATUS_FILE / QUILX_ACTIONS_FILE
+    // the bundled script), and it inherits ZYM_STATUS_FILE / ZYM_ACTIONS_FILE
     // so its set_worktree / set_actions tools write to this session's IPC files.
     const mcpConfig = {
       mcpServers: {
-        quilx: {
-          command: process.execPath, // the node running quilx — a known-good node
+        zym: {
+          command: process.execPath, // the node running zym — a known-good node
           args: [BRIDGE_SCRIPT],
-          env: { QUILX_STATUS_FILE: statusFile, QUILX_ACTIONS_FILE: `${statusFile}.actions` },
+          env: { ZYM_STATUS_FILE: statusFile, ZYM_ACTIONS_FILE: `${statusFile}.actions` },
         },
       },
     };

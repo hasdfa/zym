@@ -19,7 +19,7 @@ Two mechanisms, picked per widget:
 
 A component's styling identity is `setName('WidgetName')` → `#WidgetName`
 (PascalCase, mirrors the file/class name). Everything hangs off that id;
-**never prefix classes with `quilx-`** — the id scope already namespaces
+**never prefix classes with `zym-`** — the id scope already namespaces
 them. Four patterns, in preference order:
 
 - **`#WidgetName`** — the component's own root; the primary hook for its
@@ -116,7 +116,7 @@ There is **one** secondary-text size. Source it consistently:
 
 - **CSS-styled widget** (its own label/box): apply a class with
   `font-size: var(--font-size-small)`. Example: the diagnostics counts in
-  `WorkbenchStatus` (`.quilx-status-count`) and the per-row file count in
+  `WorkbenchStatus` (`.zym-status-count`) and the per-row file count in
   `WorkbenchList`.
 - **Inline sub-span** inside a larger markup label: use Pango
   `size="smaller"` (≈ 0.83×, the closest markup equivalent — markup can't

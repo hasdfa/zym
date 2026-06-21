@@ -12,7 +12,7 @@
  * LSP request. Gated by `editor.inlayHints`.
  */
 import type { SourceView } from '../../gi.ts';
-import { quilx } from '../../quilx.ts';
+import { zym } from '../../zym.ts';
 import { VirtualText } from './VirtualText.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';
 
@@ -50,7 +50,7 @@ export class InlayHintController {
   /** Fetch inlay hints for the whole document and render them end-of-line per line. */
   async refresh(): Promise<void> {
     if (this.disposed) return;
-    if (quilx.config.get('editor.inlayHints') === false) {
+    if (zym.config.get('editor.inlayHints') === false) {
       this.annotations.clear();
       return;
     }
@@ -60,7 +60,7 @@ export class InlayHintController {
       return;
     }
     const token = ++this.seq;
-    const hints = await quilx.lsp.inlayHints(doc);
+    const hints = await zym.lsp.inlayHints(doc);
     if (this.disposed || token !== this.seq) return; // superseded by a newer request
     this.lastHints = hints;
     this.apply();
@@ -74,7 +74,7 @@ export class InlayHintController {
 
   /** Group cached hints per (model) line, translate to view lines, render end-of-line. */
   private apply(): void {
-    if (quilx.config.get('editor.inlayHints') === false) {
+    if (zym.config.get('editor.inlayHints') === false) {
       this.annotations.clear();
       return;
     }

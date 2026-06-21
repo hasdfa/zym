@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * quilx — a modal source-code editor built with GtkSourceView 5, GTK 4 and
+ * zym — a modal source-code editor built with GtkSourceView 5, GTK 4 and
  * Adwaita, on node-gtk.
  *
  * Features:

@@ -16,7 +16,7 @@
 import { Adw, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { NERDFONT } from './nerdfont.ts';
 
 // Square off the tab buttons (Adwaita rounds them by default) and strip the gaps
@@ -328,7 +328,7 @@ export class Panel {
   // its root widget instance. The shared `Panel` key bindings (central keymap)
   // route keystrokes to the focused panel, which dispatches them back here.
   private registerTabCommands(): void {
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'tab:next': { didDispatch: () => this.selectNextTab(), description: 'Next tab' },
       'tab:previous': { didDispatch: () => this.selectPreviousTab(), description: 'Previous tab' },
       'tab:go-to-last': { didDispatch: () => this.selectLastTab(), description: 'Go to the last tab' },

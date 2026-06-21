@@ -1,7 +1,7 @@
 # Agent: claude-sdk (headless, natively rendered)
 
 A second Claude agent implementation that runs `claude` **headlessly** (the
-`claude -p` stream-json protocol) and renders the conversation in quilx's
+`claude -p` stream-json protocol) and renders the conversation in zym's
 own widgets, instead of hosting Claude's interactive TUI inside a
 `Vte.Terminal`.
 
@@ -14,8 +14,8 @@ is only about the `claude-sdk` kind.
 
 Each `claude-tui` agent is a full Ink/React TUI process whose render loop
 repaints ANSI on every token; Vte then re-parses + rasterises that on
-quilx's GTK main thread. The cost shows up *in the `claude` process* (htop)
-**and** on quilx's loop, and Vte (CPU rasteriser, shared loop) is worse at
+zym's GTK main thread. The cost shows up *in the `claude` process* (htop)
+**and** on zym's loop, and Vte (CPU rasteriser, shared loop) is worse at
 it than a GPU terminal like kitty. GTK pins all widget work to one thread,
 so the cost can't be threaded away — only removed. Headless removes it:
 `claude -p` emits compact JSON deltas (no ANSI, no repaint, no Vte parse),
@@ -26,7 +26,7 @@ which we render incrementally into native widgets.
 `@anthropic-ai/claude-agent-sdk` is a thin wrapper over exactly this
 `claude -p` protocol — but it `child_process.spawn`s from the calling
 process, assumes a vanilla Node loop, and manages its own CLI binary.
-quilx is opinionated against all three (fork-from-big-parent discipline;
+zym is opinionated against all three (fork-from-big-parent discipline;
 node-gtk GLib loop; must run the **user's** installed `claude` with their
 auth/config). So:
 
@@ -42,7 +42,7 @@ auth/config). So:
   grounded in the **observed** wire output (see below); swap them for the
   SDK's once aligned.
 - **Migration-friendly:** the UI consumes `SDKMessage`-shaped events either
-  way, so if quilx ever leaves node-gtk we can swap our transport for the
+  way, so if zym ever leaves node-gtk we can swap our transport for the
   SDK's `query()` runtime in one localized change.
 
 ## Wire protocol (observed live, claude-code 2.1.x)
@@ -104,7 +104,7 @@ session name, worktree):
 
 For this kind, status, edited files, session id, cwd, and cost all arrive
 as typed stream events — no `agent-status.sh` hooks, status-file scraping,
-or `quilxBridge` MCP. (`claude-tui` keeps the hook path.)
+or `zymBridge` MCP. (`claude-tui` keeps the hook path.)
 
 ### Permissions — `--permission-prompt-tool`
 
@@ -112,7 +112,7 @@ The TUI's in-terminal permission prompt becomes a structured request
 rendered natively. We wire `--permission-prompt-tool` from the start (not
 an MVP shortcut like `acceptEdits`): claude calls a designated MCP tool to
 ask for permission; we expose that tool from a small stdio MCP server
-(`assets/mcp/quilxPermission.mjs`, sibling to `quilxBridge.mjs`), the call
+(`assets/mcp/zymPermission.mjs`, sibling to `zymBridge.mjs`), the call
 surfaces to `SdkSession` as a permission request (status → `waiting`), the
 native card collects allow/deny, and the decision is returned as the tool
 result. This exercises the `waiting` path for real, and is exactly how the
@@ -127,7 +127,7 @@ A single `AppWindow.openAgent(options)` serves both kinds: it resolves an
 `AgentConfig` (from `src/agents/configs.ts`, picked by the
 `agent.implementation` flag or an explicit `options.kind`) and that
 config's `create()` factory builds the host. Both kinds register in
-`quilx.agents` and get their own workbench (own center + Files/Git + docks).
+`zym.agents` and get their own workbench (own center + Files/Git + docks).
 The sidebar/picker read the shared observable surface, so they don't branch
 on kind. Stop/close/restart route correctly per kind.
 
@@ -189,7 +189,7 @@ agent; turns are `{type:'user',...}` lines on stdin.
 
 - **Permission gating = `--permission-prompt-tool` (required, not
   optional).** Without it claude runs every tool unattended. claude calls
-  our stdio MCP (`assets/mcp/quilxPermission.mjs`); it bridges to
+  our stdio MCP (`assets/mcp/zymPermission.mjs`); it bridges to
   `SdkSession` over an atomic file pair; the native card returns
   `{behavior:'allow'|'deny',...}`. This is exactly how the Agent SDK's
   `canUseTool` works internally.
@@ -219,4 +219,4 @@ agent; turns are `{type:'user',...}` lines on stdin.
   `is_error:true` — unavoidable; claude reads it fine).
 - **Unknown event types** (`dispatch`→false, e.g. an inbound
   `control_request`) are surfaced as a raw-JSON row, never dropped.
-- **Debug log** is opt-in via `QUILX_SDK_DEBUG` (off in tests).
+- **Debug log** is opt-in via `ZYM_SDK_DEBUG` (off in tests).

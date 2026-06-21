@@ -3,7 +3,7 @@
 // Upstream's file is ~900 lines covering many exotic transforms (sort, rotate,
 // align, reflow, external-command, select-list, URI-encode, split-arguments, …)
 // that depend on Atom-only infra (BufferedProcess, select-list UI) or niche
-// grammar services. quilx vendors only the high-value, self-contained operators
+// grammar services. zym vendors only the high-value, self-contained operators
 // — the class bodies are copied verbatim from upstream (names preserved to ease
 // diffing); the rest are intentionally omitted and can be ported on demand:
 //   - ChangeCase family → gU / gu / g~  (uses the local `changeCase` shim)

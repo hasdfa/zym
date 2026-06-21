@@ -1,5 +1,5 @@
 /*
- * The Markdown plugin — quilx's second plugin, and the proof that adding a
+ * The Markdown plugin — zym's second plugin, and the proof that adding a
  * language is a small, isolated drop-in. Where the TypeScript plugin exercises
  * the grammar/LSP surface, this one adds detection, an LSP server (marksman),
  * and a config-schema contribution (`markdown.*`) — the `registerConfig` surface

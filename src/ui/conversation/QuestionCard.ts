@@ -18,10 +18,10 @@ import type { AgentQuestion, QuestionRequest } from '../../agents/claude-sdk/Sdk
 type Answer = { header: string; labels: string[]; notes?: string };
 
 addStyles(`
-  .quilx-q-option { padding: 4px 8px; border-radius: 6px; }
-  .quilx-q-option.is-focused { background: var(--t-ui-surface-selected); }
-  .quilx-q-note { opacity: 0.7; padding-left: 22px; font-style: italic; }
-  .quilx-q-hint { opacity: 0.5; font-size: var(--font-size-small); }
+  .zym-q-option { padding: 4px 8px; border-radius: 6px; }
+  .zym-q-option.is-focused { background: var(--t-ui-surface-selected); }
+  .zym-q-note { opacity: 0.7; padding-left: 22px; font-style: italic; }
+  .zym-q-hint { opacity: 0.5; font-size: var(--font-size-small); }
 `);
 
 interface Option { row: InstanceType<typeof Gtk.Box>; content: InstanceType<typeof Gtk.Label>; note: InstanceType<typeof Gtk.Label>; }
@@ -43,7 +43,7 @@ export class QuestionCard {
     this.qs = req.questions;
     this.onAnswer = onAnswer;
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
-    this.root.addCssClass('quilx-conversation-question');
+    this.root.addCssClass('zym-conversation-question');
     this.root.setFocusable(true);
 
     if (this.qs.length > 1) {
@@ -64,9 +64,9 @@ export class QuestionCard {
       q.options.forEach((opt, oi) => {
         const content = new Gtk.Label({ xalign: 0, wrap: true });
         const note = new Gtk.Label({ xalign: 0, wrap: true, visible: false });
-        note.addCssClass('quilx-q-note');
+        note.addCssClass('zym-q-note');
         const row = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-        row.addCssClass('quilx-q-option');
+        row.addCssClass('zym-q-option');
         row.append(content);
         row.append(note);
         const click = new Gtk.GestureClick();
@@ -81,7 +81,7 @@ export class QuestionCard {
     });
 
     const hint = new Gtk.Label({ xalign: 0, label: 'j/k answers · h/l questions · enter select · n note' });
-    hint.addCssClass('quilx-q-hint');
+    hint.addCssClass('zym-q-hint');
     this.root.append(hint);
 
     const keys = new Gtk.EventControllerKey();
@@ -172,8 +172,8 @@ export class QuestionCard {
 
     // Replace the interactive card with a compact record; drop the active border.
     clearChildren(this.root);
-    this.root.removeCssClass('quilx-conversation-question');
-    this.root.addCssClass('quilx-conversation-question-answered');
+    this.root.removeCssClass('zym-conversation-question');
+    this.root.addCssClass('zym-conversation-question-answered');
     const picked = answers.filter((a) => a.labels.length > 0);
     const text = picked.length > 0
       ? picked.map((a) => `${a.header}: ${a.labels.join(', ')}${a.notes ? ` (${a.notes})` : ''}`).join('   ·   ')

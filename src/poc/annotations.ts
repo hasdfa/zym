@@ -33,7 +33,7 @@ const SAMPLE = [
 
 const loop = GLib.MainLoop.new(null, false);
 const app = new Adw.Application({
-  applicationId: 'com.github.romgrk.quilx.poc.annotations',
+  applicationId: 'com.github.romgrk.zym.poc.annotations',
   flags: Gio.ApplicationFlags.NON_UNIQUE,
 });
 
@@ -83,7 +83,7 @@ app.on('activate', () => {
     const scrolled = new Gtk.ScrolledWindow();
     scrolled.setChild(view);
     const window = new Adw.ApplicationWindow({ application: app });
-    window.setTitle('quilx POC — GtkSourceAnnotations (end-of-line virtual text)');
+    window.setTitle('zym POC — GtkSourceAnnotations (end-of-line virtual text)');
     window.setDefaultSize(720, 420);
     window.setContent(scrolled);
     window.on('close-request', () => { loop.quit(); app.quit(); return false; });

@@ -1,19 +1,19 @@
 # System integration
 
-How quilx tracks the host desktop's settings — light/dark appearance,
+How zym tracks the host desktop's settings — light/dark appearance,
 accent, and fonts — and keeps the running UI in sync when the user
 changes them. The guiding rule: **OS appearance and font changes must be
 followed through at runtime**, without a restart.
 
 Fonts react live. The light/dark preference only partially reacts (the
-Adwaita-fallback editor scheme and the terminal flip, but not the quilx
+Adwaita-fallback editor scheme and the terminal flip, but not the zym
 theme palette). This page records what reacts today, where the gaps are,
 and the plan to close them.
 
 ## Goal
 
 When the user changes a relevant desktop setting, the corresponding
-quilx surface updates live:
+zym surface updates live:
 
 - **Light ⇄ dark** → editor scheme, syntax colors, chrome
   (header/status/tree), pickers/popovers, terminal — and, ideally, the
@@ -40,14 +40,14 @@ What exists, and whether it reacts to a live change:
   (`src/ui/Terminal.ts`) calls `setColors(null, null, null)` so VTE
   inherits libadwaita's themed fg/bg, which flip with the system scheme.
   ✅ *reacts passively* (no explicit handler).
-- **Active theme** — `export const theme = loadTheme('quilx')`
+- **Active theme** — `export const theme = loadTheme('zym')`
   (`src/theme/theme.ts`) loads a **fixed** single theme file
-  (`quilx.json`, our owned format — see [theming.md](theming.md)) at
+  (`zym.json`, our owned format — see [theming.md](theming.md)) at
   module load. The whole `theme.ui.*` / `theme.syntax.*` palette is
   static. ❌ does **not** follow OS light/dark; there is no light↔dark
   variant swap.
 - **`core.followSystemColorScheme` config** — declared in `CONFIG_SCHEMA`
-  (`src/quilx.ts`, default `true`) but **not read anywhere**. ❌ dead
+  (`src/zym.ts`, default `true`) but **not read anywhere**. ❌ dead
   setting; should gate the follow-the-OS behavior once it exists.
 - **Fonts** — ✅ centralized in the `fonts` store (`FontStore` in
   `src/fonts.ts`). One reactive stylesheet
@@ -90,7 +90,7 @@ What exists, and whether it reacts to a live change:
 
 ## Gaps (the "not followed through" list)
 
-1. OS **light ⇄ dark** change → the quilx theme palette (chrome, syntax,
+1. OS **light ⇄ dark** change → the zym theme palette (chrome, syntax,
    picker colors) does not switch; only the Adwaita-fallback editor
    scheme + terminal do.
 2. **Accent** change → match highlight unchanged.
@@ -106,9 +106,9 @@ re-appliable.
   subscribes to their `changed::monospace-font-name`,
   `changed::font-name`, `changed::color-scheme` (+ accent) /
   `notify::dark`, and emits coarse signals: `onFontsChanged`,
-  `onAppearanceChanged`. Lives under `quilx.system` (global).
+  `onAppearanceChanged`. Lives under `zym.system` (global).
 - [ ] **Theme follows appearance** — author a light/dark theme file pair
-  (e.g. `quilx.json` + `quilx-light.json`, each declaring its
+  (e.g. `zym.json` + `zym-light.json`, each declaring its
   `appearance`) and pick by `StyleManager.getDark()`; re-load + re-emit a
   `theme:changed` on appearance change. Gate on
   `core.followSystemColorScheme`; when off, keep the user's chosen theme.

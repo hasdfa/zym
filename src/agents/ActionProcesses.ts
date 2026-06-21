@@ -16,7 +16,7 @@
  * capture it); an exit the user didn't trigger surfaces as a notification.
  */
 import { Gio } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import type { AgentAction } from './actions.ts';
 
 type Subprocess = InstanceType<typeof Gio.Subprocess>;
@@ -50,7 +50,7 @@ export class ActionProcesses {
       launcher.setCwd(cwd);
       proc = launcher.spawnv([shell, '-l', '-c', action.command]);
     } catch (error) {
-      quilx.notifications.addError(`Action “${action.label}” failed to start: ${describeError(error)}`);
+      zym.notifications.addError(`Action “${action.label}” failed to start: ${describeError(error)}`);
       return;
     }
     this.procs.set(action.id, proc);
@@ -67,7 +67,7 @@ export class ActionProcesses {
       const exitedClean = proc.getIfExited() && proc.getExitStatus() === 0;
       if (!exitedClean) {
         const code = proc.getIfExited() ? proc.getExitStatus() : null;
-        quilx.notifications.addError(
+        zym.notifications.addError(
           code === null
             ? `Action “${action.label}” was terminated.`
             : `Action “${action.label}” exited with code ${code}.`,

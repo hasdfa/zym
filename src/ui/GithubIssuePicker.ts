@@ -9,7 +9,7 @@ import { Gtk } from '../gi.ts';
 import { openPicker } from './Picker.ts';
 import { proseMarkup } from './proseMarkup.ts';
 import { openUrl } from './openUrl.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { repoRoot } from '../git.ts';
 import { fetchIssues } from '../github.ts';
 
@@ -23,7 +23,7 @@ export function openGithubIssuePicker(host: Overlay, cwd: string): void {
   }
   fetchIssues(root, (issues) => {
     if (issues.length === 0) {
-      quilx.notifications.addInfo('No open issues');
+      zym.notifications.addInfo('No open issues');
       return;
     }
     const authorByUrl = new Map<string, string>();

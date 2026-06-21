@@ -1,9 +1,9 @@
 /*
- * Conversions between quilx `Point`/`Range` and LSP `Position`/`Range`, plus
+ * Conversions between zym `Point`/`Range` and LSP `Position`/`Range`, plus
  * `file://` URI helpers.
  *
  * Both coordinate systems are zero-based by line. The subtlety is the column:
- * quilx columns are *codepoint* offsets within a line (matching `GtkTextIter`
+ * zym columns are *codepoint* offsets within a line (matching `GtkTextIter`
  * line offsets), while LSP columns ("characters") are measured in the units of
  * the negotiated position encoding — UTF-16 code units by default, optionally
  * UTF-8 bytes or UTF-32 codepoints (LSP 3.17 `general.positionEncodings`).

@@ -31,18 +31,18 @@ const STATUS_COLOR: Record<AgentStatus, string> = {
   exited: theme.ui.text.muted,
 };
 
-const DOT_CLASSES = ['quilx-agent-working', 'quilx-agent-waiting', 'quilx-agent-idle', 'quilx-agent-exited'];
+const DOT_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle', 'zym-agent-exited'];
 // Slow fade in/out applied while an agent needs attention (waiting on the user, or
 // finished but unseen) — see Agent.needsAttention.
-const BLINK_CLASS = 'quilx-agent-blink';
+const BLINK_CLASS = 'zym-agent-blink';
 addStyles(`
-  .quilx-agent-working { color: ${STATUS_COLOR.working}; }
-  .quilx-agent-waiting { color: ${STATUS_COLOR.waiting}; }
-  .quilx-agent-idle    { color: ${STATUS_COLOR.idle}; }
-  .quilx-agent-exited  { color: ${STATUS_COLOR.exited}; }
+  .zym-agent-working { color: ${STATUS_COLOR.working}; }
+  .zym-agent-waiting { color: ${STATUS_COLOR.waiting}; }
+  .zym-agent-idle    { color: ${STATUS_COLOR.idle}; }
+  .zym-agent-exited  { color: ${STATUS_COLOR.exited}; }
   /* Hold full visibility ~0.6s (88%→12% across the wrap), fade down, hold fully
      invisible ~0.2s (46%→54%), fade back up — all linear, over 2.4s. */
-  @keyframes quilx-agent-blink-kf {
+  @keyframes zym-agent-blink-kf {
     0%   { opacity: 1; }
     12%  { opacity: 1; }
     46%  { opacity: 0; }
@@ -51,7 +51,7 @@ addStyles(`
     100% { opacity: 1; }
   }
   .${BLINK_CLASS} {
-    animation-name: quilx-agent-blink-kf;
+    animation-name: zym-agent-blink-kf;
     animation-duration: 2.4s;
     animation-timing-function: linear;
     animation-iteration-count: infinite;
@@ -72,7 +72,7 @@ function iconFontAttrs(): InstanceType<typeof Pango.AttrList> {
 /** Set `label` to reflect `status`: the colored dot, or the cog glyph while working. */
 export function applyAgentStatus(label: InstanceType<typeof Gtk.Label>, status: AgentStatus): void {
   for (const cls of DOT_CLASSES) label.removeCssClass(cls);
-  label.addCssClass(`quilx-agent-${status}`); // idle | working | waiting | exited
+  label.addCssClass(`zym-agent-${status}`); // idle | working | waiting | exited
   if (status === 'working') {
     label.setText(WORKING_GLYPH);
     label.setAttributes(iconFontAttrs());

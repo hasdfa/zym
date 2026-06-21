@@ -5,7 +5,7 @@
  * `settings.get(param)` / `settings.set(param, value)` and occasionally observes
  * changes. Just as upstream reads its keys off `atom.config` under the
  * `vim-mode-plus` namespace, this registers its schema into the shared
- * `quilx.config` and exposes a namespaced view — so the global config stays the
+ * `zym.config` and exposes a namespaced view — so the global config stays the
  * single source of truth and these params show up as `vim-mode-plus.*`.
  *
  * We seed only the parameters the ported core actually reads and grow the schema
@@ -13,7 +13,7 @@
  * port of upstream's ~100-entry config.
  */
 import type { ConfigSchema } from '../../../util/Config.ts';
-import { quilx } from '../../../quilx.ts';
+import { zym } from '../../../zym.ts';
 
 const schema: Record<string, ConfigSchema> = {
   debug: {
@@ -227,5 +227,5 @@ const schema: Record<string, ConfigSchema> = {
   },
 };
 
-export const settings = quilx.config.scope('vim-mode-plus').register(schema);
+export const settings = zym.config.scope('vim-mode-plus').register(schema);
 export default settings;

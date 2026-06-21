@@ -3,7 +3,7 @@
  * very left of the window). Each entry is (will be) associated with a particular
  * workbench workbench: the first ("default", selected-by-default) entry is the
  * **user** (rendered as a pseudo-agent), the rest are the running terminal agents
- * (`quilx.agents`). The list is never empty — the user entry is always present —
+ * (`zym.agents`). The list is never empty — the user entry is always present —
  * so there is no empty state.
  *
  * The top is an `Adw.HeaderBar` whose only content is a robot **button** that
@@ -19,7 +19,7 @@
 import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { Adw, Gtk, Pango } from '../gi.ts';
-import { quilx } from '../quilx.ts';
+import { zym } from '../zym.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
@@ -39,7 +39,7 @@ const ROW_TRANSITION_MS = 250;
 
 addStyles(`
   /* The unsaved-changes marker (a small dot) next to the project title — warning-colored. */
-  .quilx-modified-dot { color: var(--t-ui-status-warning); }
+  .zym-modified-dot { color: var(--t-ui-status-warning); }
   /* A transparent left border keeps the row content from shifting when the active
      row gains its accent indicator; a subtle bottom border separates the rows.
      The row height itself lives on the content box (#WorkbenchRow) rather than the
@@ -184,8 +184,8 @@ export class WorkbenchList {
 
     // Reconcile the list whenever the global agent set changes — added/removed
     // agents animate their rows in/out rather than snapping the whole list.
-    this.subs.add(quilx.agents.onDidAddAgent(() => this.syncAgents()));
-    this.subs.add(quilx.agents.onDidRemoveAgent(() => this.syncAgents()));
+    this.subs.add(zym.agents.onDidAddAgent(() => this.syncAgents()));
+    this.subs.add(zym.agents.onDidRemoveAgent(() => this.syncAgents()));
     this.rebuild();
   }
 
@@ -214,7 +214,7 @@ export class WorkbenchList {
     // shown when any open editor has unsaved edits (driven by the host via
     // `setModified`). Toggled with opacity so its slot never shifts the title.
     this.modifiedDot = iconLabel(Icons.modified);
-    this.modifiedDot.addCssClass('quilx-modified-dot');
+    this.modifiedDot.addCssClass('zym-modified-dot');
     this.modifiedDot.setTooltipText('Unsaved changes');
     this.modifiedDot.setCanTarget(false);
     this.updateModifiedDot();
@@ -264,7 +264,7 @@ export class WorkbenchList {
 
     // The user entry is always first; agents follow in launch order. Rows are built
     // already-revealed so the initial render snaps in without a transition.
-    const entries: Entry[] = [{ kind: 'user' }, ...quilx.agents.getAgents().map((agent): Entry => ({ kind: 'agent', agent }))];
+    const entries: Entry[] = [{ kind: 'user' }, ...zym.agents.getAgents().map((agent): Entry => ({ kind: 'agent', agent }))];
     for (const entry of entries) {
       const handle = this.createHandle(entry, true);
       this.handles.push(handle);
@@ -274,11 +274,11 @@ export class WorkbenchList {
     this.applySelection();
   }
 
-  // Reconcile the agent rows against `quilx.agents`: animate out rows whose agent has
+  // Reconcile the agent rows against `zym.agents`: animate out rows whose agent has
   // gone, animate in rows for newly-launched agents (appended in launch order). The
   // always-present user row is left untouched.
   private syncAgents(): void {
-    const agents = quilx.agents.getAgents();
+    const agents = zym.agents.getAgents();
     const present = new Set(agents);
 
     // Animate out rows whose agent is no longer live.
@@ -474,7 +474,7 @@ export class WorkbenchList {
   // --- Keyboard navigation (vim bare keys while #WorkbenchList is focused) --------
 
   private registerCommands(): void {
-    quilx.commands.add(this.root, {
+    zym.commands.add(this.root, {
       'core:down': { didDispatch: () => this.moveSelection(1), description: 'Move down' },
       'core:up': { didDispatch: () => this.moveSelection(-1), description: 'Move up' },
       'core:top': { didDispatch: () => this.selectLiveIndex(0), description: 'Go to the top' }, // `g g`

@@ -1,9 +1,9 @@
-// Vendored from xedel/vim-mode-plus's lib/vim-state.js with quilx adaptations:
+// Vendored from xedel/vim-mode-plus's lib/vim-state.js with zym adaptations:
 //   - ESM (`require`→`import`, `module.exports`→`export default`);
 //   - the lazy `require(file)` manager loader is replaced by MANAGER_REGISTRY
 //     (see `load()`): managers are added as they are ported; unported ones throw;
 //   - the Atom command-registration statics (getDispatcher/registerCommandsFromSpec
-//     etc.) are removed — quilx registers commands through `quilx.commands`;
+//     etc.) are removed — zym registers commands through `zym.commands`;
 //   - `modeManager` (grim deprecation shim) and focusInput/readChar are stubbed.
 // The mode/operation logic is otherwise unchanged.
 import { Emitter, Disposable, CompositeDisposable } from '../../../util/eventKit.ts'
@@ -19,7 +19,7 @@ import { CursorStyleManager, HoverManager, FlashManager, OccurrenceManager, Sequ
 import type { StatusBarManager } from './stubs.ts'
 import * as utils from './utils.ts'
 import underscorePlus from './underscorePlus.ts'
-import { quilx } from '../../../quilx.ts'
+import { zym } from '../../../zym.ts'
 import type { EditorModel } from '../EditorModel.ts'
 import type { Disposable as DisposableType } from '../../../util/eventKit.ts'
 import type { Key } from '../../../keymap/Key.ts'
@@ -168,8 +168,8 @@ export default class VimState {
   get _ (): typeof underscorePlus { return (this.constructor as typeof VimState)._ } // prettier-ignore
   static get _ (): typeof underscorePlus { return underscorePlus } // prettier-ignore
 
-  // Atom command-registration statics removed: quilx registers vim commands and
-  // keymaps through `quilx.commands`/`quilx.keymaps` (see the vim wiring module).
+  // Atom command-registration statics removed: zym registers vim commands and
+  // keymaps through `zym.commands`/`zym.keymaps` (see the vim wiring module).
 
   constructor (editor: EditorModel, statusBarManager: StatusBarManager) {
     this.editor = editor
@@ -216,7 +216,7 @@ export default class VimState {
   matchScopes (scopes: string[]): number | boolean {
     // HACK: length guard to avoid utils prop populated unnecessarily
     // TODO(vim-ts): utils.matchScopes types its element as `{classList}`; EditorModel
-    // is the real arg in quilx (no classList) — cast until utils is ported.
+    // is the real arg in zym (no classList) — cast until utils is ported.
     return scopes.length && this.utils.matchScopes(this.editorElement as any, scopes)
   }
 
@@ -672,7 +672,7 @@ export default class VimState {
   // Operations that `requireInput` (find-char, replace-char, move-to-mark) ask
   // for the next keystroke. Upstream pops a mini-editor overlay (focus-input.js)
   // or routes keys through per-char commands (read-char.js); both assume Atom's
-  // DOM. quilx instead grabs the next key straight off the KeymapManager: a
+  // DOM. zym instead grabs the next key straight off the KeymapManager: a
   // one-shot listener runs *before* keymap dispatch (so `fi` lands on the next
   // `i` rather than entering insert mode) and feeds the char to the operation.
   //
@@ -728,7 +728,7 @@ export default class VimState {
       } else if (this.mode === 'insert' && (key.name === 'return' || key.name === 'KP_Enter')) {
         this.editor.insertText('\n')
       } else {
-        quilx.keymaps.feedKey(key)
+        zym.keymaps.feedKey(key)
       }
     }
   }
@@ -758,7 +758,7 @@ export default class VimState {
       return true // claim the key; never dispatch it as a command
     }
     this.__inputGrabListener = listener
-    quilx.keymaps.addListener(listener)
+    zym.keymaps.addListener(listener)
   }
 
   // Resolve a pending readChar/focusInput. Called by the key grab, or directly
@@ -775,7 +775,7 @@ export default class VimState {
 
   __clearInput (): InputHandler | null | undefined {
     if (this.__inputGrabListener) {
-      quilx.keymaps.removeListener(this.__inputGrabListener)
+      zym.keymaps.removeListener(this.__inputGrabListener)
       this.__inputGrabListener = null
     }
     this.editorElement.removeCssClass('input-char-waiting')

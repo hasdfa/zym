@@ -25,7 +25,7 @@
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Gio, Pango, PangoCairo } from './gi.ts';
-import { quilx } from './quilx.ts';
+import { zym } from './zym.ts';
 import { styles } from './styles.ts';
 
 /** Pango family name of the bundled icon font (see assets/fonts). */
@@ -43,7 +43,7 @@ export function registerBundledFonts(): void {
   const fontMap = PangoCairo.FontMap.getDefault();
   for (const file of BUNDLED_FONTS) {
     if (!fontMap.addFontFile(Path.join(dir, file)))
-      console.warn(`quilx: failed to load bundled font ${file}`);
+      console.warn(`zym: failed to load bundled font ${file}`);
   }
 }
 
@@ -126,8 +126,8 @@ class FontStore {
 
   constructor() {
     // Bootstrap from the system fonts only. The config isn't safe to read here:
-    // fonts.ts ⇄ quilx.ts form an import cycle (quilx → Workspace → … → fonts),
-    // so during module load `quilx` may still be in its TDZ. init()/reload() fold
+    // fonts.ts ⇄ zym.ts form an import cycle (zym → Workspace → … → fonts),
+    // so during module load `zym` may still be in its TDZ. init()/reload() fold
     // in the core.uiFont / core.monospaceFont overrides once the app is running.
     this.compute(this.systemMonoName(), this.systemUiName());
   }
@@ -161,8 +161,8 @@ class FontStore {
     });
     // Follow the user font config too (it overrides the system font when non-empty);
     // it's applied after this runs, so reload on change rather than read once.
-    quilx.config.onDidChange('core.uiFont', () => this.reload());
-    quilx.config.onDidChange('core.monospaceFont', () => this.reload());
+    zym.config.onDidChange('core.uiFont', () => this.reload());
+    zym.config.onDidChange('core.monospaceFont', () => this.reload());
   }
 
   /** Recompute the fonts (config override or system), re-apply the sheet, and
@@ -246,9 +246,9 @@ class FontStore {
 
   /** A non-empty string config override for `key`, or null to fall back to the
    *  system font. Safe only at runtime (post-init), never during module load —
-   *  see the constructor on the fonts ⇄ quilx import cycle. */
+   *  see the constructor on the fonts ⇄ zym import cycle. */
   private configFont(key: string): string | null {
-    const value = quilx.config.get(key);
+    const value = zym.config.get(key);
     return typeof value === 'string' && value.trim() !== '' ? value : null;
   }
 }

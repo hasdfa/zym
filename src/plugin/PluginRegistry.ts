@@ -20,7 +20,7 @@ interface PluginEntry {
   context: PluginContextImpl | null;
   /** Set if activation failed. */
   error: string | null;
-  /** 'builtin' = shipped with quilx, 'user' = loaded from the user plugins dir. */
+  /** 'builtin' = shipped with zym, 'user' = loaded from the user plugins dir. */
   source: 'builtin' | 'user';
 }
 
@@ -31,7 +31,7 @@ export interface PluginInfo extends PluginManifest {
   error: string | null;
   /** Whether the plugin is in the disabled list. */
   disabled: boolean;
-  /** 'builtin' = shipped with quilx, 'user' = loaded from the user plugins dir. */
+  /** 'builtin' = shipped with zym, 'user' = loaded from the user plugins dir. */
   source: 'builtin' | 'user';
   /** The plugin's base directory (for reading assets like package.json). */
   dir: string;
@@ -56,7 +56,7 @@ export class PluginRegistry {
       name: plugin.name,
       description: plugin.description,
       version: plugin.version,
-      minQuilxVersion: plugin.minQuilxVersion,
+      minZymVersion: plugin.minZymVersion,
       active: context !== null,
       error,
       disabled: disabled.has(plugin.id),
@@ -73,11 +73,11 @@ export class PluginRegistry {
   async activate(id: string): Promise<void> {
     const entry = this.entries.get(id);
     if (!entry || entry.context) return;
-    const { minQuilxVersion } = entry.plugin;
-    if (minQuilxVersion) {
-      const QUILX_VERSION = '0.1.0'; // TODO: import from version constant
-      if (!PluginRegistry.versionSatisfies(QUILX_VERSION, minQuilxVersion)) {
-        entry.error = `requires quilx >= ${minQuilxVersion}, got ${QUILX_VERSION}`;
+    const { minZymVersion } = entry.plugin;
+    if (minZymVersion) {
+      const ZYM_VERSION = '0.1.0'; // TODO: import from version constant
+      if (!PluginRegistry.versionSatisfies(ZYM_VERSION, minZymVersion)) {
+        entry.error = `requires zym >= ${minZymVersion}, got ${ZYM_VERSION}`;
         console.warn(`[plugin] "${id}" skipped: ${entry.error}`);
         return;
       }

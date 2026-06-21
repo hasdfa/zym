@@ -6,7 +6,7 @@
  * handshake, negotiated capabilities + position encoding, open-document version
  * tracking, full-text document sync, and the typed requests Phase 1 uses
  * (go-to-definition). It speaks LSP types (URIs, `Position`); callers convert
- * to/from quilx `Point`/`Range` via `position.ts`.
+ * to/from zym `Point`/`Range` via `position.ts`.
  */
 import {
   InitializeRequest,

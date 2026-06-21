@@ -4,7 +4,7 @@
 // navigating. `index === entries.length` means "at the present" (not navigating).
 //
 // This isn't an upstream vim-mode-plus module (vmp leans on Atom for jumps); it's
-// a quilx addition that the motion layer and the misc-command ops drive.
+// a zym addition that the motion layer and the misc-command ops drive.
 import { Point } from '../../../text/Point.ts'
 import type { PointLike } from '../../../text/Point.ts'
 import type VimState from './vim-state.ts'

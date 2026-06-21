@@ -32,11 +32,11 @@ the one shared store. `register(schema)` declares a whole namespace at once.
 ## Assembling the schema
 
 The schema is built up at startup from several sources, all into the single
-`quilx.config` instance (`new Config(CONFIG_SCHEMA)` in `src/quilx.ts`):
+`zym.config` instance (`new Config(CONFIG_SCHEMA)` in `src/zym.ts`):
 
-- **Baseline** — `CONFIG_SCHEMA` in `src/quilx.ts` (`core.*`, `editor.*`).
+- **Baseline** — `CONFIG_SCHEMA` in `src/zym.ts` (`core.*`, `editor.*`).
 - **Subsystems** contribute their own namespaces at load time via
-  `quilx.config.scope('ns').register({...})` — e.g. `src/ui/FileTree.ts`
+  `zym.config.scope('ns').register({...})` — e.g. `src/ui/FileTree.ts`
   (`fileTree.*`) and the vim layer's `src/ui/TextEditor/vim/settings.ts`
   (`vim-mode-plus.*`).
 - **Plugins** add/remove keys on activate/deactivate through
@@ -51,7 +51,7 @@ only becomes editable/persistable once something has declared it.
 `loadConfig()` (called once at startup, returns a Disposable that stops the
 watcher):
 
-1. Ensures `$XDG_CONFIG_HOME/quilx/config.json` exists (creates the dir, seeds
+1. Ensures `$XDG_CONFIG_HOME/zym/config.json` exists (creates the dir, seeds
    `{}` if absent).
 2. Reads + applies it, then installs a `Gio` file monitor so later edits
    re-apply live.
@@ -59,7 +59,7 @@ watcher):
 - `readConfig` returns `null` on anything wrong (missing, mid-write truncation,
   not a JSON object) so a watch tick simply skips — saves arrive as several
   monitor events (truncate / temp+rename) and re-reading is idempotent.
-- `applyConfig` calls `quilx.config.set` per key and **tracks which keys took
+- `applyConfig` calls `zym.config.set` per key and **tracks which keys took
   effect**; a key present last time but absent now is `unset` back to its
   default. So the file stays the source of truth for *what is overridden*.
 - `saveConfig` (used by the settings UI after an edit) writes only keys whose
@@ -75,7 +75,7 @@ schema — `enum`→combo, `boolean`→switch, `integer`/`number`→spin (bounde
 min/max), `string`→entry, array/object→entry holding JSON. Row/group titles are
 the raw key segments, not prettified.
 
-Sync is two-way: editing a row writes through `quilx.config.set` then
+Sync is two-way: editing a row writes through `zym.config.set` then
 `saveConfig`; each row also `observe`s its key so an external edit (hand-edited
 `config.json`, or any other writer) updates the widget. A `syncing` guard makes
 programmatic updates skip the row's own change handler so the two directions

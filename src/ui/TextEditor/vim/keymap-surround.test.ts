@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource, Gdk } from '../../../gi.ts';
-import { quilx } from '../../../quilx.ts';
+import { zym } from '../../../zym.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { attachVim } from './index.ts';
 import clipboard from './clipboard.ts';
@@ -10,7 +10,7 @@ Gtk.init();
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-// Build an editor whose view is the focused widget of `quilx.window`, so the
+// Build an editor whose view is the focused widget of `zym.window`, so the
 // KeymapManager's `getActiveElements()` resolves to it and real keystrokes
 // (driven through `onWindowKeyPressEvent`) dispatch against its VimState.
 function focusedEditor(text: string) {
@@ -25,17 +25,17 @@ function focusedEditor(text: string) {
 
   const win = new Gtk.Window();
   win.setChild(view);
-  quilx.window = win as never;
+  zym.window = win as never;
   win.present();
   view.grabFocus();
 
   const press = (char: string) => {
     const keyval = Gdk.unicodeToKeyval(char.charCodeAt(0));
-    quilx.keymaps.onWindowKeyPressEvent(keyval, 0, 0);
+    zym.keymaps.onWindowKeyPressEvent(keyval, 0, 0);
   };
   const ctrl = (char: string) => {
     const keyval = Gdk.unicodeToKeyval(char.charCodeAt(0));
-    quilx.keymaps.onWindowKeyPressEvent(keyval, 0, Gdk.ModifierType.CONTROL_MASK);
+    zym.keymaps.onWindowKeyPressEvent(keyval, 0, Gdk.ModifierType.CONTROL_MASK);
   };
   const type = (chars: string) => {
     for (const ch of chars) press(ch);
@@ -193,13 +193,13 @@ test('a count applies through the keymap (3l, 2dw)', () => {
 // mirror that wiring here against the same view to exercise the deferral against
 // the live Yank operator.
 function withDuplicateLineBindings(m: ReturnType<typeof focusedEditor>) {
-  quilx.keymaps.add('editor-editing-test', {
+  zym.keymaps.add('editor-editing-test', {
     '#TextEditor.normal-mode': {
       'y d': 'editor:duplicate-line-below',
       'y u': 'editor:duplicate-line-above',
     },
   });
-  quilx.commands.add(m.view, {
+  zym.commands.add(m.view, {
     'editor:duplicate-line-below': { didDispatch: () => m.editor.duplicateLineBelow() },
     'editor:duplicate-line-above': { didDispatch: () => m.editor.duplicateLineAbove() },
   });
