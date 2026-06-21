@@ -65,14 +65,10 @@ addStyles(/* css */`
     border-bottom-left-radius: var(--popover-radius);
     border-bottom-right-radius: var(--popover-radius);
   }
-  /* Each option sits on its own raised chip: the elevated-surface background (pickers
-     / popovers / menus), a step up from the footer's editor background behind them. */
-  #AgentLauncherOptions #AgentLauncherField {
-    background-color: var(--t-ui-surface-popover);
-    border-radius: var(--popover-radius-small);
+  #AgentLauncherField {
     padding: 4px 8px;
   }
-  /* The dropdowns sit flush on their chip (no extra button frame/background). */
+  /* The dropdowns sit flush in the option row (no extra button frame/background). */
   #AgentLauncherField > dropdown {
     background: none;
     box-shadow: none;
@@ -155,9 +151,9 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // than overflowing. Each field carries a caption above its control.
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
   optionsRow.setName('AgentLauncherOptions');
+  optionsRow.append(field('agent', kindDropdown.widget));
   optionsRow.append(field('model', modelDropdown.widget));
   optionsRow.append(field('permission', permissionDropdown.widget));
-  optionsRow.append(field('agent', kindDropdown.widget));
   optionsRow.append(worktreeField);
   panel.append(optionsRow);
 
