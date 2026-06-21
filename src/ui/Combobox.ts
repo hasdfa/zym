@@ -1,11 +1,12 @@
 /*
  * Combobox — a searchable single-select control built from primitives we fully drive
  * (Gtk.DropDown couldn't: it owns its popover placement and ties list-highlight to the
- * committed value). The trigger shows the current label + chevron; clicking it (or typing
- * / Down on it) swaps it in place for a text entry and drops a filtered list popover right
- * below — so the trigger reads as becoming the entry field. Up/Down move the highlight
- * *without* changing the value; Enter or a click commits (and fires `onChange`); Escape or
- * focus-loss reverts. Fuzzy filtering reuses the Picker's ranking + match highlighting.
+ * committed value). A single Gtk.Entry is always visible: in closed state it carries the
+ * `combobox-button` CSS class so it renders like a button (no caret, button background);
+ * clicking / focusing / typing opens the popover and switches it to edit mode.
+ * Up/Down move the highlight *without* changing the value; Enter or a click commits (and
+ * fires `onChange`); Escape or focus-loss reverts. Fuzzy filtering reuses the Picker's
+ * ranking + match highlighting.
  *
  * `specialLabels` / `mutedLabels` style chosen labels (accent / dimmed), in both the
  * trigger and the list.
@@ -33,12 +34,9 @@ export interface ComboboxConfig {
   mutedLabels?: string[];
 }
 
-// The trigger is a plain Gtk.Button and the open state a plain Gtk.Entry, so both pick up
-// native Adwaita styling. The popover keeps its native frame; only minimal tweaks here:
-// the chevron icon, an edge-to-edge list, and the special/muted label accents (opacity,
-// not a theme color var, so they also resolve on the popup surface).
 addStyles(/* css */`
-  .combobox-chevron { opacity: 0.7; margin-left: 0.5em; }
+  #ComboboxEntry.combobox-button { caret-color: transparent; }
+  #ComboboxEntry > image { opacity: 0.7; }
   #ComboboxPopover > contents { padding: 0; }
   #ComboboxList { background: transparent; }
   #ComboboxItem { padding: 0.4em 0.7em; }
@@ -57,8 +55,6 @@ export class Combobox {
   private readonly muted: Set<string>;
 
   private valueToLabel = new Map<string, string>();
-  private readonly stack: InstanceType<typeof Gtk.Stack>;
-  private readonly displayLabel: InstanceType<typeof Gtk.Label>;
   private readonly entry: InstanceType<typeof Gtk.Entry>;
   private readonly popover: InstanceType<typeof Gtk.Popover>;
   private readonly listBox: InstanceType<typeof Gtk.ListBox>;
@@ -67,7 +63,6 @@ export class Combobox {
   private results: ComboOption[] = []; // filtered options, parallel to the list rows
   private open = false;
   private settingText = false; // suppress `changed` while seeding the entry
-  private suppressOpen = false; // don't auto-reopen when focus returns after a close
 
   constructor(config: ComboboxConfig) {
     this.options = config.options;
@@ -77,40 +72,18 @@ export class Combobox {
     this.muted = new Set(config.mutedLabels ?? []);
     this.ingest(config.options);
 
-    // Closed trigger: a regular Gtk.Button (native Adwaita button styling) holding the
-    // label + a dropdown chevron. Click / Enter / Space activate it via the native button.
-    this.displayLabel = new Gtk.Label({ xalign: 0, hexpand: true });
-    this.displayLabel.setEllipsize(Pango.EllipsizeMode.END);
-    const chevron = new Gtk.Image({ iconName: 'pan-down-symbolic' });
-    chevron.addCssClass('combobox-chevron');
-    const displayBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    displayBox.append(this.displayLabel);
-    displayBox.append(chevron);
-    const display = new Gtk.Button();
-    display.setName('ComboboxDisplay');
-    display.setChild(displayBox);
-    display.on('clicked', () => this.openPopup());
-    const displayKeys = new Gtk.EventControllerKey();
-    displayKeys.on('key-pressed', (keyval: number, _kc: number, state: number) => this.onDisplayKey(keyval, state));
-    display.addController(displayKeys);
-    // Focusing the trigger opens the popup (e.g. tabbing in), except when focus is just
-    // returning to it after a close (guarded below) — that must not auto-reopen.
-    const displayFocus = new Gtk.EventControllerFocus();
-    displayFocus.on('enter', () => { if (!this.suppressOpen) this.openPopup(); });
-    display.addController(displayFocus);
-
-    // Open trigger: a plain entry (no search icon) in the trigger's place.
+    // Single entry, always in the layout. In closed state it has `combobox-button`
+    // so it looks like a button (no caret). Opening removes that class.
     this.entry = new Gtk.Entry();
     this.entry.setName('ComboboxEntry');
-    this.entry.addCssClass('has-text-input'); // release the space leader so it types
-
-    this.stack = new Gtk.Stack();
-    this.stack.addNamed(display, 'display');
-    this.stack.addNamed(this.entry, 'edit');
+    this.entry.addCssClass('has-text-input');
+    this.entry.addCssClass('combobox-button');
+    this.entry.setIconFromIconName(Gtk.EntryIconPosition.SECONDARY, 'pan-down-symbolic');
+    this.entry.setIconActivatable(Gtk.EntryIconPosition.SECONDARY, false);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.root.setName('Combobox');
-    this.root.append(this.stack);
+    this.root.append(this.entry);
 
     this.listBox = new Gtk.ListBox();
     this.listBox.setName('ComboboxList');
@@ -132,16 +105,31 @@ export class Combobox {
 
     this.updateDisplay();
 
-    this.entry.on('changed', () => { if (this.open && !this.settingText) this.rebuild(this.entry.getText()); });
+    // Typing while closed: open seeded with what the user typed.
+    this.entry.on('changed', () => {
+      if (this.settingText) return;
+      const text = this.entry.getText();
+      if (!this.open) this.openPopup(text);
+      else this.rebuild(text);
+    });
     this.entry.on('activate', () => this.acceptSelected());
     this.listBox.on('row-activated', (row) => this.acceptRow(row));
+
+    // Clicking while already focused (popup closed) reopens.
+    const click = new Gtk.GestureClick();
+    click.on('pressed', () => { if (!this.open) this.openPopup(); });
+    this.entry.addController(click);
 
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => this.onEntryKey(keyval));
     this.entry.addController(keys);
 
+    // Focus-in opens the popup (e.g. tabbing into the widget).
+    // Focus-out closes it — because the entry is always the sole Tab stop,
+    // one Tab press naturally moves focus out and cancel() fires via the leave handler.
     const focus = new Gtk.EventControllerFocus();
+    focus.on('enter', () => this.openPopup());
     focus.on('leave', () => setTimeout(() => { if (this.open) this.cancel(); }, 0));
     this.entry.addController(focus);
   }
@@ -182,22 +170,24 @@ export class Combobox {
 
   private updateDisplay(): void {
     const label = this.selectedLabel();
-    this.displayLabel.setText(label);
-    this.styleLabel(this.displayLabel, label);
+    this.setEntryText(label);
+    this.entry.removeCssClass('combobox-special');
+    this.entry.removeCssClass('combobox-muted');
+    if (this.special.has(label)) this.entry.addCssClass('combobox-special');
+    else if (this.muted.has(label)) this.entry.addCssClass('combobox-muted');
   }
 
-  // Open the list, swapping the trigger for the entry. `seed` (a typed character) starts
-  // the filter; otherwise the entry seeds with the current label, selected so the first
-  // keystroke replaces it, and the list shows everything with the current value highlighted.
+  // Open the popup. With no `seed`, seeds the entry with the current label (all selected
+  // so the first keystroke replaces it). With a `seed` string, the entry already contains
+  // it (user just typed) — skip the text reset and just rebuild from it.
   private openPopup(seed?: string): void {
     if (this.open) return;
     this.open = true;
-    this.scrolled.setSizeRequest(Math.max(this.root.getWidth(), 1), -1);
-    this.stack.setVisibleChildName('edit');
-    this.popover.popup();
+    this.entry.removeCssClass('combobox-button');
     this.entry.grabFocus();
+    this.scrolled.setSizeRequest(Math.max(this.root.getWidth(), 1), -1);
+    this.popover.popup();
     if (seed !== undefined) {
-      this.setEntryText(seed);
       this.rebuild(seed);
     } else {
       this.setEntryText(this.selectedLabel());
@@ -217,14 +207,10 @@ export class Combobox {
   private closePopup(): void {
     this.open = false;
     this.popover.popdown();
-    // Swapping back focuses the trigger again; suppress the auto-open that would cause,
-    // briefly, so it stays closed (a click / Down / tab-in still opens it).
-    this.suppressOpen = true;
-    this.stack.setVisibleChildName('display');
-    setTimeout(() => { this.suppressOpen = false; }, 200);
+    this.entry.addCssClass('combobox-button');
   }
 
-  // Revert: close without committing; the trigger shows the unchanged value.
+  // Revert: close without committing; the entry shows the unchanged value.
   private cancel(): void {
     this.closePopup();
     this.updateDisplay();
@@ -297,25 +283,15 @@ export class Combobox {
   // Returns true to swallow the key.
   private onEntryKey(keyval: number): boolean {
     switch (keyval) {
-      case Gdk.KEY_Down: case Gdk.KEY_KP_Down: this.move(1); return true;
-      case Gdk.KEY_Up: case Gdk.KEY_KP_Up: this.move(-1); return true;
+      case Gdk.KEY_Down: case Gdk.KEY_KP_Down:
+        if (!this.open) { this.openPopup(); return true; }
+        this.move(1); return true;
+      case Gdk.KEY_Up: case Gdk.KEY_KP_Up:
+        if (!this.open) { this.openPopup(); return true; }
+        this.move(-1); return true;
       case Gdk.KEY_Return: case Gdk.KEY_KP_Enter: this.acceptSelected(); return true;
       case Gdk.KEY_Escape: this.cancel(); return true;
       default: return false;
     }
-  }
-
-  // On the closed trigger: Down opens; a printable key opens seeded with it. Enter/Space
-  // fall through to the native button's own activation (→ clicked → openPopup).
-  private onDisplayKey(keyval: number, state: number): boolean {
-    if (keyval === Gdk.KEY_Down || keyval === Gdk.KEY_KP_Down) {
-      this.openPopup();
-      return true;
-    }
-    if (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)) return false;
-    const ch = Gdk.keyvalToUnicode(keyval);
-    if (ch <= 32 || ch === 127) return false; // space/Enter activate the button natively
-    this.openPopup(String.fromCharCode(ch));
-    return true;
   }
 }
