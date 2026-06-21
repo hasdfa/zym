@@ -121,6 +121,17 @@ test('zc on an already-closed fold closes its parent (close outward by level)', 
   assert.match(text(), /^export class Doc \{\[\d+\]\}\n?$/, `class Doc should close on the second zc:\n${text()}`);
 });
 
+test('closing a fold from inside the body lands the caret before the marker, not on it', () => {
+  if (!hasJs) return;
+  const { syntax, buffer, text } = setup('function foo() {\n  const x = 1;\n  return x;\n}\n');
+  buffer.placeCursor(asIter(buffer.getIterAtLine(1))); // inside the body
+  syntax.setFoldAtCursor(true);
+  assert.match(text(), /^function foo\(\) \{\[\d+\]\}\n?$/, 'fold collapses');
+  const cur = asIter(buffer.getIterAtMark(buffer.getInsert()));
+  assert.equal(cur.getLine(), 0, 'caret moved up to the header line');
+  assert.equal(cur.getChar(), '{', "caret sits on the `{` before the marker, not on the `[N]`");
+});
+
 test('editing + undo with folds collapsed writes through and stays consistent', () => {
   if (!hasJs) return;
   const src = 'export class Doc {\n  m1() {\n    return 1;\n  }\n}\n';

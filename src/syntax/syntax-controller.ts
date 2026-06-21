@@ -899,7 +899,14 @@ export class SyntaxController {
         const [ps, pe] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
         const tag = region.whole ? this.bandedPlaceholderTag : this.foldPlaceholderTag;
         buffer.applyTag(tag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
-        if (cursorInside) buffer.placeCursor(asIter(buffer.getIterAtOffset(ps)));
+        if (cursorInside) {
+          // Vim leaves the caret on the fold's first line: land it on the last real char
+          // before the `[N]` marker (the header's `{`), not on the atomic placeholder. A
+          // whole-run collapse keeps no header, so its marker start is the only spot.
+          const lineStart = this.lineStartIter(asIter(buffer.getIterAtOffset(ps)).getLine()).getOffset();
+          const landing = region.whole ? ps : Math.max(lineStart, ps - 1);
+          buffer.placeCursor(asIter(buffer.getIterAtOffset(landing)));
+        }
       }
     }
     // Folds never touch the MODEL, so the shared parse tree stays valid — no reparse is
