@@ -1,8 +1,8 @@
 /*
  * AgentLauncher — the overlay for starting a new agent. A multi-line prompt editor
  * sits on top; a row of controls below it gathers the launch options (model,
- * effort [reserved], permission mode, agent kind, and a "new worktree" toggle).
- * Enter (in the prompt) launches, Escape cancels.
+ * permission mode, agent kind, and a "new worktree" toggle). Enter (in the prompt)
+ * launches, Escape cancels.
  *
  * It's a `FloatingCard` (the same overlay shell the Picker uses) filled with a
  * `createInput` prompt and reusable `Combobox` widgets. The options come from the
@@ -149,17 +149,6 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     },
   });
 
-  // Effort isn't wired yet (no launch mechanism exists); a disabled slot reserves
-  // its place so the row layout is stable when it lands.
-  const effortCombo = new Combobox({
-    title: 'effort',
-    options: [{ value: 'auto', label: 'auto' }],
-    value: 'auto',
-    width: 90,
-  });
-  effortCombo.setSensitive(false);
-  effortCombo.root.setTooltipText('Effort — coming soon');
-
   // Worktree is a toggle, not a combobox: "current" works in the current workbench
   // cwd, "new" starts the work in a fresh worktree (the agent creates it). A compact
   // captioned segmented control (a linked pair of grouped toggle buttons) with its
@@ -179,7 +168,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // than overflowing. Each combobox carries its own floating Adwaita label.
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
   optionsRow.setName('AgentLauncherOptions');
-  for (const combo of [modelCombo, effortCombo, permissionCombo, kindCombo]) {
+  for (const combo of [modelCombo, permissionCombo, kindCombo]) {
     optionsRow.append(combo.root);
   }
   optionsRow.append(worktreeField);
