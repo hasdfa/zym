@@ -54,7 +54,6 @@ addStyles(/* css */`
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
     background-color: var(--window-bg-color);
-    box-shadow: 0px 10px 33px 28px var(--t-ui-shadow);
   }
   #AgentLauncherOptions {
     padding: 0.6em;
@@ -76,8 +75,8 @@ addStyles(/* css */`
   }
   #AgentLauncherField > .field-caption {
     font-size: var(--font-size-small);
-    opacity: 0.6;
-    margin-left: 2px;
+    color: var(--t-ui-text-muted);
+    padding-left: 6px;
   }
 `);
 
@@ -105,6 +104,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   const card = openFloatingCard({
     host,
     name: 'AgentLauncher',
+    marginTop: 110, // sit lower than the Picker's default — it's a taller compose card
     onClose: () => commandsSub?.dispose(),
   });
   const panel = card.panel;

@@ -60,7 +60,6 @@ addStyles(/* css */`
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
     background-color: var(--window-bg-color);
-    box-shadow: 0px 10px 33px 28px var(--t-ui-shadow);
   }
   #PickerEntry.prose-entry,
   #PickerEntry.prose-entry > text { font-family: var(--t-font-ui-family); }

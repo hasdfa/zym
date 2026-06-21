@@ -9,17 +9,28 @@
  * only provides `close`, which the caller can bind to Escape).
  */
 import { Gtk } from '../gi.ts';
+import { addStyles } from '../styles.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-/** Distance from the top of the overlay to the card. */
+/** Default distance from the top of the overlay to the card (the Picker's position). */
 const CARD_MARGIN_TOP = 48;
+
+// The shared drop shadow for every floating card: a soft, wide blur with no spread
+// (a large spread reads as a dark halo) at reduced opacity.
+addStyles(/* css */`
+  .floating-card {
+    box-shadow: 0px 8px 28px 0px alpha(var(--t-ui-shadow), 0.55);
+  }
+`);
 
 export interface FloatingCardOptions {
   /** Overlay to mount the card in (supplied by the caller, e.g. AppWindow's). */
   host: Overlay;
   /** CSS `#id` for the card; the caller scopes its keymap/styles to this name. */
   name: string;
+  /** Distance from the top of the overlay to the card (default 48, the Picker's). */
+  marginTop?: number;
   /** Extra teardown run when the card closes (dispose subscriptions, timers). */
   onClose?: () => void;
 }
@@ -53,9 +64,10 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
   // A floating, opaque card placed at the top-centre of the overlay.
   const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
   panel.setName(options.name);
+  panel.addCssClass('floating-card'); // shared drop shadow
   panel.setHalign(Gtk.Align.CENTER);
   panel.setValign(Gtk.Align.START);
-  panel.setMarginTop(CARD_MARGIN_TOP);
+  panel.setMarginTop(options.marginTop ?? CARD_MARGIN_TOP);
   panel.overflow = Gtk.Overflow.HIDDEN;
 
   let closed = false;
