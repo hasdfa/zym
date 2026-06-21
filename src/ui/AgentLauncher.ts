@@ -1,8 +1,8 @@
 /*
  * AgentLauncher — the overlay for starting a new agent. A multi-line prompt editor
- * sits on top; a row of comboboxes below it gathers the launch options (model,
- * effort [reserved], permission mode, worktree, and agent kind). Enter (in the
- * prompt) launches, Escape cancels.
+ * sits on top; a row of controls below it gathers the launch options (model,
+ * effort [reserved], permission mode, agent kind, and a "new worktree" toggle).
+ * Enter (in the prompt) launches, Escape cancels.
  *
  * It's a `FloatingCard` (the same overlay shell the Picker uses) filled with a
  * `createInput` prompt and reusable `Combobox` widgets. The options come from the
@@ -12,14 +12,12 @@
  * the host turns that into `openAgent`.
  */
 import { Gtk, Gdk, Adw } from '../gi.ts';
-import Path from 'node:path';
 import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { openFloatingCard } from './FloatingCard.ts';
-import { Combobox, type ComboOption } from './Combobox.ts';
+import { Combobox } from './Combobox.ts';
 import { createInput } from './TextEditor/TextEditor.ts';
 import { AGENT_CONFIGS, listAgentKinds, type AgentKind } from '../agents/configs.ts';
-import { listWorktrees } from '../git.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
@@ -30,14 +28,17 @@ export interface AgentLaunchRequest {
   prompt: string;
   /** Base argv for the chosen model/permission mode (e.g. `['claude','--model',…]`). */
   command: string[];
-  /** Working directory to root the agent at (the chosen worktree, or the launch cwd). */
+  /** Working directory to root the agent at (the current workbench cwd). */
   cwd: string;
   /** The chosen agent kind. */
   kind: AgentKind;
+  /** Whether to start the work in a fresh git worktree (the agent creates it) rather
+   *  than the current one. */
+  newWorktree: boolean;
 }
 
 export interface AgentLauncherOptions {
-  /** The current working directory (offered as "current", plus the repo's worktrees). */
+  /** The current working directory the agent is rooted at by default. */
   cwd: string;
   /** The kind selected by default (from `resolveAgentKind(config)`). */
   defaultKind: AgentKind;
@@ -145,20 +146,27 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   effortCombo.setSensitive(false);
   effortCombo.root.setTooltipText('Effort — coming soon');
 
-  const worktreeCombo = new Combobox({
-    title: 'worktree',
-    options: worktreeOptions(cwd),
-    value: cwd,
-    width: 200,
-  });
+  // Worktree is a toggle, not a combobox: off works in the current workbench cwd, on
+  // starts the work in a fresh worktree (the agent creates it). A SwitchRow in its own
+  // boxed list, to match the comboboxes' Adwaita framing.
+  const worktreeSwitch = new Adw.SwitchRow();
+  worktreeSwitch.setTitle('new worktree');
+  worktreeSwitch.setActive(false);
+  worktreeSwitch.setTooltipText('Start the work in a fresh git worktree instead of the current one');
+  const worktreeList = new Gtk.ListBox();
+  worktreeList.addCssClass('boxed-list');
+  worktreeList.setSelectionMode(Gtk.SelectionMode.NONE);
+  worktreeList.setSizeRequest(200, -1);
+  worktreeList.append(worktreeSwitch);
 
   // A WrapBox so the option rows reflow onto another line on a narrow card rather
   // than overflowing. Each combobox carries its own floating Adwaita label.
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
   optionsRow.setName('AgentLauncherOptions');
-  for (const combo of [modelCombo, effortCombo, permissionCombo, worktreeCombo, kindCombo]) {
+  for (const combo of [modelCombo, effortCombo, permissionCombo, kindCombo]) {
     optionsRow.append(combo.root);
   }
+  optionsRow.append(worktreeList);
   panel.append(optionsRow);
 
   const footer = new Gtk.Label({ xalign: 0, label: '⏎ launch · esc cancel' });
@@ -173,7 +181,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     });
     const prompt = input.getText().trim();
     card.close(false); // the host focuses the new agent
-    onLaunch({ prompt, command, cwd: worktreeCombo.getValue(), kind });
+    onLaunch({ prompt, command, cwd, kind, newWorktree: worktreeSwitch.getActive() });
   };
 
   registerLauncherKeymapOnce();
@@ -194,15 +202,4 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   panel.addController(keys);
 
   input.focusInsert(); // ready to type the prompt immediately
-}
-
-// One option per worktree, prefixed by "current" (the launch cwd). The main checkout
-// or a linked worktree that *is* the cwd isn't repeated.
-function worktreeOptions(cwd: string): ComboOption[] {
-  const options: ComboOption[] = [{ value: cwd, label: 'current', detail: Path.basename(cwd) }];
-  for (const wt of listWorktrees(cwd)) {
-    if (wt.path === cwd) continue;
-    options.push({ value: wt.path, label: wt.name, detail: wt.branch ?? 'detached' });
-  }
-  return options;
 }

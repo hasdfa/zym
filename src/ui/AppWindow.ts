@@ -2406,14 +2406,16 @@ export class AppWindow {
         description: 'Run a package.json script in a terminal',
       },
       'agent:new': {
-        // The launcher gathers the prompt + model / permission mode / worktree /
-        // kind, then hands back the assembled argv for openAgent.
+        // The launcher gathers the prompt + model / permission mode / kind + a
+        // "new worktree" toggle, then hands back the assembled argv for openAgent.
+        // When the toggle is on, the agent is asked to create the worktree itself
+        // (and announce it via set_worktree, which re-roots the workbench).
         didDispatch: () =>
           openAgentLauncher(this.overlay, {
             cwd: this.workbench.cwd,
             defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
-            onLaunch: ({ prompt, command, cwd, kind }) =>
-              this.openAgent({ prompt: prompt || undefined, command, cwd, kind }),
+            onLaunch: ({ prompt, command, cwd, kind, newWorktree }) =>
+              this.openAgent({ prompt: launchPrompt(prompt, newWorktree), command, cwd, kind }),
           }),
         description: 'Start a new agent',
       },
@@ -3118,6 +3120,19 @@ function terminalTabTitle(terminal: Terminal): string {
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// The launch prompt for a new agent. With the launcher's "new worktree" toggle on,
+// prepend an instruction for the agent to create its own worktree and announce it
+// (set_worktree re-roots the workbench) — there's no host-side worktree creation; the
+// agent owns it. Returns undefined for an empty prompt with the toggle off.
+const NEW_WORKTREE_INSTRUCTION =
+  'Before anything else, create a new git worktree for this task (`git worktree add` ' +
+  'with a descriptive branch name), switch into it, and call the set_worktree tool with ' +
+  'its absolute path. Then continue.';
+function launchPrompt(prompt: string, newWorktree: boolean): string | undefined {
+  if (!newWorktree) return prompt || undefined;
+  return prompt ? `${NEW_WORKTREE_INSTRUCTION}\n\n${prompt}` : NEW_WORKTREE_INSTRUCTION;
 }
 
 // Whether `path` is `root` itself or lives beneath it (a `root + sep` prefix, so

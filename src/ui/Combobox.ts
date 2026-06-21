@@ -58,7 +58,6 @@ addStyles(/* css */`
     border-radius: var(--popover-radius-small);
   }
   #ComboboxMenu {
-    font: var(--t-font-monospace);
     border-radius: var(--popover-radius-small);
     background: transparent;
   }
@@ -226,8 +225,8 @@ export class Combobox {
   }
 
   // Rebuild the visible items for `query`: fuzzy-rank the options (or show all in
-  // insertion order when empty), then select the item for the current value if it's
-  // present, else the first.
+  // insertion order when empty), then select the top match so Enter picks the best
+  // result (not whichever row happens to hold the current value).
   private rebuild(query: string): void {
     let r: InstanceType<typeof Gtk.ListBoxRow> | null;
     while ((r = this.menu.getRowAtIndex(0))) this.menu.remove(r);
@@ -242,8 +241,7 @@ export class Combobox {
       if (opt) this.menu.append(this.buildItem(opt, m.positions));
     });
 
-    const selectIndex = Math.max(0, this.results.findIndex((o) => o.value === this.value));
-    const target = this.menu.getRowAtIndex(selectIndex);
+    const target = this.menu.getRowAtIndex(0);
     if (target) this.menu.selectRow(target);
   }
 
