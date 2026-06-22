@@ -173,23 +173,51 @@ function computeSpecificity(description: RuleNode[]): number {
 }
 
 /**
+ * A widget's identity for selector matching, with its `getName()` and
+ * `getCssClasses()` snapshotted once. Both are node-gtk native calls (and
+ * `getCssClasses` allocates a fresh array); on the per-keystroke matching path a
+ * single element is probed against many rules and re-walked as an ancestor of
+ * deeper elements, so reading them once and reusing the snapshot avoids the
+ * repeated native crossings that dominated typing-time CPU.
+ */
+export interface ElementContext {
+  widget: Widget;
+  name: string;
+  classes: string[];
+}
+
+/** Snapshot a widget's name and CSS classes for matching. */
+export function elementContext(widget: Widget): ElementContext {
+  return { widget, name: widget.getName() ?? '', classes: widget.getCssClasses() };
+}
+
+/**
  * The index keys an element can match a rule under: its GTK name (`getName()` —
  * the component's JS class name when set, else the node-gtk type name), each of
  * its CSS classes, and the `*` wildcard bucket. A rule lives in exactly one
  * bucket (its `key`); at lookup, a manager probes all of an element's keys, then
  * confirms with `matchesRule`.
  */
-export function elementMatchKeys(element: Widget): string[] {
-  return [element.getName() ?? '', ...element.getCssClasses(), '*'];
+export function elementMatchKeys(element: ElementContext): string[] {
+  return [element.name, ...element.classes, '*'];
 }
 
-export function matchesRule(element: Widget, rule: Rule): boolean {
-  if (rule.element && rule.element !== element.getName())
+// Shared selector-walk core. `subject` is the rightmost compound's element; the
+// walk climbs ancestors via `next` until the whole selector chain is consumed.
+// Both entry points below differ only in how they produce the next ancestor:
+// the hot path indexes a precomputed chain, the single-element path walks
+// `getParent()` lazily.
+function matchesRuleWalk(
+  subject: ElementContext,
+  next: (current: ElementContext) => ElementContext | null,
+  rule: Rule,
+): boolean {
+  if (rule.element && rule.element !== subject.name)
     return false;
-  if (rule.id && rule.id !== element.getName())
+  if (rule.id && rule.id !== subject.name)
     return false;
 
-  let current: Widget | null = element;
+  let current: ElementContext | null = subject;
   let combinator: string | undefined = undefined;
   let distance = 0;
 
@@ -206,16 +234,20 @@ export function matchesRule(element: Widget, rule: Rule): boolean {
 
     if (node && matchesNode(current, node)) {
       node = rule.description[i--];
-      if (combinator === '>' && distance > 1)
+      // `>` is a direct-child combinator: the combinator branch above reset
+      // `distance` to 0 at the first ancestor candidate, so a match must land
+      // there (distance 0). A non-zero distance means we climbed past one or
+      // more intervening elements — that's a descendant, not a direct child.
+      if (combinator === '>' && distance > 0)
         return false;
       combinator = undefined;
     }
     else {
-      if (current === element)
+      if (current === subject)
         return false;
     }
 
-    current = current.getParent();
+    current = next(current);
     distance += 1;
   }
 
@@ -225,14 +257,42 @@ export function matchesRule(element: Widget, rule: Rule): boolean {
   return true;
 }
 
-function matchesNode(element: Widget, node: RuleNode): boolean {
-  if (node.element && element.getName() !== node.element)
+/**
+ * Match `rule` against the element at `index` in an already-collected focus
+ * chain (`getActiveElements` order: focused element first, each ancestor next).
+ * The chain's tail past `index` is exactly the element's ancestors, so the
+ * selector walk reuses it instead of re-calling `getParent()` per node — the
+ * per-keystroke fast path.
+ */
+export function matchesRuleInChain(chain: ElementContext[], index: number, rule: Rule): boolean {
+  let i = index;
+  return matchesRuleWalk(chain[index], () => chain[++i] ?? null, rule);
+}
+
+/**
+ * Match `rule` against a single widget, walking its live `getParent()` chain.
+ * For callers (e.g. command resolution) that hold one element rather than a
+ * precomputed chain.
+ */
+export function matchesRule(element: Widget, rule: Rule): boolean {
+  return matchesRuleWalk(
+    elementContext(element),
+    current => {
+      const parent = current.widget.getParent();
+      return parent ? elementContext(parent) : null;
+    },
+    rule,
+  );
+}
+
+function matchesNode(element: ElementContext, node: RuleNode): boolean {
+  if (node.element && element.name !== node.element)
     return false;
-  if (node.id && element.getName() !== node.id)
+  if (node.id && element.name !== node.id)
     return false;
   if (node.has.length === 0 && node.not.length === 0)
     return true;
-  const classNames = element.getCssClasses();
+  const classNames = element.classes;
   if (!node.has.every(c => classNames.includes(c)))
     return false;
   if (!node.not.every(c => !classNames.includes(c)))
