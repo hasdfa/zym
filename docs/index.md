@@ -12,9 +12,9 @@ subheader becomes a directory with an `index.md`.
 Most important tasks:
 
 - git (for reviewing agent work): 
-  - Diff something else than HEAD
-  - commit viewer
-  - Improve diff viewer interface
+  - [~] Diff something else than HEAD
+  - [~] commit viewer
+  - [~] Improve diff viewer interface
   - git:discard-all (only per-file discard exists today).
   - git:undo-commit (reset --soft HEAD~1).
   - git:revert a commit (free once the log picker exists).
