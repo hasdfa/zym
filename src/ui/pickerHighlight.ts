@@ -4,15 +4,12 @@
  * so both can depend on it without a cycle. Re-exported from Picker.ts for the
  * many callers that import these alongside the picker types.
  */
-import { parse, lighten, formatHEX } from 'color-bits';
 import { theme } from '../theme/theme.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 
-// Color of the matched characters: the theme's accent foreground (Zed's
-// `text.accent`), brightened so matches pop against the row text. Baked into Pango
-// markup at row-build time, so it can't be a CSS variable (and Pango can't
-// gradient-fill text, so it's a solid color); `formatHEX` keeps it 6-digit (no
-// alpha) for the `foreground` attribute.
+// Color of the matched characters. Sourced from the theme's accent foreground
+// (Zed's `text.accent`). Baked into Pango markup at row-build time, so it can't
+// be a CSS variable (and Pango can't gradient-fill text, so it's a solid color).
 export const HIGHLIGHT_COLOR = theme.ui.text.accent;
 
 /** Highlight the `[start, end)` slice of `text`, with positions in `text` coords. */

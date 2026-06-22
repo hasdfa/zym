@@ -14,7 +14,6 @@ import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
-import { theme } from '../theme/theme.ts';
 import { frecency } from '../util/Frecency.ts';
 import { enableReadline } from './readline.ts';
 import { openFloatingCard } from './FloatingCard.ts';
@@ -23,7 +22,7 @@ import { highlightMarkup } from './pickerHighlight.ts';
 
 // The Pango-markup highlight helpers live in a leaf module now; re-exported here
 // for the many callers that import them alongside the picker types.
-export { highlightSegment, highlightMarkup, escapeMarkup } from './pickerHighlight.ts';
+export { HIGHLIGHT_COLOR, highlightSegment, highlightMarkup, escapeMarkup } from './pickerHighlight.ts';
 
 
 const PICKER_WIDTH = 640;
@@ -48,10 +47,6 @@ const FETCH_DELAY_MS = 200;
 const PROMPT_INSET = 11; // gap from the entry's left edge to the slot
 const PROMPT_SLOT = 16; // the icon/spinner square
 const PROMPT_GAP = 5; // gap from the slot to the entry text
-// Color of the matched characters. Sourced from the theme's accent foreground
-// (Zed's `text.accent`). Baked into Pango markup at row-build time, so it can't
-// be a CSS variable (and Pango can't gradient-fill text, so it's a solid color).
-export const HIGHLIGHT_COLOR = theme.ui.text.accent;
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
