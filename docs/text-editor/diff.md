@@ -24,7 +24,9 @@ It is fully documented in **[multibuffer.md](multibuffer.md)** — start there.
   HEAD, on the same multibuffer surface (one file, read-only).
 - **`git:diff-commit`** (`space g d c`) / **`git:diff-branch`** (`space g d b`)
   — read-only diffs of a commit (vs its parent) or this branch vs master/main
-  (three-dot, PR-style). Both live in **`src/ui/diffViews.ts`**, which builds the
+  (three-dot, PR-style). `git:diff-commit` takes an optional revision argument
+  (a sha, `HEAD~2`, a tag, …); dispatched without one it opens a commit picker
+  (`openCommitPicker`). Both live in **`src/ui/diffViews.ts`**, which builds the
   `DiffFile[]` from git blobs and opens a non-editable `DiffView` in a tab.
 
 ## Surviving shared pieces

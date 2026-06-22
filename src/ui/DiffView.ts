@@ -64,10 +64,18 @@ export interface DiffViewOptions {
   /** Edit-in-place: back the NEW side with live `Document`s (write-through + save + live
    *  re-diff) instead of disk snapshots. Requires `documents`. */
   editable?: boolean;
+  /**
+   * LIVE diff: this view tracks the working tree + index, so hunk staging is enabled — the gutter
+   * shows the staged/unstaged marker and `git:stage-hunk`/`git:unstage-hunk` apply. Only the
+   * staging surface (`git:diff-current-changes`) is live; read-only diffs over historical blobs
+   * (commit / branch / file) are NOT live and their gutter omits the staging section. Requires
+   * `git` + `cwd` (a repo) to do anything; pairs with `editable` on the staging surface.
+   */
+  live?: boolean;
   /** The app's document registry — required when `editable`. */
   documents?: DocumentRegistry;
-  /** The repo model — enables hunk staging (the gutter marker + `s`/`u`): refreshes Source Control
-   *  after a stage/unstage, and re-reads the index when it changes externally. */
+  /** The repo model — for a `live` diff: refreshes Source Control after a stage/unstage, and
+   *  re-reads the index when it changes externally. */
   git?: GitRepo;
 }
 
@@ -152,6 +160,9 @@ export class DiffView {
   private pendingSeq = 0;
   private readonly reviewHandlers: Array<() => void> = [];
   private readonly editable: boolean;
+  /** Whether this is a live diff (staging surface): hunk staging + the gutter marker are enabled.
+   *  Public so the command layer can gate `git:stage-hunk`/`git:unstage-hunk` on it. */
+  readonly live: boolean;
   private readonly registry?: DocumentRegistry;
   // Hunk staging: the repo root, the per-file staged (index) blob, the last-built diff (for the
   // caret→file/row lookup), and the repo model (refresh + external-change subscription).
@@ -177,6 +188,7 @@ export class DiffView {
     this.files = options.files;
     this.cwd = options.cwd;
     this.editable = !!options.editable;
+    this.live = !!options.live;
     this.registry = options.documents;
     this.gitRepo = options.git;
     this.repo = options.cwd ? repoRoot(options.cwd) : null;
@@ -225,7 +237,8 @@ export class DiffView {
       gutterBg(dmb, 'old'),
       gutterBg(dmb, 'new'),
       headerRows(dmb),
-      dmb.stagedState,
+      this.live ? dmb.stagedState : null, // staging markers only on a live diff
+      this.live,
     );
 
     this.installOverlays(dmb);
@@ -255,10 +268,10 @@ export class DiffView {
     // Materializing the buffer (setText) leaves the caret at the END; start at the top.
     this.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
 
-    // Staging is only meaningful inside a repo with the live worktree. Read each file's index blob
-    // (async) so the gutter marker can show staged vs unstaged, and refresh it when the index moves
-    // out from under us (someone stages elsewhere).
-    if (this.editable && this.repo) {
+    // Staging is only meaningful on a live diff inside a repo. Read each file's index blob (async)
+    // so the gutter marker can show staged vs unstaged, and refresh it when the index moves out from
+    // under us (someone stages elsewhere).
+    if (this.live && this.repo) {
       this.fetchIndexText(this.files.map((f) => f.path), () => this.refreshMarkers());
       this.gitUnsub = this.gitRepo?.onChange(() => this.fetchIndexText(this.files.map((f) => f.path), () => this.refreshMarkers()));
     }
@@ -435,7 +448,7 @@ export class DiffView {
       gutterBg(dmb, 'old'),
       gutterBg(dmb, 'new'),
       headerRows(dmb),
-      dmb.stagedState,
+      this.live ? dmb.stagedState : null,
     );
   }
 
@@ -579,7 +592,7 @@ export class DiffView {
       this.suppressReDiff = false;
     }
     this.applyDecorations(dmb);
-    this.lineNumbers?.setData(lineLabels(dmb.oldNums), lineLabels(dmb.newNums), gutterBg(dmb, 'old'), gutterBg(dmb, 'new'), headerRows(dmb), dmb.stagedState);
+    this.lineNumbers?.setData(lineLabels(dmb.oldNums), lineLabels(dmb.newNums), gutterBg(dmb, 'old'), gutterBg(dmb, 'new'), headerRows(dmb), this.live ? dmb.stagedState : null);
     this.installOverlays(dmb); // re-place header + gap widgets (counts/positions re-flowed)
     // retarget swapped rows but didn't repaint — re-highlight the spliced sections.
     this.editor.repaintSyntax();

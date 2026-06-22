@@ -89,11 +89,13 @@ Single-file editing plus both multibuffer surfaces run on the
 - **Continuous multi-file editable diff** — write-through, phantom
   rejection, live re-diff (no flash/caret-jump), gutter alignment,
   expand-context (`zo`/`zr`/`zm`).
-  - **Hunk staging** — each file's index blob (`git show :path`) is read
-    and every changed row classified staged/unstaged against the index
-    (staged = HEAD↔index, unstaged = index↔worktree, the same model
-    `GitGutter` uses). A gutter marker bar shows it (info/blue = staged,
-    warning/amber = unstaged). `space h s`/`space h u` →
+  - **Hunk staging** (LIVE diffs only — the staging surface
+    `git:diff-current-changes`, flagged `live`; read-only commit/branch/file
+    diffs are not live and their gutter omits this whole section) — each
+    file's index blob (`git show :path`) is read and every changed row
+    classified staged/unstaged against the index (staged = HEAD↔index,
+    unstaged = index↔worktree, the same model `GitGutter` uses). A gutter
+    marker bar shows it (info/blue = staged, warning/amber = unstaged). `space h s`/`space h u` →
     `git:stage-hunk`/`git:unstage-hunk` (the unified hunk commands, shared
     with the editor gutter; routed here via the focus chain since this
     embedded editor registers no gutter variant, and bare vim `s`/`u` stay

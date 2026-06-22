@@ -67,7 +67,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g p': 'git:push',
   // Diff views (space g d …): the current changes, a past commit, or this branch vs master/main.
   'space g d d': 'git:diff-current-changes', // "d"iff the current changes (continuous multibuffer / staging surface)
-  'space g d c': 'git:diff-commit', // diff the last "c"ommit (HEAD, against its parent)
+  'space g d c': 'git:diff-commit', // pick a "c"ommit to diff (against its parent)
   'space g d b': 'git:diff-branch', // diff this "b"ranch vs master/main (PR-style)
   'space g D': 'git:diff-current', // "D"iff just the current file (working tree vs HEAD)
   'space g c': 'git:start-commit', // "c"ommit staged changes (edit the message in a tab)
@@ -215,7 +215,9 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'z M': 'search:collapse-all',
     'z R': 'search:expand-all',
   },
-  '#TextEditor.continuous-diff': {
+  // Scoped to `.normal-mode` so the `z`/`g` prefixes don't shadow typing those characters while
+  // inserting (this surface is editable) — same reason `K: lsp:hover` is normal-mode only.
+  '#TextEditor.continuous-diff.normal-mode': {
     'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
     'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
     'z m': 'diff:collapse-context', // re-collapse expanded context
