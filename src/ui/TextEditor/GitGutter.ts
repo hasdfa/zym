@@ -20,6 +20,7 @@
  */
 import * as Path from 'node:path';
 import { theme } from '../../theme/theme.ts';
+import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import type { GutterCellSink } from '../../syntax/gutterRenderers.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../../util/hunkPatch.ts';
@@ -32,11 +33,11 @@ type ChangeKind = 'added' | 'modified' | 'removed';
 // semantic colors. Staged changes use the `info` blue so they read as a distinct
 // (already-staged, unstageable) state next to the unstaged add/modify/remove.
 const COLORS: Record<ChangeKind, string> = {
-  added: theme.ui.status.success,
-  modified: theme.ui.status.warning,
-  removed: theme.ui.status.error,
+  added: lookupCSSColor(theme, '--success-color'),
+  modified: lookupCSSColor(theme, '--warning-color'),
+  removed: lookupCSSColor(theme, '--error-color'),
 };
-const STAGED_COLOR = theme.ui.status.info;
+const STAGED_COLOR = lookupCSSColor(theme, '--info-color');
 // U+258F LEFT ONE EIGHTH BLOCK — the thinnest full-height block glyph (~1px), so
 // stacked lines read as one continuous hairline bar.
 const BAR = '▏';

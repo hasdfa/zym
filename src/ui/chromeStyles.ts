@@ -6,6 +6,7 @@
  */
 import { styles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColor } from '../theme/cssColor.ts';
 
 // Paint the window chrome (header bar, file tree, status/command bar, panel tab
 // bars) plus popover surfaces (pickers) and selected entries with the theme's
@@ -96,14 +97,14 @@ export function applyChromeStyles(): void {
 // (fatal reuses error); applied independently of the chrome so it works even
 // for themes that leave the chrome to Adwaita.
 export function applyNotificationStyles(): void {
-  const { status: { info, success, warning, error }, text: { muted: textMuted }, border } = theme.ui;
+  const { text: { muted: textMuted }, border } = theme.ui;
   const colors: Record<string, string> = {
     trace: textMuted,
-    info,
-    success,
-    warning,
-    error,
-    fatal: error,
+    info: lookupCSSColor(theme, '--info-color'),
+    success: lookupCSSColor(theme, '--success-color'),
+    warning: lookupCSSColor(theme, '--warning-color'),
+    error: lookupCSSColor(theme, '--error-color'),
+    fatal: lookupCSSColor(theme, '--error-color'),
   };
 
   const rules = [

@@ -59,7 +59,7 @@ addStyles(`
   #SearchBar entry > text { font: var(--t-font-monospace); }
   #SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
   /* Bad regex: tint the entry text. */
-  #SearchBar entry.invalid > text { color: var(--t-ui-status-error); }
+  #SearchBar entry.invalid > text { color: var(--error-color); }
   #SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
   /* Linked search+replace inputs: square the touching corners and merge the
      shared border so the two entries read as one control. */

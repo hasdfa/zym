@@ -12,6 +12,7 @@
  */
 import { Gdk, Gtk } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
+import { lookupCSSColor } from '../../theme/cssColor.ts';
 
 const SIZE = 14; // widget px — sits on the footer's text baseline
 const STROKE = 2;
@@ -63,8 +64,8 @@ export class ContextRing {
 
   // Thirds of the window: info → warning → error as it fills.
   private fillColor(): string {
-    if (this.fraction >= 2 / 3) return theme.ui.status.error;
-    if (this.fraction >= 1 / 3) return theme.ui.status.warning;
-    return theme.ui.status.info;
+    if (this.fraction >= 2 / 3) return lookupCSSColor(theme, '--error-color');
+    if (this.fraction >= 1 / 3) return lookupCSSColor(theme, '--warning-color');
+    return lookupCSSColor(theme, '--info-color');
   }
 }

@@ -65,29 +65,6 @@
           "$ref": "#/$defs/color",
           "description": "Separator/border for chrome."
         },
-        "status": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "success": {
-              "$ref": "#/$defs/color",
-              "description": "Success text; also the source hue for the diff.added tints."
-            },
-            "warning": {
-              "$ref": "#/$defs/color"
-            },
-            "error": {
-              "$ref": "#/$defs/color",
-              "description": "Error text; also the source hue for the diff.removed tints."
-            },
-            "info": {
-              "$ref": "#/$defs/color"
-            },
-            "hint": {
-              "$ref": "#/$defs/color"
-            }
-          }
-        },
         "search": {
           "type": "object",
           "additionalProperties": false,

@@ -15,6 +15,7 @@
 import { Gtk, Adw, Gdk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
+import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
@@ -252,7 +253,7 @@ export class QuestionCard {
       ? picked.map((a) => `${a.header}: ${a.labels.join(', ')}${a.notes ? ` (${a.notes})` : ''}`).join('   ·   ')
       : 'No answer selected';
     const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CHECK, theme.ui.status.success)}  ${escapeMarkup(text)}`, text);
+    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CHECK, lookupCSSColor(theme, '--success-color'))}  ${escapeMarkup(text)}`, text);
     this.root.append(label);
   }
 }

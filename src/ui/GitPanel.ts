@@ -17,6 +17,7 @@ import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColor } from '../theme/cssColor.ts';
 import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { fileIconGlyph } from './fileIcons.ts';
@@ -63,8 +64,8 @@ const STATE_LETTER: Record<GitFileState, string> = {
 };
 
 // Badge colors, matching `git status`: staged in green, unstaged/untracked in red.
-const STAGED_COLOR = theme.ui.status.success;
-const UNSTAGED_COLOR = theme.ui.status.error;
+const STAGED_COLOR = lookupCSSColor(theme, '--success-color');
+const UNSTAGED_COLOR = lookupCSSColor(theme, '--error-color');
 
 // Compact, dense rows. The theme background/selection are applied centrally in
 // AppWindow; file rows follow the theme foreground (the badge keeps its own

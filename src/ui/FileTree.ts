@@ -12,6 +12,7 @@ import { Gio, GObject, Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColor } from '../theme/cssColor.ts';
 import { zym } from '../zym.ts';
 import type { Disposable } from '../util/eventKit.ts';
 import type { GitRepo, FileGitStatus } from '../git.ts';
@@ -42,8 +43,8 @@ function displayPath(path: string): string {
 }
 
 // Git diff colors (theme success/error), matching GitBranchButton.
-const GIT_ADDED_COLOR = theme.ui.status.success;
-const GIT_REMOVED_COLOR = theme.ui.status.error;
+const GIT_ADDED_COLOR = lookupCSSColor(theme, '--success-color');
+const GIT_REMOVED_COLOR = lookupCSSColor(theme, '--error-color');
 
 /** Pango markup for a file's git status: `?` for untracked, else +added/-removed.
  *  Colors are per-segment; the wrapper makes the digits bold, slightly smaller,

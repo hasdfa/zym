@@ -18,6 +18,7 @@
 import { Gtk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColor } from '../theme/cssColor.ts';
 import { fonts } from '../fonts.ts';
 import { zym } from '../zym.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
@@ -112,7 +113,7 @@ addStyles(`
     margin: 0 12px;
   }
   /* Subagent transcript: the "view conversation" link + the pushed page's header. */
-  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
+  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--info-color); }
   .zym-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
   .zym-conversation-result {
     opacity: 0.7;
@@ -140,10 +141,10 @@ addStyles(`
   .zym-conversation-system { opacity: 0.6; font-style: italic; }
   /* The resume boundary divider: centered, muted, italic. */
   .zym-conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
-  .zym-conversation-error { color: var(--t-ui-status-error); }
+  .zym-conversation-error { color: var(--error-color); }
   /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost.
      A warning accent on the shared ToolRow (which owns padding + the expand fade). */
-  .zym-conversation-unknown { border-left: 2px solid var(--t-ui-status-warning); }
+  .zym-conversation-unknown { border-left: 2px solid var(--warning-color); }
   .zym-conversation-unknown-body { opacity: 0.75; }
   /* Agent-registered actions: a row of buttons just above the input card. The
      default action reads as the suggested (accent) button. */
@@ -178,9 +179,9 @@ addStyles(`
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
   .zym-conversation-mode { min-height: 0; }
   .zym-cmode-default { color: var(--t-ui-text-muted); }
-  .zym-cmode-acceptEdits { color: var(--t-ui-status-success); }
-  .zym-cmode-auto { color: var(--t-ui-status-warning); }
-  .zym-cmode-plan { color: var(--t-ui-status-info); }
+  .zym-cmode-acceptEdits { color: var(--success-color); }
+  .zym-cmode-auto { color: var(--warning-color); }
+  .zym-cmode-plan { color: var(--info-color); }
   .zym-conversation-perm {
     padding: 8px; margin: 6px 0;
     border: 1px solid alpha(var(--accent-bg-color), 0.25);
@@ -190,7 +191,7 @@ addStyles(`
      into a choice list (left) + a detail pane (right) for the focused choice. */
   .zym-conversation-question {
     padding: calc(2 * var(--t-spacing)); margin: 6px 0;
-    border: 1px solid var(--t-ui-status-info);
+    border: 1px solid var(--info-color);
     border-radius: var(--card-radius);
   }
   /* Once answered the border is dropped — it's just a record of the choice. */
@@ -1013,7 +1014,7 @@ export class AgentConversation implements Agent {
     }
     const rows = visible.map((task) => {
       const glyph = task.status === 'completed' ? NERDFONT.TASK.DONE : task.status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
-      const color = task.status === 'completed' ? theme.ui.status.success : task.status === 'in_progress' ? theme.ui.status.warning : undefined;
+      const color = task.status === 'completed' ? lookupCSSColor(theme, '--success-color') : task.status === 'in_progress' ? lookupCSSColor(theme, '--warning-color') : undefined;
       const body = task.status === 'completed' ? `<s>${escapeMarkup(task.subject)}</s>` : escapeMarkup(task.subject);
       const label = new Gtk.Label({ xalign: 0, wrap: true });
       setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, task.subject);
@@ -1078,7 +1079,7 @@ export class AgentConversation implements Agent {
   // An error notice in the conversation flow (refusal / max-turns / API error).
   private addErrorRow(message: string): void {
     const label = this.addRow('zym-conversation-error');
-    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
+    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, lookupCSSColor(theme, '--error-color'))}  ${escapeMarkup(message)}`, message);
   }
 
   // A muted notice that the user interrupted the turn (ctrl-c).
@@ -1099,7 +1100,7 @@ export class AgentConversation implements Agent {
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
     setMarkupSafe(header, `unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
 
-    const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, iconColor: theme.ui.status.warning, header });
+    const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, iconColor: lookupCSSColor(theme, '--warning-color'), header });
     toolRow.root.addCssClass('zym-conversation-unknown');
     const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
     body.addCssClass('zym-conversation-unknown-body');
@@ -1207,7 +1208,7 @@ export class AgentConversation implements Agent {
           toolRow.content.append(out);
         }
         if (isError) {
-          toolRow.setIcon(NERDFONT.STATUS.CROSS, theme.ui.status.error); // ✗ replaces the terminal icon
+          toolRow.setIcon(NERDFONT.STATUS.CROSS, lookupCSSColor(theme, '--error-color')); // ✗ replaces the terminal icon
           toolRow.setExpanded(true);
         }
       },
@@ -1231,7 +1232,7 @@ export class AgentConversation implements Agent {
   // preview otherwise, into the row's collapsible detail section.
   private fillToolResult(toolRow: ToolRow, name: string, isError: boolean, text: string): void {
     if (isError) {
-      toolRow.setIcon(NERDFONT.STATUS.CROSS, theme.ui.status.error); // ✗ replaces the tool icon
+      toolRow.setIcon(NERDFONT.STATUS.CROSS, lookupCSSColor(theme, '--error-color')); // ✗ replaces the tool icon
       toolRow.setExpanded(true); // surface the failure without a click
     }
     // File tools (Read/Write/Edit/…): the file is opened on the side via the
@@ -1343,7 +1344,7 @@ function renderTodos(todos: unknown[]): InstanceType<typeof Gtk.Box> {
     const content = typeof todo.content === 'string' ? todo.content : '';
     const status = todo.status;
     const glyph = status === 'completed' ? NERDFONT.TASK.DONE : status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
-    const color = status === 'completed' ? theme.ui.status.success : status === 'in_progress' ? theme.ui.status.warning : undefined;
+    const color = status === 'completed' ? lookupCSSColor(theme, '--success-color') : status === 'in_progress' ? lookupCSSColor(theme, '--warning-color') : undefined;
     const body = status === 'completed' ? `<s>${escapeMarkup(content)}</s>` : escapeMarkup(content);
     const label = new Gtk.Label({ xalign: 0, wrap: true });
     setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, content);

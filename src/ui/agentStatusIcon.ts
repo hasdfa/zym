@@ -13,6 +13,7 @@ import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColor } from '../theme/cssColor.ts';
 import { Icons } from './icons.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { escapeMarkup } from './proseMarkup.ts';
@@ -25,21 +26,22 @@ export const WORKING_GLYPH = NERDFONT.STATUS.SYNC;
 
 // Status → indicator color for the *colored* states (waiting on the user →
 // warning/amber, idle/ready → success/green), used by the *markup* path only —
-// markup can't read CSS variables, so it interpolates the literal. The CSS path
-// uses the matching var(--t-ui-status-*) directly. The muted states — working
+// markup can't read CSS variables, so it resolves the literal via lookupCSSColor.
+// The CSS path uses the matching libadwaita var(--warning-color/--success-color)
+// directly. The muted states — working
 // (cog), exited, and disconnected (resumed-not-reconnected) — carry no color;
 // they dim the inherited foreground (Adwaita's muted idiom: `--dim-opacity` in
 // CSS, `alpha="55%"` in markup) rather than picking a grey.
 const STATUS_COLOR: Partial<Record<AgentStatus, string>> = {
-  waiting: theme.ui.status.warning,
-  idle: theme.ui.status.success,
+  waiting: lookupCSSColor(theme, '--warning-color'),
+  idle: lookupCSSColor(theme, '--success-color'),
 };
 
 const DOT_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle', 'zym-agent-exited', 'zym-agent-disconnected'];
 addStyles(`
   .zym-agent-working { opacity: var(--dim-opacity); }
-  .zym-agent-waiting { color: var(--t-ui-status-warning); }
-  .zym-agent-idle    { color: var(--t-ui-status-success); }
+  .zym-agent-waiting { color: var(--warning-color); }
+  .zym-agent-idle    { color: var(--success-color); }
   .zym-agent-exited  { opacity: var(--dim-opacity); }
   .zym-agent-disconnected { opacity: var(--dim-opacity); }
 `);

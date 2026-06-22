@@ -7,6 +7,7 @@
 import { Gtk, Adw } from '../../gi.ts';
 import * as Fs from 'node:fs';
 import { theme } from '../../theme/theme.ts';
+import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
@@ -64,11 +65,11 @@ export class MonitorView {
       const m = this.session.getMonitor(id);
       if (!m || m.status !== 'running') continue;
       const row = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-      const open = this.openButton(id, m.description, theme.ui.status.warning);
+      const open = this.openButton(id, m.description, lookupCSSColor(theme, '--warning-color'));
       const cancel = new Gtk.Button({ valign: Gtk.Align.CENTER });
       cancel.addCssClass('flat');
       const cancelLabel = new Gtk.Label();
-      setMarkupSafe(cancelLabel, iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error), '✗');
+      setMarkupSafe(cancelLabel, iconSpan(NERDFONT.STATUS.CROSS, lookupCSSColor(theme, '--error-color')), '✗');
       cancel.setChild(cancelLabel);
       cancel.setTooltipText('Cancel monitor');
       cancel.on('clicked', () => { if (m.taskId) this.session.stopTask(m.taskId); });

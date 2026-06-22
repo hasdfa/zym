@@ -15,14 +15,15 @@
  */
 import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
+import { lookupCSSColor } from '../../theme/cssColor.ts';
 import type { StagedState } from '../multibuffer/diffMultiBuffer.ts';
 
 const COLOR = theme.ui.editor.lineNumber;
 
 // The staged/unstaged marker bar drawn in the diff multibuffer's gutter: info (blue) = the change
 // is already in the index, warning (amber) = it isn't yet. A blank keeps unchanged rows aligned.
-const STAGED_COLOR = theme.ui.status.info;
-const UNSTAGED_COLOR = theme.ui.status.warning;
+const STAGED_COLOR = lookupCSSColor(theme, '--info-color');
+const UNSTAGED_COLOR = lookupCSSColor(theme, '--warning-color');
 const MARKER_GLYPH = '▌';
 
 /** Leading gutter cell: a colored bar for a staged/unstaged change, else a blank of equal width. */

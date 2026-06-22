@@ -26,8 +26,8 @@ export type Scheme = 'light' | 'dark';
 
 /**
  * UI / editor chrome colors, grouped by concern to mirror the theme JSON's `ui`
- * object 1:1 (read in code as `theme.ui.editor.background`, `theme.ui.status.error`,
- * `theme.ui.diff.addedWord`, …). Every field is filled at load from the theme file
+ * object 1:1 (read in code as `theme.ui.editor.background`, `theme.ui.diff.addedWord`,
+ * `theme.ui.pr.merged`, …). Every field is filled at load from the theme file
  * over `DEFAULT_THEME.ui`, so consumers never see `undefined` — read any of them directly.
  */
 export interface ThemeUi {
@@ -53,14 +53,6 @@ export interface ThemeUi {
   };
   /** Separator/border color for chrome (e.g. the header bar's bottom edge). */
   border: string;
-  /** Semantic text colors for status/feedback. */
-  status: {
-    success: string;
-    warning: string;
-    error: string;
-    info: string;
-    hint: string;
-  };
   /**
    * Background tint for editor search matches: every match (`match`) and the
    * current one (`matchCurrent`, which falls back to `match`). `#rrggbbaa` so it
@@ -73,7 +65,7 @@ export interface ThemeUi {
   /**
    * Diff line/word background tints (`#rrggbbaa`, compose over syntax colors). The
    * `added`/`removed` (line) + `addedWord`/`removedWord` tints are derived from
-   * `status.success`/`status.error` per appearance unless the theme sets them; the
+   * the Adwaita success/error hues per appearance unless the theme sets them; the
    * word tints fall back to their line tint. `filler`/`fold` are neutral.
    */
   diff: {
@@ -188,7 +180,6 @@ interface ThemeFromFileUi {
   editor?: Partial<ThemeUi['editor']>;
   text?: Partial<ThemeUi['text']>;
   border?: string;
-  status?: Partial<ThemeUi['status']>;
   search?: Partial<ThemeUi['search']>;
   diff?: Partial<ThemeUi['diff']>;
   flash?: string;
@@ -216,7 +207,6 @@ export const DEFAULT_THEME: Theme = {
     editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
     text: { muted: '#9a9996', accent: '#c678dd' },
     border: 'rgba(0, 0, 0, 0.3)',
-    status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
     search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
     diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
     flash: '#f5c21188',
@@ -317,10 +307,13 @@ export function adaptTheme(file: ThemeFromFile): Theme {
   const f = file.ui ?? {};
   const D = DEFAULT_THEME.ui;
 
-  // status drives the diff tints, so resolve it first; the diff.* keys still win
-  // where the theme sets them, and the word tints fall back to their line tint.
-  const status = { ...D.status, ...f.status };
-  const derived = diffTones(status.success, status.error, file.appearance);
+  // Diff tints derive from the Adwaita success/error hues (per scheme) unless the
+  // theme sets diff.* explicitly; the word tints fall back to their line tint.
+  const derived = diffTones(
+    FALLBACK_COLORS['--success-color'][file.appearance],
+    FALLBACK_COLORS['--error-color'][file.appearance],
+    file.appearance,
+  );
   const diff: ThemeUi['diff'] = {
     added: f.diff?.added ?? derived.added,
     addedWord: f.diff?.addedWord ?? f.diff?.added ?? derived.addedWord,
@@ -339,7 +332,6 @@ export function adaptTheme(file: ThemeFromFile): Theme {
     editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? D.editor.background },
     text: { ...D.text, ...f.text },
     border: f.border ?? D.border,
-    status,
     search: {
       match: f.search?.match ?? D.search.match,
       matchCurrent: f.search?.matchCurrent ?? f.search?.match ?? D.search.matchCurrent,

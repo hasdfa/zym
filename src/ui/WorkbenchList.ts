@@ -39,7 +39,7 @@ const ROW_TRANSITION_MS = 250;
 
 addStyles(`
   /* The unsaved-changes marker (a small dot) next to the project title — warning-colored. */
-  .zym-modified-dot { color: var(--t-ui-status-warning); }
+  .zym-modified-dot { color: var(--warning-color); }
   /* A transparent left border keeps the row content from shifting when the active
      row gains its accent indicator; a subtle bottom border separates the rows.
      The row height itself lives on the content box (#WorkbenchRow) rather than the
@@ -59,7 +59,7 @@ addStyles(`
   #WorkbenchList list row:selected {
     color: var(--t-ui-editor-foreground);
     background-color: var(--t-ui-editor-background);
-    border-left-color: var(--t-ui-status-info);
+    border-left-color: var(--info-color);
   }
   /* Per-row edited-files count — a flat, muted button (click opens the files). */
   #WorkbenchRow .workbenchrow-files {

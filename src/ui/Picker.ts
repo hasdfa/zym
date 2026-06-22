@@ -120,7 +120,7 @@ addStyles(/* css */`
      shown in place of the matches, tinted with the theme's error color. */
   #PickerError {
     padding: 0.5em 1em;
-    color: var(--t-ui-status-error);
+    color: var(--error-color);
   }
   /* The action row uses the current prompt; set it apart from the matches with a
      separator and the accent color. */

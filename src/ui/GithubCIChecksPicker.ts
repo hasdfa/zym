@@ -17,15 +17,16 @@ import { Icons } from './icons.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { fetchChecks, type CiCheck, type CheckState } from '../github.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColor } from '../theme/cssColor.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
 // Glyph + colour per check state — the same check / dot / cross icons (in
 // success / warning / error) the header CI button uses.
 const CHECK_STYLE: Record<CheckState, { glyph: string; color: string }> = {
-  pass: { glyph: NERDFONT.STATUS.CHECK, color: theme.ui.status.success },
-  pending: { glyph: NERDFONT.STATUS.DOT, color: theme.ui.status.warning },
-  fail: { glyph: NERDFONT.STATUS.CROSS, color: theme.ui.status.error },
+  pass: { glyph: NERDFONT.STATUS.CHECK, color: lookupCSSColor(theme, '--success-color') },
+  pending: { glyph: NERDFONT.STATUS.DOT, color: lookupCSSColor(theme, '--warning-color') },
+  fail: { glyph: NERDFONT.STATUS.CROSS, color: lookupCSSColor(theme, '--error-color') },
 };
 
 // Sort/weight key: failed first, then pending, then passed.

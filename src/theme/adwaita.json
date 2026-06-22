@@ -13,13 +13,6 @@
       "accent": "#81d0ff"
     },
     "border": "rgba(255, 255, 255, 0.15)",
-    "status": {
-      "success": "#78e9ab",
-      "warning": "#ffc252",
-      "error": "#ff938c",
-      "info": "#81d0ff",
-      "hint": "#7bdff4"
-    },
     "search": {
       "match": "#e5a50a26",
       "matchCurrent": "#e5a50a59"

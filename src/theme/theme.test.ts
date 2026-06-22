@@ -17,7 +17,6 @@ test('loadTheme("adwaita") resolves the libadwaita-derived palette', () => {
   assert.equal(t.ui.editor.background, '#1d1d20'); // Adwaita dark view_bg_color
   assert.equal(t.followSystemScheme, false); // theme pins editor.background to view_bg
   assert.equal(t.ui.text.accent, '#81d0ff'); // standalone accent_color (oklab max(l,0.85))
-  assert.equal(t.ui.status.error, '#ff938c'); // standalone error_color
 });
 
 test('availableThemes lists the shipped theme files, excluding the schema', () => {
@@ -49,14 +48,13 @@ test('missing UI keys fall back to DEFAULT_THEME; omitted editor.background fill
   assert.equal(t.ui.editor.foreground, '#ffffff'); // DEFAULT_THEME
   assert.equal(t.ui.editor.background, '#1e1e1e'); // filled from the default editor bg (never undefined)
   assert.equal(t.followSystemScheme, true); // file omitted editor.background ⇒ follow system scheme
-  assert.equal(t.ui.status.success, '#2ec27e'); // DEFAULT_THEME
   assert.equal(t.ui.pr.open, '#3fb950'); // DEFAULT_THEME
 });
 
 test('a partial concern deep-merges over the default concern', () => {
-  const t = base({ ui: { status: { error: '#ff0000' } } });
-  assert.equal(t.ui.status.error, '#ff0000'); // overridden
-  assert.equal(t.ui.status.success, '#2ec27e'); // sibling kept from DEFAULT_THEME
+  const t = base({ ui: { text: { accent: '#ff0000' } } });
+  assert.equal(t.ui.text.accent, '#ff0000'); // overridden
+  assert.equal(t.ui.text.muted, '#9a9996'); // sibling kept from DEFAULT_THEME
 });
 
 test('search.matchCurrent falls back to search.match within the concern', () => {
@@ -65,10 +63,10 @@ test('search.matchCurrent falls back to search.match within the concern', () => 
   assert.equal(t.ui.search.matchCurrent, '#abcabc');
 });
 
-test('diff tints derive from status colors when diff is unset', () => {
-  const t = base({ ui: { status: { success: '#00ff00', error: '#ff0000' } } });
-  assert.match(t.ui.diff.added, /^#00[0-9a-f]{2}00[0-9a-f]{2}$/); // darkened green + alpha
-  assert.match(t.ui.diff.removed, /^#[0-9a-f]{2}0000[0-9a-f]{2}$/); // darkened red + alpha
+test('diff tints derive from the Adwaita success/error hues when diff is unset', () => {
+  const t = base(); // no diff override → derived from FALLBACK_COLORS success/error
+  assert.match(t.ui.diff.added, /^#[0-9a-f]{8}$/); // #rrggbbaa (darkened success + alpha)
+  assert.match(t.ui.diff.removed, /^#[0-9a-f]{8}$/); // #rrggbbaa (darkened error + alpha)
   assert.notEqual(t.ui.diff.addedWord, t.ui.diff.added); // word tint is stronger than line
 });
 

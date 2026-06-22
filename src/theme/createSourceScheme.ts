@@ -20,6 +20,7 @@ import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { GtkSource } from '../gi.ts';
 import type { Theme } from './theme.ts';
+import { lookupCSSColor } from './cssColor.ts';
 
 type StyleScheme = InstanceType<typeof GtkSource.StyleScheme>;
 
@@ -81,9 +82,9 @@ function schemeXml(id: string, theme: Theme): string {
     // uses diff:removed-line fg, WARNING uses diff:changed-line fg, ACCENT uses
     // diff:added-line fg (see GtkSource docs). Define them so error-lens annotations
     // are colored by severity. (We don't otherwise render diffs through the scheme.)
-    `<style name="diff:removed-line" foreground="${ui.status.error}"/>`,
-    `<style name="diff:changed-line" foreground="${ui.status.warning}"/>`,
-    `<style name="diff:added-line" foreground="${ui.status.info}"/>`,
+    `<style name="diff:removed-line" foreground="${lookupCSSColor(theme, '--error-color')}"/>`,
+    `<style name="diff:changed-line" foreground="${lookupCSSColor(theme, '--warning-color')}"/>`,
+    `<style name="diff:added-line" foreground="${lookupCSSColor(theme, '--info-color')}"/>`,
   ];
   for (const [def, capture] of DEF_STYLES) {
     const color = syntax[capture];
