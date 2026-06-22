@@ -11,9 +11,12 @@
  * whole feature lives here rather than in the AppWindow.
  */
 import * as Path from 'node:path';
+import { Gtk } from '../gi.ts';
 import { zym } from '../zym.ts';
 import { Icons } from './icons.ts';
 import { DiffView } from './DiffView.ts';
+import { openPicker, highlightMarkup, escapeMarkup } from './Picker.ts';
+import { renderRowSingleLine } from './PickerRow.ts';
 import { type DiffFile } from './multibuffer/diffMultiBuffer.ts';
 import {
   repoRoot,
@@ -27,9 +30,15 @@ import {
   type CommitSummary,
 } from '../git.ts';
 
-/** `git:diff-commit` — open the last commit's changes (HEAD, against its parent) as a diff.
- *  (A commit picker can layer on top later — the diffing core takes any CommitSummary.) */
-export async function openCommitDiff(): Promise<void> {
+type Overlay = InstanceType<typeof Gtk.Overlay>;
+
+// How many recent commits the picker lists to choose from (newest first).
+const PICKER_COMMIT_LIMIT = 200;
+
+/** `git:diff-commit` — open a commit's changes (against its parent) as a read-only diff.
+ *  `rev` is any revision git understands (a sha, `HEAD~2`, a tag, …); defaults to `HEAD`.
+ *  Dispatch the command without an argument to pick a commit instead — see `openCommitPicker`. */
+export async function openCommitDiff(rev = 'HEAD'): Promise<void> {
   const wb = zym.workspace.getActiveWorkbench();
   if (!wb) return;
   const root = repoRoot(wb.cwd);
@@ -37,9 +46,11 @@ export async function openCommitDiff(): Promise<void> {
     zym.notifications.addInfo('Not in a git repository');
     return;
   }
-  const [commit] = await new Promise<CommitSummary[]>((resolve) => listCommits(root, 'HEAD', 1, resolve));
+  // Resolve the revision to a concrete commit (`git log --max-count=1 <rev>`), so a
+  // ref/short-sha/`HEAD~n` gives us the full sha + subject the rest of the flow needs.
+  const [commit] = await new Promise<CommitSummary[]>((resolve) => listCommits(root, rev, 1, resolve));
   if (!commit) {
-    zym.notifications.addInfo('No commits yet');
+    zym.notifications.addInfo(`No commit found for '${rev}'`);
     return;
   }
   const files = await new Promise<ChangedFile[]>((resolve) => commitChangedFiles(root, commit.sha, resolve));
@@ -52,6 +63,45 @@ export async function openCommitDiff(): Promise<void> {
   const diffFiles = await buildRefDiffFiles(root, files, `${commit.sha}^`, commit.sha);
   const subject = commit.subject.length > 50 ? `${commit.subject.slice(0, 50)}…` : commit.subject;
   presentReadonlyDiff(diffFiles, Icons.gitCommit, `${commit.shortSha}  ${subject}`, wb.cwd);
+}
+
+/** `git:diff-commit` with no argument — pick a recent commit, then diff it (via `openCommitDiff`).
+ *  Lists the newest `PICKER_COMMIT_LIMIT` commits; matches against "<shortSha> <subject>". */
+export function openCommitPicker(host: Overlay): void {
+  const wb = zym.workspace.getActiveWorkbench();
+  if (!wb) return;
+  const root = repoRoot(wb.cwd);
+  if (!root) {
+    openPicker({ host, placeholder: 'Commit to diff…', promptIcon: Icons.gitCommit, onSelect: () => {}, error: 'Not a git repository' });
+    return;
+  }
+  // Open immediately in a loading state; fill in once `git log` returns (it's async).
+  const picker = openPicker({
+    host,
+    placeholder: 'Commit to diff…',
+    promptIcon: Icons.gitCommit,
+    loading: true,
+    // value = full sha (what `openCommitDiff` resolves); text = "<shortSha> <subject>"
+    // so typing either the hash or words in the message narrows the list.
+    renderRow: (item, positions) => {
+      const commit = item.data as CommitSummary;
+      return renderRowSingleLine({
+        main: highlightMarkup(item.text, positions),
+        detail: escapeMarkup(`${commit.author} · ${commit.date}`),
+      });
+    },
+    onSelect: (sha) => void openCommitDiff(sha),
+  });
+  listCommits(root, 'HEAD', PICKER_COMMIT_LIMIT, (commits) => {
+    if (commits.length === 0) {
+      zym.notifications.addInfo('No commits yet');
+      picker.close();
+      return;
+    }
+    picker.setItems(
+      commits.map((commit) => ({ value: commit.sha, text: `${commit.shortSha}  ${commit.subject}`, data: commit })),
+    );
+  });
 }
 
 /** `git:diff-branch` — open this branch vs master/main (three-dot, like a GitHub PR). */

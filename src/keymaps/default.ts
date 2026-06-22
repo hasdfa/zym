@@ -67,7 +67,7 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space g p': 'git:push',
   // Diff views (space g d …): the current changes, a past commit, or this branch vs master/main.
   'space g d d': 'git:diff-current-changes', // "d"iff the current changes (continuous multibuffer / staging surface)
-  'space g d c': 'git:diff-commit', // diff the last "c"ommit (HEAD, against its parent)
+  'space g d c': 'git:diff-commit', // pick a "c"ommit to diff (against its parent)
   'space g d b': 'git:diff-branch', // diff this "b"ranch vs master/main (PR-style)
   'space g D': 'git:diff-current', // "D"iff just the current file (working tree vs HEAD)
   'space g c': 'git:start-commit', // "c"ommit staged changes (edit the message in a tab)

@@ -45,7 +45,7 @@ import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
 import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
 import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
-import { openCommitDiff, openBranchDiff } from './diffViews.ts';
+import { openCommitDiff, openCommitPicker, openBranchDiff } from './diffViews.ts';
 import { openGithubService, type GithubService } from '../github.ts';
 import { registerGithubCommands } from './githubCommands.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
@@ -2157,8 +2157,12 @@ export class AppWindow {
         description: 'Show every changed file as one continuous diff (multibuffer)',
       },
       'git:diff-commit': {
-        didDispatch: () => void openCommitDiff(),
-        description: 'Diff the last commit (HEAD, against its parent)',
+        // With a revision argument, diff that commit; with none, pick one first.
+        didDispatch: (_e, _el, rev) =>
+          typeof rev === 'string' && rev !== ''
+            ? void openCommitDiff(rev)
+            : openCommitPicker(this.overlay),
+        description: 'Diff a commit against its parent (pick one, or pass a revision)',
         when: () => this.workbench.git.getHead() !== null,
       },
       'git:diff-branch': {
