@@ -13,7 +13,6 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { outdent } from 'outdent'
 import {
   Adw,
   Gtk,
@@ -27,7 +26,7 @@ import { PanelGroup, type Direction, type RestoredChild } from './PanelGroup.ts'
 import { TextEditor } from './TextEditor/index.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
 import { buildDefinitionPeek, wrapPeekBody, LIVE_PEEK_HEIGHT } from './TextEditor/buildDefinitionPeek.ts';
-import { Terminal } from './Terminal.ts';
+import { Terminal, terminalTabTitle } from './Terminal.ts';
 import { AgentTerminal, type AgentStatus, type AgentResume } from './AgentTerminal.ts';
 import type { Agent } from '../agents/types.ts';
 import { defaultAction, type AgentAction } from '../agents/actions.ts';
@@ -40,7 +39,7 @@ import { WorkbenchStatus } from './WorkbenchStatus.ts';
 import { GitPanel } from './GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons } from './icons.ts';
-import { NERDFONT } from './nerdfont.ts';
+import { agentTabTitle } from './agentStatusIcon.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
@@ -65,7 +64,7 @@ import { openCommandPicker } from './CommandPicker.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
 import { openWorktreePicker } from './WorktreePicker.ts';
-import { openAgentLauncher, type WorktreeChoice } from './AgentLauncher.ts';
+import { openAgentLauncher, launchPrompt } from './AgentLauncher.ts';
 import {
   openBranchPicker,
   openDeleteBranchPicker,
@@ -78,7 +77,7 @@ import { openPicker } from './Picker.ts';
 import { proseMarkup, escapeMarkup, PROSE_LINE_HEIGHT } from './proseMarkup.ts';
 import { openConfigEditor } from './ConfigEditor.ts';
 import { zym } from '../zym.ts';
-import { type SessionParticipant, type TabState, type WorkspaceState, type SessionState, type PanelNode } from '../SessionManager.ts';
+import { fileTabsOf, type SessionParticipant, type TabState, type WorkspaceState, type SessionState } from '../SessionManager.ts';
 import { SessionController, deserializeTab } from '../SessionController.ts';
 import { type Notification } from '../Notification.ts';
 import { NotificationLog } from './NotificationLog.ts';
@@ -93,8 +92,7 @@ import { NotificationToasts } from './NotificationToasts.ts';
 import { loadKeymaps, ensureUserKeymap } from '../keymaps/load.ts';
 import { loadConfig, configPath } from '../config/load.ts';
 import { CompositeDisposable, Disposable, type DisposableLike } from '../util/eventKit.ts';
-import { styles } from '../styles.ts';
-import { theme } from '../theme/theme.ts';
+import { applyChromeStyles, applyNotificationStyles } from './chromeStyles.ts';
 
 // The identifier under the cursor (for prefilling the rename prompt). Codepoint-
 // aware: columns are codepoints, so index the line as codepoints.
@@ -378,8 +376,8 @@ export class AppWindow {
       if (TOAST_TYPES.has(notification.getType())) this.notificationToasts.show(notification);
     });
 
-    this.applyChromeStyles();
-    this.applyNotificationStyles();
+    applyChromeStyles();
+    applyNotificationStyles();
 
     this.window = new Adw.ApplicationWindow({ application: app });
     this.window.setName('AppWindow'); // selector identity for command/keymap rules
@@ -1580,131 +1578,6 @@ export class AppWindow {
   private updateModifiedMarker() {
     const modified = [...this.editors.values()].some((e) => e.isModified());
     this.workbenchList.setModified(modified);
-  }
-
-  // --- Theme chrome ----------------------------------------------------------
-
-  // Paint the window chrome (header bar, file tree, status/command bar, panel tab
-  // bars) plus popover surfaces (pickers) and selected entries with the theme's
-  // colors. Installed as a single keyed, replaceable stylesheet so a future theme
-  // switch can re-apply it. Themes without their own background (ui.bg unset)
-  // leave the chrome to the system Adwaita styling.
-  private applyChromeStyles() {
-    const { editor: { background: bg }, surface: { popover: popoverBg, selected: selectedBg } } = theme.ui;
-    // A theme that follows the system scheme leaves the chrome to Adwaita.
-    if (theme.followSystemScheme) {
-      styles.remove('theme-chrome');
-      return;
-    }
-    const border = theme.ui.border;
-    // De-emphasized text for the empty-panel placeholder.
-    const muted = theme.ui.text.muted;
-    const rules = [
-      `#Header, #WorkbenchList .workbench-header {
-        background: ${bg};
-        box-shadow: none;
-        border-bottom: 1px solid ${border};
-      }`,
-      `#FileTree, #FileTree listview { background-color: ${bg}; }`,
-      `#NotificationLog, #NotificationLog list { background-color: ${bg}; }`,
-      `#KeymapPanel, #KeymapPanel viewport { background-color: ${bg}; }`,
-      `#PluginManagerPanel, #PluginManagerPanel viewport { background-color: ${bg}; }`,
-      `#LocationList, #LocationList list { background-color: ${bg}; }`,
-      `#WorkbenchList, #WorkbenchList list { background-color: ${bg}; }`,
-      `#GitPanel, #GitPanel list { background-color: ${bg}; }`,
-      `#WorkbenchRow { padding: 2px 12px; }`,
-      `#Panel tabbar .box,
-       #Panel tabbar tabbox,
-       #Panel tabbar tab { background-color: ${bg}; }`,
-      `#Panel tabbar .box {
-        box-shadow: none;
-        padding: 0;
-        min-height: 0;
-      }`,
-      `#Panel tabbar tabbox { padding: 0; min-height: 0; }`,
-      // Square (un-rounded) tabs, separated by vertical borders.
-      `#Panel tabbar tab {
-        min-height: 0;
-        padding: 2px 12px;
-        border-radius: 0;
-        border-right: 1px solid ${border};
-      }`,
-      `#Panel tabbar tab:first-child { border-left: 1px solid ${border}; }`,
-      `#Panel tabbar tab:hover { background-color: shade(${bg}, 1.2); }`,
-      `#Panel tabbar tab:selected {
-        background-color: shade(${bg}, 1.6);
-        box-shadow: inset 0 -2px ${border};
-      }`,
-      // The empty-panel placeholder blends into the app background; its text, face,
-      // cat, cheatsheet and footer are all de-emphasized. The plain face brightens
-      // to the foreground color when this is the active panel; the welcome state
-      // stays muted throughout (the cat is a calm mascot, the rest reference text).
-      // Keycaps derive their chrome from currentColor.
-      `#PanelEmptyState { background-color: ${bg}; }`,
-      `#PanelEmptyText, #PanelEmptyEmoticon, #PanelEmptyCat, #PanelEmptyCheatsheet, #PanelEmptyFooter { color: ${muted}; }`,
-      `#PanelEmptyText.is-active, #PanelEmptyEmoticon.is-active { color: ${theme.ui.editor.foreground}; }`,
-    ];
-
-    // Popover surfaces: the picker card, its search entry, and result list.
-    if (popoverBg) {
-      rules.push(
-        `#Picker,
-         #PickerEntry,
-         #PickerList,
-         #PickerList list { background-color: ${popoverBg}; }`,
-      );
-    }
-
-    // Selected entries in lists (file tree, picker results). The file-tree
-    // selection is painted only while the tree is focused (`:focus-within`); an
-    // unfocused tree drops it — see FileTree's `:not(:focus-within)` rule — so the
-    // selected row reads as inactive. Pickers are always focused when shown.
-    if (selectedBg) {
-      rules.push(
-        `#FileTree:focus-within listview row:selected,
-         #PickerList row:selected,
-         #WorkbenchList list row:selected { background-color: ${selectedBg}; }`,
-      );
-    }
-
-    styles.set(rules.join('\n'), { key: 'theme-chrome' });
-  }
-
-  // Severity styling shared by the toasts and the log: each `notification-<type>`
-  // colors its icon, and a toast card gets a matching left accent border, so the
-  // severity is legible at a glance. Colors come from the theme's semantic keys
-  // (fatal reuses error); applied independently of the chrome so it works even
-  // for themes that leave the chrome to Adwaita.
-  private applyNotificationStyles() {
-    const { status: { info, success, warning, error }, text: { muted: textMuted }, surface: { popover: popoverBg }, border, shadow } = theme.ui;
-    const colors: Record<string, string> = {
-      trace: textMuted,
-      info,
-      success,
-      warning,
-      error,
-      fatal: error,
-    };
-
-    const rules = [
-      `.NotificationToast {
-        background-color: ${popoverBg};
-        border: 1px solid ${border};
-        border-radius: 12px;
-        padding: 8px 10px;
-        min-width: 260px;
-        box-shadow: 0 2px 8px ${shadow};
-      }`,
-      // Clickable toasts (default action) get a hover tint.
-      `.NotificationToast.activatable:hover { background-color: shade(${popoverBg}, 1.15); }`,
-    ];
-    for (const [type, color] of Object.entries(colors)) {
-      rules.push(`.notification-${type} .notification-icon { color: ${color}; }`);
-      rules.push(`.NotificationToast.notification-${type} { border-left: 4px solid ${color}; }`);
-      rules.push(`#NotificationRow.notification-${type} { border-left: 3px solid ${color}; padding-left: 6px; }`);
-    }
-
-    styles.set(rules.join('\n'), { key: 'notification-colors' });
   }
 
   // --- Commands --------------------------------------------------------------
@@ -3218,62 +3091,13 @@ function span(a0: number, aLen: number, b0: number, bLen: number): number {
   return Math.min(a0 + aLen, b0 + bLen) - Math.max(a0, b0);
 }
 
-// The same indicators the WorkbenchList uses: nf-md-cog-sync while working, else a
-// round dot. Adw tab titles are plain text (no markup, no colour), so the dot
-// can't be colour-coded like the sidebar — the waiting state instead drives Adw's
-// native `needs-attention` tab highlight (see updateAgentTab).
-const AGENT_WORKING_GLYPH = NERDFONT.STATUS.SYNC;
-const AGENT_STATUS_DOT = '●';
-
-/** An agent tab's title: the WorkbenchList status glyph prefixed to the agent's name. */
-function agentTabTitle(agent: Agent): string {
-  const glyph = agent.status === 'working' ? AGENT_WORKING_GLYPH : AGENT_STATUS_DOT;
-  return `${glyph} ${agent.title}`;
-}
-
-// A terminal tab is prefixed with the shell glyph (the Adw tab-icon convention is
-// a glyph embedded in the title; see icons.ts), mirroring how editor/agent tabs
-// carry their own marker.
-function terminalTabTitle(terminal: Terminal): string {
-  return `${Icons.terminal} ${terminal.title}`;
-}
-
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-// The launch prompt for a new agent. The launcher's worktree choice is realized by the
-// agent itself (there's no host-side worktree creation): prepend an instruction to set
-// up the worktree and announce it via set_worktree (which re-roots the workbench), then
-// run the user's prompt.
-const NEW_WORKTREE_INSTRUCTION = outdent`
-  Before anything else, create a new git worktree with a descriptive branch 
-  name for the following task and switch into it:
-`
-function branchWorktreeInstruction(branch: string): string {
-  return outdent`
-    Before anything else, either go to the existing git worktree or create a new one
-    for the branch ${branch}, then do the following task:
-  `;
-}
-function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
-  if ('current' in worktree) return prompt || undefined; // run in the cwd, no worktree setup
-  const instruction = 'create' in worktree ? NEW_WORKTREE_INSTRUCTION : branchWorktreeInstruction(worktree.branch);
-  return prompt ? `${instruction}\n\n${prompt}` : instruction;
 }
 
 // Whether `path` is `root` itself or lives beneath it (a `root + sep` prefix, so
 // `/a/bc` doesn't count as under `/a/b`).
 function isUnderRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(Path.sep) ? root : root + Path.sep);
-}
-
-// The `file` tabs in a saved center layout, depth-first — used to reopen an agent
-// workbench's reviewed files on restore (the agent leaf is recreated separately).
-function fileTabsOf(node: PanelNode): Extract<TabState, { kind: 'file' }>[] {
-  if (node.type === 'leaf') {
-    return node.tabs.filter((t): t is Extract<TabState, { kind: 'file' }> => t.kind === 'file');
-  }
-  return [...fileTabsOf(node.start), ...fileTabsOf(node.end)];
 }
 

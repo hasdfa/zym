@@ -12,6 +12,7 @@
  * lets them diverge. `onLaunch` receives the assembled argv + cwd + kind; the host
  * turns that into `openAgent`.
  */
+import { outdent } from 'outdent';
 import { Gtk, Gdk, Adw } from '../gi.ts';
 import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
@@ -286,4 +287,27 @@ function field(caption: string, control: InstanceType<typeof Gtk.Widget>): Insta
   box.append(label);
   box.append(control);
   return box;
+}
+
+// The launch prompt for a new agent. The launcher's worktree choice is realized by the
+// agent itself (there's no host-side worktree creation): prepend an instruction to set
+// up the worktree and announce it via set_worktree (which re-roots the workbench), then
+// run the user's prompt.
+const NEW_WORKTREE_INSTRUCTION = outdent`
+  Before anything else, create a new git worktree with a descriptive branch
+  name for the following task and switch into it:
+`;
+function branchWorktreeInstruction(branch: string): string {
+  return outdent`
+    Before anything else, either go to the existing git worktree or create a new one
+    for the branch ${branch}, then do the following task:
+  `;
+}
+
+/** Assemble the launch prompt for `openAgent` from the user's prompt and the chosen
+ *  worktree option (see NEW_WORKTREE_INSTRUCTION). */
+export function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
+  if ('current' in worktree) return prompt || undefined; // run in the cwd, no worktree setup
+  const instruction = 'create' in worktree ? NEW_WORKTREE_INSTRUCTION : branchWorktreeInstruction(worktree.branch);
+  return prompt ? `${instruction}\n\n${prompt}` : instruction;
 }

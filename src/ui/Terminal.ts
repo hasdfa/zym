@@ -20,6 +20,7 @@ import {
 import { fonts } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { zym } from '../zym.ts';
+import { Icons } from './icons.ts';
 import type { Key } from '../keymap/Key.ts';
 import type { TabState } from '../SessionManager.ts';
 
@@ -377,4 +378,11 @@ function encodeKeyForChild(key: Key): string | null {
     return key.string;
   }
   return null;
+}
+
+// A terminal tab is prefixed with the shell glyph (the Adw tab-icon convention is
+// a glyph embedded in the title; see icons.ts), mirroring how editor/agent tabs
+// carry their own marker.
+export function terminalTabTitle(terminal: Terminal): string {
+  return `${Icons.terminal} ${terminal.title}`;
 }
