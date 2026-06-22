@@ -13,9 +13,9 @@ Atom's types are `line`, `line-number`/`gutter`, `highlight`, `cursor`,
 
 | Atom type | Our surface | Mechanism | Consumers |
 |---|---|---|---|
-| **line** | `TextDecorations` (`LineStyle`) | `GtkTextTag` paragraph-background, layered | diff add/remove/filler, diff fold-row |
+| **line** | `TextDecorations` (`LineStyle`) | `GtkTextTag` paragraph-background, layered | diff add/remove/filler |
 | **highlight** | `TextDecorations` (`HighlightStyle`) | `GtkTextTag` char-background, layered; `UnderlineOverlay` for drawn squiggles | search, word-diff, vim flash/occurrence, picker-match; **diagnostics squiggles** |
-| **gutter / line-number** | per-renderer `GtkSource.GutterRendererText` | a glyph per line | line numbers + fold chevron (`SyntaxController`), git change bars (`GitGutter`), diagnostic severity (`DiagnosticsView`), diff +/− (`DiffGutter`) |
+| **gutter / line-number** | per-renderer `GtkSource.GutterRendererText` | a glyph per line | line numbers + fold chevron (`SyntaxController`), git change bars (`GitGutter`), diagnostic severity (`DiagnosticsView`), diff old/new line columns (`CombinedDiffLineNumberGutter`) |
 | **cursor** | `EditorModel` (`cursorTag`, `extraSelectionTag`) | tag + native | vim block cursor, multi-cursor, native selection |
 | **text** (trailing/virtual) | `VirtualText` | `GtkSourceAnnotations` (EOL) | inlay hints, error lens |
 | **text** (mid-line virtual) | the fold projection (`Document.foldViewRange`) | view-only text in the view buffer | fold `[N]` placeholder — see below |

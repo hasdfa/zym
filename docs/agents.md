@@ -293,8 +293,9 @@ Capture each agent's "before" so its diff is well-defined:
   changes."
 - A **diff view** per file (`baseline → current`): next/prev change, optionally
   per-hunk accept / revert.
-- **Depends on the editor Diff renderer** (`text-editor/diff.md`, not built
-  yet) — that's the rendering substrate. Sequence: diff display → agent review.
+- **Built on the editor Diff renderer** (`text-editor/diff.md`) — the
+  multibuffer `DiffView` is the rendering substrate (with comment-to-agent /
+  review mode). Sequence: diff display → agent review.
 - TODO: expand the diff comment-to-agent action into threaded comments the agent can reply to inline.
 
 ### Ongoing vs past
@@ -482,8 +483,8 @@ exists, so it's cheap and high-value; the rest are bigger or more speculative.
 - [~] Attention notifications: in-app toasts on waiting / working→idle while
       the tab is inactive are done (`notifyAgentAttention`); header `waiting`
       badge and OS notifications while the window is unfocused are still todo
-- [ ] Editor Diff renderer (`text-editor/diff.md`) — substrate for review
-      (blocks the items below)
+- [x] Editor Diff renderer (`text-editor/diff.md`) — substrate for review
+      (the multibuffer `DiffView`)
 - [ ] Review work: per-agent baselines (PreToolUse snapshot → `.baseline/`);
       "Agent Changes" diff panel (baseline → current); live (FileMonitor) +
       post-exit

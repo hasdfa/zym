@@ -163,8 +163,8 @@ cost is bounded to the viewport. See [text-editor/index.md](text-editor/index.md
 
 Per-feature detail:
 
-- [Diff](text-editor/diff.md) — synthesized read-only buffers + decorations
-  sidestep GtkTextView's lack of virtual lines; unified + side-by-side.
+- [Diff](text-editor/diff.md) — one multibuffer `DiffView` for every diff
+  (working tree, commit, branch); see [multibuffer.md](text-editor/multibuffer.md).
 - [Multibuffer](text-editor/multibuffer.md) — every editor on a
   `ViewProjection`/`ProjectionView` substrate; editable project-search + git-diff
   shipped (folding off by design).

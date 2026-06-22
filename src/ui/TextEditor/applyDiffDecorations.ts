@@ -7,7 +7,9 @@
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 import type { DecorationLayer } from './TextDecorations.ts';
-import type { WordRange } from '../../util/DiffModel.ts';
+
+/** A `[start, end)` column range of changed characters within a modified line. */
+export type WordRange = [start: number, end: number];
 
 interface DecoratableLine {
   kind: string;
