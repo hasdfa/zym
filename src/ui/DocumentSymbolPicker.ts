@@ -16,7 +16,7 @@ import { Gtk } from '../gi.ts';
 import { openLocationPicker } from './LocationPicker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { escapeMarkup, type PickerItem } from './Picker.ts';
-import { symbolKindGlyph, Icons } from './icons.ts';
+import { symbolKindGlyph, iconSpan, Icons } from './icons.ts';
 import { zym } from '../zym.ts';
 import type { LspDocument, DocumentSymbolResult } from '../lsp/LspManager.ts';
 
@@ -26,6 +26,9 @@ export async function openDocumentSymbolPicker(
   host: Overlay,
   doc: LspDocument,
   onJump: (cursor: [number, number]) => void,
+  // The editor the outline belongs to — the picker centres over it rather than the
+  // whole window (the outline is about *this* editor, often in a split).
+  anchorTo?: InstanceType<typeof Gtk.Widget>,
 ): Promise<void> {
   const path = doc.getPath();
   if (!path) return;
@@ -48,6 +51,7 @@ export async function openDocumentSymbolPicker(
 
   openLocationPicker({
     host,
+    anchor: anchorTo ? { to: anchorTo } : undefined,
     placeholder: 'Go to symbol in document…',
     promptIcon: Icons.symbol,
     // The target file is already on screen behind the picker — a preview would
@@ -57,15 +61,20 @@ export async function openDocumentSymbolPicker(
     renderRow: (item) => {
       const sym = byValue.get(item.value);
       if (!sym) return renderRowSingleLine({ main: escapeMarkup(item.text) });
-      // Indent by nesting depth so the outline's hierarchy stays legible.
+      // Indent by nesting depth so the outline's hierarchy stays legible. The kind
+      // glyph stays inline (so it indents with the name); render it in the icon font
+      // via `iconSpan`, dimmed — a quiet cue, with the name carrying the row.
       const indent = '  '.repeat(sym.depth);
-      // The kind glyph is a quiet visual cue, so dim it; the name carries the row.
-      const glyph = `<span alpha="55%">${escapeMarkup(symbolKindGlyph(sym.kind))}</span>`;
+      const glyph = `<span alpha="55%">${iconSpan(symbolKindGlyph(sym.kind))}</span>`;
       const main = `${indent}${glyph} ${escapeMarkup(sym.name)}`;
       const detail = sym.containerName
         ? `${sym.containerName}  :${sym.point.row + 1}`
         : `:${sym.point.row + 1}`;
-      return renderRowSingleLine({ main, detail: `<span size="smaller">${escapeMarkup(detail)}</span>`, cropDetail: true });
+      return renderRowSingleLine({ 
+        main, 
+        detail: `<span size="smaller">${escapeMarkup(detail)}</span>`,
+        cropDetail: true,
+      });
     },
     locate: (item) => {
       const sym = byValue.get(item.value);

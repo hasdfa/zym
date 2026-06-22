@@ -16,6 +16,7 @@ import * as Fs from 'node:fs';
 import { Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { openPicker, type PickerItem, type PickerOptions, type RowRenderer } from './Picker.ts';
+import { type CardAnchor } from './FloatingCard.ts';
 import { TextEditor } from './TextEditor/TextEditor.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -34,6 +35,8 @@ export interface PickerLocation {
 
 export interface LocationPickerOptions {
   host: Overlay;
+  /** Align the card to a widget instead of the overlay's top-centre (forwarded). */
+  anchor?: CardAnchor;
   placeholder?: string;
   promptIcon?: string;
   /** Server-side-filtered source (e.g. rg / LSP): show results in order, no local refine. */
@@ -66,6 +69,7 @@ export function openLocationPicker(options: LocationPickerOptions): void {
   const preview = options.preview === false ? null : createSourcePreview();
   openPicker({
     host: options.host,
+    anchor: options.anchor,
     placeholder: options.placeholder,
     promptIcon: options.promptIcon,
     localFilter: options.localFilter,

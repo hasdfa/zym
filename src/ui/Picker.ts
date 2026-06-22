@@ -16,7 +16,7 @@ import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
 import { frecency } from '../util/Frecency.ts';
 import { enableReadline } from './readline.ts';
-import { openFloatingCard } from './FloatingCard.ts';
+import { openFloatingCard, type CardAnchor } from './FloatingCard.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { highlightMarkup } from './pickerHighlight.ts';
 
@@ -44,7 +44,7 @@ const FETCH_DELAY_MS = 200;
 // Leading prompt slot (px): a fixed-width icon/spinner before the entry text,
 // shown for `fetch` pickers (spun while fetching) and any `promptIcon` picker.
 // The slot reserves its space even when empty so the spinner never shifts layout.
-const PROMPT_INSET = 11; // gap from the entry's left edge to the slot
+const PROMPT_INSET = 23; // gap from the entry's left edge to the slot (was 11; nudged +1.5*spacing right to line the prompt icon up with the row icons)
 const PROMPT_SLOT = 16; // the icon/spinner square
 const PROMPT_GAP = 5; // gap from the slot to the entry text
 
@@ -187,6 +187,9 @@ const defaultRowRenderer: RowRenderer = (item, positions) =>
 
 export interface PickerOptions {
   host: Overlay;
+  /** Align the card to a widget (e.g. the active editor) instead of the overlay's
+   *  top-centre. Forwarded to the FloatingCard; see `CardAnchor`. */
+  anchor?: CardAnchor;
   placeholder?: string;
   items?: Array<string | PickerItem>;
   /** Initial entry text (e.g. seed an action prompt with the editor selection). */
@@ -455,6 +458,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
   const card = openFloatingCard({
     host,
     name: 'Picker',
+    anchor: options.anchor,
     dim: true,
     fade: true,
     onClose: () => {

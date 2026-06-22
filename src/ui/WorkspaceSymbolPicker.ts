@@ -57,11 +57,16 @@ export function openWorkspaceSymbolPicker(
       if (!sym) return renderRowSingleLine({ main: escapeMarkup(item.text) });
       // The kind glyph is a quiet visual cue, so dim it; the name carries the row.
       const glyph = `<span alpha="55%">${escapeMarkup(symbolKindGlyph(sym.kind))}</span>`;
-      const main = `${glyph} ${escapeMarkup(sym.name)}`;
+      const main = escapeMarkup(sym.name);
       const rel = Path.relative(cwd, sym.path);
       const detail = sym.containerName ? `${sym.containerName}  ${rel}` : rel;
       // Smaller, croppable path: it yields to the symbol name when space is tight.
-      return renderRowSingleLine({ main, detail: `<span size="smaller">${escapeMarkup(detail)}</span>`, cropDetail: true });
+      return renderRowSingleLine({ 
+        icon: glyph,
+        main, 
+        detail: `<span size="smaller">${escapeMarkup(detail)}</span>`, 
+        cropDetail: true
+      });
     },
     locate: (item) => {
       const sym = byValue.get(item.value);

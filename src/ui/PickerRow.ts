@@ -13,6 +13,7 @@
  */
 import { Gtk, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
+import { theme } from '../theme/theme.ts';
 import { iconSpan } from './icons.ts';
 
 addStyles(/* css */`
@@ -23,10 +24,18 @@ addStyles(/* css */`
     opacity: 0.5;
   }
   /* Second line of a stacked row (e.g. the file picker's directory): muted and a
-     touch smaller, sitting tight under the main label. */
-  #PickerRow > .picker-detail-line {
+     touch smaller, sitting tight under the main label. Descendant (not child)
+     selector — with a leading icon the lines nest one level deeper. */
+  #PickerRow .picker-detail-line {
     opacity: 0.5;
     font-size: 0.9em;
+  }
+  /* Leading icon column (file-type / state glyph), centred against the row. Margins
+     (not padding — padding ate into the glyph's own box): a left inset plus a wider
+     gap to the text, tuned so the icons line up under the prompt icon. */
+  #PickerRow > .picker-row-icon {
+    margin-left: ${theme.spacing}px;
+    margin-right: ${theme.spacing * 2}px;
   }
 `);
 
@@ -40,6 +49,9 @@ export interface RowParts {
   icon?: string;
   /** Colour for `icon` (e.g. a CI/PR state colour); default follows the text. */
   iconColor?: string;
+  /** Dim the icon — a quiet visual cue (e.g. a file-type glyph) rather than a
+   *  status colour that should stay vivid. */
+  iconMuted?: boolean;
   /** The row's main label, as Pango markup. */
   main: string;
   /** Optional secondary text, as Pango markup (right of `main`, or below it). */
@@ -60,9 +72,33 @@ export interface RowParts {
   cropDetail?: boolean;
 }
 
-/** Prepend the optional leading icon (in the icon font) to the main markup. */
-function withIcon(parts: RowParts): string {
-  return parts.icon ? `${iconSpan(parts.icon, parts.iconColor)} ${parts.main}` : parts.main;
+/** The leading icon column (a glyph in the icon font), or null when there's none.
+ *  Shared by both renderers so the `.picker-row-icon` spacing/muting is uniform. */
+function iconWidget(parts: RowParts): InstanceType<typeof Gtk.Label> | null {
+  if (parts.icon === undefined) return null;
+  const icon = new Gtk.Label({ useMarkup: true });
+  icon.setMarkup(iconSpan(parts.icon, parts.iconColor));
+  icon.setValign(Gtk.Align.CENTER);
+  icon.addCssClass('picker-row-icon');
+  if (parts.iconMuted) icon.setOpacity(0.55);
+  return icon;
+}
+
+/** Wrap row `content` in a leading-icon column when one is given, else name and
+ *  return `content` as the row itself. Applies the whole-row dimming. */
+function withIconColumn(parts: RowParts, content: InstanceType<typeof Gtk.Widget>): InstanceType<typeof Gtk.Widget> {
+  const icon = iconWidget(parts);
+  if (!icon) {
+    content.setName('PickerRow');
+    if (parts.dim) content.setOpacity(0.4);
+    return content;
+  }
+  const row = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
+  row.setName('PickerRow');
+  row.append(icon);
+  row.append(content);
+  if (parts.dim) row.setOpacity(0.4);
+  return row;
 }
 
 /**
@@ -70,17 +106,13 @@ function withIcon(parts: RowParts): string {
  * leading icon and a right-aligned muted detail that keeps its natural width.
  */
 export function renderRowSingleLine(parts: RowParts): InstanceType<typeof Gtk.Widget> {
-  const mainMarkup = withIcon(parts);
-
   if (parts.detail === undefined) {
     const label = new Gtk.Label({ xalign: 0, useMarkup: true });
-    label.setMarkup(mainMarkup);
-    label.setName('PickerRow');
+    label.setMarkup(parts.main);
     // Crop a long label to the card width rather than widening the row.
     label.setHexpand(true);
     label.setEllipsize(Pango.EllipsizeMode.END);
-    if (parts.dim) label.setOpacity(0.4);
-    return label;
+    return withIconColumn(parts, label);
   }
 
   // Main label on the left, a right-aligned muted detail on the right. The main
@@ -88,9 +120,9 @@ export function renderRowSingleLine(parts: RowParts): InstanceType<typeof Gtk.Wi
   // than pushing the detail off the edge; the detail keeps its natural width so it
   // always shows in full (unless `cropDetail`).
   const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
-  box.setName('PickerRow');
+  box.setHexpand(true);
   const main = new Gtk.Label({ xalign: 0, useMarkup: true });
-  main.setMarkup(mainMarkup);
+  main.setMarkup(parts.main);
   main.setHexpand(true);
   main.setEllipsize(Pango.EllipsizeMode.END);
   box.append(main);
@@ -106,24 +138,24 @@ export function renderRowSingleLine(parts: RowParts): InstanceType<typeof Gtk.Wi
   if (parts.detailMuted === false) detail.setMarginStart(16);
   else detail.addCssClass('picker-detail');
   box.append(detail);
-  if (parts.dim) box.setOpacity(0.4);
-  return box;
+  return withIconColumn(parts, box);
 }
 
 /**
  * A two-line row: the main label on top, a muted detail on a second line below
- * (e.g. a filename over its directory). Both lines crop to the card width.
+ * (e.g. a filename over its directory). Both lines crop to the card width. A
+ * leading icon, when given, sits in a column to the left, centred against both.
  */
 export function renderRowStacked(parts: RowParts): InstanceType<typeof Gtk.Widget> {
-  const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
-  box.setName('PickerRow');
-  box.addCssClass('picker-row-stacked');
+  const lines = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
+  lines.addCssClass('picker-row-stacked');
+  lines.setHexpand(true);
 
   const main = new Gtk.Label({ xalign: 0, useMarkup: true });
-  main.setMarkup(withIcon(parts));
+  main.setMarkup(parts.main); // the icon (if any) is a sibling column, not inline
   main.setHexpand(true);
   main.setEllipsize(Pango.EllipsizeMode.END);
-  box.append(main);
+  lines.append(main);
 
   if (parts.detail) {
     const detail = new Gtk.Label({ xalign: 0, useMarkup: true });
@@ -131,9 +163,9 @@ export function renderRowStacked(parts: RowParts): InstanceType<typeof Gtk.Widge
     detail.setHexpand(true);
     detail.setEllipsize(Pango.EllipsizeMode.END);
     detail.addCssClass('picker-detail-line');
-    box.append(detail);
+    lines.append(detail);
   }
 
-  if (parts.dim) box.setOpacity(0.4);
-  return box;
+  // A leading icon (if any) sits in a column to the left, centred against both lines.
+  return withIconColumn(parts, lines);
 }

@@ -13,6 +13,8 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { openPicker, highlightSegment, type PickerItem } from './Picker.ts';
 import { renderRowStacked } from './PickerRow.ts';
+import { fileIconGlyph } from './fileIcons.ts';
+import { Icons } from './icons.ts';
 import { Gtk } from '../gi.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
@@ -30,18 +32,26 @@ export function openFilePicker(host: Overlay, cwd: string, onSelect: (path: stri
   const picker = openPicker({
     host,
     placeholder: 'Search files…',
+    promptIcon: Icons.search,
+    // Rows carry their own (file-type) icon column, aligned under the prompt icon —
+    // so skip the prompt-driven row indent.
+    disableIconPadding: true,
     // Surface recently/frequently opened files first, and nudge them up the
     // ranking once a query is typed.
     frecency: 'file',
-    // Two-line rows: the filename on top, its directory muted below. Both index
-    // into the relative path (`item.text`) so the match highlight spans them.
+    // Two-line rows: a file-type icon, the filename on top, its directory muted
+    // below. Both lines index into the relative path (`item.text`) so the match
+    // highlight spans them.
     renderRow: (item, positions) => {
       const rel = item.text;
-      const dirEnd = rel.length - Path.basename(rel).length; // where the filename starts
+      const base = Path.basename(rel);
+      const dirEnd = rel.length - base.length; // where the filename starts
       // Directory (trailing slash dropped); a root-level file has no directory, so
       // show `.` rather than a blank second line.
       const dir = highlightSegment(rel, 0, Math.max(0, dirEnd - 1), positions);
       return renderRowStacked({
+        icon: fileIconGlyph(base, false),
+        iconMuted: true, // a quiet visual cue; the filename carries the row
         main: highlightSegment(rel, dirEnd, rel.length, positions),
         detail: dir || '.',
       });

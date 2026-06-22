@@ -2025,7 +2025,7 @@ export class AppWindow {
     await openDocumentSymbolPicker(this.overlay, editor.lsp, (cursor) => {
       editor.restoreCursor(cursor);
       editor.focus();
-    });
+    }, editor.root);
   }
 
   // Offer code actions / quick-fixes at the cursor in a picker; apply the chosen one.
