@@ -139,7 +139,7 @@ addStyles(`
   .zym-conversation-subagents { border-top: 1px solid var(--t-ui-border); border-bottom: none; }
   .zym-conversation-system { opacity: 0.6; font-style: italic; }
   /* The resume boundary divider: centered, muted, italic. */
-  .zym-conversation-resume { color: ${theme.ui.text.muted}; font-style: italic; }
+  .zym-conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
   .zym-conversation-error { color: var(--t-ui-status-error); }
   /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost.
      A warning accent on the shared ToolRow (which owns padding + the expand fade). */
@@ -799,7 +799,7 @@ export class AgentConversation implements Agent {
       if (running) {
         const stop = new Gtk.Button({ valign: Gtk.Align.CENTER });
         const stopLabel = new Gtk.Label();
-        setMarkupSafe(stopLabel, iconSpan(NERDFONT.STATUS.CROSS, theme.ui.text.muted), '✗');
+        setMarkupSafe(stopLabel, iconSpan(NERDFONT.STATUS.CROSS, undefined, true), '✗');
         stop.setChild(stopLabel);
         stop.setTooltipText(`Stop ${action.label}`);
         stop.on('clicked', () => this.stopAction(action.id));

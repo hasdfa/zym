@@ -5,11 +5,46 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adaptTheme } from './theme.ts';
+import { activeThemeName, adaptTheme, availableThemes, DEFAULT_THEME_NAME, loadTheme } from './theme.ts';
 
 /** A minimal dark theme; pass `ui`/`syntax` overrides in per-test. */
 const base = (over: { ui?: unknown; syntax?: unknown } = {}) =>
   adaptTheme({ name: 't', appearance: 'dark', ui: over.ui as never, syntax: over.syntax as never });
+
+test('loadTheme("adwaita") resolves the libadwaita-derived palette', () => {
+  const t = loadTheme('adwaita');
+  assert.equal(t.appearance, 'dark');
+  assert.equal(t.ui.editor.background, '#1d1d20'); // Adwaita dark view_bg_color
+  assert.equal(t.followSystemScheme, false); // theme pins editor.background to view_bg
+  assert.equal(t.ui.surface.popover, '#36363a'); // popover_bg_color
+  assert.equal(t.ui.surface.selected, 'rgba(53, 132, 228, 0.25)'); // view_selected_color (accent @ 25%)
+  assert.equal(t.ui.text.accent, '#81d0ff'); // standalone accent_color (oklab max(l,0.85))
+  assert.equal(t.ui.status.error, '#ff938c'); // standalone error_color
+});
+
+test('availableThemes lists the shipped theme files, excluding the schema', () => {
+  const names = availableThemes();
+  assert.ok(names.includes('adwaita'));
+  assert.ok(names.includes('zym'));
+  assert.ok(!names.includes('theme.schema'));
+});
+
+test('activeThemeName: ZYM_THEME overrides; unknown env falls back to default', () => {
+  const savedEnv = process.env.ZYM_THEME;
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  // Point config at an empty dir so the file lookup misses and the default applies.
+  process.env.XDG_CONFIG_HOME = '/nonexistent-zym-test-config';
+  try {
+    process.env.ZYM_THEME = 'zym';
+    assert.equal(activeThemeName(), 'zym'); // valid env wins
+
+    process.env.ZYM_THEME = 'does-not-exist';
+    assert.equal(activeThemeName(), DEFAULT_THEME_NAME); // unknown env ignored → default
+  } finally {
+    if (savedEnv === undefined) delete process.env.ZYM_THEME; else process.env.ZYM_THEME = savedEnv;
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = savedXdg;
+  }
+});
 
 test('missing UI keys fall back to DEFAULT_THEME; omitted editor.background fills + follows system', () => {
   const t = base();
