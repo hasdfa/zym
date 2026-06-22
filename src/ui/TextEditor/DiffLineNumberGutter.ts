@@ -19,8 +19,9 @@ import type { StagedState } from '../multibuffer/diffMultiBuffer.ts';
 
 const COLOR = theme.ui.editor.lineNumber;
 
-// The staged/unstaged marker bar drawn in the diff multibuffer's gutter: info (blue) = the change
-// is already in the index, warning (amber) = it isn't yet. A blank keeps unchanged rows aligned.
+// The staged/unstaged marker bar drawn in the gutter of a LIVE diff (the staging surface): info
+// (blue) = the change is already in the index, warning (amber) = it isn't yet. A blank keeps
+// unchanged rows aligned. Read-only diffs (commit/branch/file) aren't live and omit this section.
 const STAGED_COLOR = theme.ui.status.info;
 const UNSTAGED_COLOR = theme.ui.status.warning;
 const MARKER_GLYPH = '▌';
@@ -106,13 +107,14 @@ export class DiffLineNumberGutter {
   }
 }
 
-/** Markup for one number column: `[space][number][space]` — a single space hugging each side of
- *  the (right-aligned) number, the whole run carrying the cell background so an added/removed tint
- *  reads as a solid band, the spaces included. `label` is already padded to the column width (a
- *  blank side — added has no old #, removed no new — is all spaces of that width), so the two
- *  columns stay aligned and there's no other spacing in the gutter. */
-function cellMarkup(label: string, bg: string | null): string {
-  const content = ` ${label} `;
+/** Markup for one number column: a leading space then the (right-aligned) number, and — for the NEW
+ *  column (`trailing`) — a TRAILING space separating the number from the code that follows. The old
+ *  column omits the trailing space: the new column's own leading space is the gap between the two
+ *  number columns. The whole run carries the cell background so an added/removed tint reads as a
+ *  solid band, the spaces included. `label` is already padded to the column width (a blank side —
+ *  added has no old #, removed no new — is all spaces of that width), so the columns stay aligned. */
+function cellMarkup(label: string, bg: string | null, trailing: boolean): string {
+  const content = trailing ? ` ${label} ` : ` ${label}`;
   if (!bg) return `<span foreground="${COLOR}">${content}</span>`;
   const { rgb, alphaPct } = pangoBackground(bg);
   return `<span background="${rgb}" background_alpha="${alphaPct}%" foreground="${COLOR}">${content}</span>`;
@@ -126,6 +128,9 @@ class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
   newBg: (string | null)[] | null = null;
   // Per-row staged/unstaged marker (the leading bar). null = no marker (unchanged row).
   stagedState: StagedState[] | null = null;
+  // Whether this is a LIVE diff (the staging surface). Only live diffs carry the leading
+  // staged/unstaged marker section; a read-only diff (commit/branch/file) omits it entirely.
+  live = false;
   // View rows that carry a header-widget band ABOVE them (an excerpt's first row). Their gutter
   // cell is taller by the band, so the number must bottom-align to land on the text instead of
   // floating up beside the filename widget. Other rows top-align (a `⋯` gap band sits BELOW its
@@ -135,10 +140,11 @@ class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
 
   queryData(_lines: any, line: number) {
     (this as any).yalign = this.headerRows.has(line) ? 1 : 0;
-    const marker = markerMarkup(this.stagedState?.[line] ?? null);
-    const oldCell = cellMarkup(this.oldLabels?.[line] ?? '', this.oldBg?.[line] ?? null);
-    const newCell = cellMarkup(this.newLabels?.[line] ?? '', this.newBg?.[line] ?? null);
-    this.setMarkup(`${marker}${oldCell}${newCell}`, -1); // marker bar, then old/new columns (each carries its own [space..space])
+    // The leading staged/unstaged marker bar exists only on a live diff; read-only diffs drop it.
+    const marker = this.live ? markerMarkup(this.stagedState?.[line] ?? null) : '';
+    const oldCell = cellMarkup(this.oldLabels?.[line] ?? '', this.oldBg?.[line] ?? null, false);
+    const newCell = cellMarkup(this.newLabels?.[line] ?? '', this.newBg?.[line] ?? null, true);
+    this.setMarkup(`${marker}${oldCell}${newCell}`, -1); // [marker] old (no trailing) then new (trailing space → code)
   }
 }
 registerClass(CombinedDiffLineNumberRenderer);
@@ -161,6 +167,7 @@ export class CombinedDiffLineNumberGutter {
     newBg: (string | null)[],
     headerRows: Set<number> = new Set(),
     stagedState: StagedState[] | null = null,
+    live = false,
   ) {
     this.view = view;
     this.renderer = new CombinedDiffLineNumberRenderer();
@@ -170,7 +177,8 @@ export class CombinedDiffLineNumberGutter {
     this.renderer.newBg = newBg;
     this.renderer.headerRows = headerRows;
     this.renderer.stagedState = stagedState;
-    this.renderer.setXpad(0); // the `[space][number][space]` format carries the gutter's only spacing
+    this.renderer.live = live;
+    this.renderer.setXpad(0); // the leading/trailing spaces in the cell markup carry the gutter's only spacing
     (this.view.getGutter(Gtk.TextWindowType.LEFT) as any).insert(this.renderer, 1);
     this.primeWidth(oldLabels, newLabels);
   }
@@ -195,13 +203,14 @@ export class CombinedDiffLineNumberGutter {
     (this.renderer as any).queueDraw?.();
   }
 
-  /** Reserve width for the marker bar + the widest old + new columns (a number measured on a short
-   *  line crops). */
+  /** Reserve width for the (live-only) marker bar + the widest old + new columns (a number measured
+   *  on a short line crops). */
   private primeWidth(oldLabels: string[], newLabels: string[]): void {
     const w = (labels: string[]) => labels.reduce((max, l) => Math.max(max, l.length), 1);
-    // Mirror the rendered run `▌ old  new ` (marker bar, then each column ` <num> `, adjacent → two
-    // spaces at the seam).
-    this.renderer.setText(`${MARKER_GLYPH} ${'0'.repeat(w(oldLabels))}  ${'0'.repeat(w(newLabels))} `, -1);
+    // Mirror the rendered run `[▌] old new ` — the marker bar only on a live diff, then ` <old>` (no
+    // trailing) and ` <new> ` (trailing space → code).
+    const marker = this.renderer.live ? MARKER_GLYPH : '';
+    this.renderer.setText(`${marker} ${'0'.repeat(w(oldLabels))} ${'0'.repeat(w(newLabels))} `, -1);
     this.renderer.queueResize();
   }
 

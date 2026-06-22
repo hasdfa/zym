@@ -2207,12 +2207,12 @@ export class AppWindow {
       'git:stage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.stageHunkAtCursor(),
         description: 'Stage the hunk under the cursor (continuous diff)',
-        when: () => this.activeContinuousDiff() !== null,
+        when: () => this.activeContinuousDiff()?.live === true, // staging is live-diff only
       },
       'git:unstage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.unstageHunkAtCursor(),
         description: 'Unstage the hunk under the cursor (continuous diff)',
-        when: () => this.activeContinuousDiff() !== null,
+        when: () => this.activeContinuousDiff()?.live === true, // staging is live-diff only
       },
       'diff:review-comment': {
         didDispatch: () => this.activeContinuousDiff()?.startComment(),
@@ -2403,6 +2403,7 @@ export class AppWindow {
       files,
       cwd,
       editable: true,
+      live: true, // the staging surface: live worktree+index → staging markers + `space h s`/`space h u`
       documents: this.documents,
       git: this.workbench.git, // enables the staged/unstaged gutter marker + `space h s`/`space h u`
       onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
