@@ -10,8 +10,8 @@
  * measured on a short/blank line crops the wider numbers. The whole left gutter
  * gets a neutral background so the added/removed line tints read only in the text.
  *
- * Mirrors DiffGutter — a `GtkSource.GutterRendererText` subclass, instantiated only
- * at runtime (the node-gtk vfunc constraint).
+ * Like the other gutter renderers, a `GtkSource.GutterRendererText` subclass,
+ * instantiated only at runtime (the node-gtk vfunc constraint).
  */
 import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
