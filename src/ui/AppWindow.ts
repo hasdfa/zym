@@ -393,6 +393,21 @@ export class AppWindow {
     // Track the focused widget per panel tab so each panel can restore focus to
     // exactly where it was when it is re-activated (see focusMemory).
     this.window.on('notify::focus-widget', () => this.rememberFocus());
+    // A GtkPaned is a layout container and must never hold keyboard focus. Reparenting a
+    // focused widget into a freshly-built split — opening a work area beside a focused
+    // agent terminal to auto-open an edited file — makes GTK reassign focus onto a bare
+    // structural Paned on the next layout pass, pulling it out of wherever the user was.
+    // Bounce it straight back to the last real focus the moment it lands on a Paned.
+    let lastFocus: Widget | null = null;
+    this.window.on('notify::focus-widget', () => {
+      const f = this.window.getFocus();
+      const onPaned = !!f && (f instanceof Gtk.Paned || f.constructor?.name === 'GtkPaned');
+      if (onPaned) {
+        if (lastFocus && lastFocus.getRoot() !== null) lastFocus.grabFocus();
+        return; // never record the Paned itself as a restore target
+      }
+      lastFocus = f;
+    });
 
     // Publish the window on the global registry and start the keymap manager's
     // CAPTURE-phase key controller.
@@ -603,7 +618,7 @@ export class AppWindow {
   private openFileIn(
     path: string,
     panel: Panel,
-    options: { focus?: boolean; owner?: Workbench<'user' | Agent> } = {},
+    options: { focus?: boolean; owner?: Workbench<'user' | Agent>; select?: boolean } = {},
   ): TextEditor {
     const focus = options.focus ?? true;
     const targetOwner = options.owner ?? this.workbench;
@@ -611,23 +626,24 @@ export class AppWindow {
       ([widget, editor]) => editor.currentFile === path && this.editorOwners.get(widget) === targetOwner,
     )?.[1];
     if (existing) {
-      this.editorChildren.get(existing.root)?.select();
+      if (options.select !== false) this.editorChildren.get(existing.root)?.select();
       if (focus) existing.focus();
       return existing;
     }
-    return this.openFileViewIn(path, panel, { focus, owner: options.owner });
+    return this.openFileViewIn(path, panel, { focus, owner: options.owner, select: options.select });
   }
 
   // Open a *new* view of `path` in `panel` — no reveal-if-open, so the same file can
   // show in two panes as two views sharing one Document (live model + undo). Used by
   // splitPane; openFileIn reveals instead. `owner` is the workbench the editor lives
   // in (its git feeds the gutter); defaults to the active one.
-  private openFileViewIn(path: string, panel: Panel, options: { focus?: boolean; owner?: Workbench<'user' | Agent> } = {}): TextEditor {
-    const { focus = true, owner = this.workbench } = options;
-    const built = this.createEditorTab(path, { owner });
+  private openFileViewIn(path: string, panel: Panel, options: { focus?: boolean; owner?: Workbench<'user' | Agent>; select?: boolean } = {}): TextEditor {
+    const { focus = true, owner = this.workbench, select } = options;
+    const built = this.createEditorTab(path, { owner, focus });
     const child = panel.add(built.widget, {
       title: built.title,
       requireTabBar: built.requireTabBar,
+      select,
     });
     built.onAttached?.(child);
     const editor = this.editors.get(built.widget)!;
@@ -646,6 +662,7 @@ export class AppWindow {
       scroll?: number;
       unsavedText?: string;
       owner?: Workbench<'user' | Agent>;
+      focus?: boolean;
     } = {},
   ): RestoredChild {
     const owner = restore.owner ?? this.workbench;
@@ -671,6 +688,9 @@ export class AppWindow {
       cursor: restore.cursor,
       scroll: restore.scroll,
       unsavedText: restore.unsavedText,
+      // focus: false (a background open — agent auto-open, session restore) loads and
+      // renders when shown, but doesn't grab focus; default true takes it.
+      focus: restore.focus,
       // Announce to the workspace so editor-observing plugins (color preview, …) can
       // attach; registered after load so their first pass sees the file's content.
       onActivate: () => this.editorRegistrations.set(editor.root, zym.workspace.addTextEditor(editor)),
@@ -1198,9 +1218,15 @@ export class AppWindow {
     if (!workbench) return;
     if ([...this.editors.values()].some((editor) => editor.currentFile === path)) return;
     // openPanel splits the agent panel to the right on the first file, then reuses
-    // that work area for the rest. Pass the agent's workbench as owner so the
-    // editor's gutter uses *its* (worktree) git, not the active workbench's.
-    this.openFileIn(path, workbench.center.openPanel, { focus: false, owner: workbench });
+    // that work area for the rest. Pass the agent's workbench as owner so the editor's
+    // gutter uses *its* (worktree) git, not the active workbench's.
+    const panel = workbench.center.openPanel;
+    // focus: false never grabs keyboard focus. select: only the first file reveals
+    // itself — it fills the freshly-created (empty) work area so there's something to
+    // see. Every later edit opens quietly as a background tab in the bar, so the agent's
+    // edits never pull the view off whatever the user is looking at or editing.
+    const select = panel.tabCount === 0;
+    this.openFileIn(path, panel, { focus: false, owner: workbench, select });
   }
 
   // Restart an agent: retire the old one and relaunch with the same cwd, resuming
