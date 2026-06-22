@@ -41,6 +41,9 @@ export interface UndoTarget {
 // Fallback line height (px) when the view isn't realized, so the scroll math has
 // a non-zero divisor in headless contexts.
 const DEFAULT_LINE_HEIGHT = 18;
+// How many leading lines `getLineHeightInPixels` samples to find the base (band-free) line height
+// — see the method. A handful always includes plain content lines in any real diff/file.
+const LINE_HEIGHT_SAMPLE = 16;
 
 // Rows per chunk for the windowed backward scan (`b`/`ge`/etc.): big enough that
 // the previous match is almost always in the first window, small enough that one
@@ -1686,11 +1689,21 @@ export class EditorModel {
     return (this.view as any).getHeight();
   }
 
-  /** Pixel height of one rendered line. */
+  /** Pixel height of one rendered line. Sampled as the MINIMUM Y-range over the first several
+   *  lines, not measured on row 0 alone: a block decoration (the diff multibuffer's header/gap
+   *  bands) reserves pixels-above/below on its anchor line via a tag — and buffer row 0 always
+   *  carries the header band — which inflates that line's Y-range. A plain text line is never
+   *  shorter than the base height, so the smallest sampled Y-range is the true single-line height
+   *  (used to scroll exactly one line for ctrl-e/ctrl-y). */
   getLineHeightInPixels(): number {
-    const range = (this.view as any).getLineYrange(this.buffer.getStartIter());
-    const height = Array.isArray(range) ? range[1] : 0;
-    return height || DEFAULT_LINE_HEIGHT;
+    const sample = Math.min(this.buffer.getLineCount(), LINE_HEIGHT_SAMPLE);
+    let min = 0;
+    for (let row = 0; row < sample; row++) {
+      const range = (this.view as any).getLineYrange(this.iterAtLineStart(row));
+      const height = Array.isArray(range) ? range[1] : 0;
+      if (height > 0 && (min === 0 || height < min)) min = height;
+    }
+    return min || DEFAULT_LINE_HEIGHT;
   }
 
   /** Number of whole lines that fit in the viewport (at least 1). */
