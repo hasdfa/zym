@@ -35,31 +35,12 @@ const STATUS_COLOR: Record<AgentStatus, string> = {
 };
 
 const DOT_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle', 'zym-agent-exited', 'zym-agent-disconnected'];
-// Slow fade in/out applied while an agent needs attention (waiting on the user, or
-// finished but unseen) — see Agent.needsAttention.
-const BLINK_CLASS = 'zym-agent-blink';
 addStyles(`
   .zym-agent-working { color: ${STATUS_COLOR.working}; }
   .zym-agent-waiting { color: ${STATUS_COLOR.waiting}; }
   .zym-agent-idle    { color: ${STATUS_COLOR.idle}; }
   .zym-agent-exited  { color: ${STATUS_COLOR.exited}; }
   .zym-agent-disconnected { color: ${STATUS_COLOR.disconnected}; }
-  /* Hold full visibility ~0.6s (88%→12% across the wrap), fade down, hold fully
-     invisible ~0.2s (46%→54%), fade back up — all linear, over 2.4s. */
-  @keyframes zym-agent-blink-kf {
-    0%   { opacity: 1; }
-    12%  { opacity: 1; }
-    46%  { opacity: 0; }
-    54%  { opacity: 0; }
-    88%  { opacity: 1; }
-    100% { opacity: 1; }
-  }
-  .${BLINK_CLASS} {
-    animation-name: zym-agent-blink-kf;
-    animation-duration: 2.4s;
-    animation-timing-function: linear;
-    animation-iteration-count: infinite;
-  }
 `);
 
 // The working cog is rendered in the icon font; the plain dot uses the default
@@ -86,12 +67,6 @@ export function applyAgentStatus(label: InstanceType<typeof Gtk.Label>, status: 
   }
 }
 
-/** Toggle the slow fade in/out blink that flags an agent needing attention. */
-export function applyAgentBlink(label: InstanceType<typeof Gtk.Label>, blink: boolean): void {
-  if (blink) label.addCssClass(BLINK_CLASS);
-  else label.removeCssClass(BLINK_CLASS);
-}
-
 /**
  * A live status indicator for `agent`: a Gtk.Label that re-renders as the agent's
  * status changes. Call `dispose` to unsubscribe (e.g. when a row is rebuilt).
@@ -101,16 +76,10 @@ export function createAgentStatusIcon(agent: Agent): {
   dispose: () => void;
 } {
   const label = new Gtk.Label({ label: STATUS_DOT });
-  const update = () => {
-    applyAgentStatus(label, agent.status);
-    applyAgentBlink(label, agent.needsAttention);
-  };
+  const update = () => applyAgentStatus(label, agent.status);
   update();
-  // Status drives the dot/colour; attention drives the blink — either can change
-  // independently (e.g. viewing a still-`waiting` agent stops its blink).
   const unsubStatus = agent.onDidChangeStatus(update);
-  const unsubAttention = agent.onDidChangeAttention(update);
-  return { widget: label, dispose: () => { unsubStatus(); unsubAttention(); } };
+  return { widget: label, dispose: unsubStatus };
 }
 
 /**
