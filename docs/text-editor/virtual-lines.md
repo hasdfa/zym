@@ -41,9 +41,9 @@ Two of the three tiers surveyed here are built:
   actions).
 - **Inline AI completion / ghost text** — Copilot-style preview not in the
   buffer.
-- **Inline diff** — deleted lines (unified) and alignment fillers
-  (side-by-side) *while editing the live buffer* (the read-only viewer avoids
-  this — see diff.md).
+- **Inline diff** — deleted lines and alignment fillers *while editing the
+  live buffer* (the multibuffer diff surface uses a projection instead of
+  virtual lines — see diff.md).
 - **Folded-region placeholder** — "… 12 lines …" on the fold header.
 - **Inline images / color swatches / markdown render / expandable panels.**
 

@@ -21,9 +21,10 @@ inline read-only diff beneath any file row (an accordion), in the same widget.
 
 - **Per-row diff base** drives the inline diff: staged → index↔HEAD
   (`git show HEAD:p` / `:p`), unstaged → worktree↔index, **untracked →
-  all-added**. The viewer is self-contained given a `DiffModel` (no
+  all-added**. The viewer was self-contained given the diff data (no
   `DocumentRegistry` plumbing). Diff height is bounded (snug to displayed rows
-  after `foldUnchanged`, capped) with the viewer's own scroll past the cap.
+  after collapsing unchanged runs, capped) with the viewer's own scroll past
+  the cap.
 
 - **Commit** opens `.git/COMMIT_EDITMSG` as a normal editor tab; save+close
   commits via `git commit -F` (hooks/GPG honored).

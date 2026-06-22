@@ -202,14 +202,13 @@ signal params — `get-child-position`'s `GdkRectangle*`).
    [document-registry.md](document-registry.md)); the disk snapshot is the
    closed-file fallback.
 
-> The fold placeholder is **not** a consumer: the diff viewer collapses
-> unchanged runs to a `⋯ N unchanged lines` placeholder via the view-side
-> fold projection (`foldUnchanged` in `src/util/DiffModel.ts` returns fold
-> regions over real buffer rows; `SyntaxController.foldViewRange`
-> physically replaces each collapsed run with the placeholder text in the
-> view buffer — see [folding.md](folding.md) / [diff.md](diff.md)), not
-> via a block. This keeps the diff and single-line folding on one
-> mechanism.
+> The multibuffer `DiffView` **is** a consumer: it windows the diff (only
+> changed hunks + context are projected into the view) and marks each elided
+> run with a `⋯ N unchanged lines` **gap widget** — a block decoration placed
+> below the last shown row, alongside the per-file header bands (see
+> [diff.md](diff.md) / [multibuffer.md](multibuffer.md)). Single-line code
+> folding is a separate mechanism (the fold projection — see
+> [folding.md](folding.md)).
 
 ## Open questions
 
@@ -246,7 +245,7 @@ primitive and the existing infra it would reuse.
   preview inline. Reuses `find-references`. *Most natural next.*
 - **Inline AI edit (Cmd-K style)** — a focusable prompt under the line →
   apply as a diff. Reuses agents.
-- **Peek commit / blame diff** — inline a `DiffViewer` below a line.
+- **Peek commit / blame diff** — inline a `DiffView` below a line.
   Reuses diff + git.
 - **Inline rename** — a tiny inline editor for `lsp:rename` with live
   preview.

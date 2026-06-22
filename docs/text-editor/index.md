@@ -46,7 +46,7 @@ vim-mode-plus).
 | Code folding | **Built** (ours) | No upstream fold API in GtkSource 5; we use the `invisible` `TextTag`. |
 | Gutter (line nums, diagnostics, git bars) | **Native** | `GtkSourceGutterRenderer`. |
 | Inline virtual text / inlay hints / diff | **Built** | `VirtualText.ts` wraps native `GtkSourceAnnotations` (5.18+; we're on 5.20). |
-| Diff display (inline + side-by-side) | **Built** | `DiffView` / `SideBySideDiffView` from synthesized read-only buffers. |
+| Diff display | **Built** | One multibuffer `DiffView` (`src/ui/DiffView.ts`) on a `ViewProjection`. |
 | Search UI | **Built** | `SearchController` + `SearchBar`. |
 | Minimap | **Native** | `GtkSource.Map`. |
 | Multiple cursors / block selection | **Built (emulated)** | No native support; emulated on `MarkerLayer` (Option A). |
@@ -307,14 +307,14 @@ undo in a couple of steps; replication covers inserts + single-line backspaces
 
 ### Diff display — *done*
 
-`DiffView` (unified) and `SideBySideDiffView` (two-column) render from
-synthesized read-only buffers — alignment fillers / deleted lines are real
-padded lines styled via `editor.decorations`, sidestepping GtkTextView's lack of
-virtual lines and reusing the buffer-only + decoration + scroll-sync primitives.
-Unified collapses unchanged runs via the editor's diff-fold method. See
-[diff.md](diff.md). Diff *data* comes from the **Git** workstream; `GitGutter.ts`
-draws VS Code-style change bars (in-process Myers diff of buffer↔index and
-index↔HEAD).
+Every diff renders on the one multibuffer `DiffView` (`src/ui/DiffView.ts`): each
+changed file's old/new sides are stitched into a single scrollable editor via a
+`ViewProjection`, with changed hunks + context shown and long unchanged runs
+elided to a `⋯` gap widget. Backgrounds come from `editor.decorations`; per-side
+syntax is painted through the projection. See [multibuffer.md](multibuffer.md)
+and [diff.md](diff.md). Diff *data* comes from the **Git** workstream;
+`GitGutter.ts` draws VS Code-style change bars (in-process Myers diff of
+buffer↔index and index↔HEAD).
 
 ### Scrolling & open performance — *done; native rendering is the floor*
 

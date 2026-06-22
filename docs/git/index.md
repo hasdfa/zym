@@ -398,6 +398,8 @@ state, so an external `git add` fires `onChange`.
 - [ ] Forge: GitLab provider (factor out a `Forge` interface when it
   lands)
 - [ ] In-panel diffs in `GitPanel` itself
-- [ ] More git diff sources (commit / PR) — see text-editor/diff.md
+- [x] More git diff sources: commit, vs its parent (`git:diff-commit`) and this
+  branch vs base, PR-style (`git:diff-branch`) — `src/ui/diffViews.ts`; see
+  text-editor/diff.md
 - [~] Perf: coalesce the `onChange` fan-out (one `git status` per root +
   per-file refetch gate)

@@ -258,5 +258,5 @@ Single-file editing plus both multibuffer surfaces run on the
 - Wiring: `src/ui/AppWindow.ts` (`openSearchResults`/`space *`,
   `openContinuousDiff`/`space g d d`, `file:save` routing,
   `diff:expand-*`); read-only commit/branch diffs in `src/ui/diffViews.ts`.
-- Reuse: `src/util/lineDiff.ts`, `DiffModel.ts`;
+- Reuse: `src/util/lineDiff.ts`, `applyDiffDecorations.ts`;
   `src/lsp/workspaceEdit.ts`.
