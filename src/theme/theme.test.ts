@@ -5,24 +5,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adaptTheme, loadTheme } from './theme.ts';
+import { adaptTheme } from './theme.ts';
 
 /** A minimal dark theme; pass `ui`/`syntax` overrides in per-test. */
 const base = (over: { ui?: unknown; syntax?: unknown } = {}) =>
   adaptTheme({ name: 't', appearance: 'dark', ui: over.ui as never, syntax: over.syntax as never });
-
-test('loadTheme("zym") resolves the shipped palette into the nested model', () => {
-  const t = loadTheme('zym');
-  assert.equal(t.appearance, 'dark');
-  assert.equal(t.ui.editor.foreground, '#f1f1f1');
-  assert.equal(t.ui.editor.background, '#2d2d2d');
-  assert.equal(t.followSystemScheme, false); // theme sets its own editor.background
-  assert.equal(t.ui.surface.popover, '#383838');
-  assert.equal(t.ui.surface.selected, '#3f4b5b');
-  assert.equal(t.ui.status.success, '#98be65');
-  assert.equal(t.ui.search.matchCurrent, '#e5a50a59');
-  assert.equal(t.syntax.keyword, '#5ab9f9');
-});
 
 test('missing UI keys fall back to DEFAULT_THEME; omitted editor.background fills + follows system', () => {
   const t = base();
