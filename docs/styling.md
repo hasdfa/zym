@@ -158,6 +158,18 @@ form to use:
   `AppWindow.ts`) interpolate concrete `theme.ui.*`; they're rebuilt per
   theme.
 
+**Muted text and borders have native idioms — prefer them over a theme
+color** so they track the inherited foreground on any scheme (and map onto
+stock libadwaita):
+
+- **Muted / dim text** is the current foreground at reduced opacity, not a
+  separate grey. In Pango markup use `<span alpha="55%">` (foreground alpha,
+  Pango ≥1.38); in CSS use `opacity: var(--dim-opacity)` (or libadwaita's
+  `.dim-label` class). Reach for `theme.ui.text.muted` only for a
+  GtkTextTag / draw-func sink that has neither.
+- **Hairline borders** are `var(--border-color)` (libadwaita's
+  `currentColor` at 15%) — not an `alpha()` of a theme foreground.
+
 Severity glyph+color pairs (diagnostics) come from `severityStyle()` in
 `src/lsp/diagnostics/severity.ts`, the single source shared by the gutter
 and squiggle (`DiagnosticsView`), the Diagnostics panel (`DiagnosticsPanel`),
