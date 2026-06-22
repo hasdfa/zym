@@ -10,7 +10,6 @@
  */
 import { Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
-import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
 import { escapeMarkup, markupLabel, clearChildren, setLineHeight } from '../proseMarkup.ts';
@@ -144,7 +143,7 @@ function blockMarkup(block: Block): string {
     case 'blockquote':
       return setLineHeight(blockquoteMarkup(block.blocks), LINE_HEIGHT);
     case 'hr':
-      return `<span foreground="${attrEscape(theme.ui.text.muted)}">────────────────</span>`;
+      return `<span alpha="55%">────────────────</span>`;
     default:
       return ''; // code / table are rendered as widgets in setMarkdown
   }
@@ -170,7 +169,7 @@ function blockquoteMarkup(blocks: Block[]): string {
     .filter((b) => b.type !== 'code' && b.type !== 'table')
     .map(blockMarkup)
     .join('\n');
-  const bar = `<span foreground="${attrEscape(theme.ui.text.muted)}">│</span> `;
+  const bar = `<span alpha="55%">│</span> `;
   return inner.split('\n').map((line) => bar + line).join('\n');
 }
 

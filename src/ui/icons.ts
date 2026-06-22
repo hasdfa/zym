@@ -81,12 +81,11 @@ export function iconLabel(glyph: string): InstanceType<typeof Gtk.Label> {
 
 /** A Pango-markup span rendering `glyph` in the icon font, optionally coloured —
  *  for inline use inside a larger markup label (vs. `iconLabel`, a standalone
- *  widget). */
-export function iconSpan(glyph: string, color?: string): string {
-  const open = color
-    ? `<span font_family="${ICON_FONT_FAMILY}" foreground="${color}">`
-    : `<span font_family="${ICON_FONT_FAMILY}">`;
-  return `${open}${glyph}</span>`;
+ *  widget). Pass `dim` (and no `color`) for muted glyphs: dims the inherited
+ *  foreground (Adwaita's muted idiom) rather than picking a grey. */
+export function iconSpan(glyph: string, color?: string, dim?: boolean): string {
+  const attr = color ? ` foreground="${color}"` : dim ? ` alpha="55%"` : '';
+  return `<span font_family="${ICON_FONT_FAMILY}"${attr}>${glyph}</span>`;
 }
 
 // Completion-item kind → Codicon glyph (nf-cod-symbol_*), keyed by the framework's

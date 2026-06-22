@@ -23,15 +23,16 @@ export const STATUS_DOT = '●';
 export const DISCONNECTED_DOT = '○'; // hollow: resumed but not reconnected
 export const WORKING_GLYPH = NERDFONT.STATUS.SYNC;
 
-// Status → indicator color: working (muted cog), waiting on the user (warning/
-// amber), idle/ready (success/green), exited (muted).
-const STATUS_COLOR: Record<AgentStatus, string> = {
-  working: theme.ui.text.muted,
+// Status → indicator color for the *colored* states (waiting on the user →
+// warning/amber, idle/ready → success/green), used by the *markup* path only —
+// markup can't read CSS variables, so it interpolates the literal. The CSS path
+// uses the matching var(--t-ui-status-*) directly. The muted states — working
+// (cog), exited, and disconnected (resumed-not-reconnected) — carry no color;
+// they dim the inherited foreground (Adwaita's muted idiom: `--dim-opacity` in
+// CSS, `alpha="55%"` in markup) rather than picking a grey.
+const STATUS_COLOR: Partial<Record<AgentStatus, string>> = {
   waiting: theme.ui.status.warning,
   idle: theme.ui.status.success,
-  exited: theme.ui.text.muted,
-  // Resumed but not yet reconnected — a hollow/dim dot, distinct from live green.
-  disconnected: theme.ui.text.muted,
 };
 
 const DOT_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle', 'zym-agent-exited', 'zym-agent-disconnected'];
@@ -39,11 +40,11 @@ const DOT_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle',
 // finished but unseen) — see Agent.needsAttention.
 const BLINK_CLASS = 'zym-agent-blink';
 addStyles(`
-  .zym-agent-working { color: ${STATUS_COLOR.working}; }
-  .zym-agent-waiting { color: ${STATUS_COLOR.waiting}; }
-  .zym-agent-idle    { color: ${STATUS_COLOR.idle}; }
-  .zym-agent-exited  { color: ${STATUS_COLOR.exited}; }
-  .zym-agent-disconnected { color: ${STATUS_COLOR.disconnected}; }
+  .zym-agent-working { opacity: var(--dim-opacity); }
+  .zym-agent-waiting { color: var(--t-ui-status-warning); }
+  .zym-agent-idle    { color: var(--t-ui-status-success); }
+  .zym-agent-exited  { opacity: var(--dim-opacity); }
+  .zym-agent-disconnected { opacity: var(--dim-opacity); }
   /* Hold full visibility ~0.6s (88%→12% across the wrap), fade down, hold fully
      invisible ~0.2s (46%→54%), fade back up — all linear, over 2.4s. */
   @keyframes zym-agent-blink-kf {
@@ -120,10 +121,13 @@ export function createAgentStatusIcon(agent: Agent): {
  */
 export function agentStatusMarkup(status: AgentStatus): string {
   const color = STATUS_COLOR[status];
+  // Colored states carry an explicit foreground; the muted states dim the
+  // inherited foreground (alpha="55%") instead — see STATUS_COLOR.
+  const fg = color ? `foreground="${color}"` : `alpha="55%"`;
   if (status === 'working') {
-    return `<span foreground="${color}" font_family="${ICON_FONT_FAMILY}">${WORKING_GLYPH}</span>`;
+    return `<span ${fg} font_family="${ICON_FONT_FAMILY}">${WORKING_GLYPH}</span>`;
   }
-  return `<span foreground="${color}">${status === 'disconnected' ? DISCONNECTED_DOT : STATUS_DOT}</span>`;
+  return `<span ${fg}>${status === 'disconnected' ? DISCONNECTED_DOT : STATUS_DOT}</span>`;
 }
 
 // --- Worktree ---------------------------------------------------------------
@@ -134,7 +138,7 @@ export function agentWorktreeMarkup(worktree: WorktreeInfo | null): string | nul
   if (!worktree?.linked) return null;
   const name = worktree.branch ?? worktree.name;
   return (
-    `<span foreground="${theme.ui.text.muted}">` +
+    `<span alpha="55%">` +
     `<span font_family="${ICON_FONT_FAMILY}">${Icons.git}</span> ${escapeMarkup(name)}</span>`
   );
 }

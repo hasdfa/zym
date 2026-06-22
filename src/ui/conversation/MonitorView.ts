@@ -91,7 +91,7 @@ export class MonitorView {
       const m = this.session.getMonitor(id);
       if (!m) return;
       const head = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-      setMarkupSafe(head, `<b>${escapeMarkup(m.description)}</b>  <span foreground="${theme.ui.text.muted}">${escapeMarkup(m.status)}</span>`, `${m.description} (${m.status})`);
+      setMarkupSafe(head, `<b>${escapeMarkup(m.description)}</b>  <span alpha="55%">${escapeMarkup(m.status)}</span>`, `${m.description} (${m.status})`);
       box.append(head);
       let output = '';
       if (m.outputFile) { try { output = Fs.readFileSync(m.outputFile, 'utf8'); } catch { /* not readable yet */ } }
