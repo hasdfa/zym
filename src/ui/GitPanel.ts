@@ -86,7 +86,7 @@ addStyles(`
      only while the panel is focused — an unfocused panel shows no highlight. */
   #GitPanel row:selected { background-color: transparent; }
   #GitPanel:focus-within row:selected {
-    background-color: var(--t-ui-surface-selected);
+    background-color: alpha(var(--accent-bg-color), 0.25);
   }
 `);
 

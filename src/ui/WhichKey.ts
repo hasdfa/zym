@@ -27,7 +27,7 @@ addStyles(`
     background-color: var(--popover-bg-color);
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
-    box-shadow: 0px 10px 33px 28px var(--t-ui-shadow);
+    box-shadow: 0px 10px 33px 28px var(--shade-color);
     padding: 0.5em 0.75em;
     margin-bottom: 12px;
   }

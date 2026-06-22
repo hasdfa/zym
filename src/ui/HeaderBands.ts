@@ -16,7 +16,7 @@ import { escapeMarkup } from './proseMarkup.ts';
 addStyles(`
   .mb-header {
     padding: 2px 8px 2px 6px;
-    background-color: var(--t-ui-surface-selected);
+    background-color: alpha(var(--accent-bg-color), 0.25);
   }
   .mb-header-icon { color: var(--t-ui-text-muted); }
   .mb-header-label { color: var(--t-ui-editor-foreground); }

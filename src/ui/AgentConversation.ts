@@ -74,7 +74,7 @@ addStyles(`
     background: transparent;
     transition: background 150ms ease;
   }
-  .zym-conversation-toolrow-expanded { background: var(--t-ui-surface-popover); }
+  .zym-conversation-toolrow-expanded { background: var(--card-bg-color); }
   /* The header button: flat, left-aligned, no min size. Its own transparent
      background suppresses the flat hover, so re-add an explicit hover tint
      (rounded to match the toggle). */
@@ -82,7 +82,7 @@ addStyles(`
     padding: 6px 8px; min-height: 0; border-radius: 8px;
     background: transparent; border: none; box-shadow: none;
   }
-  .zym-conversation-toolrow-button:hover { background: var(--t-ui-surface-selected); }
+  .zym-conversation-toolrow-button:hover { background: alpha(var(--accent-bg-color), 0.25); }
   .zym-conversation-toolrow-detail { padding: 0 8px 6px 8px; }
   /* Allow/Deny buttons embedded in a tool row's details (a permission prompt). */
   .zym-conversation-perm-buttons { margin-top: 4px; }
@@ -95,8 +95,8 @@ addStyles(`
     margin: 10px 0;
     border-radius: 10px;
   }
-  .zym-conversation-user { background: var(--t-ui-surface-selected); }
-  .zym-conversation-assistant { background: var(--t-ui-surface-popover); }
+  .zym-conversation-user { background: alpha(var(--accent-bg-color), 0.25); }
+  .zym-conversation-assistant { background: var(--card-bg-color); }
   /* The floating "copy message" button, pinned top-right of the transcript viewport. */
   .zym-conversation-copy { margin: 10px; padding: 2px 6px; min-height: 0; min-width: 0; opacity: 0.5; }
   .zym-conversation-copy:hover { opacity: 1; }
@@ -106,7 +106,7 @@ addStyles(`
   .zym-conversation-thinking-row { padding: 6px calc(2 * var(--t-spacing)); }
   /* A message queued while the agent is busy — a right-aligned bubble above the spinner. */
   .zym-conversation-pending {
-    background: var(--t-ui-surface-selected);
+    background: alpha(var(--accent-bg-color), 0.25);
     border-radius: 10px;
     padding: 6px 10px;
     margin: 0 12px;
@@ -116,22 +116,22 @@ addStyles(`
   .zym-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
   .zym-conversation-result {
     opacity: 0.7;
-    background: var(--t-ui-surface-popover);
+    background: var(--card-bg-color);
     padding: 4px 8px;
     margin-top: 2px;
     border-radius: 4px;
   }
   /* A Task (subagent) report renders as a fuller markdown card. */
   .zym-conversation-task-result {
-    background: var(--t-ui-surface-popover);
-    border-left: 3px solid var(--t-ui-surface-selected);
+    background: var(--card-bg-color);
+    border-left: 3px solid alpha(var(--accent-bg-color), 0.25);
     padding: 6px 10px;
     margin-top: 4px;
     border-radius: 4px;
   }
   .zym-conversation-tasks {
     padding: 8px 12px;
-    background: var(--t-ui-surface-popover);
+    background: var(--card-bg-color);
     border-bottom: 1px solid var(--t-ui-border);
   }
   .zym-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
@@ -156,7 +156,7 @@ addStyles(`
     margin: 0 calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing));
     border: 1px solid var(--t-ui-border);
     border-radius: var(--card-radius);
-    background: var(--t-ui-surface-popover);
+    background: var(--card-bg-color);
   }
   /* Let the card's background show through the editor (no separate editor bg). */
   #AgentConversationPrompt,
@@ -183,7 +183,7 @@ addStyles(`
   .zym-cmode-plan { color: var(--t-ui-status-info); }
   .zym-conversation-perm {
     padding: 8px; margin: 6px 0;
-    border: 1px solid var(--t-ui-surface-selected);
+    border: 1px solid alpha(var(--accent-bg-color), 0.25);
     border-radius: 6px;
   }
   /* AskUserQuestion: an interactive choice card (info-tinted while open). Split

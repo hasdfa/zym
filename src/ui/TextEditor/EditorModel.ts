@@ -24,6 +24,7 @@ import { Cursor } from './Cursor.ts';
 import { MarkerLayer } from './MarkerLayer.ts';
 import { Emitter, Disposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
+import { lookupCSSColorAlpha } from '../../theme/cssColor.ts';
 import { Gtk, type SourceBuffer, type SourceView } from '../../gi.ts';
 
 /** Cursor shapes the vim layer switches between per mode. */
@@ -660,7 +661,7 @@ export class EditorModel {
     if (!this.extraSelectionTag) {
       this.extraSelectionTag = new Gtk.TextTag({
         name: 'vim-extra-selection',
-        background: theme.ui.surface.selected,
+        background: lookupCSSColorAlpha(theme, '--accent-bg-color', 0.25),
       });
       this.buffer.getTagTable().add(this.extraSelectionTag);
     }

@@ -38,7 +38,7 @@ export type TerminalMode = 'normal' | 'insert';
 // (not `-within`) because normal mode focuses the container itself, not the Vte.
 addStyles(`
   .zym-terminal.terminal-normal:focus {
-    outline: 1px solid var(--t-ui-surface-selected);
+    outline: 1px solid alpha(var(--accent-bg-color), 0.25);
     outline-offset: -1px;
   }
 `);

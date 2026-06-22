@@ -13,11 +13,6 @@
       "accent": "#81d0ff"
     },
     "border": "rgba(255, 255, 255, 0.15)",
-    "shadow": "rgba(0, 0, 6, 0.25)",
-    "surface": {
-      "popover": "#36363a",
-      "selected": "rgba(53, 132, 228, 0.25)"
-    },
     "status": {
       "success": "#78e9ab",
       "warning": "#ffc252",
@@ -31,25 +26,65 @@
     }
   },
   "syntax": {
-    "comment": { "color": "#80878c" },
-    "operator": { "color": "#5ab9f9" },
-    "punctuation": { "color": "#5ab9f9" },
-    "punctuation.special": { "color": "#e69052" },
-    "string": { "color": "#a3c970" },
-    "string.regex": { "color": "#59c2ca" },
-    "string.escape": { "color": "#cf80e6" },
-    "number": { "color": "#ff7b7a" },
-    "boolean": { "color": "#ff7b7a" },
-    "constant.builtin": { "color": "#e69052" },
-    "constant": { "color": "#afa7e7" },
-    "variable.special": { "color": "#afa7e7" },
-    "variable.parameter": { "color": "#62a6bc" },
-    "attribute": { "color": "#f4c682" },
-    "tag": { "color": "#5ab9f9" },
-    "keyword": { "color": "#5ab9f9" },
-    "property": { "color": "#cf80e6" },
-    "type": { "color": "#f4c682" },
-    "constructor": { "color": "#f4c682" },
-    "function": { "color": "#f4c682" }
+    "comment": {
+      "color": "#80878c"
+    },
+    "operator": {
+      "color": "#5ab9f9"
+    },
+    "punctuation": {
+      "color": "#5ab9f9"
+    },
+    "punctuation.special": {
+      "color": "#e69052"
+    },
+    "string": {
+      "color": "#a3c970"
+    },
+    "string.regex": {
+      "color": "#59c2ca"
+    },
+    "string.escape": {
+      "color": "#cf80e6"
+    },
+    "number": {
+      "color": "#ff7b7a"
+    },
+    "boolean": {
+      "color": "#ff7b7a"
+    },
+    "constant.builtin": {
+      "color": "#e69052"
+    },
+    "constant": {
+      "color": "#afa7e7"
+    },
+    "variable.special": {
+      "color": "#afa7e7"
+    },
+    "variable.parameter": {
+      "color": "#62a6bc"
+    },
+    "attribute": {
+      "color": "#f4c682"
+    },
+    "tag": {
+      "color": "#5ab9f9"
+    },
+    "keyword": {
+      "color": "#5ab9f9"
+    },
+    "property": {
+      "color": "#cf80e6"
+    },
+    "type": {
+      "color": "#f4c682"
+    },
+    "constructor": {
+      "color": "#f4c682"
+    },
+    "function": {
+      "color": "#f4c682"
+    }
   }
 }

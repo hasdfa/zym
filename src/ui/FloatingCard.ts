@@ -47,7 +47,7 @@ function naturalSize(widget: Widget, orientation: number, forSize: number): numb
 // scrim painted behind a card over the rest of the window.
 addStyles(/* css */`
   .floating-card {
-    box-shadow: 0px 8px 28px 0px alpha(var(--t-ui-shadow), 0.55);
+    box-shadow: 0px 8px 28px 0px alpha(var(--shade-color), 0.55);
   }
   .floating-card-scrim {
     background-color: alpha(black, 0.35);

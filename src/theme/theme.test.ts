@@ -16,8 +16,6 @@ test('loadTheme("adwaita") resolves the libadwaita-derived palette', () => {
   assert.equal(t.appearance, 'dark');
   assert.equal(t.ui.editor.background, '#1d1d20'); // Adwaita dark view_bg_color
   assert.equal(t.followSystemScheme, false); // theme pins editor.background to view_bg
-  assert.equal(t.ui.surface.popover, '#36363a'); // popover_bg_color
-  assert.equal(t.ui.surface.selected, 'rgba(53, 132, 228, 0.25)'); // view_selected_color (accent @ 25%)
   assert.equal(t.ui.text.accent, '#81d0ff'); // standalone accent_color (oklab max(l,0.85))
   assert.equal(t.ui.status.error, '#ff938c'); // standalone error_color
 });
@@ -49,7 +47,7 @@ test('activeThemeName: ZYM_THEME overrides; unknown env falls back to default', 
 test('missing UI keys fall back to DEFAULT_THEME; omitted editor.background fills + follows system', () => {
   const t = base();
   assert.equal(t.ui.editor.foreground, '#ffffff'); // DEFAULT_THEME
-  assert.equal(t.ui.editor.background, '#1e1e1e'); // filled from surface.popover (never undefined)
+  assert.equal(t.ui.editor.background, '#1e1e1e'); // filled from the default editor bg (never undefined)
   assert.equal(t.followSystemScheme, true); // file omitted editor.background ⇒ follow system scheme
   assert.equal(t.ui.status.success, '#2ec27e'); // DEFAULT_THEME
   assert.equal(t.ui.pr.open, '#3fb950'); // DEFAULT_THEME

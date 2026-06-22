@@ -35,7 +35,7 @@ export interface ThemeUi {
     /** Default editor text foreground. */
     foreground: string;
     /**
-     * Editor background — always filled (the theme's value, else `surface.popover`).
+     * Editor background — always filled (the theme's value, else the default editor bg).
      * Whether the editor uses this via a theme-owned GtkSourceView scheme, or instead
      * follows the system light/dark Adwaita scheme, is decided by
      * `Theme.followSystemScheme` (set when the theme file omits this field) — not by
@@ -53,14 +53,6 @@ export interface ThemeUi {
   };
   /** Separator/border color for chrome (e.g. the header bar's bottom edge). */
   border: string;
-  /** Drop-shadow color for floating surfaces (popovers, toasts, cards). */
-  shadow: string;
-  surface: {
-    /** Background of elevated surfaces: pickers, popovers, autocomplete, menus. */
-    popover: string;
-    /** Background of a selected entry (file tree row, picker result, list item). */
-    selected: string;
-  };
   /** Semantic text colors for status/feedback. */
   status: {
     success: string;
@@ -146,7 +138,7 @@ export interface Theme {
    * True when the theme file omitted `ui.editor.background`: the editor follows the
    * system light/dark Adwaita scheme instead of a theme-owned GtkSourceView scheme
    * (see TextEditor.followSystemColorScheme / createSourceScheme). `ui.editor.background`
-   * is still filled (with `surface.popover`) so color consumers always have a value.
+   * is still filled (with the default editor bg) so color consumers always have a value.
    */
   followSystemScheme: boolean;
   /** Base spacing unit in px (margins / gaps between content chrome); `--t-spacing`. */
@@ -196,8 +188,6 @@ interface ThemeFromFileUi {
   editor?: Partial<ThemeUi['editor']>;
   text?: Partial<ThemeUi['text']>;
   border?: string;
-  shadow?: string;
-  surface?: Partial<ThemeUi['surface']>;
   status?: Partial<ThemeUi['status']>;
   search?: Partial<ThemeUi['search']>;
   diff?: Partial<ThemeUi['diff']>;
@@ -226,8 +216,6 @@ export const DEFAULT_THEME: Theme = {
     editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
     text: { muted: '#9a9996', accent: '#c678dd' },
     border: 'rgba(0, 0, 0, 0.3)',
-    shadow: 'rgba(0, 0, 0, 0.3)',
-    surface: { popover: '#1e1e1e', selected: 'rgba(127, 127, 127, 0.25)' },
     status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
     search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
     diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
@@ -342,19 +330,15 @@ export function adaptTheme(file: ThemeFromFile): Theme {
     fold: f.diff?.fold ?? D.diff.fold,
   };
 
-  const surface = { ...D.surface, ...f.surface };
-
   // editor.background is the one field a theme may omit; its absence means "follow the
   // system light/dark scheme" (recorded as followSystemScheme). We still FILL the field
-  // — with the popover surface — so every color consumer reads a concrete value.
+  // — with the default editor background — so every color consumer reads a concrete value.
   const followSystemScheme = f.editor?.background === undefined;
 
   const ui: ThemeUi = {
-    editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? surface.popover },
+    editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? D.editor.background },
     text: { ...D.text, ...f.text },
     border: f.border ?? D.border,
-    shadow: f.shadow ?? D.shadow,
-    surface,
     status,
     search: {
       match: f.search?.match ?? D.search.match,
@@ -393,6 +377,9 @@ export function adaptTheme(file: ThemeFromFile): Theme {
  */
 function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui: ThemeUi): void {
   const fg = ui.editor.foreground;
+  // Code (inline + fenced) gets a faint foreground-tint background — a subtle band
+  // that reads on any editor background, light or dark, without a dedicated token.
+  const codeBg = formatHEXA(withAlpha(parse(fg), 0.06));
   const colorDefaults: SyntaxColors = {
     'markup.heading': syntax.function ?? syntax.keyword ?? fg,
     'markup.link': syntax.function ?? ui.text.accent,
@@ -424,8 +411,8 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
     'markup.link': { underline: true },
     'markup.quote': { italic: true },
     // Inline code → text-only background; block code (fences) → full-line background.
-    'markup.raw': { background: ui.surface.popover },
-    'markup.raw.block': { lineBackground: ui.surface.popover },
+    'markup.raw': { background: codeBg },
+    'markup.raw.block': { lineBackground: codeBg },
   };
   for (const [cap, style] of Object.entries(styleDefaults)) {
     syntaxStyle[cap] = { ...style, ...syntaxStyle[cap] };

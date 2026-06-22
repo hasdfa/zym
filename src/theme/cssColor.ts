@@ -40,6 +40,16 @@ export function gdkRgbaToString(rgba: { red: number; green: number; blue: number
   return a === 255 ? rgb : `${rgb}${hex(a)}`;
 }
 
+/** Scale the alpha of a resolved `#rrggbb[aa]` string by `factor` (0–1), returning
+ *  `#rrggbbaa`. Our resolved colors are always hex, so this is plain hex math (no
+ *  color lib). The non-CSS analogue of CSS's `alpha(var(--…), factor)` — see
+ *  `lookupCSSColorAlpha`. */
+function withAlpha(hex: string, factor: number): string {
+  const base = hex.length >= 9 ? parseInt(hex.slice(7, 9), 16) / 255 : 1;
+  const a = Math.round(Math.max(0, Math.min(1, base * factor)) * 255);
+  return `${hex.slice(0, 7)}${a.toString(16).padStart(2, '0')}`;
+}
+
 // --- Resolution (the single path) -----------------------------------------
 
 const cache = new Map<string, string>();
@@ -96,4 +106,14 @@ export function lookupCSSColor(theme: Theme, name: string): string {
   if (fb) return fb[scheme];
 
   throw new Error(`lookupCSSColor: cannot resolve "${name}"`);
+}
+
+/**
+ * Like `lookupCSSColor`, but scales the resolved color's alpha by `factor` (0–1) —
+ * the non-CSS equivalent of CSS's `alpha(var(--…), factor)`, for GtkTextTag / draw-func
+ * backgrounds that want a translucent shade (e.g. a selection background of
+ * `--accent-bg-color` at 25%). Returns `#rrggbbaa`.
+ */
+export function lookupCSSColorAlpha(theme: Theme, name: string, factor: number): string {
+  return withAlpha(lookupCSSColor(theme, name), factor);
 }

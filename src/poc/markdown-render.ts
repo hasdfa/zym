@@ -36,8 +36,8 @@ addStyles(`
     margin: 10px 0;
     border-radius: 10px;
   }
-  .zym-conversation-user { background: var(--t-ui-surface-selected); }
-  .zym-conversation-assistant { background: var(--t-ui-surface-popover); }
+  .zym-conversation-user { background: alpha(var(--accent-bg-color), 0.25); }
+  .zym-conversation-assistant { background: var(--card-bg-color); }
 `);
 
 const here = Path.dirname(fileURLToPath(import.meta.url));

@@ -65,24 +65,6 @@
           "$ref": "#/$defs/color",
           "description": "Separator/border for chrome."
         },
-        "shadow": {
-          "$ref": "#/$defs/color",
-          "description": "Drop shadow for floating surfaces."
-        },
-        "surface": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "popover": {
-              "$ref": "#/$defs/color",
-              "description": "Background of elevated surfaces: pickers, popovers, menus."
-            },
-            "selected": {
-              "$ref": "#/$defs/color",
-              "description": "Background of a selected list/tree row."
-            }
-          }
-        },
         "status": {
           "type": "object",
           "additionalProperties": false,

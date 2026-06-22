@@ -26,7 +26,7 @@ addStyles(`
   .zym-q-prompt { margin-bottom: calc(2 * var(--t-spacing)); font-size: var(--t-font-ui-size-large); }
   .zym-q-switcher button { padding-top: 2px; padding-bottom: 2px; min-height: 0; }
   .zym-q-hint { opacity: 0.5; font-size: var(--t-font-ui-size-small); }
-  .zym-q-row-focused { background: var(--t-ui-surface-selected); }
+  .zym-q-row-focused { background: alpha(var(--accent-bg-color), 0.25); }
   .zym-q-note { padding-left: calc(4 * var(--t-spacing)); }
 `);
 

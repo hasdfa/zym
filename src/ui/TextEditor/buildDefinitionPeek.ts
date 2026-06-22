@@ -11,12 +11,11 @@ import { theme } from '../../theme/theme.ts';
 import { addStyles } from '../../styles.ts';
 import { TextEditor, INPUT_PADDING } from './TextEditor.ts';
 
-const PEEK_BG = theme.ui.surface.popover;
 const PEEK_MUTED = theme.ui.text.muted;
 
 addStyles(`
   .peek-card {
-    background-color: ${PEEK_BG};
+    background-color: var(--popover-bg-color);
     border: 1px solid var(--border-color);
     border-radius: 6px;
     box-shadow: 0 1px 4px alpha(black, 0.3);

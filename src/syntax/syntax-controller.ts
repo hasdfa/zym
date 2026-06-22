@@ -23,6 +23,7 @@
 import { Gtk, Pango, type SourceBuffer, type SourceView } from '../gi.ts';
 import { Point } from '../text/Point.ts';
 import { theme } from '../theme/theme.ts';
+import { lookupCSSColorAlpha } from '../theme/cssColor.ts';
 import { findBracketPair } from './bracketMatch.ts';
 import { type NodeRowRange } from './indent.ts';
 import { type TagName } from './tags.ts';
@@ -232,7 +233,7 @@ export class SyntaxController {
     // Bracket-match highlight (subtle box-like background + bold).
     this.bracketMatchTag = mk({
       name: 'bracket-match',
-      background: theme.ui.surface.selected,
+      background: lookupCSSColorAlpha(theme, '--accent-bg-color', 0.25),
       weight: Pango.Weight.BOLD,
     });
 
