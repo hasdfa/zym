@@ -153,7 +153,6 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   const card = openFloatingCard({
     host,
     name: 'AgentLauncher',
-    marginTop: 110, // sit lower than the Picker's default — it's a taller compose card
     dim: true, // it's a focused compose surface — dim the rest of the window
     fade: true,
     // Remember the (possibly unsent) prompt + the chosen options on any dismissal, so they
