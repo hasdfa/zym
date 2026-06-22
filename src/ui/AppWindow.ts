@@ -156,6 +156,11 @@ export class AppWindow {
   // Headless `claude-sdk` agents mounted as center tabs (keyed by their root
   // widget), disposed when their tab closes (see disposeChild).
   private readonly conversations = new Map<Widget, AgentConversation>();
+  // Terminal tabs opened for a `terminal` agent action (set_actions), keyed by the
+  // terminal's root widget. Re-running an action reuses its still-open tab (run the
+  // command in place); the tab is closed when the action is cleared, the agent is
+  // closed, or the user closes the tab (see pruneActionTerminals / disposeChild).
+  private readonly actionTerminals = new Map<Widget, { agent: Agent; actionId: string; terminal: Terminal; child: PanelChild }>();
 
   private readonly workbenchList: WorkbenchList;
   // The top-level split whose start child is the workbench sidebar; its position is
@@ -724,33 +729,72 @@ export class AppWindow {
     this.terminals.get(built.widget)!.focus();
   }
 
-  // Open a `terminal` agent action (set_actions) in a terminal tab in the agent's
-  // own workbench, so its output lands beside the agent. Like runScript, the shell
-  // runs the command then execs a login shell, keeping the tab open on the output.
+  // Open a `terminal` agent action (set_actions) in a dedicated terminal tab in the
+  // agent's own workbench, so its output lands beside the agent. The shell runs the
+  // command once and the tab stays on its output when it exits (no fresh shell is
+  // spawned). Re-running the same action reuses its still-open tab — the command
+  // runs again in place — instead of piling up a tab per run. The tab is cleaned up
+  // when the action is cleared (pruneActionTerminals) or the agent is closed.
   // (Terminal-less actions run as background processes inside the host, not here.)
   private runAgentActionInTerminal(agent: Agent, action: AgentAction): void {
     this.showAgent(agent); // activate the agent's workbench — the action runs beside it
     const shell = process.env.SHELL || '/bin/bash';
+    const command = [shell, '-l', '-c', action.command];
+
+    // Reuse the action's existing tab if it's still around (it lingers on its output
+    // after the command exits): bring it forward and re-run the command in place.
+    const existing = this.findActionTerminal(agent, action.id);
+    if (existing) {
+      existing.child.select();
+      existing.terminal.run(command);
+      existing.terminal.focus();
+      return;
+    }
+
     const built = this.createTerminalTab(agent.effectiveCwd, {
-      command: [shell, '-l', '-c', `${action.command}; exec ${shell} -l`],
+      command,
       title: action.label,
+      keepOpenOnExit: true, // stay on the output when the command exits; don't respawn a shell
+      transient: true, // too short-lived to restore — keep it out of the session
     });
     const child = this.workbench.center.add(built.widget, { title: built.title });
     built.onAttached?.(child);
-    this.terminals.get(built.widget)!.focus();
+    const terminal = this.terminals.get(built.widget)!;
+    this.actionTerminals.set(built.widget, { agent, actionId: action.id, terminal, child });
+    terminal.focus();
+  }
+
+  // The still-open terminal tab for `agent`'s action, or null. (Closed tabs are
+  // dropped from the map by disposeChild, so a hit is always a live tab.)
+  private findActionTerminal(agent: Agent, actionId: string) {
+    for (const entry of this.actionTerminals.values())
+      if (entry.agent === agent && entry.actionId === actionId) return entry;
+    return null;
+  }
+
+  // Close the terminal tabs of `agent`'s actions that no longer exist — the agent
+  // re-registered its actions (set_actions) and dropped these, so their dedicated
+  // terminals are stale. Closing the tab tears down the rest via disposeChild.
+  private pruneActionTerminals(agent: Agent): void {
+    const live = new Set(agent.actions.map((a) => a.id));
+    for (const entry of [...this.actionTerminals.values()])
+      if (entry.agent === agent && !live.has(entry.actionId)) entry.child.close();
   }
 
   // Construct + wire a terminal tab WITHOUT attaching it to a panel. Shared by
   // openTerminal, the script runner, and session restore (a restored terminal is
   // a fresh shell in cwd). `command`/`title` let a caller run something other than
   // a login shell (e.g. a package script).
-  private createTerminalTab(cwd: string, options: { command?: string[]; title?: string } = {}): RestoredChild {
+  private createTerminalTab(cwd: string, options: { command?: string[]; title?: string; keepOpenOnExit?: boolean; transient?: boolean } = {}): RestoredChild {
     let child: PanelChild | null = null;
     const terminal = new Terminal({
       cwd,
       command: options.command,
       title: options.title,
-      // The shell exiting (`exit`/Ctrl-D) closes its tab.
+      keepOpenOnExit: options.keepOpenOnExit,
+      transient: options.transient,
+      // The shell exiting (`exit`/Ctrl-D) closes its tab. A `keepOpenOnExit` tab
+      // (an agent action) instead stays on its output and never fires this.
       onExit: () => child?.close(),
     });
     this.terminals.set(terminal.root, terminal);
@@ -819,6 +863,8 @@ export class AppWindow {
     const agentSubs = new CompositeDisposable();
     this.agentSubs.set(agent, agentSubs);
     agentSubs.add(new Disposable(agent.onTitleChange(() => this.updateAgentTab(agent))));
+    // Drop a `terminal` action's dedicated tab when the agent stops registering it.
+    agentSubs.add(new Disposable(agent.onDidChangeActions(() => this.pruneActionTerminals(agent))));
     // Notify when the agent needs attention while the user isn't looking at it.
     let previousStatus = agent.status;
     agentSubs.add(new Disposable(agent.onDidChangeStatus(() => {
@@ -1222,6 +1268,10 @@ export class AppWindow {
   // the user's workbench if it was active), and retire it from the registry.
   private closeAgent(agent: Agent): void {
     if (!agent.exited) agent.kill();
+    // Drop the agent's action terminals (set_actions tabs in its workbench center);
+    // disposeChild won't reach them (they're terminals, not editors).
+    for (const entry of [...this.actionTerminals.values()])
+      if (entry.agent === agent) this.disposeChild(entry.terminal.root);
     if (this.workbench.owner === agent) this.activateOwner('user'); // swap away first
     const workbench = this.workbenches.get(agent);
     this.workbenches.delete(agent); // its workbench (center + Files/Git + bottom + tabs) goes
@@ -1328,6 +1378,10 @@ export class AppWindow {
     this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
+    // An agent-action terminal: kill any still-running command (e.g. a dev server)
+    // so a closed/cleared action leaves nothing behind, then drop it from the map.
+    this.actionTerminals.get(widget)?.terminal.kill();
+    this.actionTerminals.delete(widget);
     this.conversations.get(widget)?.dispose(); // kill the claude child + IPC watchers
     this.conversations.delete(widget);
     this.agentChildren.delete(widget);
