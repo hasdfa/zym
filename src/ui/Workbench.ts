@@ -163,10 +163,15 @@ export class Workbench<TOwner = unknown> {
     this.root = this.hLeft;
     this.root.setName('Workbench'); // selector identity for command/keymap rules
 
-    // The user's workbench shows Files/Source-Control in the right dock; an agent's
-    // opens terminal-only (the panel is still built, so reveal-on-demand — file-tree:
-    // focus / git commands — can attach it later). The bottom slot starts empty.
-    if (options.showSideDock) this.setRight({ root: contents.leftPanel.root });
+    // The user's workbench docks Files/Source-Control in the right slot but starts it
+    // hidden — assigned so the dock toggle (and file-tree: / git-panel: focus) has
+    // something to reveal, yet out of the way until the user asks for it. An agent's
+    // opens terminal-only (the panel is still built, so reveal-on-demand can attach it
+    // later). The bottom slot starts empty.
+    if (options.showSideDock) {
+      this.setRight({ root: contents.leftPanel.root });
+      this.setDockVisible('right', false); // hidden by default (setRight forced it visible)
+    }
     this.setCenter(contents.center);
   }
 
