@@ -13,7 +13,6 @@ import { theme } from '../theme/theme.ts';
 // switch can re-apply it. Themes without their own background (ui.bg unset)
 // leave the chrome to the system Adwaita styling.
 export function applyChromeStyles(): void {
-  const { surface: { selected: selectedBg } } = theme.ui;
   // A theme that follows the system scheme leaves the chrome to Adwaita.
   if (theme.followSystemScheme) {
     styles.remove('theme-chrome');
