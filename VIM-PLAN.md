@@ -10,6 +10,9 @@ types to `any`.
 See `docs/tooling.md` → "Type casts (`as any`)" and
 `docs/text-editor/vim-mode.md` for background on the shim.
 
+**Status:** Phases 1 and 2 are done (src `as any` 116 → 80; typecheck clean,
+988 tests pass). Phases 3–6 remain.
+
 ## Guiding principle
 
 Most divergences are *missing-but-trivial*: the primitive already exists on the
