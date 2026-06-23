@@ -1,13 +1,23 @@
 /*
- * GitLogView — a keyboard-navigable git history viewer, hosted as a center tab
- * (opened via the `git:log` command).
+ * GitLogView — a keyboard-navigable git history viewer, hosted as a single center
+ * tab (opened via the `git:log` command).
  *
- * A header carrying the branch and its details (upstream ref, ahead/behind, HEAD
- * sha) sits above a search field and a plain list of recent commits, newest first.
- * Each commit row shows its subject over an "author · date · sha" detail line, in
- * the monospace font. Navigation follows the project's vim-style list convention —
- * j/k move, g g/G jump to the ends — and o/Enter (or l) opens the selected commit's
- * diff, which the host shows in a side split (see AppWindow.openGitLog).
+ * The whole viewer fits in one tab: a horizontal `Gtk.Paned` splits a commit list
+ * (left) from the selected commit's read-only diff (right) — no side-split panel.
+ * The left column carries a header (branch + upstream ref / ahead-behind / HEAD sha)
+ * over a search field over a plain list of recent commits, newest first. Each commit
+ * row shows its subject over an "author · date · sha" detail line, in the monospace
+ * font. Navigation follows the project's vim-style list convention — j/k move, g g/G
+ * jump to the ends — and moving the selection live-previews that commit's diff in the
+ * right pane (debounced); o/Enter (or l) loads it and moves focus into the diff.
+ *
+ * The diff is built by `buildCommitDiffView` (shared with `git:diff-commit`) and
+ * embedded directly, so this view owns its lifecycle (disposed on swap + on close).
+ * Because the diff is a vim `TextEditor` whose normal-mode `escape` is taken, leaving
+ * it back to the list needs a dedicated key: `ctrl-w h` (the commit list sits to the
+ * left) → `git-log:focus-list`, scoped to `#GitLogView #TextEditor` so it only binds
+ * inside this viewer. The command is registered on the view root, reachable from both
+ * the search field and the embedded diff.
  *
  * The search field filters live, using the picker's fzy matcher (no highlighting):
  * `file:x` matches a changed path, `author:y` matches the author, and any bare word
@@ -26,6 +36,8 @@ import { escapeMarkup } from './pickerHighlight.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
 import { humanReadableTime } from '../util/humanReadableTime.ts';
 import { Icons } from './icons.ts';
+import { buildCommitDiffView } from './diffViews.ts';
+import { type DiffView } from './DiffView.ts';
 import {
   repoRoot,
   listCommits,
@@ -38,12 +50,18 @@ import {
 export interface GitLogViewOptions {
   cwd: string;
   git: GitRepo;
-  /** Open the selected commit's diff (the host places it in a side split). */
-  onOpenCommit: (commit: CommitSummary) => void;
 }
 
 // How many recent commits to list (newest first) — matches the commit picker's depth.
 const COMMIT_LIMIT = 200;
+
+// The selected commit's diff is rebuilt when the selection settles, not on every j/k
+// during a fast scroll — building a DiffView spins up a whole editor, so debounce it.
+const PREVIEW_DEBOUNCE_MS = 90;
+
+// Default divider position: a commit list wide enough for the "author · date · sha"
+// detail line, leaving the rest of the tab for the diff.
+const LIST_WIDTH = 380;
 
 // A parsed search query: `file:`/`author:` filters plus bare words (matched against
 // the subject). Empty across the board means "show everything".
@@ -56,6 +74,8 @@ interface Filters {
 // The header padding, search-field margin, and commit-row padding share the same
 // base inset (2× the spacing token) so the chrome lines up.
 addStyles(`
+  /* Left column: the commit list, set off from the diff pane by a border. */
+  #GitLogView .gitlog-list-column { border-right: 1px solid var(--border-color); }
   #GitLogView .gitlog-header {
     padding: calc(2 * var(--t-spacing));
     border-bottom: 1px solid var(--border-color);
@@ -77,14 +97,16 @@ addStyles(`
   /* Selected row: full selection color while focused, a muted version otherwise. */
   #GitLogList row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
   #GitLogView:focus-within #GitLogList row:selected { background-color: var(--t-ui-surface-selected); }
+  /* Right pane: the embedded diff (or a placeholder while nothing is selected). */
+  #GitLogView .gitlog-diff-placeholder { color: var(--t-ui-text-muted); padding: 12px; }
 `);
 
 export class GitLogView {
-  readonly root: InstanceType<typeof Gtk.Box>;
+  readonly root: InstanceType<typeof Gtk.Paned>;
 
   private readonly git: GitRepo;
+  private readonly cwd: string;
   private readonly repo: string | null;
-  private readonly onOpenCommit: (commit: CommitSummary) => void;
   private readonly subs = new CompositeDisposable();
 
   private readonly branchLabel: InstanceType<typeof Gtk.Label>;
@@ -94,15 +116,25 @@ export class GitLogView {
   private readonly listBox: InstanceType<typeof Gtk.ListBox>;
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly empty: InstanceType<typeof Gtk.Label>;
+  private readonly diffPane: InstanceType<typeof Gtk.Box>; // right pane: holds the diff or placeholder
 
   private commits: CommitSummary[] = []; // all loaded commits (newest first)
   private filtered: CommitSummary[] = []; // those currently shown (after the search filter)
   private filesBySha = new Map<string, string[]>(); // sha → changed paths, for `file:` filtering
 
+  // Embedded diff state: the live DiffView in the right pane, the sha it shows (so a
+  // re-select of the same commit is a no-op), the build generation (drops a stale async
+  // build superseded by a newer selection), and the preview debounce timer.
+  private diff: DiffView | null = null;
+  private diffSha: string | null = null;
+  private buildGen = 0;
+  private previewTimer: NodeJS.Timeout | null = null;
+  private disposed = false;
+
   constructor(options: GitLogViewOptions) {
     this.git = options.git;
+    this.cwd = options.cwd;
     this.repo = repoRoot(options.cwd);
-    this.onOpenCommit = options.onOpenCommit;
 
     // --- Header: branch (with icon) over its details (upstream / ahead-behind / HEAD).
     const branchIcon = new Gtk.Label();
@@ -150,28 +182,52 @@ export class GitLogView {
     this.empty.addCssClass('gitlog-empty');
     this.empty.setVisible(false);
 
-    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    // --- Left column: header / search / list, stacked. Its own box so the Paned can
+    // hold it whole and a border can set it off from the diff.
+    const listColumn = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    listColumn.addCssClass('gitlog-list-column');
+    listColumn.append(header);
+    listColumn.append(this.searchBox);
+    listColumn.append(this.scrolled);
+    listColumn.append(this.empty);
+
+    // --- Right pane: the selected commit's diff, swapped in place; a placeholder until
+    // one is selected (or when a commit touched no files).
+    this.diffPane = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true, vexpand: true });
+    this.showDiffPlaceholder('Select a commit to view its diff');
+
+    // --- One tab, split: list | diff. The list keeps its width on window resize; the
+    // diff absorbs the extra space. Neither child collapses to nothing.
+    this.root = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
     this.root.setName('GitLogView'); // CSS identity (the list keymap targets #GitLogList)
-    this.root.append(header);
-    this.root.append(this.searchBox);
-    this.root.append(this.scrolled);
-    this.root.append(this.empty);
+    this.root.setStartChild(listColumn);
+    this.root.setEndChild(this.diffPane);
+    this.root.setPosition(LIST_WIDTH);
+    this.root.setResizeStartChild(false);
+    this.root.setShrinkStartChild(false);
+    this.root.setShrinkEndChild(false);
 
     this.registerCommands();
     this.renderHeader();
     this.load();
   }
 
-  /** Move keyboard focus into the list, selecting the first commit if none is yet. */
+  /** Move keyboard focus into the list, selecting (and previewing) the first commit if
+   *  none is yet. The `ctrl-w h` / `git-log:focus-list` target — the way back out of the
+   *  embedded diff editor. */
   focus(): void {
     if (!this.listBox.getSelectedRow() && this.filtered.length) {
       const first = this.listBox.getRowAtIndex(0);
-      if (first) this.listBox.selectRow(first);
+      if (first) { this.listBox.selectRow(first); this.schedulePreview(); }
     }
     (this.listBox.getSelectedRow() ?? this.listBox).grabFocus();
   }
 
   dispose(): void {
+    this.disposed = true;
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimer = null;
+    this.clearDiff();
     this.subs.dispose();
   }
 
@@ -216,6 +272,12 @@ export class GitLogView {
     listCommits(this.repo, 'HEAD', COMMIT_LIMIT, (commits) => {
       this.commits = commits;
       this.applyFilter();
+      // The list already holds focus from `openGitLog`'s `focus()` (which ran before the
+      // commits landed), so select + preview the newest commit now — unless the user has
+      // since dropped into the search field.
+      if (!this.listBox.getSelectedRow() && this.filtered.length && !(this.search as any).hasFocus()) {
+        this.selectIndex(0);
+      }
     });
     // Changed paths for the `file:` filter — loaded in one pass, alongside the
     // commits; a `file:` query before this lands simply matches nothing until it does.
@@ -323,13 +385,24 @@ export class GitLogView {
         'git-log:search': { didDispatch: () => this.search.grabFocus(), description: 'Filter the commit list' },
       }),
     );
-    // The search entry's own keys (bound to `#GitLogSearch` in the central keymap):
-    // drop from the field down into the filtered results, keeping the query.
+    // `git-log:focus-list` / `git-log:focus-diff` are registered on the view ROOT (not a
+    // leaf), so they dispatch from anywhere inside the viewer. They model the list and the
+    // diff as two nested windows: `ctrl-w l` steps from the list INTO the diff, `ctrl-w h`
+    // steps back; the OUTWARD directions are left to the global `#AppWindow` pane nav. The
+    // search field also reaches focus-list (Enter/Down/Escape drop into the list).
     this.subs.add(
-      zym.commands.add(this.search, {
-        'git-log:focus-list': { didDispatch: () => this.focus(), description: 'Move from the filter to the commit list' },
+      zym.commands.add(this.root, {
+        'git-log:focus-list': { didDispatch: () => this.focus(), description: 'Move focus to the commit list' },
+        'git-log:focus-diff': { didDispatch: () => this.focusDiff(), description: 'Move focus to the diff pane' },
       }),
     );
+  }
+
+  /** Step into the diff pane (`ctrl-w l` from the list). Focuses the loaded diff, or —
+   *  if nothing is loaded yet — opens the selected commit and focuses it. */
+  private focusDiff(): void {
+    if (this.diff) { this.diff.focus(); return; }
+    this.openSelected();
   }
 
   private move(delta: number): void {
@@ -345,9 +418,12 @@ export class GitLogView {
     if (row) {
       this.listBox.selectRow(row);
       row.grabFocus(); // scrolls the row into view
+      this.schedulePreview(); // moving the selection live-previews that commit's diff
     }
   }
 
+  /** Open the selected commit's diff and move focus into it (o/Enter/l). Reuses the
+   *  preview already loaded for that commit when present; otherwise builds it now. */
   private openSelected(): void {
     const row = this.listBox.getSelectedRow();
     if (row) this.activate(row.getIndex());
@@ -355,6 +431,73 @@ export class GitLogView {
 
   private activate(index: number): void {
     const commit = this.filtered[index];
-    if (commit) this.onOpenCommit(commit);
+    if (commit) this.loadDiff(commit, /* focus */ true);
+  }
+
+  // --- Embedded diff -----------------------------------------------------------
+
+  /** Debounced live preview of the selected commit's diff (focus stays on the list).
+   *  Skipped during a fast j/k scroll — only the commit the selection settles on builds. */
+  private schedulePreview(): void {
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimer = setTimeout(() => {
+      this.previewTimer = null;
+      const row = this.listBox.getSelectedRow();
+      const commit = row ? this.filtered[row.getIndex()] : undefined;
+      if (commit) this.loadDiff(commit, /* focus */ false);
+    }, PREVIEW_DEBOUNCE_MS);
+  }
+
+  /** Build `commit`'s diff (vs its first parent) and swap it into the right pane. A
+   *  re-select of the commit already shown is a no-op (just refocuses when asked). The
+   *  build is async + generation-guarded, so a newer selection wins. */
+  private loadDiff(commit: CommitSummary, focus: boolean): void {
+    if (!this.repo) return;
+    if (this.diffSha === commit.sha) {
+      if (focus) this.diff?.focus();
+      return;
+    }
+    const gen = ++this.buildGen;
+    void buildCommitDiffView(this.repo, commit, this.cwd).then((built) => {
+      if (this.disposed || gen !== this.buildGen) {
+        built?.view.dispose(); // superseded by a newer selection (or the view closed)
+        return;
+      }
+      // Record the shown sha BEFORE swapping so a commit with no changes (placeholder)
+      // is still remembered — re-selecting it won't rebuild.
+      this.diffSha = commit.sha;
+      if (!built) {
+        this.showDiffPlaceholder('This commit has no file changes');
+        return;
+      }
+      this.clearDiff();
+      built.view.root.setHexpand(true);
+      built.view.root.setVexpand(true);
+      this.diffPane.append(built.view.root);
+      this.diff = built.view;
+      if (focus) built.view.focus();
+    });
+  }
+
+  /** Drop whatever the right pane currently holds (the live diff or a placeholder),
+   *  disposing the diff. Leaves the pane empty for the next `append`. */
+  private clearDiff(): void {
+    this.diff?.dispose();
+    this.diff = null;
+    let child = this.diffPane.getFirstChild();
+    while (child) {
+      const next = child.getNextSibling();
+      this.diffPane.remove(child);
+      child = next;
+    }
+  }
+
+  /** Replace the right pane with a muted message (no commit selected, or no changes).
+   *  Leaves `diffSha` to the caller — the constructor's first call runs with it null. */
+  private showDiffPlaceholder(text: string): void {
+    this.clearDiff();
+    const label = new Gtk.Label({ label: text, xalign: 0, yalign: 0 });
+    label.addCssClass('gitlog-diff-placeholder');
+    this.diffPane.append(label);
   }
 }
