@@ -11,19 +11,16 @@ subheader becomes a directory with an `index.md`.
 
 Most important tasks:
 
+- agent UI
+- styling/theming
 - git (for reviewing agent work): 
-  - [~] Diff something else than HEAD
-  - [~] commit viewer
   - [~] Improve diff viewer interface
   - git:discard-all (only per-file discard exists today).
   - git:undo-commit (reset --soft HEAD~1).
   - git:revert a commit (free once the log picker exists).
   - First push of a new branch → auto -u origin <branch> (set upstream).
   - conflict resolution
-- autocomplete: fix reposition bug and style (+signature/hover)
 - pickers: improve UI/UX, attach to panel when applicable
-- vim:
-  - gb
 
 ## Architecture
 
