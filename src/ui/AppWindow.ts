@@ -66,8 +66,7 @@ import { openThemePicker } from './ThemePicker.ts';
 import { saveConfig } from '../config/load.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
-import { openWorktreePicker } from './WorktreePicker.ts';
-import { openAgentLauncher, launchPrompt } from './AgentLauncher.ts';
+import { openAgentLauncher, launchPrompt, type LauncherMode } from './AgentLauncher.ts';
 import {
   openBranchPicker,
   openDeleteBranchPicker,
@@ -2587,32 +2586,30 @@ export class AppWindow {
   // Terminal command: open a shell in a new center-panel tab. Handler only;
   // bound to `space t` in the central keymap.
   private registerTerminalCommands() {
+    // The launcher gathers the prompt + model / permission mode / effort / kind + a worktree
+    // choice, then hands back the assembled argv. The worktree is set up by the agent itself
+    // (it announces it via set_worktree, which re-roots the workbench) — see launchPrompt.
+    // `mode` selects which worktree-scoped variant of the launcher to render.
+    const launchAgent = (mode?: LauncherMode) =>
+      openAgentLauncher(this.overlay, {
+        cwd: this.workbench.cwd,
+        defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
+        mode,
+        onLaunch: ({ prompt, command, cwd, kind, worktree, background }) =>
+          this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind, background }),
+      });
     zym.commands.add('#AppWindow', {
       'terminal:new': { didDispatch: () => this.openTerminal(), description: 'Open a new terminal' },
       'scripts:run': {
         didDispatch: () => openScriptRunner(this.overlay, this.workbench.cwd, (name) => this.runScript(name)),
         description: 'Run a package.json script in a terminal',
       },
-      'agent:new': {
-        // The launcher gathers the prompt + model / permission mode / kind + a worktree
-        // choice (create a fresh one, or a branch to work on), then hands back the
-        // assembled argv. The worktree is set up by the agent itself (it announces it via
-        // set_worktree, which re-roots the workbench) — see launchPrompt.
-        didDispatch: () =>
-          openAgentLauncher(this.overlay, {
-            cwd: this.workbench.cwd,
-            defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
-            onLaunch: ({ prompt, command, cwd, kind, worktree, background }) =>
-              this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind, background }),
-          }),
-        description: 'Start a new agent',
-      },
-      // Pick an existing worktree to launch the agent in (its workbench is rooted
-      // there). New worktrees are created by the agent itself, then detected live.
-      'agent:new-in-worktree': {
-        didDispatch: () => openWorktreePicker(this.overlay, this.workbench.cwd, (cwd) => this.openAgent({ cwd })),
-        description: 'Start a new agent in a chosen git worktree',
-      },
+      'agent:new': { didDispatch: () => launchAgent(), description: 'Start a new agent' },
+      // The three worktree-scoped launcher flows (the worktree itself is realized by the
+      // agent — see launchPrompt): pick an existing branch, the current root, or a fresh one.
+      'agent:new-in-worktree': { didDispatch: () => launchAgent('existing-worktree'), description: 'Start a new agent in an existing git worktree' },
+      'agent:new-this-worktree': { didDispatch: () => launchAgent('this-worktree'), description: 'Start a new agent in the current git worktree' },
+      'agent:new-worktree': { didDispatch: () => launchAgent('new-worktree'), description: 'Start a new agent in a new git worktree' },
       'agent:picker': {
         didDispatch: () => openAgentPicker(this.overlay, {
           onActivate: (agent) => this.showAgent(agent),

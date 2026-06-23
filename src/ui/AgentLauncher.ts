@@ -40,6 +40,7 @@ let savedDraft = '';
 // (for worktree, '' is the valid "create" choice).
 let savedModel = '';
 let savedPermission = '';
+let savedEffort = '';
 let savedKind: AgentKind | '' = '';
 let savedWorktree = '';
 
@@ -67,11 +68,24 @@ export interface AgentLaunchRequest {
   background: boolean;
 }
 
+/** Which launch flow the launcher renders. They differ only in how the worktree choice is
+ *  surfaced/seeded and where focus starts:
+ *  - `default` — the full launcher; the worktree dropdown (create / current / branch) sits
+ *    in the options row, prompt focused.
+ *  - `existing-worktree` — pick an existing branch up front: the worktree combobox moves
+ *    into the title (and is focused first), "create" is dropped (that's `new-worktree`).
+ *  - `this-worktree` — same titled combobox, but pre-selected to the current root and with
+ *    the prompt focused (tweak the choice only if you want to).
+ *  - `new-worktree` — always a fresh worktree: no worktree control, just a title saying so. */
+export type LauncherMode = 'default' | 'existing-worktree' | 'this-worktree' | 'new-worktree';
+
 export interface AgentLauncherOptions {
   /** The current working directory the agent is rooted at by default. */
   cwd: string;
   /** The kind selected by default (from `resolveAgentKind(config)`). */
   defaultKind: AgentKind;
+  /** The launch flow to render (default: `'default'`). */
+  mode?: LauncherMode;
   /** Invoked with the assembled launch request when the user submits. */
   onLaunch: (request: AgentLaunchRequest) => void;
 }
@@ -112,6 +126,16 @@ addStyles(/* css */`
     color: var(--t-ui-text-muted);
     padding-left: 6px;
   }
+  /* Title row above the prompt for the worktree-scoped flows; inset to line up with the
+     prompt text and the options row. The worktree combobox sits inline after the label. */
+  #AgentLauncherTitle {
+    padding: calc(4 * var(--t-spacing)) calc(4 * var(--t-spacing)) 0;
+    font: var(--t-font-ui);
+    background-color: var(--t-ui-editor-background);
+  }
+  #AgentLauncherTitle > .launcher-title {
+    font-weight: bold;
+  }
 `);
 
 let keymapRegistered = false;
@@ -121,9 +145,9 @@ function registerLauncherKeymapOnce(): void {
   // Enter (in the prompt) launches and switches to the agent; alt-enter inserts a newline
   // (the app convention, see AgentConversation). ctrl-enter launches from anywhere in the
   // card (incl. the option dropdowns); ctrl-shift-enter launches in the background (without
-  // switching to the new agent). Escape is handled by a bubble-phase controller on the card
-  // so an open combobox popover can swallow it first (the window keymap runs in capture
-  // phase, ahead of that).
+  // switching to the new agent). Escape (core:cancel) dismisses the launcher — handled by a
+  // bubble-phase controller on the card so an open combobox popover can swallow it first (a
+  // closed combobox lets it through; the window keymap runs in capture phase, ahead of that).
   zym.keymaps.add('agent-launcher', {
     '#AgentLauncher': {
       'ctrl-enter': 'launcher:submit',
@@ -137,8 +161,8 @@ function registerLauncherKeymapOnce(): void {
     // From NORMAL mode, q or escape dismiss the launcher (in insert mode escape is
     // vim's insert→normal, so it doesn't reach this). Mirrors DiffCommentBox.
     '#AgentLauncherPrompt #TextEditor.normal-mode': {
-      q: 'launcher:close',
-      escape: 'launcher:close',
+      q: 'core:cancel',
+      escape: 'core:cancel',
     },
   });
 }
@@ -146,6 +170,10 @@ function registerLauncherKeymapOnce(): void {
 /** Open the agent launcher overlay in `host`. */
 export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions): void {
   const { cwd, defaultKind, onLaunch } = options;
+  const mode = options.mode ?? 'default';
+  const newWorktree = mode === 'new-worktree';
+  // The two flows that surface the worktree combobox inline in the title (vs the options row).
+  const worktreeInTitle = mode === 'existing-worktree' || mode === 'this-worktree';
 
   const draft = savedDraft; // an unsent prompt from a previous dismissal, if any
 
@@ -161,18 +189,87 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
       savedDraft = input.getText();
       savedModel = modelDropdown.getValue();
       savedPermission = permissionDropdown.getValue();
+      savedEffort = effortDropdown.getValue();
       savedKind = kindDropdown.getValue() as AgentKind;
-      savedWorktree = worktreeDropdown.getValue();
+      if (worktreeDropdown) savedWorktree = worktreeDropdown.getValue();
       commandsSub?.dispose();
     },
   });
   const panel = card.panel;
   panel.setSizeRequest(CARD_WIDTH, -1);
 
+  // Options, seeded from the last-used values (else the kind's defaults). The kind drives
+  // which models / permission modes are offered; the Claude kinds share a list today, but
+  // changing the kind re-populates them (to that kind's defaults).
+  const kind0 = savedKind || defaultKind;
+  const kindOptions = AGENT_CONFIGS[kind0].options;
+
+  const modelDropdown = new Combobox({ options: kindOptions.models, value: savedModel || kindOptions.defaultModel });
+  const permissionDropdown = new Combobox({ options: kindOptions.permissionModes, value: savedPermission || kindOptions.defaultPermissionMode });
+  const effortDropdown = new Combobox({ options: kindOptions.efforts, value: savedEffort || kindOptions.defaultEffort });
+  const kindDropdown = new Combobox({
+    options: listAgentKinds(),
+    value: kind0,
+    onChange: (value) => {
+      const opts = AGENT_CONFIGS[value as AgentKind].options;
+      modelDropdown.setOptions(opts.models, opts.defaultModel);
+      permissionDropdown.setOptions(opts.permissionModes, opts.defaultPermissionMode);
+      effortDropdown.setOptions(opts.efforts, opts.defaultEffort);
+    },
+  });
+
+  // Worktree: a dropdown with two special choices up top — "create" (start in a fresh
+  // worktree the agent makes) and "current" (run in the workbench cwd, no worktree) —
+  // followed by the repo's branches (work on a chosen branch in its own worktree). The
+  // worktree-in-title flows drop "create" (that's what the new-worktree flow is for); the
+  // new-worktree flow has no dropdown at all (it's pinned to "create"). Specials use
+  // sentinel values; the list is searchable; branches load asynchronously.
+  const worktreeSpecials = worktreeInTitle
+    ? [{ value: WT_CURRENT, label: 'current' }]
+    : [
+        { value: WT_CREATE, label: 'create' },
+        { value: WT_CURRENT, label: 'current' },
+      ];
+  // `this-worktree` pre-selects the current root; `existing-worktree` keeps the last-used
+  // choice but falls back off a stale "create" (which it doesn't offer).
+  const worktreeInitial =
+    mode === 'this-worktree' ? WT_CURRENT
+    : worktreeInTitle && savedWorktree === WT_CREATE ? WT_CURRENT
+    : savedWorktree;
+  const worktreeDropdown = newWorktree
+    ? null
+    : new Combobox({ options: worktreeSpecials, value: worktreeInitial, specialLabels: ['create'], mutedLabels: ['current'] });
+  const repo = repoRoot(cwd);
+  if (worktreeDropdown && repo) {
+    listBranches(repo, (branches) => {
+      if (card.isClosed()) return;
+      worktreeDropdown.setOptions(
+        [...worktreeSpecials, ...branches.map((b) => ({ value: b, label: b }))],
+        worktreeInitial, // keep the seeded choice selected if it still exists
+      );
+    });
+  }
+
+  // Title above the prompt for the worktree-scoped flows: existing/this show "Launch agent
+  // in worktree [combobox]" (the worktree control lives inline here, not in the options
+  // row); new-worktree is just a label.
+  if (worktreeInTitle || newWorktree) {
+    const title = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
+    title.setName('AgentLauncherTitle');
+    const label = new Gtk.Label({ xalign: 0, label: newWorktree ? 'Launch agent in new worktree:' : 'Launch agent in worktree' });
+    label.addCssClass('launcher-title');
+    title.append(label);
+    if (worktreeDropdown) {
+      worktreeDropdown.root.setHexpand(true); // fill the rest of the title width
+      title.append(worktreeDropdown.root);
+    }
+    panel.append(title);
+  }
+
   // The prompt — a buffer-only editor (full vim editing) that auto-grows with its
-  // content up to 5 lines (then scrolls), wrapped in a named container so the
+  // content up to 20 lines (then scrolls), wrapped in a named container so the
   // enter/alt-enter keymap scopes to it. Seeded with any restored draft.
-  const input = createInput({ placeholder: 'Prompt for the agent…', initialText: draft, grow: true, maxLines: 5, padding: CARD_PADDING });
+  const input = createInput({ placeholder: 'Prompt for the agent…', initialText: draft, grow: true, maxLines: 20, padding: CARD_PADDING });
   const promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   promptContainer.setName('AgentLauncherPrompt');
   promptContainer.append(input.root);
@@ -184,58 +281,16 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   promptFocus.on('leave', () => panel.removeCssClass('prompt-focused'));
   promptContainer.addController(promptFocus);
 
-  // Options, seeded from the last-used values (else the kind's defaults). The kind drives
-  // which models / permission modes are offered; the Claude kinds share a list today, but
-  // changing the kind re-populates them (to that kind's defaults).
-  const kind0 = savedKind || defaultKind;
-  const kindOptions = AGENT_CONFIGS[kind0].options;
-
-  const modelDropdown = new Combobox({ options: kindOptions.models, value: savedModel || kindOptions.defaultModel });
-  const permissionDropdown = new Combobox({ options: kindOptions.permissionModes, value: savedPermission || kindOptions.defaultPermissionMode });
-  const kindDropdown = new Combobox({
-    options: listAgentKinds(),
-    value: kind0,
-    onChange: (value) => {
-      const opts = AGENT_CONFIGS[value as AgentKind].options;
-      modelDropdown.setOptions(opts.models, opts.defaultModel);
-      permissionDropdown.setOptions(opts.permissionModes, opts.defaultPermissionMode);
-    },
-  });
-
-  // Worktree: a dropdown with two special choices up top — "create" (start in a fresh
-  // worktree the agent makes) and "current" (run in the workbench cwd, no worktree) —
-  // followed by the repo's branches (work on a chosen branch in its own worktree). The
-  // specials use sentinel values; the list is searchable; branches load asynchronously.
-  const worktreeSpecials = [
-    { value: WT_CREATE, label: 'create' },
-    { value: WT_CURRENT, label: 'current' },
-  ];
-  const worktreeDropdown = new Combobox({
-    options: worktreeSpecials,
-    value: savedWorktree,
-    specialLabels: ['create'],
-    mutedLabels: ['current'],
-  });
-  const worktreeField = field('worktree', worktreeDropdown.root);
-  const repo = repoRoot(cwd);
-  if (repo) {
-    listBranches(repo, (branches) => {
-      if (card.isClosed()) return;
-      worktreeDropdown.setOptions(
-        [...worktreeSpecials, ...branches.map((b) => ({ value: b, label: b }))],
-        savedWorktree, // keep the last-used choice selected if it still exists
-      );
-    });
-  }
-
   // A WrapBox so the option fields reflow onto another line on a narrow card rather
-  // than overflowing. Each field carries a caption above its control.
+  // than overflowing. Each field carries a caption above its control. The worktree field
+  // only appears here in the default flow (the worktree flows surface it in the title).
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
   optionsRow.setName('AgentLauncherOptions');
   optionsRow.append(field('agent', kindDropdown.root));
   optionsRow.append(field('model', modelDropdown.root));
   optionsRow.append(field('permission', permissionDropdown.root));
-  optionsRow.append(worktreeField);
+  optionsRow.append(field('effort', effortDropdown.root));
+  if (worktreeDropdown && mode === 'default') optionsRow.append(field('worktree', worktreeDropdown.root));
   panel.append(optionsRow);
 
   const submit = (background: boolean) => {
@@ -243,11 +298,15 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     const command = AGENT_CONFIGS[kind].options.buildCommand({
       model: modelDropdown.getValue(),
       permissionMode: permissionDropdown.getValue(),
+      effort: effortDropdown.getValue(),
     });
     const prompt = input.getText().trim();
-    const sel = worktreeDropdown.getValue();
+    // No dropdown (the new-worktree flow) → always a fresh worktree.
+    const sel = worktreeDropdown?.getValue();
     const worktree: WorktreeChoice =
-      sel === WT_CREATE ? { create: true } : sel === WT_CURRENT ? { current: true } : { branch: sel };
+      sel === undefined || sel === WT_CREATE ? { create: true }
+        : sel === WT_CURRENT ? { current: true }
+          : { branch: sel };
     card.close(false); // onClose stashes the text…
     savedDraft = ''; // …but it was submitted, so don't restore it next time
     onLaunch({ prompt, command, cwd, kind, worktree, background });
@@ -258,12 +317,13 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     'launcher:submit': { didDispatch: () => submit(false), description: 'Launch the agent and switch to it' },
     'launcher:submit-background': { didDispatch: () => submit(true), description: 'Launch the agent without switching to it' },
     'launcher:newline': { didDispatch: () => input.insertText('\n'), description: 'Insert a newline in the prompt' },
-    'launcher:close': { didDispatch: () => card.close(), description: 'Close the launcher' },
+    'core:cancel': { didDispatch: () => card.close(), description: 'Close the launcher' },
   });
 
   // Escape closes the card — handled here in the bubble phase so a combobox's own
-  // capture-phase Escape (closing its open popover) wins first; only an unhandled
-  // Escape bubbles up to dismiss the card.
+  // capture-phase Escape (closing its open popover) wins first; only an unhandled Escape
+  // (the prompt's normal-mode binding aside, or a closed combobox) bubbles up to dismiss
+  // the card. This is why it isn't a plain `#AgentLauncher` keymap binding (capture phase).
   const keys = new Gtk.EventControllerKey();
   keys.on('key-pressed', (keyval: number) => {
     if (keyval !== Gdk.KEY_Escape) return false;
@@ -272,8 +332,16 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   });
   panel.addController(keys);
 
-  input.focusInsert(); // ready to type the prompt immediately
-  if (draft) input.selectAll(); // a restored draft starts fully selected (keep or overtype)
+  // Focus the worktree combobox first in the existing-worktree flow (pick before typing);
+  // every other flow (incl. this-worktree, which is pre-selected) focuses the prompt. Focus
+  // it closed (`false`) — opening here, before the card is laid out, would mis-size the
+  // popover; it opens correctly on the first interaction.
+  if (mode === 'existing-worktree' && worktreeDropdown) {
+    worktreeDropdown.focus(false);
+  } else {
+    input.focusInsert(); // ready to type the prompt immediately
+    if (draft) input.selectAll(); // a restored draft starts fully selected (keep or overtype)
+  }
 }
 
 // A captioned field: a small muted label on top of `control`. Used for the dropdowns

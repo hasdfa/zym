@@ -45,8 +45,11 @@ export interface AgentLaunchOptions {
   defaultModel: string;
   permissionModes: LaunchOption[];
   defaultPermissionMode: string;
-  /** Base argv for the chosen model/permission mode (e.g. `['claude','--model',…]`). */
-  buildCommand(sel: { model: string; permissionMode: string }): string[];
+  /** Reasoning-effort levels (passed as `--effort`); `default` omits the flag. */
+  efforts: LaunchOption[];
+  defaultEffort: string;
+  /** Base argv for the chosen model/permission mode/effort (e.g. `['claude','--model',…]`). */
+  buildCommand(sel: { model: string; permissionMode: string; effort: string }): string[];
 }
 
 /** The per-launch parameters every kind's factory accepts. */

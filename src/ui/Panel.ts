@@ -84,7 +84,7 @@ const WELCOME_SHORTCUTS: ReadonlyArray<{ action: string; keys: string }> = [
   { action: 'File tree', keys: 'space f f' }, // file-tree:focus
   { action: 'Source control', keys: 'space g g' }, // git-panel:focus
   { action: 'New terminal', keys: 'space t' }, // terminal:new
-  { action: 'New agent', keys: 'space a n' }, // agent:new
+  { action: 'New agent', keys: 'space a n n' }, // agent:new
   { action: 'Show all keybindings', keys: 'space ?' }, // keymap:show
 ];
 

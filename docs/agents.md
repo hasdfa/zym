@@ -120,6 +120,23 @@ What already exists and is reused, not rebuilt:
 - **`src/ui/AgentPicker.ts`** — fuzzy quick-switcher over running agents, with
   a *Start agent: `<query>`* action that launches a new agent with the typed
   prompt.
+- **`src/ui/AgentLauncher.ts`** — the compose overlay for starting an agent: an
+  auto-growing multi-line prompt editor (vim editing, grows to 20 lines then
+  scrolls) over a reflowing row of option dropdowns (`Combobox`es) — agent kind,
+  model, permission mode, **effort** (`--effort`; the `default` choice omits the
+  flag), and the worktree choice. Each kind's `AgentLaunchOptions`
+  (`agents/configs.ts` + `claudeOptions.ts`) supplies the option lists and the
+  `buildCommand` argv builder, so changing the kind re-populates them. Enter
+  launches; the last-used options + an unsent draft persist to the next open.
+  A `mode` selects one of four flows, differing only in how the worktree choice is
+  surfaced/seeded and where focus starts (the worktree is always realized by the
+  agent via `set_worktree` — see `launchPrompt`): `default` (`agent:new`) keeps the
+  worktree dropdown in the options row; `existing-worktree` (`agent:new-in-worktree`)
+  moves it into a "Launch agent in worktree [combobox]" title, focuses it first, and
+  drops the "create" choice; `this-worktree` (`agent:new-this-worktree`) is the same
+  titled combobox pre-selected to the current root with the prompt focused; and
+  `new-worktree` (`agent:new-worktree`) drops the control entirely under a "Launch
+  agent in new worktree:" title (pinned to a fresh worktree).
 - **`AppWindow`** — `openAgent(prompt?)` / `showAgent` (reattaches a persisted
   widget, gated on `getRoot()` so a desynced tab map can't strand or rip it),
   `agentChildren` (agent → center tab), `agent:new` / `agent:picker` commands,
@@ -376,9 +393,12 @@ can re-root independently. Pieces and how they connect:
   reads the workbench git's `getBranch()` and re-renders on its `onChange`
   (in-place checkouts); a worktree move re-points it via host-driven
   `refreshAgent` (avoids a read-before-swap race).
-- **Launch-time** — `cli.listWorktrees()` + `WorktreePicker` /
-  `agent:new-in-worktree` start an agent rooted in an existing worktree
-  (`openAgent({cwd})`).
+- **Launch-time** — the launcher's worktree-scoped flows
+  (`agent:new-in-worktree` / `-this-worktree` / `-worktree`) seed the worktree
+  choice up front; the agent then realizes it via `set_worktree`, which re-roots
+  the workbench (see `launchPrompt`). (`cli.listWorktrees()` + the standalone
+  `WorktreePicker` — rooting directly via `openAgent({cwd})` — is no longer wired
+  to a command.)
 - **Resume** — restores a conversation's branch/worktree/cwd (`resumeOptions`).
   `AgentSession.cwd` is read from the transcript (Claude records its cwd per
   entry); `agent:picker` / `agent:resume-conversation` list sessions across

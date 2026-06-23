@@ -63,6 +63,7 @@ export class Combobox {
   private results: ComboOption[] = []; // filtered options, parallel to the list rows
   private open = false;
   private settingText = false; // suppress `changed` while seeding the entry
+  private suppressOpenOnFocus = false; // a focus() that shouldn't pop the list open
 
   constructor(config: ComboboxConfig) {
     this.options = config.options;
@@ -129,13 +130,29 @@ export class Combobox {
     // Focus-out closes it — because the entry is always the sole Tab stop,
     // one Tab press naturally moves focus out and cancel() fires via the leave handler.
     const focus = new Gtk.EventControllerFocus();
-    focus.on('enter', () => this.openPopup());
+    focus.on('enter', () => { if (!this.suppressOpenOnFocus) this.openPopup(); });
     focus.on('leave', () => setTimeout(() => { if (this.open) this.cancel(); }, 0));
     this.entry.addController(focus);
   }
 
   getValue(): string {
     return this.value;
+  }
+
+  /** Move keyboard focus into the control. By default focusing opens the popover (the same
+   *  as a click); pass `false` to focus the closed control — it keeps its button styling and
+   *  opens on the first real interaction. Use that when focusing before the widget is laid
+   *  out, where opening immediately would mis-size the popover (every row ellipsized to "…"). */
+  focus(open = true): void {
+    if (open) {
+      this.entry.grabFocus();
+      return;
+    }
+    // Suppress only the open synchronously triggered by this grab; a later genuine focus
+    // (post-layout) still opens normally.
+    this.suppressOpenOnFocus = true;
+    this.entry.grabFocus();
+    this.suppressOpenOnFocus = false;
   }
 
   /** Set the selection programmatically (no `onChange`). */
@@ -290,7 +307,9 @@ export class Combobox {
         if (!this.open) { this.openPopup(); return true; }
         this.move(-1); return true;
       case Gdk.KEY_Return: case Gdk.KEY_KP_Enter: this.acceptSelected(); return true;
-      case Gdk.KEY_Escape: this.cancel(); return true;
+      // Only swallow Escape when the list is open (to close it); a closed combobox has
+      // nothing to cancel, so let it bubble (e.g. to dismiss an enclosing dialog).
+      case Gdk.KEY_Escape: if (!this.open) return false; this.cancel(); return true;
       default: return false;
     }
   }

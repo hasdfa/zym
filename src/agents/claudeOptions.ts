@@ -22,11 +22,28 @@ export const CLAUDE_PERMISSION_MODES: LaunchOption[] = [
 ];
 export const CLAUDE_DEFAULT_PERMISSION_MODE = 'default';
 
-/** Base argv for the chosen options. `default` permission mode is left implicit. */
-export function buildClaudeCommand(sel: { model: string; permissionMode: string }): string[] {
+// The reasoning-effort levels offered at launch (passed as `--effort`). The leading
+// `default` choice is a sentinel — it leaves the flag off so the CLI uses its own
+// default — distinct from the real `low…max` levels the CLI accepts.
+export const CLAUDE_EFFORTS: LaunchOption[] = [
+  { value: 'default', label: 'default', detail: 'tool default' },
+  { value: 'low', label: 'low', detail: 'fast, scoped tasks' },
+  { value: 'medium', label: 'medium', detail: 'balanced' },
+  { value: 'high', label: 'high', detail: 'thorough' },
+  { value: 'xhigh', label: 'xhigh', detail: 'coding / agentic' },
+  { value: 'max', label: 'max', detail: 'maximum effort' },
+];
+export const CLAUDE_DEFAULT_EFFORT = 'default';
+
+/** Base argv for the chosen options. `default` permission mode and effort are left
+ *  implicit (the flag is omitted so the CLI applies its own default). */
+export function buildClaudeCommand(sel: { model: string; permissionMode: string; effort: string }): string[] {
   const argv = ['claude', '--model', sel.model];
   if (sel.permissionMode && sel.permissionMode !== 'default') {
     argv.push('--permission-mode', sel.permissionMode);
+  }
+  if (sel.effort && sel.effort !== 'default') {
+    argv.push('--effort', sel.effort);
   }
   return argv;
 }
