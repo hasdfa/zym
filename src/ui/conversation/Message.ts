@@ -27,9 +27,9 @@ addStyles(`
     padding: calc(2 * var(--t-spacing));
     border-radius: 10px;
   }
-  #Message.user .message-bubble { background: alpha(var(--accent-bg-color), 0.25); }
-  #Message.assistant .message-bubble {
-    background: var(--card-bg-color);
+  #Message.user .message-bubble { background: var(--t-ui-surface-selected); }
+  #Message.assistant .message-bubble { 
+    background: var(--t-ui-surface-popover);
     border: 1px solid ${theme.ui.border};
   }
   #Message.thinking .message-bubble { background: transparent; opacity: 0.55; font-style: italic; }

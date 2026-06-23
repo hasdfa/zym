@@ -14,7 +14,6 @@ import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { lookupCSSColor } from '../theme/cssColor.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { NERDFONT } from './nerdfont.ts';
 import type { GitRepo } from '../git.ts';
@@ -27,15 +26,15 @@ const CONFLICT_GLYPH = NERDFONT.STATUS.WARNING;
 // Count colors in the theme palette (fallbacks are Adwaita's): working-tree
 // insertions/deletions in success/error; upstream ahead in info, behind in
 // warning, and both (a diverged branch) in danger/error.
-const COLOR_ADDED = lookupCSSColor(theme, '--success-color');
-const COLOR_REMOVED = lookupCSSColor(theme, '--error-color');
-const COLOR_INFO = lookupCSSColor(theme, '--info-color');
-const COLOR_WARNING = lookupCSSColor(theme, '--warning-color');
-const COLOR_DANGER = lookupCSSColor(theme, '--error-color');
+const COLOR_ADDED = theme.ui.status.success;
+const COLOR_REMOVED = theme.ui.status.error;
+const COLOR_INFO = theme.ui.status.info;
+const COLOR_WARNING = theme.ui.status.warning;
+const COLOR_DANGER = theme.ui.status.error;
 
 // The conflict icon is error-colored.
 addStyles(`
-  .zym-conflict { color: var(--error-color); }
+  .zym-conflict { color: var(--t-ui-status-error); }
 `);
 
 // A "+N"/"-M"/"↑N"/"↓M" count, as an inline markup span: a smaller, coloured run

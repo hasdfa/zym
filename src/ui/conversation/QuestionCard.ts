@@ -15,7 +15,6 @@
 import { Gtk, Adw, Gdk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
-import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
@@ -29,7 +28,7 @@ addStyles(`
      into a choice list (left) + a detail pane (right) for the focused choice. */
   .zym-conversation-question {
     padding: calc(2 * var(--t-spacing));
-    border: 1px solid var(--info-color);
+    border: 1px solid var(--t-ui-status-info);
     border-radius: var(--card-radius);
   }
   /* Once answered the card becomes a tool row (see QuestionCard.submit) — no border. */
@@ -49,7 +48,7 @@ addStyles(`
   .zym-q-prompt { margin-bottom: calc(2 * var(--t-spacing)); font-size: var(--t-font-ui-size-large); }
   .zym-q-switcher button { padding-top: 2px; padding-bottom: 2px; min-height: 0; }
   .zym-q-hint { opacity: 0.5; font-size: var(--t-font-ui-size-small); }
-  .zym-q-row-focused { background: alpha(var(--accent-bg-color), 0.25); }
+  .zym-q-row-focused { background: var(--t-ui-surface-selected); }
   .zym-q-note { padding-left: calc(4 * var(--t-spacing)); }
 `);
 
@@ -284,7 +283,7 @@ export class QuestionCard {
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
     header.addCssClass('zym-conversation-toolrow');
     setMarkupSafe(header, escapeMarkup(summary), summary);
-    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: lookupCSSColor(theme, '--success-color'), header });
+    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header });
     row.content.append(this.answeredDetails());
     this.root.append(row.root);
   }
@@ -305,7 +304,7 @@ export class QuestionCard {
         const selected = o.check.getActive();
         const note = (o.note.getText() ?? '').trim();
         const glyph = selected
-          ? iconSpan(NERDFONT.TASK.DONE, lookupCSSColor(theme, '--success-color'))
+          ? iconSpan(NERDFONT.TASK.DONE, theme.ui.status.success)
           : iconSpan(NERDFONT.TASK.OPEN, undefined, true);
         const body = selected ? `<b>${escapeMarkup(opt.label)}</b>` : escapeMarkup(opt.label);
         const extra = note ? ` <span alpha="65%">— ${escapeMarkup(note)}</span>` : '';

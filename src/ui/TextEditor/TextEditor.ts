@@ -107,8 +107,8 @@ addStyles(`
     color: var(--t-ui-editor-foreground);
     padding: 2px 8px;
   }
-  .zym-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--warning-color), 0.25); }
-  .zym-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--error-color),   0.25); }
+  .zym-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-warning), 0.25); }
+  .zym-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-error),   0.25); }
   .zym-banner-warning label,
   .zym-banner-error   label { font-weight: bold; }
   .zym-banner-warning button,

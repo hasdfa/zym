@@ -17,7 +17,6 @@ import { Gtk, Pango } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { lookupCSSColor } from '../theme/cssColor.ts';
 import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { fileIconGlyph } from './fileIcons.ts';
@@ -64,8 +63,8 @@ const STATE_LETTER: Record<GitFileState, string> = {
 };
 
 // Badge colors, matching `git status`: staged in green, unstaged/untracked in red.
-const STAGED_COLOR = lookupCSSColor(theme, '--success-color');
-const UNSTAGED_COLOR = lookupCSSColor(theme, '--error-color');
+const STAGED_COLOR = theme.ui.status.success;
+const UNSTAGED_COLOR = theme.ui.status.error;
 
 // Compact, dense rows. The theme background/selection are applied centrally in
 // AppWindow; file rows follow the theme foreground (the badge keeps its own
@@ -87,7 +86,7 @@ addStyles(`
      only while the panel is focused — an unfocused panel shows no highlight. */
   #GitPanel row:selected { background-color: transparent; }
   #GitPanel:focus-within row:selected {
-    background-color: alpha(var(--accent-bg-color), 0.25);
+    background-color: var(--t-ui-surface-selected);
   }
 `);
 

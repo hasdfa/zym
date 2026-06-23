@@ -14,7 +14,7 @@
  */
 import { Gdk, Gtk } from './gi.ts';
 import { Disposable } from './util/eventKit.ts';
-import { appColorVariables, theme, themeUiCssVariables } from './theme/theme.ts';
+import { theme, themeUiCssVariables } from './theme/theme.ts';
 
 const PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION;
 
@@ -170,18 +170,11 @@ addStyles(`
 // `--t-ui-editor-background`), so CSS under `#AppWindow` reads a theme color as
 // `var(--t-ui-…)` instead of interpolating the literal. See themeUiCssVariables and
 // docs/styling.md. (Markup / GtkTextTag consumers can't read CSS vars and still use
-// `theme.ui.*` directly.)
-//
-// `appColorVariables` adds our first-class semantic colors that libadwaita has no
-// variable for — `--info-*` and `--hint-*` — for the current scheme, so CSS reads
-// `var(--info-color)` natively alongside libadwaita's own (`--success-color`, …).
-//
-// Static today because `theme` is load-constant; when live theme-switching lands this
-// becomes a keyed sheet re-set on theme change.
+// `theme.ui.*` directly.) Static today because `theme` is load-constant; when live
+// theme-switching lands this becomes a keyed sheet re-set on theme change.
 addStyles(`
   #AppWindow {
     --t-spacing: ${theme.spacing}px;
     ${themeUiCssVariables(theme).replace(/\n/g, '\n    ')}
-    ${appColorVariables(theme.appearance).replace(/\n/g, '\n    ')}
   }
 `);

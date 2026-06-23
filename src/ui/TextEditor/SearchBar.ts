@@ -16,6 +16,7 @@
  */
 import { Gdk, Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
+import { theme } from '../../theme/theme.ts';
 import { regexSpans, replacementSpans, applySpans } from './regexHighlight.ts';
 import type { SourceView } from '../../gi.ts';
 import type { Point } from '../../text/Point.ts';
@@ -30,6 +31,10 @@ interface MotionSearch {
 }
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
+
+// Floating "elevated surface": use the theme's popover background so it reads as
+// a panel over the editor, not part of it.
+const POPOVER_BG = theme.ui.surface.popover;
 
 const ENTRY_WIDTH_CHARS = 28;
 const COUNT_WIDTH_CHARS = 11; // fits the longest label ("Bad pattern") so it never reflows
@@ -48,10 +53,10 @@ function recordSearchHistory(query: string): void {
 
 addStyles(`
   #SearchBar {
-    background-color: var(--popover-bg-color);
+    background-color: ${POPOVER_BG};
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
-    box-shadow: 0px 6px 20px 8px var(--shade-color);
+    box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
     padding: 4px;
   }
   #SearchBar entry { min-height: 0; }
@@ -59,7 +64,7 @@ addStyles(`
   #SearchBar entry > text { font: var(--t-font-monospace); }
   #SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
   /* Bad regex: tint the entry text. */
-  #SearchBar entry.invalid > text { color: var(--error-color); }
+  #SearchBar entry.invalid > text { color: var(--t-ui-status-error); }
   #SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
   /* Linked search+replace inputs: square the touching corners and merge the
      shared border so the two entries read as one control. */

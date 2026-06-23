@@ -19,7 +19,7 @@ addStyles(`
   /* The editor box and a pending-comment card share the same card chrome. */
   .diff-comment-box,
   .diff-comment-card {
-    background: var(--card-bg-color);
+    background: var(--t-ui-surface-popover);
     border: 1px solid var(--t-ui-border);
     border-radius: var(--card-radius);
     margin: var(--t-spacing);

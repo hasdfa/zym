@@ -48,8 +48,8 @@ addStyles(`
   #LocationList .locationlist-empty { color: var(--t-ui-text-muted); padding: 12px; }
   /* Selected row: theme selection color while the list is active (focused), a
      muted (faded) version of it otherwise. */
-  #LocationList list row:selected { background-color: alpha(var(--accent-bg-color), 0.1); }
-  #LocationList:focus-within list row:selected { background-color: alpha(var(--accent-bg-color), 0.25); }
+  #LocationList list row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
+  #LocationList:focus-within list row:selected { background-color: var(--t-ui-surface-selected); }
 `);
 
 export class LocationList {

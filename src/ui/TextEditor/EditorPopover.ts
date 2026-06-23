@@ -26,7 +26,7 @@ import type { EditorModel } from './EditorModel.ts';
 // list). The platform theme supplies the border-radius / shadow.
 addStyles(`
   #EditorPopover > contents {
-    background-color: var(--popover-bg-color);
+    background-color: var(--t-ui-surface-popover);
     color: var(--t-ui-editor-foreground);
     padding: 6px 8px;
   }

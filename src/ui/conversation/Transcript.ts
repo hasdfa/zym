@@ -59,7 +59,7 @@ addStyles(`
     background: transparent;
     transition: background 150ms ease;
   }
-  .zym-conversation-toolrow-expanded { background: var(--card-bg-color); }
+  .zym-conversation-toolrow-expanded { background: var(--t-ui-surface-popover); }
   /* The header button: a standard Adwaita flat button (its own hover tint), just
      left-aligned with no min size and rounded to match the toggle. */
   .zym-conversation-toolrow-button {
@@ -71,33 +71,33 @@ addStyles(`
      metrics and line up. The head reads as a muted title; paths read as links. */
   .zym-conversation-filehead { opacity: 0.85; }
   .zym-conversation-filepath {
-    color: var(--info-color);
+    color: var(--t-ui-text-info);
     font-family: var(--t-font-monospace-family);
   }
   /* Allow/Deny buttons embedded in a tool row's details (a permission prompt). */
   .zym-conversation-perm-buttons { margin-top: 4px; }
   
   /* Subagent transcript: the "view conversation" link + the pushed page's header. */
-  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--info-color); }
+  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
   .zym-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
   .zym-conversation-result {
     opacity: 0.7;
-    background: var(--card-bg-color);
+    background: var(--t-ui-surface-popover);
     padding: 4px 8px;
     margin-top: 2px;
     border-radius: 4px;
   }
   /* A Task (subagent) report renders as a fuller markdown card. */
   .zym-conversation-task-result {
-    background: var(--card-bg-color);
-    border-left: 3px solid alpha(var(--accent-bg-color), 0.25);
+    background: var(--t-ui-surface-popover);
+    border-left: 3px solid var(--t-ui-surface-selected);
     padding: 6px 10px;
     margin-top: 4px;
     border-radius: 4px;
   }
   .zym-conversation-tasks {
     padding: 8px calc(4 * var(--t-spacing));
-    background: var(--card-bg-color);
+    background: var(--t-ui-surface-popover);
     border-bottom: 1px solid var(--t-ui-border);
   }
   .zym-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
@@ -106,7 +106,7 @@ addStyles(`
   .zym-conversation-system { opacity: 0.6; font-style: italic; }
   /* The resume boundary divider: centered, muted, italic. */
   .zym-conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
-  .zym-conversation-error { color: var(--error-color); }
+  .zym-conversation-error { color: var(--t-ui-status-error); }
   /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost.
      The warning is carried by the ToolRow warning status (icon + header tint),
      not a border. */

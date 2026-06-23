@@ -22,6 +22,7 @@ import type { SourceView } from '../../gi.ts';
 import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 const POPUP_BG = theme.ui.editor.background;
+const SELECTED_BG = theme.ui.surface.selected;
 const DETAIL_COLOR = theme.ui.text.muted;
 const LIST_WIDTH_PX = 420;
 const DOC_WIDTH_PX = 440;
@@ -47,7 +48,7 @@ addStyles(`
     background-color: ${POPUP_BG};
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius-small);
-    box-shadow: 0px 6px 20px 8px var(--shade-color);
+    box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
   }
   /* Inner widgets paint nothing — the card's background shows through, and rows
      get no min-height so a single match is exactly one row tall. */
@@ -58,7 +59,7 @@ addStyles(`
     min-height: 0;
   }
   #CompletionPopup row { padding: 1px ${ROW_PADDING_PX}px; }
-  #CompletionPopup row:selected { background-color: alpha(var(--accent-bg-color), 0.25); border-radius: 0; }
+  #CompletionPopup row:selected { background-color: ${SELECTED_BG}; border-radius: 0; }
   #CompletionPopup .completion-icon { margin-right: ${ICON_MARGIN_PX}px; color: ${DETAIL_COLOR}; opacity: 0.8; }
   #CompletionPopup .completion-label { font: var(--t-font-monospace); }
   #CompletionPopup .completion-detail { opacity: 0.55; margin-left: 0.5em; }

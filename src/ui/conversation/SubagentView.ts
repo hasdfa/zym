@@ -6,7 +6,6 @@
  */
 import { Gtk, Adw } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
-import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { fonts } from '../../fonts.ts';
 import { Message } from './Message.ts';
 import { toolMarkup } from '../toolDisplay.ts';
@@ -83,7 +82,7 @@ export class SubagentView {
     const rows: Widget[] = [];
     for (const [id, s] of this.running) {
       if (s.status !== 'running') continue;
-      rows.push(this.linkButton(id, NERDFONT.STATUS.SYNC, s.agentType, s.description, lookupCSSColor(theme, '--warning-color')));
+      rows.push(this.linkButton(id, NERDFONT.STATUS.SYNC, s.agentType, s.description, theme.ui.status.warning));
     }
     this.panel.render(rows);
   }

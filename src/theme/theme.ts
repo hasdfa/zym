@@ -18,16 +18,12 @@ import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { alpha as withAlpha, darken, formatHEXA, lighten, parse } from 'color-bits';
 
-/** Light/dark color scheme — a theme's `appearance`, and the key into the
- *  Adwaita / app color tables (APP_COLORS, FALLBACK). */
-export type Scheme = 'light' | 'dark';
-
 // --- Internal (consumed) shape ---------------------------------------------
 
 /**
  * UI / editor chrome colors, grouped by concern to mirror the theme JSON's `ui`
- * object 1:1 (read in code as `theme.ui.editor.background`, `theme.ui.diff.addedWord`,
- * `theme.ui.pr.merged`, …). Every field is filled at load from the theme file
+ * object 1:1 (read in code as `theme.ui.editor.background`, `theme.ui.status.error`,
+ * `theme.ui.diff.addedWord`, …). Every field is filled at load from the theme file
  * over `DEFAULT_THEME.ui`, so consumers never see `undefined` — read any of them directly.
  */
 export interface ThemeUi {
@@ -35,7 +31,7 @@ export interface ThemeUi {
     /** Default editor text foreground. */
     foreground: string;
     /**
-     * Editor background — always filled (the theme's value, else the default editor bg).
+     * Editor background — always filled (the theme's value, else `surface.popover`).
      * Whether the editor uses this via a theme-owned GtkSourceView scheme, or instead
      * follows the system light/dark Adwaita scheme, is decided by
      * `Theme.followSystemScheme` (set when the theme file omits this field) — not by
@@ -53,6 +49,22 @@ export interface ThemeUi {
   };
   /** Separator/border color for chrome (e.g. the header bar's bottom edge). */
   border: string;
+  /** Drop-shadow color for floating surfaces (popovers, toasts, cards). */
+  shadow: string;
+  surface: {
+    /** Background of elevated surfaces: pickers, popovers, autocomplete, menus. */
+    popover: string;
+    /** Background of a selected entry (file tree row, picker result, list item). */
+    selected: string;
+  };
+  /** Semantic text colors for status/feedback. */
+  status: {
+    success: string;
+    warning: string;
+    error: string;
+    info: string;
+    hint: string;
+  };
   /**
    * Background tint for editor search matches: every match (`match`) and the
    * current one (`matchCurrent`, which falls back to `match`). `#rrggbbaa` so it
@@ -65,7 +77,7 @@ export interface ThemeUi {
   /**
    * Diff line/word background tints (`#rrggbbaa`, compose over syntax colors). The
    * `added`/`removed` (line) + `addedWord`/`removedWord` tints are derived from
-   * the Adwaita success/error hues per appearance unless the theme sets them; the
+   * `status.success`/`status.error` per appearance unless the theme sets them; the
    * word tints fall back to their line tint. `filler`/`fold` are neutral.
    */
   diff: {
@@ -125,12 +137,12 @@ export type SyntaxStyles = Record<string, SyntaxStyle>;
 
 export interface Theme {
   name: string;
-  appearance: Scheme;
+  appearance: 'light' | 'dark';
   /**
    * True when the theme file omitted `ui.editor.background`: the editor follows the
    * system light/dark Adwaita scheme instead of a theme-owned GtkSourceView scheme
    * (see TextEditor.followSystemColorScheme / createSourceScheme). `ui.editor.background`
-   * is still filled (with the default editor bg) so color consumers always have a value.
+   * is still filled (with `surface.popover`) so color consumers always have a value.
    */
   followSystemScheme: boolean;
   /** Base spacing unit in px (margins / gaps between content chrome); `--t-spacing`. */
@@ -169,7 +181,7 @@ interface ThemeSyntaxToken {
  */
 interface ThemeFromFile {
   name: string;
-  appearance: Scheme;
+  appearance: 'light' | 'dark';
   spacing?: number;
   ui?: ThemeFromFileUi;
   syntax?: Record<string, ThemeSyntaxToken>;
@@ -180,6 +192,9 @@ interface ThemeFromFileUi {
   editor?: Partial<ThemeUi['editor']>;
   text?: Partial<ThemeUi['text']>;
   border?: string;
+  shadow?: string;
+  surface?: Partial<ThemeUi['surface']>;
+  status?: Partial<ThemeUi['status']>;
   search?: Partial<ThemeUi['search']>;
   diff?: Partial<ThemeUi['diff']>;
   flash?: string;
@@ -207,6 +222,9 @@ export const DEFAULT_THEME: Theme = {
     editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
     text: { muted: '#9a9996', accent: '#c678dd' },
     border: 'rgba(0, 0, 0, 0.3)',
+    shadow: 'rgba(0, 0, 0, 0.3)',
+    surface: { popover: '#1e1e1e', selected: 'rgba(127, 127, 127, 0.25)' },
+    status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
     search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
     diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
     flash: '#f5c21188',
@@ -220,8 +238,13 @@ export const DEFAULT_THEME: Theme = {
 //
 // Concrete color knowledge for the layers that can't read CSS — kept here with the
 // rest of the design tokens. `src/theme/cssColor.ts` is the *mechanism* that maps a
-// CSS-variable name to a value, reading these two tables; CSS itself reads the
-// variables natively and needs neither.
+// CSS-variable name to a value, reading the two tables below; CSS itself reads the
+// variables natively and needs neither. This is salvaged, self-contained scaffolding
+// for the Adwaita styling migration (see STYLING-PLAN.md) — nothing in the app wires
+// it up yet, so it changes no rendering.
+
+/** Light/dark color scheme — the key into the Adwaita / app color tables below. */
+export type Scheme = 'light' | 'dark';
 
 /**
  * App-owned semantic colors with no libadwaita equivalent — `info` and `hint`
@@ -263,6 +286,19 @@ export const FALLBACK_COLORS: Record<string, Record<Scheme, string>> = {
   '--shade-color': { dark: '#00000640', light: '#00000612' },
 };
 
+/**
+ * The app-color registry (APP_COLORS) as CSS custom-property declarations for the
+ * given scheme — one line per entry (`--info-color: #…;`). The CSS-side half of the
+ * bridge: emit this on a root widget so CSS consumers can read `var(--info-color)`
+ * natively, in lockstep with what `lookupCSSColor` returns for the non-CSS side.
+ * Not currently wired into any stylesheet (see STYLING-PLAN.md). Newline-joined.
+ */
+export function appColorVariables(scheme: Scheme): string {
+  return Object.entries(APP_COLORS)
+    .map(([name, byScheme]) => `${name}: ${byScheme[scheme]};`)
+    .join('\n');
+}
+
 /** Load the owned theme `<name>.json` from next to this module. */
 export function loadTheme(name: string): Theme {
   const file = Path.join(import.meta.dirname, `${name}.json`);
@@ -280,7 +316,7 @@ export function loadTheme(name: string): Theme {
 function diffTones(
   success: string,
   error: string,
-  appearance: Scheme,
+  appearance: 'light' | 'dark',
 ): Pick<ThemeUi['diff'], 'added' | 'addedWord' | 'removed' | 'removedWord'> {
   const mute = appearance === 'dark' ? darken : lighten;
   const line = (c: string): string => formatHEXA(withAlpha(mute(parse(c), 0.25), 0.18));
@@ -307,13 +343,10 @@ export function adaptTheme(file: ThemeFromFile): Theme {
   const f = file.ui ?? {};
   const D = DEFAULT_THEME.ui;
 
-  // Diff tints derive from the Adwaita success/error hues (per scheme) unless the
-  // theme sets diff.* explicitly; the word tints fall back to their line tint.
-  const derived = diffTones(
-    FALLBACK_COLORS['--success-color'][file.appearance],
-    FALLBACK_COLORS['--error-color'][file.appearance],
-    file.appearance,
-  );
+  // status drives the diff tints, so resolve it first; the diff.* keys still win
+  // where the theme sets them, and the word tints fall back to their line tint.
+  const status = { ...D.status, ...f.status };
+  const derived = diffTones(status.success, status.error, file.appearance);
   const diff: ThemeUi['diff'] = {
     added: f.diff?.added ?? derived.added,
     addedWord: f.diff?.addedWord ?? f.diff?.added ?? derived.addedWord,
@@ -323,15 +356,20 @@ export function adaptTheme(file: ThemeFromFile): Theme {
     fold: f.diff?.fold ?? D.diff.fold,
   };
 
+  const surface = { ...D.surface, ...f.surface };
+
   // editor.background is the one field a theme may omit; its absence means "follow the
   // system light/dark scheme" (recorded as followSystemScheme). We still FILL the field
-  // — with the default editor background — so every color consumer reads a concrete value.
+  // — with the popover surface — so every color consumer reads a concrete value.
   const followSystemScheme = f.editor?.background === undefined;
 
   const ui: ThemeUi = {
-    editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? D.editor.background },
+    editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? surface.popover },
     text: { ...D.text, ...f.text },
     border: f.border ?? D.border,
+    shadow: f.shadow ?? D.shadow,
+    surface,
+    status,
     search: {
       match: f.search?.match ?? D.search.match,
       matchCurrent: f.search?.matchCurrent ?? f.search?.match ?? D.search.matchCurrent,
@@ -369,9 +407,6 @@ export function adaptTheme(file: ThemeFromFile): Theme {
  */
 function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui: ThemeUi): void {
   const fg = ui.editor.foreground;
-  // Code (inline + fenced) gets a faint foreground-tint background — a subtle band
-  // that reads on any editor background, light or dark, without a dedicated token.
-  const codeBg = formatHEXA(withAlpha(parse(fg), 0.06));
   const colorDefaults: SyntaxColors = {
     'markup.heading': syntax.function ?? syntax.keyword ?? fg,
     'markup.link': syntax.function ?? ui.text.accent,
@@ -403,8 +438,8 @@ function applyMarkupDefaults(syntax: SyntaxColors, syntaxStyle: SyntaxStyles, ui
     'markup.link': { underline: true },
     'markup.quote': { italic: true },
     // Inline code → text-only background; block code (fences) → full-line background.
-    'markup.raw': { background: codeBg },
-    'markup.raw.block': { lineBackground: codeBg },
+    'markup.raw': { background: ui.surface.popover },
+    'markup.raw.block': { lineBackground: ui.surface.popover },
   };
   for (const [cap, style] of Object.entries(styleDefaults)) {
     syntaxStyle[cap] = { ...style, ...syntaxStyle[cap] };
@@ -480,18 +515,6 @@ export function themeUiCssVariables(t: Theme): string {
   };
   walk(t.ui as unknown as Record<string, unknown>, []);
   return lines.join('\n');
-}
-
-/**
- * The app-color registry (APP_COLORS) as CSS custom-property declarations for the
- * given scheme — one line per entry (`--info-color: #…;`). Emitted on `#AppWindow`
- * (see src/styles.ts) so CSS consumers read `var(--info-color)` natively, kept in
- * lockstep with what `lookupCSSColor` returns for the non-CSS side. Newline-joined.
- */
-export function appColorVariables(scheme: Scheme): string {
-  return Object.entries(APP_COLORS)
-    .map(([name, byScheme]) => `${name}: ${byScheme[scheme]};`)
-    .join('\n');
 }
 
 /**

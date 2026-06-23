@@ -18,7 +18,6 @@
 import { Gtk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { lookupCSSColor } from '../theme/cssColor.ts';
 import { fonts } from '../fonts.ts';
 import { zym } from '../zym.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
@@ -63,11 +62,12 @@ addStyles(`
 
   /* A message queued while the agent is busy — a right-aligned bubble above the prompt. */
   .zym-conversation-pending {
-    background: alpha(var(--accent-bg-color), 0.25);
+    background: var(--t-ui-surface-selected);
     border-radius: 10px;
     padding: 6px 10px;
     margin: 0 12px;
   }
+  
   /* Agent-registered actions: a row of buttons just above the input card. The
      default action reads as the suggested (accent) button. */
   .zym-conversation-actions {
@@ -79,7 +79,7 @@ addStyles(`
     margin: 0 calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing));
     border: 1px solid var(--t-ui-border);
     border-radius: var(--card-radius);
-    background: var(--card-bg-color);
+    background: var(--t-ui-surface-popover);
   }
   
   /* Let the card's background show through the editor (no separate editor bg). */
@@ -106,12 +106,12 @@ addStyles(`
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
   .zym-conversation-mode { min-height: 0; }
   .zym-cmode-default { color: var(--t-ui-text-muted); }
-  .zym-cmode-acceptEdits { color: var(--success-color); }
-  .zym-cmode-auto { color: var(--warning-color); }
-  .zym-cmode-plan { color: var(--info-color); }
+  .zym-cmode-acceptEdits { color: var(--t-ui-status-success); }
+  .zym-cmode-auto { color: var(--t-ui-status-warning); }
+  .zym-cmode-plan { color: var(--t-ui-status-info); }
   .zym-conversation-perm {
     padding: 8px;
-    border: 1px solid alpha(var(--accent-bg-color), 0.25);
+    border: 1px solid var(--t-ui-surface-selected);
     border-radius: 6px;
   }
   #AgentConversationPrompt { padding: 0; }
@@ -893,7 +893,7 @@ export class AgentConversation implements Agent {
     }
     const rows = visible.map((task) => {
       const glyph = task.status === 'completed' ? NERDFONT.TASK.DONE : task.status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
-      const color = task.status === 'completed' ? lookupCSSColor(theme, '--success-color') : task.status === 'in_progress' ? lookupCSSColor(theme, '--warning-color') : undefined;
+      const color = task.status === 'completed' ? theme.ui.status.success : task.status === 'in_progress' ? theme.ui.status.warning : undefined;
       const body = task.status === 'completed' ? `<s>${escapeMarkup(task.subject)}</s>` : escapeMarkup(task.subject);
       const label = new Gtk.Label({ xalign: 0, wrap: true });
       setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, task.subject);
@@ -953,7 +953,7 @@ export class AgentConversation implements Agent {
   // An error notice in the conversation flow (refusal / max-turns / API error).
   private addErrorRow(message: string): void {
     const label = this.addRow('zym-conversation-error');
-    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, lookupCSSColor(theme, '--error-color'))}  ${escapeMarkup(message)}`, message);
+    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
   }
 
   // A muted notice that the user interrupted the turn (ctrl-c).
@@ -1219,7 +1219,7 @@ function renderTodos(todos: unknown[]): InstanceType<typeof Gtk.Box> {
     const content = typeof todo.content === 'string' ? todo.content : '';
     const status = todo.status;
     const glyph = status === 'completed' ? NERDFONT.TASK.DONE : status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
-    const color = status === 'completed' ? lookupCSSColor(theme, '--success-color') : status === 'in_progress' ? lookupCSSColor(theme, '--warning-color') : undefined;
+    const color = status === 'completed' ? theme.ui.status.success : status === 'in_progress' ? theme.ui.status.warning : undefined;
     const body = status === 'completed' ? `<s>${escapeMarkup(content)}</s>` : escapeMarkup(content);
     const label = new Gtk.Label({ xalign: 0, wrap: true });
     setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, content);

@@ -75,8 +75,8 @@ addStyles(`
   #GitLogView .gitlog-subject { color: var(--t-ui-editor-foreground); }
   #GitLogView .gitlog-meta { color: var(--t-ui-text-muted); }
   /* Selected row: full selection color while focused, a muted version otherwise. */
-  #GitLogList row:selected { background-color: alpha(var(--accent-bg-color), 0.1); }
-  #GitLogView:focus-within #GitLogList row:selected { background-color: alpha(var(--accent-bg-color), 0.25); }
+  #GitLogList row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
+  #GitLogView:focus-within #GitLogList row:selected { background-color: var(--t-ui-surface-selected); }
 `);
 
 export class GitLogView {

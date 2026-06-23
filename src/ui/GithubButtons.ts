@@ -22,7 +22,6 @@ import { Gtk } from '../gi.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { lookupCSSColor } from '../theme/cssColor.ts';
 import { zym } from '../zym.ts';
 import { openUrl } from './openUrl.ts';
 import { repoRoot } from '../git.ts';
@@ -35,9 +34,9 @@ import type { GitRepo } from '../git.ts';
 // CI status glyph + colour (bundled icon font): check / dot / cross, drawn in
 // the theme's success / warning / error.
 const CI_STYLE: Record<CiStatus, { glyph: string; color: string }> = {
-  success: { glyph: NERDFONT.STATUS.CHECK, color: lookupCSSColor(theme, '--success-color') },
-  warning: { glyph: NERDFONT.STATUS.DOT, color: lookupCSSColor(theme, '--warning-color') },
-  error: { glyph: NERDFONT.STATUS.CROSS, color: lookupCSSColor(theme, '--error-color') },
+  success: { glyph: NERDFONT.STATUS.CHECK, color: theme.ui.status.success },
+  warning: { glyph: NERDFONT.STATUS.DOT, color: theme.ui.status.warning },
+  error: { glyph: NERDFONT.STATUS.CROSS, color: theme.ui.status.error },
 };
 
 // Markup for the PR segment: the state glyph (coloured) then "#1234" in the

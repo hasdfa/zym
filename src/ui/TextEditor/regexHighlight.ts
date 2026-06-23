@@ -10,7 +10,6 @@
  */
 import { Pango } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
-import { lookupCSSColor } from '../../theme/cssColor.ts';
 
 interface Span {
   start: number; // char offset (inclusive)
@@ -22,10 +21,10 @@ interface Span {
 // (with theme-token fallbacks — never an inline literal).
 const COLOR = {
   meta: theme.syntax.keyword ?? theme.ui.text.accent, // . ^ $ | * + ? { }
-  group: theme.syntax.punctuation ?? lookupCSSColor(theme, '--info-color'), // ( )
-  charClass: theme.syntax.type ?? lookupCSSColor(theme, '--warning-color'), // [ … ]
-  escape: theme.syntax['string.escape'] ?? theme.syntax.string ?? lookupCSSColor(theme, '--info-color'), // \x
-  ref: theme.syntax.constant ?? theme.syntax.number ?? lookupCSSColor(theme, '--warning-color'), // $1 $& … in the replacement
+  group: theme.syntax.punctuation ?? theme.ui.status.info, // ( )
+  charClass: theme.syntax.type ?? theme.ui.status.warning, // [ … ]
+  escape: theme.syntax['string.escape'] ?? theme.syntax.string ?? theme.ui.status.info, // \x
+  ref: theme.syntax.constant ?? theme.syntax.number ?? theme.ui.status.warning, // $1 $& … in the replacement
 };
 
 /** Color spans for a regex pattern. */

@@ -40,7 +40,7 @@ addStyles(`
      with a thin selection-colored outline. */
   #Panel.active-empty,
   #Panel .active-empty {
-    outline: 1px solid alpha(var(--accent-bg-color), 0.25);
+    outline: 1px solid var(--t-ui-surface-selected);
     outline-offset: -1px;
   }
   /* Welcome empty state (the user's central pane): the sleeping cat over a

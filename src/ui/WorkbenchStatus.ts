@@ -56,7 +56,7 @@ const DIAG_ANIM_MS = 200;
 addStyles(`
   #WorkbenchStatus button { min-width: 0; padding-left: 6px; padding-right: 6px; }
   #WorkbenchStatus .zym-lsp-ready { color: var(--t-ui-text-muted); }
-  #WorkbenchStatus .zym-lsp-failed { color: var(--error-color); }
+  #WorkbenchStatus .zym-lsp-failed { color: var(--t-ui-status-error); }
   #WorkbenchStatus .zym-status-count { font-size: var(--t-font-ui-size-small); }
 `);
 

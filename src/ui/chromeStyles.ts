@@ -6,7 +6,6 @@
  */
 import { styles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { lookupCSSColor } from '../theme/cssColor.ts';
 
 // Paint the window chrome (header bar, file tree, status/command bar, panel tab
 // bars) plus popover surfaces (pickers) and selected entries with the theme's
@@ -14,7 +13,7 @@ import { lookupCSSColor } from '../theme/cssColor.ts';
 // switch can re-apply it. Themes without their own background (ui.bg unset)
 // leave the chrome to the system Adwaita styling.
 export function applyChromeStyles(): void {
-  const { editor: { background: bg } } = theme.ui;
+  const { editor: { background: bg }, surface: { popover: popoverBg, selected: selectedBg } } = theme.ui;
   // A theme that follows the system scheme leaves the chrome to Adwaita.
   if (theme.followSystemScheme) {
     styles.remove('theme-chrome');
@@ -70,23 +69,26 @@ export function applyChromeStyles(): void {
   ];
 
   // Popover surfaces: the picker card, its search entry, and result list.
-  rules.push(
-    `#Picker,
-     #PickerEntry,
-     #PickerList,
-     #PickerList list { background-color: var(--popover-bg-color); }`,
-  );
+  if (popoverBg) {
+    rules.push(
+      `#Picker,
+       #PickerEntry,
+       #PickerList,
+       #PickerList list { background-color: ${popoverBg}; }`,
+    );
+  }
 
-  // Selected entries in lists (file tree, picker results) — the accent at 25%, the
-  // Adwaita selection idiom. The file-tree selection is painted only while the tree
-  // is focused (`:focus-within`); an unfocused tree drops it — see FileTree's
-  // `:not(:focus-within)` rule — so the selected row reads as inactive. Pickers are
-  // always focused when shown.
-  rules.push(
-    `#FileTree:focus-within listview row:selected,
-     #PickerList row:selected,
-     #WorkbenchList list row:selected { background-color: alpha(var(--accent-bg-color), 0.25); }`,
-  );
+  // Selected entries in lists (file tree, picker results). The file-tree
+  // selection is painted only while the tree is focused (`:focus-within`); an
+  // unfocused tree drops it — see FileTree's `:not(:focus-within)` rule — so the
+  // selected row reads as inactive. Pickers are always focused when shown.
+  if (selectedBg) {
+    rules.push(
+      `#FileTree:focus-within listview row:selected,
+       #PickerList row:selected,
+       #WorkbenchList list row:selected { background-color: ${selectedBg}; }`,
+    );
+  }
 
   styles.set(rules.join('\n'), { key: 'theme-chrome' });
 }
@@ -97,27 +99,27 @@ export function applyChromeStyles(): void {
 // (fatal reuses error); applied independently of the chrome so it works even
 // for themes that leave the chrome to Adwaita.
 export function applyNotificationStyles(): void {
-  const { text: { muted: textMuted }, border } = theme.ui;
+  const { status: { info, success, warning, error }, text: { muted: textMuted }, surface: { popover: popoverBg }, border, shadow } = theme.ui;
   const colors: Record<string, string> = {
     trace: textMuted,
-    info: lookupCSSColor(theme, '--info-color'),
-    success: lookupCSSColor(theme, '--success-color'),
-    warning: lookupCSSColor(theme, '--warning-color'),
-    error: lookupCSSColor(theme, '--error-color'),
-    fatal: lookupCSSColor(theme, '--error-color'),
+    info,
+    success,
+    warning,
+    error,
+    fatal: error,
   };
 
   const rules = [
     `.NotificationToast {
-      background-color: var(--popover-bg-color);
+      background-color: ${popoverBg};
       border: 1px solid ${border};
       border-radius: 12px;
       padding: 8px 10px;
       min-width: 260px;
-      box-shadow: 0 2px 8px var(--shade-color);
+      box-shadow: 0 2px 8px ${shadow};
     }`,
     // Clickable toasts (default action) get a hover tint.
-    `.NotificationToast.activatable:hover { background-color: shade(var(--popover-bg-color), 1.15); }`,
+    `.NotificationToast.activatable:hover { background-color: shade(${popoverBg}, 1.15); }`,
   ];
   for (const [type, color] of Object.entries(colors)) {
     rules.push(`.notification-${type} .notification-icon { color: ${color}; }`);

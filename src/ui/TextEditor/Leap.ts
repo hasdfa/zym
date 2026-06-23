@@ -51,10 +51,10 @@ addStyles(`
      Monospace family (from the font store) with its own bold weight + the
      inherited editor size, so it overlays the concealed character cleanly. */
   .zym-leap-mark { font-family: var(--t-font-monospace-family); font-weight: bold; }
-  .zym-leap-label { color: var(--error-color); }
+  .zym-leap-label { color: var(--t-ui-status-error); }
   /* Paged-out placeholders share the label color; the dot glyph (and lighter
      weight) is what marks them as not-yet-labeled. */
-  .zym-leap-dot { color: var(--error-color); font-weight: normal; }
+  .zym-leap-dot { color: var(--t-ui-status-error); font-weight: normal; }
 `);
 
 /** Request shape handed over by the vim layer's leap motion via `setLeapInput`. */

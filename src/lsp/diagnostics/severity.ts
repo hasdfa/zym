@@ -11,7 +11,6 @@
  */
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { theme } from '../../theme/theme.ts';
-import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { NERDFONT } from '../../ui/nerdfont.ts';
 
 export interface SeverityStyle {
@@ -20,10 +19,10 @@ export interface SeverityStyle {
 }
 
 export const SEVERITY_STYLES: Record<number, SeverityStyle> = {
-  [DiagnosticSeverity.Error]: { glyph: NERDFONT.STATUS.WARNING, color: lookupCSSColor(theme, '--error-color') },
-  [DiagnosticSeverity.Warning]: { glyph: NERDFONT.STATUS.WARNING, color: lookupCSSColor(theme, '--warning-color') },
-  [DiagnosticSeverity.Information]: { glyph: NERDFONT.STATUS.INFO, color: lookupCSSColor(theme, '--info-color') },
-  [DiagnosticSeverity.Hint]: { glyph: NERDFONT.STATUS.HINT, color: lookupCSSColor(theme, '--hint-color') },
+  [DiagnosticSeverity.Error]: { glyph: NERDFONT.STATUS.WARNING, color: theme.ui.status.error },
+  [DiagnosticSeverity.Warning]: { glyph: NERDFONT.STATUS.WARNING, color: theme.ui.status.warning },
+  [DiagnosticSeverity.Information]: { glyph: NERDFONT.STATUS.INFO, color: theme.ui.status.info },
+  [DiagnosticSeverity.Hint]: { glyph: NERDFONT.STATUS.HINT, color: theme.ui.status.hint },
 };
 
 /** Presentation for a severity, defaulting to Error for unknown/undefined. */

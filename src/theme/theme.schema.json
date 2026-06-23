@@ -65,6 +65,47 @@
           "$ref": "#/$defs/color",
           "description": "Separator/border for chrome."
         },
+        "shadow": {
+          "$ref": "#/$defs/color",
+          "description": "Drop shadow for floating surfaces."
+        },
+        "surface": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "popover": {
+              "$ref": "#/$defs/color",
+              "description": "Background of elevated surfaces: pickers, popovers, menus."
+            },
+            "selected": {
+              "$ref": "#/$defs/color",
+              "description": "Background of a selected list/tree row."
+            }
+          }
+        },
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "success": {
+              "$ref": "#/$defs/color",
+              "description": "Success text; also the source hue for the diff.added tints."
+            },
+            "warning": {
+              "$ref": "#/$defs/color"
+            },
+            "error": {
+              "$ref": "#/$defs/color",
+              "description": "Error text; also the source hue for the diff.removed tints."
+            },
+            "info": {
+              "$ref": "#/$defs/color"
+            },
+            "hint": {
+              "$ref": "#/$defs/color"
+            }
+          }
+        },
         "search": {
           "type": "object",
           "additionalProperties": false,

@@ -12,7 +12,6 @@
  */
 import { Gtk, Pango } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
-import { lookupCSSColorAlpha } from '../../theme/cssColor.ts';
 import type { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import type { SyntaxProjection, SyntaxSlice } from '../../syntax/SyntaxProjection.ts';
 import type { ViewProjection } from '../TextEditor/ViewProjection.ts';
@@ -79,7 +78,7 @@ export class ExcerptSyntaxProjection implements SyntaxProjection {
       editable: false,
       weight: Pango.Weight.BOLD,
       foreground: theme.ui.text.muted,
-      paragraphBackground: lookupCSSColorAlpha(theme, '--accent-bg-color', 0.25),
+      paragraphBackground: theme.ui.surface.selected,
     });
     this.gapTag = mk({ name: 'mb:gap', editable: false, foreground: theme.ui.text.muted });
   }
