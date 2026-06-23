@@ -69,7 +69,7 @@ addStyles(`
   /* Pending-command preview ("showcmd"), floated in the editor's bottom-right. */
   .zym-showcmd {
     font: var(--t-font-monospace);
-    background-color: var(--t-ui-editor-background);
+    background-color: var(--view-bg-color);
     color: var(--t-ui-editor-foreground);
     opacity: 0.75;
     padding: 1px 6px;
@@ -84,13 +84,13 @@ addStyles(`
   /* Filled caret block for positions with no glyph to reverse-video (empty line,
      past end-of-line, end-of-buffer). */
   .zym-block-caret {
-    background-color: var(--t-ui-editor-foreground);
+    background-color: var(--view-fg-color);
     border-radius: 1px;
   }
   /* Beam caret for extra (multi-cursor) carets in insert mode — a thin vertical
      bar, like the primary insert-mode caret. */
   .zym-beam-caret {
-    background-color: var(--t-ui-editor-foreground);
+    background-color: var(--view-fg-color);
   }
   /* Buffer-only mode: greyed placeholder shown over an empty buffer. */
   .zym-placeholder {
@@ -107,8 +107,8 @@ addStyles(`
     color: var(--t-ui-editor-foreground);
     padding: 2px 8px;
   }
-  .zym-banner-warning { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-warning), 0.25); }
-  .zym-banner-error   { background-color: mix(var(--t-ui-editor-background), var(--t-ui-status-error),   0.25); }
+  .zym-banner-warning { background-color: mix(var(--view-bg-color), var(--t-ui-status-warning), 0.25); }
+  .zym-banner-error   { background-color: mix(var(--view-bg-color), var(--t-ui-status-error),   0.25); }
   .zym-banner-warning label,
   .zym-banner-error   label { font-weight: bold; }
   .zym-banner-warning button,

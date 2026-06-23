@@ -29,7 +29,7 @@ import { preloadGrammars } from '../syntax/grammar.ts';
 // The conversation wrapper CSS, copied from AgentConversation so the preview reads
 // like a real transcript. (MarkdownView's own .zym-md-* styles arrive via import.)
 addStyles(`
-  #MarkdownRenderPoc { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
+  #MarkdownRenderPoc { background: var(--view-bg-color); color: var(--t-ui-editor-foreground); }
   #MarkdownRenderPoc .transcript { padding: 16px; font-size: 1.05em; }
   #MarkdownRenderPoc .bubble {
     padding: 14px 18px;

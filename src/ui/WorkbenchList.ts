@@ -58,7 +58,7 @@ addStyles(`
      filled background. */
   #WorkbenchList list row:selected {
     color: var(--t-ui-editor-foreground);
-    background-color: var(--t-ui-editor-background);
+    background-color: var(--view-bg-color);
     border-left-color: var(--t-ui-status-info);
   }
   /* Per-row edited-files count — a flat, muted button (click opens the files). */

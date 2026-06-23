@@ -117,7 +117,7 @@ addStyles(/* css */`
     /* The card is monospace (for the prompt); the option controls read better in the
        UI (proportional) font. */
     font: var(--t-font-ui);
-    background-color: var(--t-ui-editor-background);
+    background-color: var(--view-bg-color);
     border-bottom-left-radius: var(--popover-radius);
     border-bottom-right-radius: var(--popover-radius);
   }
@@ -131,7 +131,7 @@ addStyles(/* css */`
   #AgentLauncherTitle {
     padding: calc(4 * var(--t-spacing)) calc(4 * var(--t-spacing)) 0;
     font: var(--t-font-ui);
-    background-color: var(--t-ui-editor-background);
+    background-color: var(--view-bg-color);
   }
   #AgentLauncherTitle > .launcher-title {
     font-weight: bold;

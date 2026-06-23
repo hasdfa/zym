@@ -27,7 +27,7 @@ const COPY_GLYPH = NERDFONT.ACTION.COPY;
 addStyles(`
   .zym-md { }
   .zym-md-code {
-    background: var(--t-ui-editor-background);
+    background: var(--view-bg-color);
     padding: 8px 10px;
     border-radius: 6px;
     font-family: var(--t-font-monospace-family);

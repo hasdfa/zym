@@ -496,7 +496,7 @@ export const theme = loadTheme(activeThemeName());
 
 /**
  * The theme's `ui.*` color tokens as CSS custom-property declarations — one per leaf,
- * named `--t-ui-<dashed-path>`: `theme.ui.editor.background` → `--t-ui-editor-background`,
+ * named `--t-ui-<dashed-path>`: `theme.ui.editor.background` → `--view-bg-color`,
  * `theme.ui.search.matchCurrent` → `--t-ui-search-match-current` (camelCase keys are
  * dashed). Installed once on the root `#AppWindow` selector (see src/styles.ts) so any
  * CSS under the window can read a theme color as `var(--t-ui-…)` instead of interpolating

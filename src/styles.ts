@@ -167,7 +167,7 @@ addStyles(`
 
 // Active-theme color tokens as CSS variables on the root window. Every `theme.ui.*`
 // leaf becomes `--t-ui-<dashed-path>` (e.g. `theme.ui.editor.background` →
-// `--t-ui-editor-background`), so CSS under `#AppWindow` reads a theme color as
+// `--view-bg-color`), so CSS under `#AppWindow` reads a theme color as
 // `var(--t-ui-…)` instead of interpolating the literal. See themeUiCssVariables and
 // docs/styling.md. (Markup / GtkTextTag consumers can't read CSS vars and still use
 // `theme.ui.*` directly.) Static today because `theme` is load-constant; when live

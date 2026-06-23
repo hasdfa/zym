@@ -58,7 +58,7 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
 // the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
 addStyles(`
-  #AgentConversation .conversation-surface { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
+  #AgentConversation .conversation-surface { background: var(--view-bg-color); color: var(--t-ui-editor-foreground); }
 
   /* A message queued while the agent is busy — a right-aligned bubble above the prompt. */
   #AgentConversation .conversation-pending {

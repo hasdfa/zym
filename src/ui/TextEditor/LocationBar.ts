@@ -20,7 +20,7 @@ import { type Crumb } from '../../syntax/breadcrumb.ts';
 addStyles(`
   #LocationBar {
     padding: 1px 8px;
-    background-color: var(--t-ui-editor-background);
+    background-color: var(--view-bg-color);
     border-bottom: 1px solid var(--t-ui-border);
     font-family: var(--t-font-monospace-family);
   }
