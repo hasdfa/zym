@@ -30,8 +30,9 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space o': 'file:find', // fuzzy file picker
   'space f o': 'file:find', // fuzzy file picker
   'space f e': 'file:open-path', // open by path (directory-navigating opener)
-  'space /': 'project:search', // full-text search (ripgrep)
-  'space *': 'project:search-results', // selected text → all matches in a multibuffer
+  'space /': 'project:search', // full-text search (ripgrep) — quick-jump picker
+  'space *': 'project:search-results', // selected text → all matches in the search multibuffer
+  'space p s': 'project:search-open', // open the project-search multibuffer (search entry + flags)
   'space q': 'app:quit',
   'space t': 'terminal:new',
   'space p r': 'scripts:run', // "p"ackage "r"un — run a package.json script in a terminal
@@ -280,6 +281,14 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   },
   '#GitLogView #TextEditor': {
     'ctrl-w h': 'git-log:focus-list',
+  },
+
+  // The project-search query field: Down/Enter drop focus into the results multibuffer,
+  // keeping the query (so you can browse/edit without reaching for the mouse).
+  '#ProjectSearchEntry': {
+    down: 'project-search:focus-results',
+    enter: 'project-search:focus-results',
+    'kp_enter': 'project-search:focus-results',
   },
 
   // The notification log: while it has focus, bare keys act on the history
