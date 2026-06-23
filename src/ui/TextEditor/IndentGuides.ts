@@ -57,14 +57,14 @@ export class IndentGuides {
     const bind = (getter: 'getVadjustment' | 'getHadjustment', notify: string) => {
       let bound: any = null;
       const rebind = () => {
-        const adj = (view as any)[getter]?.();
+        const adj = view[getter]?.();
         if (!adj || adj === bound) return;
         if (bound) bound.off('value-changed', redraw); // drop the stale binding before re-binding
         bound = adj;
         adj.on('value-changed', redraw);
       };
       rebind();
-      (view as any).on(notify, rebind);
+      view.on(notify, rebind);
       this.subs.add(new Disposable(() => {
         view.off(notify, rebind);
         if (bound) bound.off('value-changed', redraw);
@@ -90,7 +90,7 @@ export class IndentGuides {
 
   private draw(cr: any): void {
     if (!this.enabled || !this.view.getRealized()) return;
-    const view = this.view as any;
+    const view = this.view;
     const rect = view.getVisibleRect();
     if (!rect || !rect.height) return;
 
@@ -218,7 +218,7 @@ export class IndentGuides {
   /** Measure the monospace char advance from a visible content line. */
   private ensureMetrics(top: number, bottom: number): boolean {
     if (this.charWidth > 0) return true;
-    const view = this.view as any;
+    const view = this.view;
     for (let row = top; row <= bottom; row++) {
       if (this.model.lineLength(row) < 2) continue;
       const a = view.getIterLocation(this.model.iterAtPoint(new Point(row, 0)));

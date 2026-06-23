@@ -72,7 +72,7 @@ test('500 deterministic-random edits across both directions never desync', () =>
   const { pv, src, synced } = identitySetup('the quick brown fox\n');
   let ok = true;
   for (let i = 0; i < 500 && ok; i++) {
-    const buf = i % 2 === 0 ? (pv.buffer as any) : (src as any); // alternate view / source origin
+    const buf = i % 2 === 0 ? (pv.buffer) : (src); // alternate view / source origin
     const len = textOf(buf).length;
     const off = (i * 7919) % Math.max(1, len);
     if (i % 3 === 0 && len > 4) {
@@ -112,19 +112,19 @@ test('materializes a multi-source projection with headers', () => {
 
 test('non-editable rows (headers) carry the readonly tag; segment rows do not', () => {
   const { pv } = multiSetup();
-  const tag = (pv.buffer as any).getTagTable().lookup('vp:readonly');
+  const tag = pv.buffer.getTagTable().lookup('vp:readonly');
   assert.ok(tag, 'readonly tag exists');
-  assert.equal(asIter((pv.buffer as any).getIterAtLineOffset(0, 1)).hasTag(tag), true, 'header row 0 is readonly');
-  assert.equal(asIter((pv.buffer as any).getIterAtLineOffset(3, 0)).hasTag(tag), true, 'blank row 3 is readonly');
-  assert.equal(asIter((pv.buffer as any).getIterAtLineOffset(1, 1)).hasTag(tag), false, 'segment row 1 is editable');
+  assert.equal(asIter(pv.buffer.getIterAtLineOffset(0, 1)).hasTag(tag), true, 'header row 0 is readonly');
+  assert.equal(asIter(pv.buffer.getIterAtLineOffset(3, 0)).hasTag(tag), true, 'blank row 3 is readonly');
+  assert.equal(asIter(pv.buffer.getIterAtLineOffset(1, 1)).hasTag(tag), false, 'segment row 1 is editable');
 });
 
 test('multi-source: an in-place edit routes to the right source, leaving others intact', () => {
   const { a, b, pv } = multiSetup();
   // View rows: 0:a.ts 1:"const aaa = 1;" 2:"function fa() {}" 3:<blank> 4:b.ts 5:"const bbb = 2;" 6:"let ccc = 3;"
   // Insert "export " at the start of view row 1 → source a.ts row 1.
-  const row1Start = asIter((pv.buffer as any).getIterAtLine(1)).getOffset();
-  insertAt(pv.buffer as any, row1Start, 'export ');
+  const row1Start = asIter(pv.buffer.getIterAtLine(1)).getOffset();
+  insertAt(pv.buffer, row1Start, 'export ');
   assert.equal(textOf(a), '// a\nexport const aaa = 1;\nfunction fa() {}\n', 'wrote through to source a.ts');
   assert.equal(textOf(b), 'const bbb = 2;\nlet ccc = 3;\n', 'source b.ts untouched');
   // The view row matches the edited source row.
@@ -132,14 +132,14 @@ test('multi-source: an in-place edit routes to the right source, leaving others 
   assert.equal(view.split('\n')[1], 'export const aaa = 1;');
 
   // A second in-place edit, into source b.ts (proves the row-direct map stayed valid).
-  const row6Start = asIter((pv.buffer as any).getIterAtLine(6)).getOffset();
-  insertAt(pv.buffer as any, row6Start, 'const ');
+  const row6Start = asIter(pv.buffer.getIterAtLine(6)).getOffset();
+  insertAt(pv.buffer, row6Start, 'const ');
   assert.equal(textOf(b), 'const bbb = 2;\nconst let ccc = 3;\n', 'second edit routed to b.ts');
 });
 
 test('multi-source: an edit on a header row does not write through to any source', () => {
   const { a, b, pv } = multiSetup();
-  insertAt(pv.buffer as any, 0, 'X'); // view row 0 is the "a.ts" header (a block)
+  insertAt(pv.buffer, 0, 'X'); // view row 0 is the "a.ts" header (a block)
   assert.equal(textOf(a), '// a\nconst aaa = 1;\nfunction fa() {}\n', 'a.ts unchanged');
   assert.equal(textOf(b), 'const bbb = 2;\nlet ccc = 3;\n', 'b.ts unchanged');
 });
@@ -147,9 +147,9 @@ test('multi-source: an edit on a header row does not write through to any source
 test('multi-source: a delete spanning two sources is rejected (boundary clamp)', () => {
   const { a, b, pv } = multiSetup();
   // Delete from inside a.ts's excerpt (view row 2) across the blank/header into b.ts (row 5).
-  const from = asIter((pv.buffer as any).getIterAtLine(2)).getOffset();
-  const to = asIter((pv.buffer as any).getIterAtLineOffset(5, 3)).getOffset();
-  deleteRange(pv.buffer as any, from, to);
+  const from = asIter(pv.buffer.getIterAtLine(2)).getOffset();
+  const to = asIter(pv.buffer.getIterAtLineOffset(5, 3)).getOffset();
+  deleteRange(pv.buffer, from, to);
   assert.equal(textOf(a), '// a\nconst aaa = 1;\nfunction fa() {}\n', 'a.ts unchanged (cross-source delete rejected)');
   assert.equal(textOf(b), 'const bbb = 2;\nlet ccc = 3;\n', 'b.ts unchanged');
 });
@@ -157,8 +157,8 @@ test('multi-source: a delete spanning two sources is rejected (boundary clamp)',
 test('a source change re-materializes the multi-source view (reverse-sync rebuild)', async () => {
   const { a, pv } = multiSetup();
   // Change a projected row of source A (row 1 = "const aaa = 1;").
-  const lineStart = asIter((a as any).getIterAtLine(1)).getOffset();
-  insertAt(a as any, lineStart, 'export ');
+  const lineStart = asIter(a.getIterAtLine(1)).getOffset();
+  insertAt(a, lineStart, 'export ');
   await Promise.resolve(); // flush the deferred rebuild microtask
   assert.equal(
     textOf(pv.buffer),
@@ -172,8 +172,8 @@ test('a source change re-materializes the multi-source view (reverse-sync rebuil
 function editableMulti() {
   const a = srcBuffer('a0\na1\n');
   const b = srcBuffer('b0\nb1\n');
-  (a as any).setEnableUndo(true);
-  (b as any).setEnableUndo(true);
+  a.setEnableUndo(true);
+  b.setEnableUndo(true);
   const items: Item[] = [
     { type: 'segment', segment: { sourceKey: 'a', startRow: 0, endRow: 1, editable: true, kind: 'real' } },
     { type: 'segment', segment: { sourceKey: 'b', startRow: 0, endRow: 1, editable: true, kind: 'real' } },
@@ -184,7 +184,7 @@ function editableMulti() {
 
 test('multi-source: an external in-place source edit mirrors into the view', () => {
   const { a, pv } = editableMulti();
-  insertAt(a as any, 0, 'X'); // a change to source a from elsewhere (not via the multibuffer)
+  insertAt(a, 0, 'X'); // a change to source a from elsewhere (not via the multibuffer)
   assert.equal(textOf(a), 'Xa0\na1\n');
   assert.equal(textOf(pv.buffer), 'Xa0\na1\nb0\nb1', 'the view mirrored the in-place edit at the right row');
 });
@@ -192,7 +192,7 @@ test('multi-source: an external in-place source edit mirrors into the view', () 
 test('cross-source undo: a view edit routes + undoes on the right source', () => {
   const { a, b, pv } = editableMulti();
   pv.beginUserAction();
-  insertAt(pv.buffer as any, 0, 'X'); // view row 0 → source a
+  insertAt(pv.buffer, 0, 'X'); // view row 0 → source a
   pv.endUserAction();
   assert.equal(textOf(a), 'Xa0\na1\n', 'wrote through to source a');
   assert.equal(pv.canUndo(), true);
@@ -209,9 +209,9 @@ test('cross-source undo: a view edit routes + undoes on the right source', () =>
 test('cross-source undo: a multi-file transaction undoes both sources as one step', () => {
   const { a, b, pv } = editableMulti();
   pv.beginUserAction();
-  insertAt(pv.buffer as any, 0, 'X'); // edits source a (view row 0)
-  const b0Start = asIter((pv.buffer as any).getIterAtLine(2)).getOffset(); // view row 2 = b0
-  insertAt(pv.buffer as any, b0Start, 'Y'); // edits source b (view row 2)
+  insertAt(pv.buffer, 0, 'X'); // edits source a (view row 0)
+  const b0Start = asIter(pv.buffer.getIterAtLine(2)).getOffset(); // view row 2 = b0
+  insertAt(pv.buffer, b0Start, 'Y'); // edits source b (view row 2)
   pv.endUserAction();
   assert.equal(textOf(a), 'Xa0\na1\n');
   assert.equal(textOf(b), 'Yb0\nb1\n');
@@ -238,7 +238,7 @@ const lineTextOf = (buf: any, row: number): string => {
 // One file, two excerpts (rows 1..3 and 6..8) separated by a header + blank.
 function twoExcerptsOfOneFile() {
   const f = srcBuffer('l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n'); // rows 0..9 (row 9 empty)
-  (f as any).setEnableUndo(true);
+  f.setEnableUndo(true);
   const items: Item[] = [
     { type: 'block', block: { kind: 'header', text: 'F' } },
     { type: 'segment', segment: { sourceKey: 'f', startRow: 1, endRow: 3, editable: true, kind: 'real' } },
@@ -252,8 +252,8 @@ function twoExcerptsOfOneFile() {
 
 test('re-segment: a multi-line insert grows its segment and shifts the later same-source one', () => {
   const { f, pv } = twoExcerptsOfOneFile();
-  const row2 = asIter((pv.buffer as any).getIterAtLine(2)).getOffset(); // view row 2 = source f row 2 ("l2")
-  insertAt(pv.buffer as any, row2, 'NEW\n'); // splits f row 2 into "NEW" + "l2"
+  const row2 = asIter(pv.buffer.getIterAtLine(2)).getOffset(); // view row 2 = source f row 2 ("l2")
+  insertAt(pv.buffer, row2, 'NEW\n'); // splits f row 2 into "NEW" + "l2"
   assert.equal(textOf(f), 'l0\nl1\nNEW\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n', 'wrote through, growing the source');
   assert.equal(
     textOf(pv.buffer),
@@ -261,16 +261,16 @@ test('re-segment: a multi-line insert grows its segment and shifts the later sam
     'first excerpt grew (l1,NEW,l2,l3); the second still shows l6,l7,l8',
   );
   // The map rebuilt: an in-place edit on a row BELOW the insert now routes to the right source row.
-  const lastBody = asIter((pv.buffer as any).getIterAtLine(8)).getOffset(); // view row 8 = "l8"
-  insertAt(pv.buffer as any, lastBody, 'Z');
+  const lastBody = asIter(pv.buffer.getIterAtLine(8)).getOffset(); // view row 8 = "l8"
+  insertAt(pv.buffer, lastBody, 'Z');
   assert.equal(lineTextOf(f, 9), 'Zl8', 'in-place edit after a re-segment routed to the correct (shifted) source row');
 });
 
 test('re-segment: a multi-line delete shrinks its segment and shifts the later one up', () => {
   const { f, pv } = twoExcerptsOfOneFile();
-  const from = asIter((pv.buffer as any).getIterAtLine(2)).getOffset(); // view row 2 = "l2"
-  const to = asIter((pv.buffer as any).getIterAtLine(3)).getOffset(); // view row 3 = "l3"
-  deleteRange(pv.buffer as any, from, to); // remove the whole "l2\n" line
+  const from = asIter(pv.buffer.getIterAtLine(2)).getOffset(); // view row 2 = "l2"
+  const to = asIter(pv.buffer.getIterAtLine(3)).getOffset(); // view row 3 = "l3"
+  deleteRange(pv.buffer, from, to); // remove the whole "l2\n" line
   assert.equal(textOf(f), 'l0\nl1\nl3\nl4\nl5\nl6\nl7\nl8\n', 'the line was removed from the source');
   assert.equal(
     textOf(pv.buffer),
@@ -281,9 +281,9 @@ test('re-segment: a multi-line delete shrinks its segment and shifts the later o
 
 test('re-segment: a multi-line edit is one cross-source undo step (view + source restored)', async () => {
   const { f, pv } = twoExcerptsOfOneFile();
-  const row1 = asIter((pv.buffer as any).getIterAtLine(1)).getOffset(); // view row 1 = "l1"
+  const row1 = asIter(pv.buffer.getIterAtLine(1)).getOffset(); // view row 1 = "l1"
   pv.beginUserAction();
-  insertAt(pv.buffer as any, row1, 'A\nB\n'); // two new rows (write-through re-segments, no flash)
+  insertAt(pv.buffer, row1, 'A\nB\n'); // two new rows (write-through re-segments, no flash)
   pv.endUserAction();
   assert.equal(textOf(pv.buffer), 'F\nA\nB\nl1\nl2\nl3\n\nl6\nl7\nl8');
   pv.undo(); // replays the source's undo → the row-count reverse-sync mirrors incrementally
@@ -294,10 +294,10 @@ test('re-segment: a multi-line edit is one cross-source undo step (view + source
 
 test('re-segment undo mirrors incrementally — no whole-buffer re-materialize (decorations survive)', async () => {
   const { pv } = twoExcerptsOfOneFile();
-  const buf = pv.buffer as any;
+  const buf = pv.buffer;
   // A decoration tag on a stable row above the edit (view row 1 = "l1"). A full re-materialize
   // (setText) on undo would wipe it; the incremental mirror leaves it in place.
-  const tag = new Gtk.TextTag({ name: 'test:deco' } as any);
+  const tag = new Gtk.TextTag({ name: 'test:deco' });
   buf.getTagTable().add(tag);
   buf.applyTag(tag, asIter(buf.getIterAtLine(1)), asIter(buf.getIterAtLineOffset(1, 2)));
   const hasDeco = () => asIter(buf.getIterAtLineOffset(1, 1)).hasTag(tag);
@@ -316,7 +316,7 @@ test('re-segment undo mirrors incrementally — no whole-buffer re-materialize (
 
 test('300 row-count-changing edits within editable segments never desync map↔buffer↔source', () => {
   const { f, pv } = twoExcerptsOfOneFile();
-  const buf = pv.buffer as any;
+  const buf = pv.buffer;
   // Consistency: the view buffer's line count matches the map, and every source-mapped view
   // row shows exactly its source row's text (block rows are left to the materializer).
   const consistent = (): string => {
@@ -325,7 +325,7 @@ test('300 row-count-changing edits within editable segments never desync map↔b
     for (let r = 0; r < n; r++) {
       const t = pv.view.viewToSource(r, 0);
       if (t.kind !== 'source') continue;
-      const want = lineTextOf(f as any, t.row);
+      const want = lineTextOf(f, t.row);
       const got = lineTextOf(buf, r);
       if (want !== got) return `row ${r} → src ${t.row}: "${got}" != "${want}"`;
     }
@@ -379,8 +379,8 @@ test('retarget: minimal-churn item swap keeps unchanged rows (decorations surviv
   assert.equal(textOf(pv.buffer), 'l0\nl1\nl2');
 
   // A decoration on view row 0; it must survive both a grow and a shrink.
-  const buf = pv.buffer as any;
-  const tag = new Gtk.TextTag({ name: 'test:deco' } as any);
+  const buf = pv.buffer;
+  const tag = new Gtk.TextTag({ name: 'test:deco' });
   buf.getTagTable().add(tag);
   buf.applyTag(tag, asIter(buf.getIterAtLine(0)), asIter(buf.getIterAtLineOffset(0, 2)));
   const hasDeco = () => asIter(buf.getIterAtLineOffset(0, 1)).hasTag(tag);
@@ -409,7 +409,7 @@ test('retarget to a recomputed diff matches a fresh build (re-diff on edit)', ()
 
   // The new side was edited (b→B): update the source as a write-through would, then re-diff.
   pv.suspend();
-  (newBuf as any).setText('a\nB\nc\n', -1);
+  newBuf.setText('a\nB\nc\n', -1);
   pv.resume();
   const items1 = diffSegments(['a', 'b', 'c', ''], ['a', 'B', 'c', ''], 'new:f', 'old:f').items;
   pv.retarget(items1);
@@ -425,7 +425,7 @@ test('retarget to a recomputed diff matches a fresh build (re-diff on edit)', ()
 test('dispose stops syncing', () => {
   const { pv, src } = identitySetup('abc\n');
   pv.dispose();
-  insertAt(src as any, 0, 'Z');
+  insertAt(src, 0, 'Z');
   assert.equal(textOf(pv.buffer), 'abc\n', 'disposed view no longer mirrors the source');
 });
 
@@ -454,7 +454,7 @@ test('unfold restores the collapsed text exactly', () => {
 test('an edit before a fold (write-through) maps to the right source offset', () => {
   const { pv, src } = identitySetup(SAMPLE);
   pv.fold(FOLD[0], FOLD[1], '[...]');
-  insertAt(pv.buffer as any, 0, 'Q');
+  insertAt(pv.buffer, 0, 'Q');
   assert.equal(textOf(src), 'Q' + SAMPLE);
   assert.equal(textOf(pv.buffer), "Qimport {[...]} from './git.ts';\n");
 });
@@ -462,7 +462,7 @@ test('an edit before a fold (write-through) maps to the right source offset', ()
 test('an edit after a fold (write-through) maps past the collapsed body', () => {
   const { pv, src } = identitySetup(SAMPLE);
   pv.fold(FOLD[0], FOLD[1], '[...]');
-  insertAt(pv.buffer as any, textOf(pv.buffer).length - 1, '!'); // just before the trailing newline
+  insertAt(pv.buffer, textOf(pv.buffer).length - 1, '!'); // just before the trailing newline
   assert.equal(textOf(pv.buffer), "import {[...]} from './git.ts';!\n");
   assert.equal(textOf(src), "import {\n  X,\n} from './git.ts';!\n");
 });
@@ -470,7 +470,7 @@ test('an edit after a fold (write-through) maps past the collapsed body', () => 
 test('an external source edit propagates into a folded view, kept collapsed', () => {
   const { pv, src } = identitySetup(SAMPLE);
   pv.fold(FOLD[0], FOLD[1], '[...]');
-  insertAt(src as any, 0, 'Z'); // a change from elsewhere, before the fold
+  insertAt(src, 0, 'Z'); // a change from elsewhere, before the fold
   assert.equal(textOf(src), 'Z' + SAMPLE);
   assert.equal(textOf(pv.buffer), "Zimport {[...]} from './git.ts';\n");
 });
@@ -478,7 +478,7 @@ test('an external source edit propagates into a folded view, kept collapsed', ()
 test('an external edit inside the fold is absorbed; unfold restores it', () => {
   const { pv, src } = identitySetup(SAMPLE);
   const fold = pv.fold(FOLD[0], FOLD[1], '[...]');
-  insertAt(src as any, 11, 'YY'); // inside the collapsed body (around the `X`)
+  insertAt(src, 11, 'YY'); // inside the collapsed body (around the `X`)
   assert.equal(textOf(pv.buffer), "import {[...]} from './git.ts';\n", 'view stays collapsed (absorbed)');
   assert.equal(textOf(src), "import {\n  YYX,\n} from './git.ts';\n");
   pv.unfold(fold!);
@@ -493,7 +493,7 @@ test('nested folds: an outer fold subsumes an inner one; model intact, unfold re
   const outer = pv.fold(t().indexOf('out {') + 5, t().lastIndexOf('}'), '[5]'); // fold outer (subsumes inner)
   assert.equal(t(), 'out {[5]}\n', 'outer collapses, subsuming the inner fold');
   assert.equal(textOf(src), 'out {\n in {\n  x\n }\n}\n', 'source never corrupted by nesting');
-  insertAt(pv.buffer as any, 0, 'Z'); // edit before the nested fold still translates
+  insertAt(pv.buffer, 0, 'Z'); // edit before the nested fold still translates
   assert.equal(textOf(src), 'Zout {\n in {\n  x\n }\n}\n');
   pv.unfold(outer!);
   assert.equal(t(), 'Zout {\n in {\n  x\n }\n}\n', 'unfolding the outer restores the full body');
@@ -530,14 +530,14 @@ test('600 edits around a fold never desync the source or the collapsed view', ()
   let why = '';
   for (let i = 0; i < 600 && ok; i++) {
     if (i % 2 === 1) {
-      insertAt(pv.buffer as any, 0, '.'); // write-through, before the fold
+      insertAt(pv.buffer, 0, '.'); // write-through, before the fold
     } else {
       const len = textOf(src).length;
       if (i % 3 === 0 && len > fold.end + 3) {
         const at = fold.end + 1; // delete a char safely after the fold
-        deleteRange(src as any, at, at + 1);
+        deleteRange(src, at, at + 1);
       } else {
-        insertAt(src as any, len - 1, String.fromCharCode(97 + (i % 26))); // insert after the fold
+        insertAt(src, len - 1, String.fromCharCode(97 + (i % 26))); // insert after the fold
       }
     }
     if (textOf(pv.buffer) !== collapsed()) { ok = false; why = `collapsed view desync @${i}`; }

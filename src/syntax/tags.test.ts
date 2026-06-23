@@ -5,7 +5,7 @@ import * as Path from 'node:path';
 import { tagNamesAt } from './tags.ts';
 
 const require_ = createRequire(import.meta.url);
-const Parser = require_('web-tree-sitter') as any;
+const Parser = require_('web-tree-sitter');
 const wtsDir = Path.dirname(require_.resolve('web-tree-sitter'));
 const tsxWasm = require_.resolve('tree-sitter-wasms/out/tree-sitter-tsx.wasm');
 

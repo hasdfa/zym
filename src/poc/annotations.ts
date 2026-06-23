@@ -51,9 +51,9 @@ app.on('activate', () => {
     const view: any = new GtkSource.View({ buffer, monospace: true });
     view.setShowLineNumbers(true);
 
-    const Style: any = (GtkSource as any).AnnotationStyle;
-    const A: any = (GtkSource as any).Annotation;
-    const provider: any = new (GtkSource as any).AnnotationProvider();
+    const Style: any = GtkSource.AnnotationStyle;
+    const A: any = GtkSource.Annotation;
+    const provider: any = new GtkSource.AnnotationProvider();
 
     // [line (0-based), text, style]
     const annotations: [number, string, number][] = [

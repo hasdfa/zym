@@ -23,7 +23,7 @@ function setup(text: string) {
 
 function hasTag(editor: EditorModel, point: PointLike, tagName: string): boolean {
   const tag = editor.buffer.getTagTable().lookup(tagName);
-  return tag ? (editor.iterAtPoint(point) as any).hasTag(tag) : false;
+  return tag ? (editor.iterAtPoint(point)).hasTag(tag) : false;
 }
 
 test('literal search finds all matches and seats on the first from the origin', () => {

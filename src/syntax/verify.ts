@@ -45,11 +45,11 @@ app.on('activate', () => {
   win.setContent(scrolled);
   win.present();
 
-  (buffer as any).setText(SAMPLE, -1);
-  (buffer as any).placeCursor((buffer as any).getStartIter());
+  buffer.setText(SAMPLE, -1);
+  buffer.placeCursor(buffer.getStartIter());
 
   const handled = syntax.setLanguageForPath('/tmp/sample.js');
-  const natHeight = () => (view as any).measure(Gtk.Orientation.VERTICAL, -1)[1];
+  const natHeight = () => view.measure(Gtk.Orientation.VERTICAL, -1)[1];
 
   {
     setTimeout(() => {
@@ -59,13 +59,13 @@ app.on('activate', () => {
 
       // Exercise the fold path: cursor into loadDocument's body, then za (toggle
       // fold at cursor). The vim keymap's z-prefix dispatches this method.
-      (buffer as any).placeCursor((buffer as any).getIterAtLine(3)[1]);
+      buffer.placeCursor(buffer.getIterAtLine(3)[1]);
       syntax.toggleFoldAtCursor();
 
       // Live edit: insert a line. This fires insert-text → the controller records
       // a tree edit → 'changed' → a debounced incremental reparse. The new
       // `42` literal should appear as an extra @number capture.
-      (buffer as any).insert((buffer as any).getEndIter(), '\nconst answer = 42;\n', -1);
+      buffer.insert(buffer.getEndIter(), '\nconst answer = 42;\n', -1);
 
       setTimeout(() => {
         const afterZa = natHeight();

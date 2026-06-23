@@ -144,12 +144,12 @@ test('editable diff: undo of an insert before removed lines splices (no whole-bu
   const path = tmpFile('a\nc\n'); // new side: B1,B2 removed
   const registry = new DocumentRegistry();
   const mbv = new DiffView({ editable: true, documents: registry, files: [{ path, oldText, newText: 'a\nc\n' }] });
-  const buf = (mbv.editor.sourceView as any).getBuffer();
+  const buf = mbv.editor.sourceView.getBuffer();
 
   const aRow = linesOf(mbv).indexOf('a');
   assert.ok(aRow >= 0, 'found the context row before the removed lines');
   // A decoration on the stable `a` row — survives a minimal splice, wiped by a whole-buffer setText.
-  const tag = new Gtk.TextTag({ name: 'test:deco' } as any);
+  const tag = new Gtk.TextTag({ name: 'test:deco' });
   buf.getTagTable().add(tag);
   buf.applyTag(tag, asIter(buf.getIterAtLine(aRow)), asIter(buf.getIterAtLineOffset(aRow, 1)));
   const hasDeco = () => asIter(buf.getIterAtLine(aRow)).hasTag(tag); // col 0, inside the [0,1) tag
@@ -242,7 +242,7 @@ test('editable diff: `O` on an excerpt-first line re-diffs under the GLib loop (
   zym.window = win as never;
   win.present();
   mbv.editor.sourceView.grabFocus();
-  pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
+  pumpUntil(() => mbv.editor.sourceView.getMapped?.());
   assert.equal(linesOf(mbv)[0], 'aaaa', 'a leading gap elides the head — first shown row is the context `aaaa`');
 
   mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
@@ -275,11 +275,11 @@ test('editable diff: re-diff reconciles the header/gap bands in place (no teardo
   zym.window = win as never;
   win.present();
   mbv.editor.sourceView.grabFocus();
-  pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
+  pumpUntil(() => mbv.editor.sourceView.getMapped?.());
 
   // Spy on band churn: any add/remove across the re-diff would mean a teardown (the flicker).
   let adds = 0, removes = 0;
-  const ib = mbv.editor.inlineBlocks as any;
+  const ib = mbv.editor.inlineBlocks;
   const origAdd = ib.add.bind(ib);
   ib.add = (o: any) => { adds++; return origAdd(o); };
   const entries = (mbv as any).bands.entries as Map<string, { handle: any }>;
@@ -313,7 +313,7 @@ test('editable diff: the gutter bottom-aligns an excerpt-first row, top-aligns t
   zym.window = win as never;
   win.present();
   mbv.editor.sourceView.grabFocus();
-  pumpUntil(() => (mbv.editor.sourceView as any).getMapped?.());
+  pumpUntil(() => mbv.editor.sourceView.getMapped?.());
 
   const renderer = ((mbv as any).lineNumbers as any).renderer;
   assert.deepEqual([...renderer.headerRows], [0], 'view row 0 is the excerpt-first row (header band above)');

@@ -100,8 +100,8 @@ export class ProjectionView {
     this.items = items;
     this.buffer = new GtkSource.Buffer();
     this.buffer.setEnableUndo(false); // the source models own undo (as Document's views do)
-    const table = (this.buffer as any).getTagTable();
-    table.add(new Gtk.TextTag({ name: READONLY_TAG, editable: false } as any));
+    const table = this.buffer.getTagTable();
+    table.add(new Gtk.TextTag({ name: READONLY_TAG, editable: false }));
     this.projection = ViewProjection.build(items, (seg) => this.sourceLines(seg));
     this.materialize();
     this.wireView();
@@ -126,9 +126,9 @@ export class ProjectionView {
   private materialize(): void {
     this.viewSuppress = true;
     try {
-      (this.buffer as any).setText(this.projection.viewText, -1);
+      this.buffer.setText(this.projection.viewText, -1);
       this.applyReadonlyTags();
-      (this.buffer as any).setModified(false);
+      this.buffer.setModified(false);
     } finally {
       this.viewSuppress = false;
     }
@@ -163,7 +163,7 @@ export class ProjectionView {
   }
 
   private endOfLine(row: number): any {
-    const iter = asIter((this.buffer as any).getIterAtLine(row));
+    const iter = asIter(this.buffer.getIterAtLine(row));
     if (!iter.endsLine()) iter.forwardToLineEnd();
     return iter;
   }
@@ -195,7 +195,7 @@ export class ProjectionView {
       const src = this.soleSource();
       if (!src) return;
       const srcOffset = this.projection.viewOffsetToProj(iter.getOffset());
-      this.suppressing(this.projection.soleKey!, () => (src as any).insert(iterAtOffset(src, srcOffset), text, -1));
+      this.suppressing(this.projection.soleKey!, () => src.insert(iterAtOffset(src, srcOffset), text, -1));
       return;
     }
     // MULTI-SOURCE: route the edit to the segment's source. The readonly tag blocks edits on
@@ -211,7 +211,7 @@ export class ProjectionView {
     if (!src) return;
     this.noteSourceEdit(target.sourceKey);
     this.suppressing(target.sourceKey, () =>
-      (src as any).insert(asIter((src as any).getIterAtLineOffset(target.row, target.column)), text, -1),
+      src.insert(asIter(src.getIterAtLineOffset(target.row, target.column)), text, -1),
     );
     const added = newlineCount(text);
     if (added > 0) this.resegment(target.sourceKey, target.row, added);
@@ -224,7 +224,7 @@ export class ProjectionView {
       const s = this.projection.viewOffsetToProj(startIter.getOffset());
       const e = this.projection.viewOffsetToProj(endIter.getOffset());
       if (e <= s) return; // a delete wholly inside a fold placeholder maps to a zero range
-      this.suppressing(this.projection.soleKey!, () => (src as any).delete(iterAtOffset(src, s), iterAtOffset(src, e)));
+      this.suppressing(this.projection.soleKey!, () => src.delete(iterAtOffset(src, s), iterAtOffset(src, e)));
       return;
     }
     // MULTI-SOURCE: a delete within ONE editable segment routes to its source. A delete ending at
@@ -260,9 +260,9 @@ export class ProjectionView {
     if (!src) return;
     this.noteSourceEdit(a.sourceKey);
     this.suppressing(a.sourceKey, () =>
-      (src as any).delete(
-        asIter((src as any).getIterAtLineOffset(a.row, a.column)),
-        asIter((src as any).getIterAtLineOffset(bRow, bCol)),
+      src.delete(
+        asIter(src.getIterAtLineOffset(a.row, a.column)),
+        asIter(src.getIterAtLineOffset(bRow, bCol)),
       ),
     );
     const removed = bRow - a.row; // rows merged away by a multi-line delete (0 = in-place)
@@ -341,12 +341,12 @@ export class ProjectionView {
           // observers (the search results' band reconcile) must defer their projection-dependent work
           // to the post-rebuild reflow rather than read the now-stale current map.
           this.scheduleRemap();
-          this.applyToView((b) => b.insert(asIter((b as any).getIterAtLineOffset(pos.row, pos.column)), text, -1));
+          this.applyToView((b) => b.insert(asIter(b.getIterAtLineOffset(pos.row, pos.column)), text, -1));
           return;
         }
         return this.scheduleRebuild();
       }
-      if (pos) this.applyToView((b) => b.insert(asIter((b as any).getIterAtLineOffset(pos.row, pos.column)), text, -1));
+      if (pos) this.applyToView((b) => b.insert(asIter(b.getIterAtLineOffset(pos.row, pos.column)), text, -1));
       return;
     }
     const off = iter.getOffset();
@@ -375,12 +375,12 @@ export class ProjectionView {
           // Flag the remap pending BEFORE mirroring (see onSourceInsert) so band-reconcile observers
           // defer to the reflow instead of reading the stale map mid-undo.
           this.scheduleRemap();
-          this.applyToView((buf) => buf.delete(asIter((buf as any).getIterAtLineOffset(a.row, a.column)), asIter((buf as any).getIterAtLineOffset(b.row, b.column))));
+          this.applyToView((buf) => buf.delete(asIter(buf.getIterAtLineOffset(a.row, a.column)), asIter(buf.getIterAtLineOffset(b.row, b.column))));
           return;
         }
         return this.scheduleRebuild();
       }
-      if (a && b) this.applyToView((buf) => buf.delete(asIter((buf as any).getIterAtLineOffset(a.row, a.column)), asIter((buf as any).getIterAtLineOffset(b.row, b.column))));
+      if (a && b) this.applyToView((buf) => buf.delete(asIter(buf.getIterAtLineOffset(a.row, a.column)), asIter(buf.getIterAtLineOffset(b.row, b.column))));
       return;
     }
     const startOff = startIter.getOffset();
@@ -427,7 +427,7 @@ export class ProjectionView {
     if (!src) return;
     const viewStart = this.projection.projOffsetToView(handle.start);
     const placeholderLen = cpLength(handle.placeholder);
-    const body = (src as any).getText(iterAtOffset(src, handle.start), iterAtOffset(src, handle.end), true); // proj == source
+    const body = src.getText(iterAtOffset(src, handle.start), iterAtOffset(src, handle.end), true); // proj == source
     this.projection.removeFold(handle);
     this.applyToView((buffer) => {
       buffer.delete(iterAtOffset(buffer, viewStart), iterAtOffset(buffer, viewStart + placeholderLen));
@@ -444,7 +444,7 @@ export class ProjectionView {
   modelLineForViewLine(viewLine: number): number {
     const src = this.soleSource();
     if (!src) return viewLine;
-    const viewOff = asIter((this.buffer as any).getIterAtLine(viewLine)).getOffset();
+    const viewOff = asIter(this.buffer.getIterAtLine(viewLine)).getOffset();
     return iterAtOffset(src, this.projection.viewOffsetToProj(viewOff)).getLine();
   }
 
@@ -452,15 +452,15 @@ export class ProjectionView {
   viewLineForModelLine(modelLine: number): number {
     const src = this.soleSource();
     if (!src) return modelLine;
-    const srcOff = asIter((src as any).getIterAtLine(modelLine)).getOffset();
-    return iterAtOffset(this.buffer as any, this.projection.projOffsetToView(srcOff)).getLine();
+    const srcOff = asIter(src.getIterAtLine(modelLine)).getOffset();
+    return iterAtOffset(this.buffer, this.projection.projOffsetToView(srcOff)).getLine();
   }
 
   /** Translate a VIEW caret to SOURCE coordinates (folds shift lines + columns) — for LSP. */
   modelPointFromView(point: Point): Point {
     const src = this.soleSource();
     if (!src) return point;
-    const viewOff = asIter((this.buffer as any).getIterAtLineOffset(point.row, point.column)).getOffset();
+    const viewOff = asIter(this.buffer.getIterAtLineOffset(point.row, point.column)).getOffset();
     const iter = iterAtOffset(src, this.projection.viewOffsetToProj(viewOff));
     return new Point(iter.getLine(), iter.getLineOffset());
   }
@@ -469,8 +469,8 @@ export class ProjectionView {
   viewPointFromModel(point: Point): Point {
     const src = this.soleSource();
     if (!src) return point;
-    const srcOff = asIter((src as any).getIterAtLineOffset(point.row, point.column)).getOffset();
-    const iter = iterAtOffset(this.buffer as any, this.projection.projOffsetToView(srcOff));
+    const srcOff = asIter(src.getIterAtLineOffset(point.row, point.column)).getOffset();
+    const iter = iterAtOffset(this.buffer, this.projection.projOffsetToView(srcOff));
     return new Point(iter.getLine(), iter.getLineOffset());
   }
 
@@ -493,7 +493,7 @@ export class ProjectionView {
   /** The source text a fold currently collapses (for search-reveal matching). */
   foldModelText(fold: Fold): string {
     const src = this.soleSource();
-    return src ? (src as any).getText(iterAtOffset(src, fold.start), iterAtOffset(src, fold.end), true) : '';
+    return src ? src.getText(iterAtOffset(src, fold.start), iterAtOffset(src, fold.end), true) : '';
   }
 
   /** Whether a fold handle is still live (not subsumed by an enclosing fold / deleted). */
@@ -533,7 +533,7 @@ export class ProjectionView {
    *  + push the (multi-file) step. Inner closes just decrement the depth. */
   endUserAction(): void {
     if (this.actionDepth === 0 || --this.actionDepth > 0) return;
-    for (const key of this.openActions) (this.sources.get(key) as any)?.endUserAction();
+    for (const key of this.openActions) (this.sources.get(key))?.endUserAction();
     this.openActions.clear();
     if (this.currentTxn && this.currentTxn.size) {
       this.undoStack.push([...this.currentTxn]);
@@ -547,7 +547,7 @@ export class ProjectionView {
   private noteSourceEdit(key: string): void {
     if (this.currentTxn) {
       if (!this.openActions.has(key)) {
-        (this.sources.get(key) as any)?.beginUserAction();
+        (this.sources.get(key))?.beginUserAction();
         this.openActions.add(key);
       }
       this.currentTxn.add(key);
@@ -571,7 +571,7 @@ export class ProjectionView {
     if (!txn) return;
     this.replaying = true;
     try {
-      for (let i = txn.length - 1; i >= 0; i--) (this.sources.get(txn[i]) as any)?.undo();
+      for (let i = txn.length - 1; i >= 0; i--) (this.sources.get(txn[i]))?.undo();
     } finally {
       this.replaying = false;
     }
@@ -584,7 +584,7 @@ export class ProjectionView {
     if (!txn) return;
     this.replaying = true;
     try {
-      for (const key of txn) (this.sources.get(key) as any)?.redo();
+      for (const key of txn) (this.sources.get(key))?.redo();
     } finally {
       this.replaying = false;
     }
@@ -607,7 +607,7 @@ export class ProjectionView {
   private applyToView(mutate: (buffer: any) => void): void {
     this.viewSuppress = true;
     try {
-      mutate(this.buffer as any);
+      mutate(this.buffer);
     } finally {
       this.viewSuppress = false;
     }
@@ -704,7 +704,7 @@ export class ProjectionView {
       this.items = items;
       this.projection = next;
       this.relockReadonly();
-      (this.buffer as any).setModified(false);
+      this.buffer.setModified(false);
     } finally {
       this.viewSuppress = false;
     }
@@ -713,7 +713,7 @@ export class ProjectionView {
   /** Splice the view buffer to `target` by applying only its line-level diff against the current
    *  text — leaving unchanged lines (their tags + the caret) in place. */
   private spliceTo(target: string): void {
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     const current = buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true) as string;
     if (current === target) return;
     const ops = diffLines(current.split('\n'), target.split('\n'));
@@ -737,7 +737,7 @@ export class ProjectionView {
   /** Delete the whole of view line `row` (its text + the newline that joins it to its
    *  neighbour). The final line has no trailing newline, so swallow the PRECEDING one instead. */
   private deleteViewLine(row: number): void {
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     const lastLine = buffer.getLineCount() - 1;
     let start = asIter(buffer.getIterAtLine(row));
     let end: any;
@@ -756,7 +756,7 @@ export class ProjectionView {
   /** Insert `text` as a new view line at `row` (before the line currently there, or as a new
    *  final line when `row` is past the end). */
   private insertViewLine(row: number, text: string): void {
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     if (row < buffer.getLineCount()) {
       buffer.insert(asIter(buffer.getIterAtLine(row)), text + '\n', -1);
     } else {

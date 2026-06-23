@@ -218,7 +218,7 @@ export class DiffView {
     // Scope the expand-context keymap to this surface: `#TextEditor.continuous-diff` is more
     // specific than vim's `#TextEditor`, so `z o`/`z R`/`z m` bind here while `z z` (scroll) etc.
     // still fall through to vim.
-    (this.editor.sourceView as any).addCssClass('continuous-diff');
+    this.editor.sourceView.addCssClass('continuous-diff');
 
     if (this.editable) {
       this.editor.model.setEditableCheck((s, e) => this.projection.isViewRangeEditable(s, e));
@@ -248,10 +248,10 @@ export class DiffView {
       // the caret relative to the gaps, so re-diff IMMEDIATELY — debouncing it leaves the caret
       // briefly stranded next to a gap widget before the deferred reflow corrects it. A within-line
       // edit doesn't move gaps, so it stays debounced (the common per-keystroke case).
-      this.lastLineCount = (this.projectionView.buffer as any).getLineCount();
+      this.lastLineCount = this.projectionView.buffer.getLineCount();
       this.editor.model.onDidChangeText(() => {
         if (this.suppressReDiff) return; // our own retarget edits
-        const n = (this.projectionView.buffer as any).getLineCount();
+        const n = this.projectionView.buffer.getLineCount();
         const lineCountChanged = n !== this.lastLineCount;
         this.lastLineCount = n;
         // A line-count change reflows the diff; re-diff on a MICROTASK (after the full edit
@@ -567,7 +567,7 @@ export class DiffView {
   private scheduleMicroReDiff(): void {
     if (this.microReDiffTickId || this.disposed) return;
     if (this.reDiffTimer) { clearTimeout(this.reDiffTimer); this.reDiffTimer = null; }
-    this.microReDiffTickId = (this.editor.sourceView as any).addTickCallback(() => {
+    this.microReDiffTickId = this.editor.sourceView.addTickCallback(() => {
       this.microReDiffTickId = 0;
       if (!this.disposed && !this.suppressReDiff) this.reDiff();
       return false; // G_SOURCE_REMOVE — run once
@@ -601,13 +601,13 @@ export class DiffView {
       const pos = this.projection.sourceToView(anchor.sourceKey, anchor.row, anchor.column);
       if (pos) this.editor.model.setCursorBufferPosition(pos);
     }
-    this.lastLineCount = (this.projectionView.buffer as any).getLineCount(); // reflow changed it
+    this.lastLineCount = this.projectionView.buffer.getLineCount(); // reflow changed it
   }
 
   /** Added/removed line backgrounds from the per-row diff kinds (header/blank/gap/context get
    *  none). The view buffer's last line is unterminated, so decorations span its content. */
   private applyDecorations(dmb: DiffMultiBuffer): void {
-    const buffer = this.projectionView.buffer as any;
+    const buffer = this.projectionView.buffer;
     const lines = dmb.rowKinds.map((kind, row) => ({
       kind: kind === 'added' || kind === 'removed' ? kind : 'context',
       text: this.lineText(buffer, row),
@@ -623,7 +623,7 @@ export class DiffView {
   }
 
   private installNavigation(): void {
-    const view = this.editor.sourceView as any;
+    const view = this.editor.sourceView;
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => {
@@ -650,7 +650,7 @@ export class DiffView {
   }
 
   private cursorRow(): number {
-    const buffer = (this.editor.sourceView as any).getBuffer();
+    const buffer = this.editor.sourceView.getBuffer();
     return asIter(buffer.getIterAtMark(buffer.getInsert())).getLine();
   }
 
@@ -750,7 +750,7 @@ export class DiffView {
       onClose: () => {
         if (this.commentBox === box) this.commentBox = null;
         if (this.disposed) return void box.dispose(); // view tearing down: don't tick a dead view
-        (this.editor.sourceView as any).addTickCallback(() => (box.dispose(), false));
+        this.editor.sourceView.addTickCallback(() => (box.dispose(), false));
       },
     });
     box.focus();
@@ -858,7 +858,7 @@ export class DiffView {
     if (!hit) return null;
 
     // Diff body: each selected row as a unified-diff line (+/-/space by kind).
-    const buffer = this.projectionView.buffer as any;
+    const buffer = this.projectionView.buffer;
     const body = rows.map((r) => {
       const prefix = kinds[r] === 'added' ? '+' : kinds[r] === 'removed' ? '-' : ' ';
       return prefix + this.lineText(buffer, r);
@@ -998,7 +998,7 @@ export class DiffView {
     this.commentBox = null;
     if (this.reDiffTimer) clearTimeout(this.reDiffTimer);
     this.reDiffTimer = null;
-    if (this.microReDiffTickId) (this.editor.sourceView as any).removeTickCallback(this.microReDiffTickId);
+    if (this.microReDiffTickId) this.editor.sourceView.removeTickCallback(this.microReDiffTickId);
     this.microReDiffTickId = 0;
     this.gitUnsub?.(); // stop listening for external index changes
     this.gitUnsub = undefined;

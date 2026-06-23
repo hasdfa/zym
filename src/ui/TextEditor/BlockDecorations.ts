@@ -95,7 +95,7 @@ export class BlockDecorations {
 
   constructor(view: SourceView) {
     this.view = view;
-    this.buffer = (view as any).getBuffer();
+    this.buffer = view.getBuffer();
 
     // Place any blocks added before the view was mapped. `map` fires before the
     // first layout pass, so line geometry (get_iter_location) is still 0 — defer
@@ -105,7 +105,7 @@ export class BlockDecorations {
       this.hookVadjustment();
     };
     view.on('map', onMap);
-    this.subs.add(new Disposable(() => (view as any).off('map', onMap)));
+    this.subs.add(new Disposable(() => view.off('map', onMap)));
 
     // An edit to (or around) a band's anchor line can drop the reserved-space tag and leave the
     // overlay stranded — fatal on an EDITABLE surface (the search/diff multibuffers), where you type
@@ -123,7 +123,7 @@ export class BlockDecorations {
    *  mid-allocation. This is what keeps a band aligned after a fold toggle. */
   private hookVadjustment(): void {
     if (this.vadjHooked) return;
-    const vadj = (this.view as any).getVadjustment?.();
+    const vadj = this.view.getVadjustment?.();
     if (!vadj) return;
     this.vadjHooked = true;
     const onVadjChanged = () => this.scheduleReposition();
@@ -142,7 +142,7 @@ export class BlockDecorations {
     slot.setVisible(true);
     const block: Block = {
       mark: this.buffer.createMark(null, lineIter, true /* left gravity: stay at line start */),
-      tag: new Gtk.TextTag({ name: `inline-block:${this.nextTagId++}` } as any),
+      tag: new Gtk.TextTag({ name: `inline-block:${this.nextTagId++}` }),
       slot,
       widget: options.widget,
       placement,
@@ -150,7 +150,7 @@ export class BlockDecorations {
       placed: false, // set once place() runs; place() skips re-adding an already-parented slot
       lastY: NaN,
     };
-    (this.buffer.getTagTable() as any).add(block.tag);
+    (this.buffer.getTagTable()).add(block.tag);
     this.blocks.add(block);
 
     // Always place from the deferred flush, never synchronously — even when mapped.
@@ -219,7 +219,7 @@ export class BlockDecorations {
   private reserveTickId = 0;
   private scheduleReserve(): void {
     if (this.reserveTickId || this.blocks.size === 0) return;
-    this.reserveTickId = (this.view as any).addTickCallback(() => {
+    this.reserveTickId = this.view.addTickCallback(() => {
       this.reserveTickId = 0;
       for (const block of this.blocks) if (block.placed) this.place(block); // re-apply the tag + reposition
       this.scheduleReposition(); // settle the position over the next frames (post-undo relayout)
@@ -237,7 +237,7 @@ export class BlockDecorations {
   private scheduleReposition(): void {
     this.repositionFrames = 0; // (re)start the settle window
     if (this.repositionTickId) return; // a tick is already running
-    this.repositionTickId = (this.view as any).addTickCallback(() => {
+    this.repositionTickId = this.view.addTickCallback(() => {
       for (const block of this.blocks) if (block.placed) this.reposition(block);
       if (++this.repositionFrames >= REPOSITION_FRAMES) {
         this.repositionTickId = 0;
@@ -272,7 +272,7 @@ export class BlockDecorations {
   /** Anchor line's pixel rect (buffer coords). */
   private lineRect(line: number): { y: number; height: number } {
     const iter = unwrap(this.buffer.getIterAtLine(line));
-    const loc = (this.view as any).getIterLocation(iter);
+    const loc = this.view.getIterLocation(iter);
     const rect = Array.isArray(loc) ? loc[0] ?? loc[1] : loc;
     return { y: rect?.y ?? 0, height: rect?.height ?? 0 };
   }
@@ -289,15 +289,15 @@ export class BlockDecorations {
     // Add the slot as an overlay first so it's parented and can measure correctly.
     // A reused (pooled) slot is already an overlay child — keep it, just (re)position.
     if (!block.slot.getParent?.()) {
-      (this.view as any).addOverlay(block.slot, 0, this.lineRect(line).y);
+      this.view.addOverlay(block.slot, 0, this.lineRect(line).y);
     }
     block.placed = true;
 
-    block.height = Math.max(1, (block.slot.measure(Gtk.Orientation.VERTICAL, -1) as any)[1]);
+    block.height = Math.max(1, (block.slot.measure(Gtk.Orientation.VERTICAL, -1))[1]);
 
     // Reserve the band on the anchor line (re-applied each place in case it moved).
     const prop = block.placement === 'below' ? 'pixelsBelowLines' : 'pixelsAboveLines';
-    (block.tag as any)[prop] = block.height;
+    block.tag[prop] = block.height;
     const start = unwrap(this.buffer.getIterAtLine(line));
     const end = unwrap(this.buffer.getIterAtLine(line + 1)); // ok: anchors aren't the last line
     this.buffer.removeTag(block.tag, this.buffer.getStartIter(), this.buffer.getEndIter());
@@ -307,7 +307,7 @@ export class BlockDecorations {
     // and changing the gap tag don't otherwise trigger size_allocate, so the gap
     // stays unreserved and the overlay child unallocated (invisible) until some
     // external event (e.g. a window resize) forces a relayout.
-    (this.view as any).queueResize?.();
+    this.view.queueResize?.();
     this.reposition(block);
   }
 
@@ -319,13 +319,13 @@ export class BlockDecorations {
     const y = block.placement === 'below' ? rect.y + rect.height : rect.y - block.height;
     if (y === block.lastY) return; // no-op move (avoids churn during the settle window)
     block.lastY = y;
-    (this.view as any).moveOverlay(block.slot, 0, y);
+    this.view.moveOverlay(block.slot, 0, y);
   }
 
   private removeBlock(block: Block): void {
     if (!this.blocks.delete(block)) return;
     this.buffer.removeTag(block.tag, this.buffer.getStartIter(), this.buffer.getEndIter());
-    (this.buffer.getTagTable() as any).remove(block.tag);
+    (this.buffer.getTagTable()).remove(block.tag);
     this.buffer.deleteMark(block.mark);
 
     // Detach the consumer's widget from the slot (Gtk.Box.remove works), so it can be

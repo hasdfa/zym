@@ -27,10 +27,10 @@ export interface ViewAnnotation {
 }
 
 const STYLE_ENUM: Record<AnnotationStyleName, number> = {
-  none: (GtkSource as any).AnnotationStyle.NONE,
-  warning: (GtkSource as any).AnnotationStyle.WARNING,
-  error: (GtkSource as any).AnnotationStyle.ERROR,
-  accent: (GtkSource as any).AnnotationStyle.ACCENT,
+  none: GtkSource.AnnotationStyle.NONE,
+  warning: GtkSource.AnnotationStyle.WARNING,
+  error: GtkSource.AnnotationStyle.ERROR,
+  accent: GtkSource.AnnotationStyle.ACCENT,
 };
 
 export class VirtualText {
@@ -39,8 +39,8 @@ export class VirtualText {
   private added = false;
 
   constructor(view: SourceView) {
-    this.provider = new (GtkSource as any).AnnotationProvider();
-    this.annotations = (view as any).getAnnotations();
+    this.provider = new GtkSource.AnnotationProvider();
+    this.annotations = view.getAnnotations();
   }
 
   /** Replace the whole annotation set (producers recompute their full list per update).
@@ -56,7 +56,7 @@ export class VirtualText {
     for (const item of items) {
       const style = STYLE_ENUM[item.style ?? 'none'];
       // GtkSource.Annotation.new(description, icon, line, style)
-      this.provider.addAnnotation((GtkSource as any).Annotation.new(item.text, null, item.line, style));
+      this.provider.addAnnotation(GtkSource.Annotation.new(item.text, null, item.line, style));
     }
     if (items.length) {
       this.annotations.addProvider(this.provider);

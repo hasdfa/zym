@@ -75,7 +75,7 @@ function setupSearch() {
       { path: b, regions: [{ startRow: 0, endRow: 2 }] },
     ],
   });
-  return { a, b, registry, mbv, buffer: (mbv.editor.model as any).buffer };
+  return { a, b, registry, mbv, buffer: mbv.editor.model.buffer };
 }
 
 test('anchor survives write-through + undo with NO re-projection (the o-u case, mark-only)', () => {
@@ -105,7 +105,7 @@ test('anchor survives the diff retarget splice (re-diff) — minimal splice keep
   const path = tmpFile('f.ts', newText);
   const registry = new DocumentRegistry();
   const mbv = new DiffView({ editable: true, documents: registry, files: [{ path, oldText, newText }] });
-  const buffer = (mbv.editor.model as any).buffer;
+  const buffer = mbv.editor.model.buffer;
   // Anchor the stable context line "line3" — it stays present across the re-diff.
   const lines: string[] = mbv.editor.getText().split('\n');
   const anchor = anchorAt(buffer, lines.indexOf('line3'));

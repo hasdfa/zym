@@ -138,7 +138,7 @@ function sortedDirectory(file: GFile, isVisible: VisibleFn): InstanceType<typeof
   while ((info = enumerator.nextFile(null)) !== null) {
     const child = enumerator.getChild(info);
     const isDir = info.getFileType() === Gio.FileType.DIRECTORY;
-    if (!isVisible(info.getName(), pathOf(child as any), isDir)) continue;
+    if (!isVisible(info.getName(), pathOf(child), isDir)) continue;
     info.setAttributeObject('standard::file', child as any);
     infos.push(info);
   }
@@ -403,7 +403,7 @@ export class FileTree {
       (item: any) =>
         item.getFileType() !== Gio.FileType.DIRECTORY
           ? null
-          : sortedDirectory(item.getAttributeObject('standard::file') as any, isVisible),
+          : sortedDirectory(item.getAttributeObject('standard::file'), isVisible),
     );
   }
 
@@ -460,7 +460,7 @@ export class FileTree {
   private applyStatus(listItem: any): void {
     const row = listItem.getItem();
     if (!row) return;
-    const file = (row.getItem() as any).getAttributeObject('standard::file');
+    const file = (row.getItem()).getAttributeObject('standard::file');
     const path = file ? pathOf(file) : null;
     const markup = statusMarkup(path ? this.statuses.get(path) : undefined);
 
@@ -529,7 +529,7 @@ export class FileTree {
 
   private openFile(row: InstanceType<typeof Gtk.TreeListRow>): void {
     const info: any = row.getItem();
-    const path = pathOf(info.getAttributeObject('standard::file') as any);
+    const path = pathOf(info.getAttributeObject('standard::file'));
     if (path) this.onOpenFile(path);
   }
 

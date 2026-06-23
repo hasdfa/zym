@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { initTreeSitter } from '../../src/syntax/grammar.ts';
 
 const require_ = createRequire(import.meta.url);
-const Parser = require_('web-tree-sitter') as any;
+const Parser = require_('web-tree-sitter');
 const HERE = Path.dirname(fileURLToPath(import.meta.url));
 const query = (rel: string) => Fs.readFileSync(Path.join(HERE, 'queries', rel), 'utf8');
 

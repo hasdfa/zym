@@ -175,7 +175,7 @@ export default class OperationStack {
     // `recorded` is a recorded Motion pulled from globalState; mutated through
     // motion-specific members (backwards, ...).
     // TODO(vim-ts): tighten once globalState entries are typed.
-    const recorded = this.vimState.globalState.get(key) as any
+    const recorded = this.vimState.globalState.get(key)
     if (!recorded) return
 
     recorded.vimState = this.vimState
@@ -272,7 +272,7 @@ export default class OperationStack {
       // repeat (`;`/`,`, `repeatIfNecessary`) and the start-leap heuristic check
       // `lastCommandName` against `Find`/`Till`/… and must see the motion, not
       // the wrapper.
-      const target = (operation as any).target
+      const target = operation.target
       this.lastCommandName = operation.name === 'VisualModeSelect' && target ? target.name : operation.name
       operation.resetState()
     }

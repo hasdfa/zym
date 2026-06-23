@@ -32,7 +32,7 @@ function setup(src: string) {
   doc.setText(src);
   const buffer: any = doc.createView();
   const view = new GtkSource.View({ buffer });
-  const syntax = new SyntaxController(view, buffer, { folding: true, folds: doc as any, documentSyntax: (doc as any).syntax });
+  const syntax = new SyntaxController(view, buffer, { folding: true, folds: doc, documentSyntax: doc.syntax });
   syntax.setLanguageForPath('/x.ts');
   const text = () => buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true) as string;
   const tagsAt = (row: number, col: number): string[] =>

@@ -405,7 +405,7 @@ class Tag extends Pair {
       allowNextLine: this.isAllowNextLine(),
       allowForwarding: this.allowForwarding,
       inclusive: this.inclusive
-    } as any) // TODO(vim-ts): tighten — pair-finder.ts options not yet typed
+    }) // TODO(vim-ts): tighten — pair-finder.ts options not yet typed
   }
 
   getPairInfo (from: Point): PairInfo | undefined {

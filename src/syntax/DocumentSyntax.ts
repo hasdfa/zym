@@ -205,7 +205,7 @@ export class DocumentSyntax {
    *  reparse-from-scratch-after-fold dance is needed (that was a view-buffer-parse wart). */
   private reparse(opts: { full?: boolean; silent?: boolean } = {}): void {
     if (this.disposed || !this.grammar || !this.parser) return;
-    const buffer = this.source as any;
+    const buffer = this.source;
     this.cachedText = buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true);
     // web-tree-sitter reports UTF-16 columns; iterAtLineOffset wants codepoints. They
     // only diverge on astral chars — detect once so the common BMP file pays nothing.
@@ -243,7 +243,7 @@ export class DocumentSyntax {
 
   /** A `VisibleRange` spanning model lines `[from, to]` (clamped), for `collectCaptures`. */
   private lineRange(from: number, to: number): VisibleRange {
-    const buffer = this.source as any;
+    const buffer = this.source;
     const last = buffer.getLineCount() - 1;
     const f = Math.max(0, Math.min(from, last));
     const t = Math.max(f, Math.min(to, last));

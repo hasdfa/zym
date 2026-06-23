@@ -186,7 +186,7 @@ export class CompletionPopup {
     const rect = this.model.pixelRectForBufferPosition(this.anchor);
     if (!rect) return false;
     try {
-      const root = (this.view as any).getRoot?.();
+      const root = this.view.getRoot?.();
       const surfaceWidth = root?.getWidth?.() ?? 0;
       if (!surfaceWidth) return false;
       const res: any = (this.view as any).computeBounds(root);
@@ -260,7 +260,7 @@ export class CompletionPopup {
     if (!row || !adjustment) return;
     let rect;
     try {
-      const result: any = (row as any).computeBounds(this.listBox);
+      const result: any = row.computeBounds(this.listBox);
       rect = Array.isArray(result) ? result[1] : result;
     } catch {
       return;

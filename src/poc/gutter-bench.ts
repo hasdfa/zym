@@ -50,7 +50,7 @@ fontMap.addFontFile(Path.join(fontDir, 'SymbolsNerdFontMono-Regular.ttf'));
 const ctx: any = fontMap.createContext();
 const FONT = Pango.FontDescription.fromString('Monospace 11');
 ctx.setFontDescription(FONT);
-const makeLayout = (): any => { const l = (Pango.Layout as any).new(ctx); l.setFontDescription(FONT); return l; };
+const makeLayout = (): any => { const l = Pango.Layout.new(ctx); l.setFontDescription(FONT); return l; };
 
 // ---------------------------------------------------------------------------
 // Markup constants + per-line builders — copied verbatim from the real renderers.

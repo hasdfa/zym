@@ -88,14 +88,14 @@ test('an edit through one view reparses the shared model and repaints both views
 
   // Edit through view A's buffer → forwarded to the model → propagated to view B. The
   // model edit drives ONE (debounced) reparse on the shared DocumentSyntax.
-  const buf = a.buffer as any;
+  const buf = a.buffer;
   buf.insert(buf.getEndIter(), 'const y = 42;\n', -1);
   await new Promise((r) => setTimeout(r, 120)); // let the 60ms reparse debounce fire
 
   assert.ok((doc.syntax.captureCounts()['number'] ?? 0) > before, 'incremental reparse saw the new number literal');
   // The new `42` is highlighted in BOTH views (each repainted off the one reparse).
   const updated = doc.getText();
-  assert.ok((b.buffer as any).getText((b.buffer as any).getStartIter(), (b.buffer as any).getEndIter(), true) === updated,
+  assert.ok(b.buffer.getText(b.buffer.getStartIter(), b.buffer.getEndIter(), true) === updated,
     'view B mirrors the edit');
   a.syntax.dispose();
   b.syntax.dispose();

@@ -37,7 +37,7 @@ class MultiBufferLineRenderer extends GtkSource.GutterRendererText {
     // A header band ABOVE makes the cell taller above → bottom-align (yalign 1) keeps the number on
     // the text; a gap band BELOW makes it taller below → top-align (yalign 0). Plain rows: either
     // (cell == text height). `queryData` runs per row right before it's drawn, so this is per-row.
-    (this as any).yalign = this.bandAt(line) === 'below' ? 0 : 1;
+    this.yalign = this.bandAt(line) === 'below' ? 0 : 1;
     const label = lineNumberLabel(this.getProjection(), line, this.width);
     this.setMarkup(`<span foreground="${COLOR}">${label || ' '}</span>`, -1);
   }
@@ -56,14 +56,14 @@ export class SourceLineNumberGutter {
   constructor(view: SourceView, getProjection: () => ViewProjection, maxLineNumber: number, bandAt: (line: number) => 'above' | 'below' | null) {
     this.view = view;
     this.renderer = new MultiBufferLineRenderer();
-    (this.renderer as any).getProjection = getProjection;
-    (this.renderer as any).bandAt = bandAt;
-    (this.renderer as any).width = String(Math.max(1, maxLineNumber)).length;
+    this.renderer.getProjection = getProjection;
+    this.renderer.bandAt = bandAt;
+    this.renderer.width = String(Math.max(1, maxLineNumber)).length;
     this.renderer.setXpad(4);
     (this.view as any).getGutter(Gtk.TextWindowType.LEFT).insert(this.renderer, 0);
 
     // Reserve width for the widest number up front (a number measured on a short line crops).
-    this.renderer.setText('0'.repeat((this.renderer as any).width), -1);
+    this.renderer.setText('0'.repeat(this.renderer.width), -1);
     this.renderer.queueResize();
   }
 

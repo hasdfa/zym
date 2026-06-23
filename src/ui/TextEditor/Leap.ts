@@ -219,10 +219,10 @@ export class Leap {
    *  *before* the conceal tag so conceal keeps the higher priority on first chars. */
   private dimTagFor(): InstanceType<typeof Gtk.TextTag> {
     if (this.dimTag) return this.dimTag;
-    const tag = new Gtk.TextTag({ name: 'leap:dim' } as any);
+    const tag = new Gtk.TextTag({ name: 'leap:dim' });
     const fg = new Gdk.RGBA();
     fg.parse(theme.ui.text.muted);
-    (tag as any).foregroundRgba = fg;
+    tag.foregroundRgba = fg;
     this.buffer.getTagTable().add(tag);
     this.dimTag = tag;
     return tag;
@@ -232,10 +232,10 @@ export class Leap {
    *  floated mark is all that shows in the cell. Created lazily, once. */
   private conceal(): InstanceType<typeof Gtk.TextTag> {
     if (this.concealTag) return this.concealTag;
-    const tag = new Gtk.TextTag({ name: 'leap:conceal' } as any);
+    const tag = new Gtk.TextTag({ name: 'leap:conceal' });
     const bg = new Gdk.RGBA();
     bg.parse(theme.ui.editor.background);
-    (tag as any).foregroundRgba = bg;
+    tag.foregroundRgba = bg;
     this.buffer.getTagTable().add(tag);
     this.concealTag = tag;
     return tag;

@@ -212,7 +212,7 @@ test('read-only editor: edits no-op and input stays disabled across vim modes', 
   assert.equal(m.getText(), 'abc\n', 'programmatic (vim) edit rejected in read-only');
   // Entering insert mode would call setInputEnabled(true); read-only must keep input off.
   m.setInputEnabled(true);
-  assert.equal((view as any).getEditable(), false, 'native input stays disabled in read-only');
+  assert.equal(view.getEditable(), false, 'native input stays disabled in read-only');
   assert.equal(m.isReadOnly(), true);
 });
 

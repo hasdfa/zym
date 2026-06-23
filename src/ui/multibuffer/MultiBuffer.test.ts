@@ -55,7 +55,7 @@ function paintMultibuffer(excerpts: Excerpt[], lines: Record<string, string[]>, 
     projection: new ExcerptSyntaxProjection(() => projection, sources),
   });
   syntax.paint();
-  return { buffer: buffer as any, projection, syntax };
+  return { buffer: buffer, projection, syntax };
 }
 
 /** Whether `token` on view row `viewRow` carries `tagName` (checked mid-token). */
@@ -128,7 +128,7 @@ test('a ProjectionView-backed multibuffer (the SearchResultsView path) materiali
     { header: 'b.ts', segments: [seg('/b.ts', 0, 1)] },
   ];
   const pv = new ProjectionView(excerptsToItems(excerpts), new Map([['/a.ts', aBuf], ['/b.ts', bBuf]]));
-  const buffer = pv.buffer as any;
+  const buffer = pv.buffer;
   assert.equal(
     buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true),
     'a.ts\nconst aaa = 1;\nfunction fa() {}\n\nb.ts\nconst bbb = 2;\nlet ccc = 3;',
@@ -175,7 +175,7 @@ test('the diff multibuffer highlights both the new (context/added) and old (remo
   const oldSyn = source(oldText, '/x.ts');
   const pv = new ProjectionView(
     dmb.items,
-    new Map([['new:/x.ts', (newSyn as any).sourceBuffer], ['old:/x.ts', (oldSyn as any).sourceBuffer]]),
+    new Map([['new:/x.ts', newSyn.sourceBuffer], ['old:/x.ts', oldSyn.sourceBuffer]]),
   );
   const view = new GtkSource.View({ buffer: pv.buffer });
   const syntax = new SyntaxController(view, pv.buffer, {

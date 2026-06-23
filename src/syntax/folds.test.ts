@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { computeFoldRanges } from './folds.ts';
 
 const require_ = createRequire(import.meta.url);
-const Parser = require_('web-tree-sitter') as any;
+const Parser = require_('web-tree-sitter');
 const wtsDir = Path.dirname(require_.resolve('web-tree-sitter'));
 const tsWasm = require_.resolve('tree-sitter-wasms/out/tree-sitter-typescript.wasm');
 const HERE = Path.dirname(fileURLToPath(import.meta.url));

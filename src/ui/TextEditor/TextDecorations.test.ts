@@ -19,7 +19,7 @@ function model(text: string): EditorModel {
 /** Whether the decoration tag `tagName` covers the character at `point`. */
 function hasTag(m: EditorModel, point: PointLike, tagName: string): boolean {
   const tag = m.buffer.getTagTable().lookup(tagName);
-  return tag ? (m.iterAtPoint(point) as any).hasTag(tag) : false;
+  return tag ? (m.iterAtPoint(point)).hasTag(tag) : false;
 }
 
 test('decorate applies a styled tag over the range; clear removes it', () => {

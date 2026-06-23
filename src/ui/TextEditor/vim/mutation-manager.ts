@@ -72,7 +72,7 @@ export default class MutationManager {
       resetMarker = true
 
       let initialPointMarker: Marker | undefined
-      const initialPoint = this.swrap(selection).getBufferPositionFor('head', {from: ['property', 'selection'] as any})!
+      const initialPoint = this.swrap(selection).getBufferPositionFor('head', {from: ['property', 'selection']})!
       if (this.stayByMarker) {
         initialPointMarker = (this.markerLayer.markBufferPosition as any)(initialPoint, {invalidate: 'never'})
       }

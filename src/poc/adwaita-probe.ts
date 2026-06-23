@@ -74,14 +74,14 @@ function lookup(ctx: any, cssName: string): { ok: boolean; hex?: string } {
   const res = ctx.lookupColor(named);
   let ok: boolean;
   let color: any;
-  if (Array.isArray(res)) { [ok, color] = res; } else { ok = !!res; color = (ctx as any).__lastColor; }
+  if (Array.isArray(res)) { [ok, color] = res; } else { ok = !!res; color = ctx.__lastColor; }
   return ok && color ? { ok: true, hex: toHex(color) } : { ok: false };
 }
 
 function probeScheme(label: string): Record<string, Record<string, { ok: boolean; hex?: string }>> {
   const widget = new Gtk.Label({ label: 'probe' });
   // Realize-free: the display-wide Adwaita provider is in the style cascade.
-  const ctx = (widget as any).getStyleContext();
+  const ctx = widget.getStyleContext();
   const out: Record<string, Record<string, { ok: boolean; hex?: string }>> = {};
   for (const [cat, names] of Object.entries(COLOR_VARS)) {
     out[cat] = {};

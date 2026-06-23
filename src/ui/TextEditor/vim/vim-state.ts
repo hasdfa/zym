@@ -442,7 +442,7 @@ export default class VimState {
 
     if (options.userInvocation) {
       // TODO(vim-ts): OperationStack.lastCommandName isn't a declared field yet.
-      ;(this.operationStack as any).lastCommandName = null
+      ;this.operationStack.lastCommandName = null
 
       if (this.editor.hasMultipleCursors()) {
         this.clearSelections()

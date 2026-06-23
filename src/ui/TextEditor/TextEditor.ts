@@ -843,7 +843,7 @@ export class TextEditor implements DocumentHost {
     // release these on their own. This is the dominant native-memory leak. See `subs`.
     this.subs.dispose();
     if (this.mapHandler) {
-      (this.view as any).off('map', this.mapHandler);
+      this.view.off('map', this.mapHandler);
       this.mapHandler = null;
     }
     this.dismissSignature();
@@ -1172,7 +1172,7 @@ export class TextEditor implements DocumentHost {
       }
       return ++frames < 120; // keep trying ~2s then give up
     };
-    this.connect(this.view, 'map', () => (this.view as any).addTickCallback(tick));
+    this.connect(this.view, 'map', () => this.view.addTickCallback(tick));
   }
 
   /** Whether an inline peek is currently open. */
@@ -1315,7 +1315,7 @@ export class TextEditor implements DocumentHost {
         applyCap();
         applyFloor();
         let frames = 0;
-        (this.view as any).addTickCallback(() => { this.view.queueResize(); return ++frames < 2; });
+        this.view.addTickCallback(() => { this.view.queueResize(); return ++frames < 2; });
       });
     }
 
@@ -1584,7 +1584,7 @@ export class TextEditor implements DocumentHost {
     // getIterLocation gives the character cell (buffer coords); convert to the
     // view's widget coords (accounts for the gutter and scroll position).
     const cell = (this.view as any).getIterLocation(iter) as { x: number; y: number; width: number; height: number };
-    const [winX, winY] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
+    const [winX, winY] = this.view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
     // An empty line / EOL has near-zero cell width; fall back to a slim block.
     const width = cell.width > 1 ? cell.width : Math.max(2, Math.round(cell.height * 0.5));
     this.caret.setSizeRequest(width, cell.height);
@@ -1619,7 +1619,7 @@ export class TextEditor implements DocumentHost {
         width: number;
         height: number;
       };
-      const [winX, winY] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
+      const [winX, winY] = this.view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
       const beam = carets[i].beam;
       // Secondary insert-mode carets render as a 1px beam (thinner than the main
       // caret) so they read as subordinate, nudged 1px left to sit on the gap
@@ -1662,7 +1662,7 @@ export class TextEditor implements DocumentHost {
 
   private isVimIdle(): boolean {
     const stack = this.vimState.operationStack;
-    const register = (this.vimState as any).__register;
+    const register = this.vimState.__register;
     return (
       zym.keymaps.queuedKeystrokes.length === 0 &&
       stack.isEmpty() &&
@@ -1861,7 +1861,7 @@ export class TextEditor implements DocumentHost {
     this.focusOnLoad = opts.focus ?? true;
     const onMap = () => this.activate();
     this.mapHandler = onMap;
-    (this.view as any).on('map', onMap);
+    this.view.on('map', onMap);
   }
 
   /** First-show hook (one-shot): load the file's content if no sibling view has yet, else
@@ -1871,7 +1871,7 @@ export class TextEditor implements DocumentHost {
     if (this.activated || this.disposed) return;
     this.activated = true;
     if (this.mapHandler) {
-      (this.view as any).off('map', this.mapHandler);
+      this.view.off('map', this.mapHandler);
       this.mapHandler = null;
     }
     // A shared document already loaded by another view → just wire this view onto it;
@@ -2117,8 +2117,8 @@ export class TextEditor implements DocumentHost {
       return ++frames < 120; // keep trying ~2s then give up
     };
     if (!apply()) return; // already laid out → set once, done
-    if ((this.view as any).getMapped()) (this.view as any).addTickCallback(apply);
-    else this.connect(this.view, 'map', () => (this.view as any).addTickCallback(apply));
+    if (this.view.getMapped()) this.view.addTickCallback(apply);
+    else this.connect(this.view, 'map', () => this.view.addTickCallback(apply));
   }
 
   /** Restore unsaved content (session restore): replace the buffer and keep it

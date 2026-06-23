@@ -79,7 +79,7 @@ function showPeek() {
   if (peek) return;
   // 1) reserve the band so real lines part. 2) drop the card into the SIBLING
   // overlay (not the text window) and position it at the gap.
-  (gapTag as any).pixelsBelowLines = PEEK_HEIGHT;
+  gapTag.pixelsBelowLines = PEEK_HEIGHT;
   const start = asIter(buffer.getIterAtLine(ANCHOR_LINE));
   const end = asIter(buffer.getIterAtLine(ANCHOR_LINE + 1));
   buffer.applyTag(gapTag, start, end);
@@ -95,7 +95,7 @@ function hidePeek() {
   const start = asIter(buffer.getIterAtLine(ANCHOR_LINE));
   const end = asIter(buffer.getIterAtLine(ANCHOR_LINE + 1));
   buffer.removeTag(gapTag, start, end);
-  (gapTag as any).pixelsBelowLines = 0;
+  gapTag.pixelsBelowLines = 0;
   overlay.removeOverlay(peek);
   peek = null;
   view.queueResize();
@@ -111,7 +111,7 @@ function togglePeek() {
  *  Called on scroll. */
 function reposition() {
   if (!peek) return;
-  (overlay as any).queueAllocate?.();
+  overlay.queueAllocate?.();
 }
 
 const loop = GLib.MainLoop.new(null, false);

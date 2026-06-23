@@ -51,7 +51,7 @@ function createClipboard(selection: Selection): Clipboard {
   function ensure(): any {
     if (initialized) return gtkClipboard;
     initialized = true;
-    const display = Gdk.Display.getDefault() as any;
+    const display = Gdk.Display.getDefault();
     if (!display) return null; // headless: in-memory only
     gtkClipboard = selection === 'primary' ? display.getPrimaryClipboard() : display.getClipboard();
     gtkClipboard.on('changed', refreshCache);

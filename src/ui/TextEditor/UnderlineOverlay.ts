@@ -71,16 +71,16 @@ export class UnderlineOverlay {
     const bind = (getter: 'getVadjustment' | 'getHadjustment', notify: string) => {
       let bound: any = null;
       const rebind = () => {
-        const adj = (this.view as any)[getter]?.();
+        const adj = this.view[getter]?.();
         if (!adj || adj === bound) return;
         if (bound) bound.off('value-changed', redraw); // drop the stale binding before re-binding
         bound = adj;
         adj.on('value-changed', redraw);
       };
       rebind();
-      (this.view as any).on(notify, rebind);
+      this.view.on(notify, rebind);
       this.subs.add(new Disposable(() => {
-        (this.view as any).off(notify, rebind);
+        this.view.off(notify, rebind);
         if (bound) bound.off('value-changed', redraw);
       }));
     };
@@ -89,7 +89,7 @@ export class UnderlineOverlay {
     // Redraw on edits too: the marks have already moved with the edit, so repaint now
     // (at their new positions) rather than waiting for the next diagnostics push — this
     // is what removes the on-edit lag.
-    const buffer = this.model.buffer as any;
+    const buffer = this.model.buffer;
     buffer.on('changed', redraw);
     this.subs.add(new Disposable(() => buffer.off('changed', redraw)));
   }
@@ -103,7 +103,7 @@ export class UnderlineOverlay {
 
   /** Replace the underline set and repaint, anchoring each range to a mark pair. */
   setUnderlines(underlines: Underline[]): void {
-    const buffer = this.model.buffer as any;
+    const buffer = this.model.buffer;
     this.deleteMarks();
     // start mark right-gravity, end mark left-gravity → the pair brackets the range like
     // a GtkTextTag (inserts at the edges fall outside; inserts inside grow it).
@@ -124,7 +124,7 @@ export class UnderlineOverlay {
   }
 
   private deleteMarks(): void {
-    const buffer = this.model.buffer as any;
+    const buffer = this.model.buffer;
     for (const p of this.placed) {
       buffer.deleteMark(p.startMark);
       buffer.deleteMark(p.endMark);
@@ -141,7 +141,7 @@ export class UnderlineOverlay {
     const c = this.rgba(color);
     cr.setSourceRgba(c.red, c.green, c.blue, c.alpha);
     // Resolve the marks to their current positions (they've tracked any edits).
-    const buffer = this.model.buffer as any;
+    const buffer = this.model.buffer;
     const startIter = asIter(buffer.getIterAtMark(startMark));
     const endIter = asIter(buffer.getIterAtMark(endMark));
     const startRow = startIter.getLine();
@@ -162,15 +162,15 @@ export class UnderlineOverlay {
 
   /** Widget-pixel `[x0, x1]` and baseline `y` for `[startCol, endCol)` on `row`. */
   private lineSpan(row: number, startColumn: number, endColumn: number): { x0: number; x1: number; y: number } | null {
-    const startCell = (this.view as any).getIterLocation(this.model.iterAtPoint(new Point(row, startColumn)));
-    const endCell = (this.view as any).getIterLocation(this.model.iterAtPoint(new Point(row, endColumn)));
+    const startCell = this.view.getIterLocation(this.model.iterAtPoint(new Point(row, startColumn)));
+    const endCell = this.view.getIterLocation(this.model.iterAtPoint(new Point(row, endColumn)));
     // Underline sits just below the cell box (in the descender gap).
-    const [x0, y] = (this.view as any).bufferToWindowCoords(
+    const [x0, y] = this.view.bufferToWindowCoords(
       Gtk.TextWindowType.WIDGET,
       startCell.x,
       startCell.y + startCell.height,
     );
-    const [x1] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, endCell.x, endCell.y);
+    const [x1] = this.view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, endCell.x, endCell.y);
     return { x0, x1, y: y - AMPLITUDE + 0.5 };
   }
 

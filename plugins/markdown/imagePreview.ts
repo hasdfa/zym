@@ -82,9 +82,9 @@ function loadTexture(absPath: string, cache: Map<string, CachedTexture>): Cached
   if (hit && hit.mtimeMs === mtimeMs) return hit;
   try {
     // newFromFileAtScale downscales preserving aspect ratio in one decode.
-    const pixbuf = (GdkPixbuf.Pixbuf as any).newFromFileAtScale(absPath, MAX_WIDTH, MAX_HEIGHT, true);
+    const pixbuf = GdkPixbuf.Pixbuf.newFromFileAtScale(absPath, MAX_WIDTH, MAX_HEIGHT, true);
     const entry: CachedTexture = {
-      texture: (Gdk.Texture as any).newForPixbuf(pixbuf),
+      texture: Gdk.Texture.newForPixbuf(pixbuf),
       width: pixbuf.getWidth(),
       height: pixbuf.getHeight(),
       mtimeMs,
@@ -99,7 +99,7 @@ function loadTexture(absPath: string, cache: Map<string, CachedTexture>): Cached
 /** A fresh Picture for `entry` (the texture/paintable is shared across blocks, but
  *  a widget has a single parent, so each block needs its own Picture). */
 function buildPicture(entry: CachedTexture): InstanceType<typeof Gtk.Widget> {
-  const picture = (Gtk.Picture as any).newForPaintable(entry.texture);
+  const picture = Gtk.Picture.newForPaintable(entry.texture);
   picture.setSizeRequest(entry.width, entry.height);
   picture.setHalign(Gtk.Align.START);
   picture.setMarginStart(8);

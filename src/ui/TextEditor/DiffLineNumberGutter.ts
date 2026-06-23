@@ -89,10 +89,10 @@ export class DiffLineNumberGutter {
 
   /** Swap the per-row labels + cell backgrounds (after a re-diff re-flows the rows) and repaint. */
   setData(labels: string[], backgrounds?: (string | null)[]): void {
-    (this.renderer as any).labels = labels;
+    this.renderer.labels = labels;
     this.renderer.backgrounds = backgrounds ?? null;
     this.primeWidth(labels);
-    (this.renderer as any).queueDraw?.();
+    this.renderer.queueDraw?.();
   }
 
   /** Reserve width for the widest label (a number measured on a short line would crop). */
@@ -139,7 +139,7 @@ class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
   headerRows: Set<number> = new Set();
 
   queryData(_lines: any, line: number) {
-    (this as any).yalign = this.headerRows.has(line) ? 1 : 0;
+    this.yalign = this.headerRows.has(line) ? 1 : 0;
     // The leading staged/unstaged marker bar exists only on a live diff; read-only diffs drop it.
     const marker = this.live ? markerMarkup(this.stagedState?.[line] ?? null) : '';
     const oldCell = cellMarkup(this.oldLabels?.[line] ?? '', this.oldBg?.[line] ?? null, false);
@@ -200,7 +200,7 @@ export class CombinedDiffLineNumberGutter {
     this.renderer.headerRows = headerRows;
     this.renderer.stagedState = stagedState;
     this.primeWidth(oldLabels, newLabels);
-    (this.renderer as any).queueDraw?.();
+    this.renderer.queueDraw?.();
   }
 
   /** Reserve width for the (live-only) marker bar + the widest old + new columns (a number measured

@@ -230,7 +230,7 @@ class FoldAll extends MiscCommand {
       }
     }
     // TODO(vim-ts): scrollToCursorPosition not yet on EditorModel
-    ;(this.editor as any).scrollToCursorPosition({center: true})
+    ;this.editor.scrollToCursorPosition({center: true})
   }
 }
 
@@ -424,7 +424,7 @@ class ScrollCursorToLeft extends MiscCommand {
     } else {
       // TODO(vim-ts): setScrollRight/component not yet on EditorModel
       ;(this.editorElement as any).setScrollRight(pixel.left)
-      ;(this.editor as any).component.updateSync() // FIXME: This is necessary maybe because of bug of atom-core.
+      ;this.editor.component.updateSync() // FIXME: This is necessary maybe because of bug of atom-core.
     }
   }
 }
@@ -550,7 +550,7 @@ class DeleteToBeginningOfInsertLine extends InsertMode {
 class RecordMacro extends MiscCommand {
   async execute (): Promise<void> {
     // TODO(vim-ts): macro record methods not yet on KeymapManager
-    const km = zym.keymaps as any
+    const km = zym.keymaps
     if (km.isRecordingMacro()) {
       // TODO(vim-ts): recordingMacroRegister not yet on VimState
       this.vimState.saveMacro((this.vimState as any).recordingMacroRegister, km.stopMacroRecord())

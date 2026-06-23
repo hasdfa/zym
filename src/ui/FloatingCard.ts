@@ -29,7 +29,7 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 /** A widget's bounds in `relativeTo`'s coordinate space, or null if not yet computable
  *  (e.g. the target isn't realized). `computeBounds` returns `[ok, Graphene.Rect]`. */
 function boundsIn(widget: Widget, relativeTo: Widget): { x: number; y: number; width: number; height: number } | null {
-  const res: any = (widget as any).computeBounds(relativeTo);
+  const res: any = widget.computeBounds(relativeTo);
   const ok = Array.isArray(res) ? res[0] : !!res;
   const rect = Array.isArray(res) ? res[1] : res;
   if (!ok || !rect) return null;
@@ -38,7 +38,7 @@ function boundsIn(widget: Widget, relativeTo: Widget): { x: number; y: number; w
 
 /** Natural size of `widget` along `orientation` (px); `measure` returns `[min, nat, …]`. */
 function naturalSize(widget: Widget, orientation: number, forSize: number): number {
-  const m: any = (widget as any).measure(orientation, forSize);
+  const m: any = widget.measure(orientation, forSize);
   return Array.isArray(m) ? m[1] : m;
 }
 

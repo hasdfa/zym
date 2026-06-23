@@ -216,7 +216,7 @@ export class SyntaxController {
     this.buffer = buffer;
     this.foldingEnabled = options.folding !== false;
 
-    const table = (buffer as any).getTagTable();
+    const table = buffer.getTagTable();
     const mk = (props: Record<string, unknown>) => { const t = new Gtk.TextTag(props); table.add(t); return t; };
 
     // Build the syntax-highlight tags FIRST: tag priority follows creation order,
@@ -225,9 +225,9 @@ export class SyntaxController {
 
     // The tag that performs the actual hiding when a range is folded.
     this.invisibleTag = new Gtk.TextTag({ name: FOLD_HIDDEN_TAG_NAME, invisible: true });
-    (buffer as any).getTagTable().add(this.invisibleTag);
-    this.foldPlaceholderTag = new Gtk.TextTag({ name: 'ts:fold-placeholder', editable: false, foreground: theme.ui.text.muted } as any);
-    (buffer as any).getTagTable().add(this.foldPlaceholderTag);
+    buffer.getTagTable().add(this.invisibleTag);
+    this.foldPlaceholderTag = new Gtk.TextTag({ name: 'ts:fold-placeholder', editable: false, foreground: theme.ui.text.muted });
+    buffer.getTagTable().add(this.foldPlaceholderTag);
 
     // Bracket-match highlight (subtle box-like background + bold).
     this.bracketMatchTag = mk({
@@ -265,7 +265,7 @@ export class SyntaxController {
     // is set by the enclosing ScrolledWindow after construction, so connect when
     // it appears (notify::vadjustment) as well as now if it's already there.
     const connectScroll = () => {
-      const vadj = (view as any).getVadjustment?.();
+      const vadj = view.getVadjustment?.();
       if (vadj && vadj !== this.scrollAdj) {
         this.scrollAdj = vadj;
         this.connect(vadj, 'value-changed', () => this.scheduleViewportRepaint());
@@ -307,7 +307,7 @@ export class SyntaxController {
     // doesn't pin this controller and its providers (tab-close detaches, never destroys).
     if (this.gutterRenderer) {
       try { (this.view as any).getGutter(Gtk.TextWindowType.LEFT).remove(this.gutterRenderer); } catch { /* gutter already gone */ }
-      (this.gutterRenderer as any).controller = null;
+      this.gutterRenderer.controller = null;
       this.gutterRenderer = null;
     }
     this.gitCell = null;
@@ -330,7 +330,7 @@ export class SyntaxController {
   /** Highlight the bracket under (or just before) the cursor and its match. */
   private updateBracketMatch(): void {
     if (this.disposed) return;
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     buffer.removeTag(this.bracketMatchTag, buffer.getStartIter(), buffer.getEndIter());
     const cursor = asIter(buffer.getIterAtMark(buffer.getInsert())).getOffset();
     const len = buffer.getCharCount();
@@ -375,7 +375,7 @@ export class SyntaxController {
     this.repaint(); // paint this view from the (shared) tree — silent for siblings
     this.rebuildFoldMap();
     this.scheduleGutterInstall();
-    (this.view as any).queueDraw();
+    this.view.queueDraw();
     return true;
   }
 
@@ -416,7 +416,7 @@ export class SyntaxController {
     if (this.disposed) return;
     this.repaint();
     this.rebuildFoldMap();
-    (this.view as any).queueDraw();
+    this.view.queueDraw();
   }
 
   /**
@@ -430,7 +430,7 @@ export class SyntaxController {
   private repaint(): void {
     if (!this.hasContent()) return;
     this.lineTextCache.clear();
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     // Clear only OUR highlight tags (the fold placeholder tags are separate, untouched).
     this.highlight.clear(buffer, buffer.getStartIter(), buffer.getEndIter());
     const range = this.visibleRange() ?? this.initialPaintRange();
@@ -466,7 +466,7 @@ export class SyntaxController {
     if (!this.hasContent()) return;
     if (this.projection) {
       const from = vFrom ?? 0;
-      const to = vTo ?? (this.buffer as any).getLineCount() - 1;
+      const to = vTo ?? this.buffer.getLineCount() - 1;
       for (const slice of this.projection.paintSlices(from, to)) {
         const captures = slice.syntax.captures(slice.fromRow, slice.toRow);
         this.highlight.paint(this.buffer, captures, (row, col) => this.sliceIter(slice, row, col));
@@ -489,11 +489,11 @@ export class SyntaxController {
    *  comment-colored constructor bug). Clamping a position before the slice to its first row
    *  (col 0) and one after to its last row's end keeps every tag inside its own excerpt. */
   private sliceIter(slice: SyntaxSlice, sourceRow: number, sourceCol: number): any {
-    if (sourceRow < slice.fromRow) return asIter((this.buffer as any).getIterAtLineOffset(slice.viewStart, 0));
+    if (sourceRow < slice.fromRow) return asIter(this.buffer.getIterAtLineOffset(slice.viewStart, 0));
     if (sourceRow > slice.toRow) return this.lineEndIter(slice.viewStart + (slice.toRow - slice.sourceStart));
     const viewRow = slice.viewStart + (sourceRow - slice.sourceStart);
     const col = slice.syntax.hasAstral ? this.toCodepointColumn(viewRow, sourceCol) : sourceCol;
-    return asIter((this.buffer as any).getIterAtLineOffset(viewRow, col));
+    return asIter(this.buffer.getIterAtLineOffset(viewRow, col));
   }
 
   /** On scroll (no reparse): paint just the parts of the visible range not already in the
@@ -509,7 +509,7 @@ export class SyntaxController {
     this.lineTextCache.clear();
     for (const [a, b] of gaps) this.paintViewLines(a, b);
     this.paintedRanges = mergeRange(this.paintedRanges, top, bottom);
-    (this.view as any).queueDraw();
+    this.view.queueDraw();
   }
 
   /** Install the gutter once the view is sized (its line metrics validated). Deferred off
@@ -518,7 +518,7 @@ export class SyntaxController {
    *  Headless / already-sized: install now. */
   private scheduleGutterInstall(): void {
     if (this.gutterInstalled) return;
-    const view = this.view as any;
+    const view = this.view;
     if (!view.getRealized() || view.getHeight() > 0) { this.installGutter(); return; }
     let frames = 0;
     const tick = (): boolean => {
@@ -571,7 +571,7 @@ export class SyntaxController {
     this.gutterInstalled = true;
     // Drop the reserved left margin: the gutter now occupies that space, so swapping them
     // in the same layout pass keeps the text column fixed (no shift).
-    if (this.gutterReserved) (this.view as any).setLeftMargin(0);
+    if (this.gutterReserved) this.view.setLeftMargin(0);
     const gutter = (this.view as any).getGutter(Gtk.TextWindowType.LEFT);
     // ONE renderer composes the whole gutter (custom + fold-aware: GtkSourceView's
     // built-in line numbers render a number for every folded line at the collapsed y —
@@ -635,11 +635,11 @@ export class SyntaxController {
   /** The visible buffer range as VIEW lines `[top, bottom]` (± a margin), or null (whole
    *  buffer) when the view isn't realized/laid out yet (initial load, headless). */
   private visibleRange(): [number, number] | null {
-    const view = this.view as any;
+    const view = this.view;
     if (!view.getRealized()) return null;
     const rect = view.getVisibleRect();
     if (!rect || !rect.height) return null;
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     const lineAtY = (y: number): number => {
       const r = view.getLineAtY(y);
       return asIter(Array.isArray(r) ? r[0] : r).getLine();
@@ -655,8 +655,8 @@ export class SyntaxController {
    *  the file's head — so open is O(viewport) not O(file). A genuinely unrealized view
    *  (headless / tests) returns null so the whole buffer is still painted. */
   private initialPaintRange(): [number, number] | null {
-    if (!(this.view as any).getRealized()) return null;
-    const last = (this.buffer as any).getLineCount() - 1;
+    if (!this.view.getRealized()) return null;
+    const last = this.buffer.getLineCount() - 1;
     return [0, Math.min(INITIAL_PAINT_LINES, last)];
   }
 
@@ -706,11 +706,11 @@ export class SyntaxController {
     if (this.viewFolded) {
       const col = this.docSyntax.hasAstral ? this.modelCodepointCol(modelRow, modelCol) : modelCol;
       const vp = this.foldHost!.viewPointFromModel(this.buffer, new Point(modelRow, col));
-      return asIter((this.buffer as any).getIterAtLineOffset(vp.row, vp.column));
+      return asIter(this.buffer.getIterAtLineOffset(vp.row, vp.column));
     }
     // view line == model line, view text == model text → resolve directly on the view buffer.
     const col = this.docSyntax.hasAstral ? this.toCodepointColumn(modelRow, modelCol) : modelCol;
-    return asIter((this.buffer as any).getIterAtLineOffset(modelRow, col));
+    return asIter(this.buffer.getIterAtLineOffset(modelRow, col));
   }
 
   /** Rebuild `foldsByHeaderLine` from the shared parse's discovered fold ranges (MODEL
@@ -720,7 +720,7 @@ export class SyntaxController {
    *  the body, so the fold IS rediscovered — unlike the old view-buffer parse). */
   private rebuildFoldMap(): void {
     if (!this.foldingEnabled) return;
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     this.foldsByHeaderLine.clear();
     // Collapsed folds first: their placeholder occupies a view line; key by it.
     if (this.foldHost) {
@@ -743,7 +743,7 @@ export class SyntaxController {
   }
 
   private clearHighlight(): void {
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     const start = buffer.getStartIter();
     const end = buffer.getEndIter();
     this.highlight.clear(buffer, start, end);
@@ -770,10 +770,10 @@ export class SyntaxController {
     if (utf16Col <= 0) return utf16Col;
     let text = this.lineTextCache.get(line);
     if (text === undefined) {
-      const start = asIter((this.buffer as any).getIterAtLine(line));
+      const start = asIter(this.buffer.getIterAtLine(line));
       const end = start.copy();
       if (!end.endsLine()) end.forwardToLineEnd();
-      text = (this.buffer as any).getText(start, end, true) as string;
+      text = this.buffer.getText(start, end, true) as string;
       this.lineTextCache.set(line, text);
     }
     let cp = 0;
@@ -789,7 +789,7 @@ export class SyntaxController {
   /** Toggle `region`. Returns the view range an expand revealed (the restored body), so a
    *  fold-open command can drop the caret on its first non-blank character; null on collapse. */
   private toggleFold(region: FoldRegion): RevealedRange | null {
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     const cursorOff = asIter(buffer.getIterAtMark(buffer.getInsert())).getOffset();
     // Track this code fold's desired open/closed state by its MODEL start row. Captured
     // before the expand splices the body back.
@@ -863,7 +863,7 @@ export class SyntaxController {
     // shifted view lines immediately (no reparse will fire to do it). A private parse
     // repaints when its (full) reparse lands via onReparse.
     if (this.translate) this.repaint();
-    (this.view as any).queueDraw();
+    this.view.queueDraw();
     this.emitFoldsChanged();
     return revealed;
   }
@@ -917,21 +917,21 @@ export class SyntaxController {
   }
 
   private markOffset(mark: any): number {
-    return asIter((this.buffer as any).getIterAtMark(mark)).getOffset();
+    return asIter(this.buffer.getIterAtMark(mark)).getOffset();
   }
 
   private pointAtOffset(offset: number): [number, number] {
-    const iter = asIter((this.buffer as any).getIterAtOffset(offset));
+    const iter = asIter(this.buffer.getIterAtOffset(offset));
     return [iter.getLine(), iter.getLineOffset()];
   }
 
   /** End-of-line iter for a buffer line (the position of its trailing newline). */
   private lineStartIter(line: number): any {
-    return asIter((this.buffer as any).getIterAtLine(line));
+    return asIter(this.buffer.getIterAtLine(line));
   }
 
   private lineEndIter(line: number): any {
-    const iter = asIter((this.buffer as any).getIterAtLine(line));
+    const iter = asIter(this.buffer.getIterAtLine(line));
     if (!iter.endsLine()) iter.forwardToLineEnd();
     return iter;
   }
@@ -939,7 +939,7 @@ export class SyntaxController {
   /** Iter at the footer line's first non-whitespace glyph (its `}`), so a fold hides
    *  the leading indentation and the `}` joins the header flush. */
   private footerContentStart(line: number): any {
-    const iter = asIter((this.buffer as any).getIterAtLine(line));
+    const iter = asIter(this.buffer.getIterAtLine(line));
     // getChar() returns the character as a STRING, not a codepoint number — comparing
     // it to 0x20/0x09 was always false, so indentation before `}` was never skipped
     // (it only looked right when `}` sat at column 0).
@@ -1026,7 +1026,7 @@ export class SyntaxController {
    *  Returns a cached value (the renderer calls this per visible line per frame); the
    *  cache is refreshed by primeGutter on edits, and lazily on first read. */
   lineNumberWidth(): number {
-    return this.cachedLineDigits || (this.cachedLineDigits = String((this.buffer as any).getLineCount()).length);
+    return this.cachedLineDigits || (this.cachedLineDigits = String(this.buffer.getLineCount()).length);
   }
 
   /**
@@ -1039,7 +1039,7 @@ export class SyntaxController {
   private primeGutter(): void {
     // Compute the fresh width (one getLineCount per edit) and keep the per-frame cache
     // current, even before the renderer exists, so the renderer's first read is right.
-    const digits = String((this.buffer as any).getLineCount()).length;
+    const digits = String(this.buffer.getLineCount()).length;
     this.cachedLineDigits = digits;
     if (!this.gutterRenderer) return;
     if (digits === this.lineNumberPrimedDigits) return;
@@ -1055,14 +1055,14 @@ export class SyntaxController {
    *  matches, so toggleFold mutates/removes the same one). */
   private regionForHandle(handle: any, pStart: number | undefined): FoldRegion {
     const p = pStart ?? this.foldHost!.foldPlaceholderRange(this.buffer, handle)[0];
-    const line = asIter((this.buffer as any).getIterAtOffset(p)).getLine();
+    const line = asIter(this.buffer.getIterAtOffset(p)).getLine();
     const existing = this.foldsByHeaderLine.get(line);
     if (existing && existing.handle === handle) return existing;
     return { startLine: line, endLine: line, folded: true, handle };
   }
 
   private regionAtCursor(): FoldRegion | null {
-    const buffer = this.buffer as any;
+    const buffer = this.buffer;
     const cursor = asIter(buffer.getIterAtMark(buffer.getInsert()));
     const off = cursor.getOffset();
     const line = cursor.getLine();
@@ -1168,7 +1168,7 @@ export class SyntaxController {
     }
     this.rebuildFoldMap();
     if (this.translate) this.repaint();
-    (this.view as any).queueDraw();
+    this.view.queueDraw();
     this.emitFoldsChanged();
   }
 
@@ -1184,7 +1184,7 @@ export class SyntaxController {
     // unfoldAll must do the same or the restored text shows in the delimiter color.
     this.rebuildFoldMap();
     if (this.translate) this.repaint();
-    (this.view as any).queueDraw();
+    this.view.queueDraw();
     this.emitFoldsChanged();
   }
 

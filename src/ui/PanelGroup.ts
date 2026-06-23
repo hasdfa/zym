@@ -557,7 +557,7 @@ export class PanelGroup {
   // The widget's bounds relative to the group root, or null if unavailable.
   private rectOf(widget: Widget): { x: number; y: number; w: number; h: number } | null {
     try {
-      const result: any = (widget as any).computeBounds(this.root);
+      const result: any = widget.computeBounds(this.root);
       const rect = Array.isArray(result) ? result[1] : result;
       if (!rect) return null;
       return { x: rect.getX(), y: rect.getY(), w: rect.getWidth(), h: rect.getHeight() };

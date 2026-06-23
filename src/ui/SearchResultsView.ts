@@ -123,7 +123,7 @@ export class SearchResultsView {
     this.bands = this.editor.blockDecorations();
     // Scope the per-excerpt collapse keymap (`z a`/`z M`/`z R`) to this surface — more specific than
     // vim's `#TextEditor`, so it wins while other `z` motions fall through.
-    (this.editor.sourceView as any).addCssClass('search-results');
+    this.editor.sourceView.addCssClass('search-results');
     this.root = this.editor.root;
 
     if (this.editable) {
@@ -152,16 +152,16 @@ export class SearchResultsView {
       // concern is the stitched SYNTAX highlighting — the painter needs a nudge after a row-count
       // reflow. Repaint on a row-count change (write-through; the projection is fresh then), and
       // again after a deferred reverse-sync remap settles (its 'changed' fires on a stale map).
-      this.lastLineCount = (this.editor.sourceView as any).getBuffer().getLineCount();
+      this.lastLineCount = this.editor.sourceView.getBuffer().getLineCount();
       this.editor.model.onDidChangeText(() => {
         if (this.projectionView.isSyncPending()) return; // stale map — the reflow handler repaints
-        const n = (this.editor.sourceView as any).getBuffer().getLineCount();
+        const n = this.editor.sourceView.getBuffer().getLineCount();
         if (n === this.lastLineCount) return;
         this.lastLineCount = n;
         this.editor.repaintSyntax();
       });
       this.projectionView.setReflowHandler(() => {
-        this.lastLineCount = (this.editor.sourceView as any).getBuffer().getLineCount();
+        this.lastLineCount = this.editor.sourceView.getBuffer().getLineCount();
         this.editor.repaintSyntax();
       });
     }
@@ -266,7 +266,7 @@ export class SearchResultsView {
   /** Which excerpt (index) the cursor sits in — the excerpt whose segments contain the cursor's
    *  source position; null on a row that maps to no source. */
   private excerptAtCursor(): number | null {
-    const buffer = (this.editor.sourceView as any).getBuffer();
+    const buffer = this.editor.sourceView.getBuffer();
     const row = asIter(buffer.getIterAtMark(buffer.getInsert())).getLine();
     const src = this.projection.viewToSource(row, 0);
     if (src.kind !== 'source') return null;
@@ -384,7 +384,7 @@ export class SearchResultsView {
    *  Enter only jumps in NORMAL mode (when the view isn't accepting text input) — in INSERT
    *  mode it stays a newline — and double-click keeps its word-select behaviour. */
   private installNavigation(): void {
-    const view = this.editor.sourceView as any;
+    const view = this.editor.sourceView;
     const keys = new Gtk.EventControllerKey();
     keys.setPropagationPhase(Gtk.PropagationPhase.CAPTURE);
     keys.on('key-pressed', (keyval: number) => {
@@ -408,7 +408,7 @@ export class SearchResultsView {
   }
 
   private cursorRow(): number {
-    const buffer = (this.editor.sourceView as any).getBuffer();
+    const buffer = this.editor.sourceView.getBuffer();
     return asIter(buffer.getIterAtMark(buffer.getInsert())).getLine();
   }
 

@@ -53,9 +53,9 @@ export class Peek {
   constructor(view: SourceView, overlay: InstanceType<typeof Gtk.Overlay>) {
     this.view = view;
     this.overlay = overlay;
-    this.buffer = (view as any).getBuffer();
-    this.gapTag = new Gtk.TextTag({ name: 'inline-peek-gap' } as any);
-    (this.buffer as any).getTagTable().add(this.gapTag);
+    this.buffer = view.getBuffer();
+    this.gapTag = new Gtk.TextTag({ name: 'inline-peek-gap' });
+    this.buffer.getTagTable().add(this.gapTag);
   }
 
   get isOpen(): boolean {
@@ -68,14 +68,14 @@ export class Peek {
     this.wireOnce();
 
     const mark = this.buffer.createMark(null, asIter(this.buffer.getIterAtLine(options.line)), true);
-    (this.gapTag as any).pixelsBelowLines = options.height;
+    this.gapTag.pixelsBelowLines = options.height;
     const start = asIter(this.buffer.getIterAtLine(options.line));
     const end = asIter(this.buffer.getIterAtLine(options.line + 1));
     this.buffer.applyTag(this.gapTag, start, end);
 
     this.current = { widget: options.widget, mark, height: options.height, alignLeft: !!options.alignLeft, onClose: options.onClose };
     this.overlay.addOverlay(options.widget);
-    (this.view as any).queueResize();
+    this.view.queueResize();
     this.reposition();
   }
 
@@ -83,11 +83,11 @@ export class Peek {
     if (!this.current) return;
     const { widget, mark, onClose } = this.current;
     this.current = null;
-    (this.gapTag as any).pixelsBelowLines = 0;
+    this.gapTag.pixelsBelowLines = 0;
     this.buffer.removeTag(this.gapTag, this.buffer.getStartIter(), this.buffer.getEndIter());
     this.overlay.removeOverlay(widget);
     this.buffer.deleteMark(mark);
-    (this.view as any).queueResize();
+    this.view.queueResize();
     onClose?.();
   }
 
@@ -95,7 +95,7 @@ export class Peek {
 
   /** Re-run the overlay allocation so get-child-position repositions the card. */
   private reposition(): void {
-    if (this.current) (this.overlay as any).queueAllocate?.();
+    if (this.current) this.overlay.queueAllocate?.();
   }
 
   private wireOnce(): void {
@@ -111,24 +111,24 @@ export class Peek {
       const [x, y] = this.gapWindowXY(cur.mark);
       alloc.x = Math.max(0, Math.round(x));
       alloc.y = Math.round(y);
-      alloc.width = Math.max(1, (this.view as any).getWidth() - Math.max(0, Math.round(x)));
+      alloc.width = Math.max(1, this.view.getWidth() - Math.max(0, Math.round(x)));
       alloc.height = cur.height;
       return true;
     });
 
     // Scroll-follow. The view's adjustment is the ScrolledWindow's by now (it's
     // already mounted), so this binds the live one.
-    (this.view as any).getVadjustment?.()?.on('value-changed', () => this.reposition());
+    this.view.getVadjustment?.()?.on('value-changed', () => this.reposition());
   }
 
   /** The gap's top-left in the view's WIDGET coords (scroll-aware). */
   private gapWindowXY(mark: any): [number, number] {
     const iter = asIter(this.buffer.getIterAtMark(mark));
-    const loc = (this.view as any).getIterLocation(iter);
+    const loc = this.view.getIterLocation(iter);
     const rect = Array.isArray(loc) ? loc[0] ?? loc[1] : loc;
     // `alignLeft` pins to the text-window left (buffer x=0) to match add_overlay decorations.
     const bufX = this.current?.alignLeft ? 0 : (rect?.x ?? 0);
     const bufY = (rect?.y ?? 0) + (rect?.height ?? 0);
-    return (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, bufX, bufY);
+    return this.view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, bufX, bufY);
   }
 }

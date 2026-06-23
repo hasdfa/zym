@@ -100,8 +100,8 @@ app.on('activate', async () => {
       paintable.snapshot(snapshot, w, h);
       const node = snapshot.toNode();
       if (node) {
-        const gskRenderer: any = (window as any).getRenderer();
-        const rect: any = (new Graphene.Rect() as any).init(0, 0, w, h);
+        const gskRenderer: any = window.getRenderer();
+        const rect: any = (new Graphene.Rect()).init(0, 0, w, h);
         const texture: any = gskRenderer.renderTexture(node, rect);
         texture.saveToPng('/tmp/gutter-visual.png');
         process.stderr.write(`[visual] wrote /tmp/gutter-visual.png (${w}x${h})\n`);

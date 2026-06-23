@@ -43,7 +43,7 @@ const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 
 /** Whether view (row, col) carries the search-highlight decoration tag. */
 function hasSearchTag(mbv: SearchResultsView, row: number, col: number): boolean {
-  const buffer = (mbv.editor.sourceView as any).getBuffer();
+  const buffer = mbv.editor.sourceView.getBuffer();
   const tag = buffer.getTagTable().lookup('deco:search:highlight');
   if (!tag) return false;
   return asIter(buffer.getIterAtLineOffset(row, col)).hasTag(tag);

@@ -549,7 +549,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     if (!row || !adjustment) return;
     let rect: any;
     try {
-      const result: any = (row as any).computeBounds(listBox);
+      const result: any = row.computeBounds(listBox);
       rect = Array.isArray(result) ? result[1] : result;
     } catch {
       return;

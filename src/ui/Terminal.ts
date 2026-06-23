@@ -147,7 +147,7 @@ export class Terminal {
     // the `xterm.title` termprop via the detailed `termprop-changed` signal.
     terminal.on('termprop-changed', (name: string) => {
       if (name !== XTERM_TITLE) return;
-      const value = (terminal as any).getTermpropString(XTERM_TITLE) as string | string[] | null;
+      const value = terminal.getTermpropString(XTERM_TITLE) as string | string[] | null;
       this._title = (Array.isArray(value) ? value[0] : value) || 'Terminal';
       this.emitTitleChange();
     });

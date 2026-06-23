@@ -200,7 +200,7 @@ function runAssertions(): void {
   check('cursors are independent per view', aCur === 2 && bCur === 7);
 
   // Native per-buffer annotation API is reachable (rendering verified in the window).
-  check('GtkSource.Annotation API present', typeof (GtkSource as any).Annotation === 'function');
+  check('GtkSource.Annotation API present', typeof GtkSource.Annotation === 'function');
 
   console.log('\n(c) propagation cost (1000 single-char inserts → 2 mirrors):');
   const t0 = process.hrtime.bigint();

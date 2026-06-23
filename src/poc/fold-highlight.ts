@@ -31,7 +31,7 @@ const require_ = createRequire(import.meta.url);
 // web-tree-sitter 0.20.x is CommonJS (`export = Parser`) and matches the ABI of
 // the prebuilt tree-sitter-wasms grammars. Parser is the default export; the
 // Language class hangs off it, and queries are built via `language.query(...)`.
-const Parser = require_('web-tree-sitter') as any;
+const Parser = require_('web-tree-sitter');
 type TSNode = any;
 
 // node-gtk is a CJS native addon; load it through createRequire from this ESM.

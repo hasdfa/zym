@@ -16,7 +16,7 @@ import * as Path from 'node:path';
 import { languages } from '../lang/index.ts';
 
 const require_ = createRequire(import.meta.url);
-const Parser = require_('web-tree-sitter') as any;
+const Parser = require_('web-tree-sitter');
 
 let initPromise: Promise<void> | null = null;
 

@@ -171,8 +171,8 @@ export class DecorationLayer {
     // (`deco:<layer>:<style>`) — consumers/tests look these up by name.
     return this.tagFor(`style:${style}`, `deco:${this.name}:${style}`, (tag) => {
       // Line styles use paragraph-background (full-width); spans use char background.
-      if (LINE_STYLES.has(style)) (tag as any).paragraphBackgroundRgba = parseColor(STYLE_BACKGROUND[style]);
-      else (tag as any).backgroundRgba = parseColor(STYLE_BACKGROUND[style]);
+      if (LINE_STYLES.has(style)) tag.paragraphBackgroundRgba = parseColor(STYLE_BACKGROUND[style]);
+      else tag.backgroundRgba = parseColor(STYLE_BACKGROUND[style]);
     });
   }
 
@@ -180,9 +180,9 @@ export class DecorationLayer {
     const key = `tint:${colors.background}|${colors.foreground ?? ''}|${colors.wholeLine ? 'L' : 'C'}`;
     return this.tagFor(key, `deco:${this.name}:${key}`, (tag) => {
       // wholeLine → paragraph-background (full width, like a `line` style); else a char span.
-      if (colors.wholeLine) (tag as any).paragraphBackgroundRgba = parseColor(colors.background);
-      else (tag as any).backgroundRgba = parseColor(colors.background);
-      if (colors.foreground) (tag as any).foregroundRgba = parseColor(colors.foreground);
+      if (colors.wholeLine) tag.paragraphBackgroundRgba = parseColor(colors.background);
+      else tag.backgroundRgba = parseColor(colors.background);
+      if (colors.foreground) tag.foregroundRgba = parseColor(colors.foreground);
     });
   }
 
@@ -195,7 +195,7 @@ export class DecorationLayer {
   ): InstanceType<typeof Gtk.TextTag> {
     let tag = this.tags.get(key);
     if (tag) return tag;
-    tag = new Gtk.TextTag({ name } as any);
+    tag = new Gtk.TextTag({ name });
     configure(tag);
     const table = this.buffer.getTagTable();
     table.add(tag);

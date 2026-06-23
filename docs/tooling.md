@@ -34,6 +34,18 @@ tool; this config enables no stylistic/layout rules.
   `catch {}` blocks are not allowed (an intentional one needs an explicit
   comment or a no-op statement).
 
+### Type casts (`as any`)
+
+Policy (also in [index.md](index.md)): avoid `(x as any)`; justify any you keep.
+
+- **Where the remaining casts legitimately live.** The bulk sit in the
+  Atom-ported vim layer (`src/ui/TextEditor/vim/*`), which drives an
+  `EditorModel` / `selection` / `cursor` / `markerLayer` / `this.utils` shim that
+  intentionally does not replicate Atom's full `TextEditor` typings — those are
+  architectural and stay until the shim is typed (see
+  [vim-mode.md](text-editor/vim-mode.md)). The rest are a few `Gio.File.prototype`
+  monkeypatches and `{} as any` test mocks.
+
 ### `local/no-floating-cleanup` (type-aware)
 
 Vendored from MUI

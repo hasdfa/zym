@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { MD_INJECTIONS } from './index.ts';
 
 const require_ = createRequire(import.meta.url);
-const Parser = require_('web-tree-sitter') as any;
+const Parser = require_('web-tree-sitter');
 const HERE = Path.dirname(fileURLToPath(import.meta.url));
 const wtsDir = Path.dirname(require_.resolve('web-tree-sitter'));
 const wasm = (name: string) => Path.join(HERE, 'grammars', name);

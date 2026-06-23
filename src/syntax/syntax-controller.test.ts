@@ -17,7 +17,7 @@ function setup(text: string) {
   const buffer = doc.createView();
   const view = new GtkSource.View({ buffer });
   const syntax = new SyntaxController(view, buffer, { folds: doc });
-  const textOf = () => (buffer as any).getText(buffer.getStartIter(), buffer.getEndIter(), true);
+  const textOf = () => buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true);
   const registerFoldable = (startLine: number, endLine: number) =>
     syntax.foldsByHeaderLine.set(startLine, { startLine, endLine, folded: false });
   return { doc, buffer, view, syntax, textOf, registerFoldable };
@@ -71,7 +71,7 @@ test('a collapsed fold maps the gutter line back to the model line', () => {
 test('bracket match: highlights the bracket under the cursor and its pair', () => {
   const { buffer } = setup('foo(bar)\n');
   const at = (off: number) => {
-    const r = (buffer as any).getIterAtOffset(off);
+    const r = buffer.getIterAtOffset(off);
     return Array.isArray(r) ? r[r.length - 1] : r;
   };
   const tag = buffer.getTagTable().lookup('bracket-match')!;

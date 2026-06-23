@@ -45,7 +45,7 @@ app.on('activate', () => {
   editor.sourceView.addController(keys);
 
   const win = new Adw.ApplicationWindow({ application: app, defaultWidth: 800, defaultHeight: 600 });
-  (win as any).setContent(editor.root);
+  win.setContent(editor.root);
   win.on('close-request', () => { loop.quit(); app.quit(); return false; });
   win.present();
 

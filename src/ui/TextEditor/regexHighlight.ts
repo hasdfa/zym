@@ -70,10 +70,10 @@ export function replacementSpans(source: string): Span[] {
 
 /** Apply `spans` over `entry` (whose text is `source`), replacing any prior attributes. */
 export function applySpans(entry: any, source: string, spans: Span[]): void {
-  const list = (Pango.AttrList as any).new();
+  const list = Pango.AttrList.new();
   for (const span of spans) {
     const [r, g, b] = rgb16(span.color);
-    const attr = (Pango as any).attrForegroundNew(r, g, b);
+    const attr = Pango.attrForegroundNew(r, g, b);
     attr.startIndex = byteLength(source.slice(0, span.start));
     attr.endIndex = byteLength(source.slice(0, span.end));
     list.insert(attr);

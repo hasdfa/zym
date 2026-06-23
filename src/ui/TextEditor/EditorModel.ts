@@ -1642,7 +1642,7 @@ export class EditorModel {
   /** The inclusive `[first, last]` visible buffer rows; whole buffer if unrealized. */
   private visibleRowRange(): [number, number] {
     if (!this.view.getRealized()) return [0, this.getLastBufferRow()];
-    const rect = (this.view as any).getVisibleRect() as PixelRect;
+    const rect = this.view.getVisibleRect() as PixelRect;
     const top = this.bufferRowAtY(rect.y);
     const bottom = this.bufferRowAtY(rect.y + Math.max(0, rect.height - 1));
     return [top, bottom];
@@ -1651,7 +1651,7 @@ export class EditorModel {
   /** The buffer row whose line box contains buffer-coordinate `y`. */
   private bufferRowAtY(y: number): number {
     // get_line_at_y has out-args (iter, line_top); node-gtk returns them as an array.
-    const result = (this.view as any).getLineAtY(y);
+    const result = this.view.getLineAtY(y);
     const iter = Array.isArray(result) ? result[0] : result;
     return iter.getLine();
   }
@@ -1665,8 +1665,8 @@ export class EditorModel {
     if (!this.view.getRealized()) return null;
     // Buffer coords → the WIDGET window (accounts for the gutter + scroll offset),
     // mirroring TextEditor's unfocused-caret placement.
-    const cell = (this.view as any).getIterLocation(this.iterAtPoint(point)) as PixelRect;
-    const [x, y] = (this.view as any).bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
+    const cell = this.view.getIterLocation(this.iterAtPoint(point)) as PixelRect;
+    const [x, y] = this.view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, cell.x, cell.y);
     return { x, y, width: cell.width, height: cell.height };
   }
 
@@ -1693,13 +1693,13 @@ export class EditorModel {
    */
   setTopBufferRow(row: number): void {
     if (!this.view.getRealized()) return;
-    const loc = (this.view as any).getIterLocation(this.iterAtPoint({ row, column: 0 })) as PixelRect;
+    const loc = this.view.getIterLocation(this.iterAtPoint({ row, column: 0 })) as PixelRect;
     this.setScrollTop(loc.y);
   }
 
   /** The viewport height in pixels (0 when not realized). */
   getHeight(): number {
-    return (this.view as any).getHeight();
+    return this.view.getHeight();
   }
 
   /** Pixel height of one rendered line. Sampled as the MINIMUM Y-range over the first several
@@ -1712,7 +1712,7 @@ export class EditorModel {
     const sample = Math.min(this.buffer.getLineCount(), LINE_HEIGHT_SAMPLE);
     let min = 0;
     for (let row = 0; row < sample; row++) {
-      const range = (this.view as any).getLineYrange(this.iterAtLineStart(row));
+      const range = this.view.getLineYrange(this.iterAtLineStart(row));
       const height = Array.isArray(range) ? range[1] : 0;
       if (height > 0 && (min === 0 || height < min)) min = height;
     }
@@ -1726,7 +1726,7 @@ export class EditorModel {
 
   /** Document-pixel top/left of `point`'s character cell (scroll-independent). */
   pixelPositionForScreenPosition(point: PointLike): { top: number; left: number } {
-    const cell = (this.view as any).getIterLocation(this.iterAtPoint(point)) as PixelRect;
+    const cell = this.view.getIterLocation(this.iterAtPoint(point)) as PixelRect;
     return { top: cell.y, left: cell.x };
   }
 
@@ -1745,7 +1745,7 @@ export class EditorModel {
   ): { point: Point; goalX: number } | null {
     if (!this.view.getRealized()) return null;
     const iter = this.iterAtPoint(point);
-    const x = goalX ?? ((this.view as any).getIterLocation(iter) as PixelRect).x;
+    const x = goalX ?? (this.view.getIterLocation(iter) as PixelRect).x;
     // Move by one DISPLAY (wrapped) row using the view's own layout. This is
     // correct under soft-wrap (a buffer line can span several display rows) AND for
     // mixed-height lines (a scaled Markdown heading is taller than its unscaled
@@ -1753,16 +1753,16 @@ export class EditorModel {
     // under/overshoot in those cases. `forward/backward_display_line` mutate the
     // iter in place and return whether it moved (false at the first/last row).
     const moved = direction === 'down'
-      ? (this.view as any).forwardDisplayLine(iter)
-      : (this.view as any).backwardDisplayLine(iter);
+      ? this.view.forwardDisplayLine(iter)
+      : this.view.backwardDisplayLine(iter);
     if (!moved) return null; // already on the first/last display row
     // Those land at the target row's start column; re-snap to the goal visual x on
     // that row so the cursor keeps its column (Vim's goal-column behavior). Probe
     // at the row's MIDDLE y, not its top: get_iter_at_location at an exact row-top
     // boundary returns the row above (the boundary is that row's bottom edge).
-    const cell = (this.view as any).getIterLocation(iter) as PixelRect;
+    const cell = this.view.getIterLocation(iter) as PixelRect;
     const midY = cell.y + Math.max(1, Math.floor(cell.height / 2));
-    const result = (this.view as any).getIterAtLocation(x, midY) as unknown[];
+    const result = this.view.getIterAtLocation(x, midY) as unknown[];
     const target = (Array.isArray(result) ? result : [result]).find(
       (r): r is TextIter => Boolean(r) && typeof (r as TextIter).getLine === 'function',
     );

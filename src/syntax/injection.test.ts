@@ -48,14 +48,14 @@ test('injection: a fenced ```ts block in Markdown is painted by the TypeScript g
     // setLanguageForPath runs one synchronous refresh (parse + inject + paint).
     assert.equal(syntax.setLanguageForPath(tmp), true);
 
-    const tagTable = (buffer as any).getTagTable();
+    const tagTable = buffer.getTagTable();
     const keywordTag = tagTable.lookup('ts:keyword');
     assert.ok(keywordTag, 'the keyword tag should exist');
 
     // `const` inside the fence must carry the keyword tag — only the injected
     // TypeScript grammar produces it; the Markdown grammar never would.
     const at = md.indexOf('const') + 2; // mid-token, away from the boundary
-    const iter = asIter((buffer as any).getIterAtOffset(at));
+    const iter = asIter(buffer.getIterAtOffset(at));
     assert.ok(iter.hasTag(keywordTag), 'injected TypeScript keyword tag should paint `const`');
 
     // Styled tags (not just color): `**bold**` (via the inline grammar injection)
@@ -64,7 +64,7 @@ test('injection: a fenced ```ts block in Markdown is painted by the TypeScript g
     assert.ok(boldTag, 'the bold decoration tag should exist');
     assert.equal(boldTag.weight, Pango.Weight.BOLD, 'the bold tag should be bold weight');
     const boldAt = md.indexOf('bold') + 1;
-    const boldIter = asIter((buffer as any).getIterAtOffset(boldAt));
+    const boldIter = asIter(buffer.getIterAtOffset(boldAt));
     assert.ok(boldIter.hasTag(boldTag), 'bold text should carry the bold decoration tag');
 
     // Fenced code gets a full-line (paragraph) background that layers *under* the
@@ -73,7 +73,7 @@ test('injection: a fenced ```ts block in Markdown is painted by the TypeScript g
     const hasParagraphBg = (it: any): boolean =>
       (it.getTags() as any[]).some((t) => t.paragraphBackgroundSet === true);
     assert.ok(hasParagraphBg(iter), 'fenced code should have a full-line background');
-    const headingIter = asIter((buffer as any).getIterAtOffset(md.indexOf('Title')));
+    const headingIter = asIter(buffer.getIterAtOffset(md.indexOf('Title')));
     assert.ok(!hasParagraphBg(headingIter), 'a non-code line should have no line background');
 
     Fs.unlinkSync(tmp);
@@ -121,8 +121,8 @@ test('injection: HTML-block markdown highlights (grammar libc shims present)',
     assert.ok((counts['markup.heading.1'] ?? 0) >= 1, 'heading should be captured');
 
     // And the `**bold**` after the HTML block is still reached by the inline injection.
-    const boldTag = (buffer as any).getTagTable().lookup('ts*bold');
-    const boldIter = asIter((buffer as any).getIterAtOffset(md.indexOf('bold') + 1));
+    const boldTag = buffer.getTagTable().lookup('ts*bold');
+    const boldIter = asIter(buffer.getIterAtOffset(md.indexOf('bold') + 1));
     assert.ok(boldIter.hasTag(boldTag), 'bold past the HTML block should be highlighted');
 
     Fs.unlinkSync(tmp);
