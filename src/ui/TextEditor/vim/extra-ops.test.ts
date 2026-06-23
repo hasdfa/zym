@@ -102,6 +102,18 @@ test('gv reselects the last visual selection', () => {
   assert.deepEqual([range.start.toArray(), range.end.toArray()], [[0, 0], [0, 5]]);
 });
 
+test('gb selects the latest changed/yanked region', () => {
+  const { editor, vimState, run, at } = setup('hello world\n');
+  at(0, 0);
+  run('Yank');
+  run('MoveToEndOfWord'); // ye → yank "hello", sets the `[`/`]` change marks
+  at(0, 9); // move the cursor away from the changed region
+  run('SelectLatestChange'); // gb
+  assert.ok(vimState.isMode('visual'));
+  const range = editor.getLastSelection().getBufferRange();
+  assert.deepEqual([range.start.toArray(), range.end.toArray()], [[0, 0], [0, 5]]);
+});
+
 test('visual o swaps the active end of the selection', () => {
   const { editor, run, at } = setup('hello\n');
   at(0, 1);
