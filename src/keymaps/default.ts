@@ -248,9 +248,9 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   '#LocationList': LIST_NAV,
 
   // Git log (history) viewer — bound to the list (not the whole view) so the bare
-  // keys don't type into the search field above it. Shared list navigation plus
-  // o/Enter to open the selected commit's diff (l does the same via core:right),
-  // and `/` to jump to the filter field.
+  // keys don't type into the search field above it. Shared list navigation (which
+  // also live-previews the diff in the right pane) plus o/Enter to open the selected
+  // commit's diff and focus it (l does the same via core:right), and `/` to filter.
   '#GitLogList': {
     ...LIST_NAV, // j/k, g g, G, l (l opens the selected commit)
     o: 'git-log:open',
@@ -265,6 +265,21 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     enter: 'git-log:focus-list',
     'kp_enter': 'git-log:focus-list',
     escape: 'git-log:focus-list',
+  },
+
+  // Move between the viewer's two nested "windows" — the commit list and the embedded
+  // diff editor — with vim's `ctrl-w` direction keys. Since every bare key inside a
+  // TextEditor is taken by vim (escape included), the way out of the embedded editor has
+  // to be a chord; `ctrl-w h`/`l` reuse the window-nav vocabulary. We override only the
+  // INWARD direction on each side (`ctrl-w l` list→diff, `ctrl-w h` diff→list); the
+  // outward `ctrl-w h`/`ctrl-w l` fall through to `#AppWindow` pane nav, so this reads as
+  // a nested split, not a special case. Both selectors outrank `#AppWindow` by CSS
+  // specificity (two ids vs one).
+  '#GitLogView #GitLogList': {
+    'ctrl-w l': 'git-log:focus-diff',
+  },
+  '#GitLogView #TextEditor': {
+    'ctrl-w h': 'git-log:focus-list',
   },
 
   // The notification log: while it has focus, bare keys act on the history
