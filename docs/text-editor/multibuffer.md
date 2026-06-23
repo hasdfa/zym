@@ -55,7 +55,9 @@ Three layers:
 backed by a `MultiBufferDocument`, so vim/search/decorations come free.
 UI classes carry no `MultiBuffer` in their name; that's the model layer
 (`src/ui/multibuffer/`).
-- `SearchResultsView` (project search) — `src/ui/SearchResultsView.ts`.
+- `SearchResultsView` (project search results) — `src/ui/SearchResultsView.ts`;
+  wrapped by `ProjectSearchView` (`src/ui/ProjectSearchView.ts`), which adds the
+  search-entry + ripgrep-flag header and rebuilds the results on each query.
 - `DiffView` (git diff) — `src/ui/DiffView.ts`;
   `buildDiffMultiBuffer` (`diffMultiBuffer.ts`, model) windows each file
   (context ±3, runs ≥2 elided to a `⋯` gap), `diffSegments.ts` does the
@@ -110,8 +112,14 @@ Single-file editing plus both multibuffer surfaces run on the
     `.git/COMMIT_EDITMSG` in a tab (save+close commits).
   - `space g o` opens the diff multibuffer (the `GitStagingView`
     replacement).
-- **Editable project search + replace-all** — `space *`; `file:save`
-  routes to the active multibuffer.
+- **Editable project search + replace-all** — `space p s` opens the search
+  surface (`ProjectSearchView`); `space *` opens it seeded with the editor
+  selection. A header carries a debounced search entry plus ripgrep flag
+  controls — Match case / Whole word / Regex toggles, include/exclude glob
+  fields, and a "Hidden" toggle (`--no-ignore --hidden`); editing any re-runs
+  the search and rebuilds the results multibuffer (`SearchResultsView`).
+  Ripgrep runs through the process runner (`projectSearch.ts`, see
+  `docs/process-runner.md`). `file:save` routes to the active multibuffer.
 - **Cross-source undo/redo** — `ProjectionView` is the `UndoTarget`;
   re-entrant user actions; a multi-file edit is one Ctrl-Z.
 - **Multibuffer interaction** — vim works (real editor); expand-context
@@ -247,7 +255,8 @@ Single-file editing plus both multibuffer surfaces run on the
 - Substrate: `src/ui/TextEditor/ViewProjection.ts`, `ProjectionView.ts`;
   `src/syntax/DocumentSyntax.ts`, `SyntaxProjection.ts`,
   `syntax-controller.ts`; `Document.ts`, `DocumentRegistry.ts`.
-- Surfaces (UI, `src/ui/`): `SearchResultsView.ts`,
+- Surfaces (UI, `src/ui/`): `SearchResultsView.ts`, `ProjectSearchView.ts`
+  (the search-entry + flags wrapper),
   `DiffView.ts`, `SourceLineNumberGutter.ts`, `HeaderBands.ts`;
   plus `src/ui/TextEditor/DiffLineNumberGutter.ts`,
   `applyDiffDecorations.ts`.
@@ -257,8 +266,8 @@ Single-file editing plus both multibuffer surfaces run on the
 - Model (`src/ui/multibuffer/`): `MultiBufferModel.ts`,
   `MultiBufferDocument.ts`, `diffMultiBuffer.ts`, `diffSegments.ts`,
   `projectSearch.ts`, `ExcerptSyntaxProjection.ts`.
-- Wiring: `src/ui/AppWindow.ts` (`openSearchResults`/`space *`,
-  `openContinuousDiff`/`space g d d`, `file:save` routing,
+- Wiring: `src/ui/AppWindow.ts` (`openProjectSearch`/`space *` +
+  `space p s`, `openContinuousDiff`/`space g d d`, `file:save` routing,
   `diff:expand-*`); read-only commit/branch diffs in `src/ui/diffViews.ts`.
 - Reuse: `src/util/lineDiff.ts`, `applyDiffDecorations.ts`;
   `src/lsp/workspaceEdit.ts`.
