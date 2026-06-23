@@ -1,6 +1,6 @@
 /*
  * Editable diff multibuffer — HUNK STAGING (Phase G5, docs/text-editor/multibuffer.md, task #17).
- * Over a real temp git repo, `DiffView({ editable, cwd })` reads each file's index blob
+ * Over a real temp git repo, `DiffView({ editable, live, cwd })` reads each file's index blob
  * and classifies every changed row as staged / unstaged (the gutter marker). `stageHunkAtCursor`
  * builds the index→worktree hunk patch and `git apply --cached`s it; `unstageHunkAtCursor` reverses
  * the HEAD→index hunk out of the index. After each op the index is re-read and the markers flip.
@@ -58,6 +58,7 @@ function open(committed: string, worktree: string) {
   const registry = new DocumentRegistry();
   const mbv = new DiffView({
     editable: true,
+    live: true, // staging (index reads + markers) is gated on a live diff
     documents: registry,
     cwd: repo,
     files: [{ path: file, oldText: committed, newText: worktree }],

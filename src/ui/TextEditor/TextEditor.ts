@@ -498,6 +498,13 @@ export class TextEditor implements DocumentHost {
   private pendingUnsaved: string | null = null;
   private onActivate: (() => void) | null = null;
   private mapHandler: (() => void) | null = null;
+  // Whether to take keyboard focus once the content loads. The lazy load fires when
+  // the tab is shown, which is the deferred companion to the synchronous focus() a
+  // foreground open does — so a foreground open lands focus here. A background open
+  // (focus: false — session restore, an agent auto-opening a file it edited) still
+  // loads and renders when shown, but leaves this false so the load doesn't yank
+  // focus out of wherever the user is.
+  private focusOnLoad = true;
 
   // Set when the loaded file has a pathologically long line (see LONG_LINE_THRESHOLD):
   // soft-wrap and tree-sitter highlighting are then disabled for it. `applyWrap` re-applies
@@ -1838,10 +1845,12 @@ export class TextEditor implements DocumentHost {
    *
    * `opts.cursor` is restored after load; `opts.onActivate` runs once, post-load, for the
    * owner's wiring (e.g. registering the editor with the workspace once it has content).
+   * `opts.focus` (default true) is whether the load grabs keyboard focus — a foreground
+   * open takes it, a background one (focus: false) loads and renders without stealing it.
    */
   prepareFile(
     path: string,
-    opts: { cursor?: [number, number]; scroll?: number; unsavedText?: string; onActivate?: () => void } = {},
+    opts: { cursor?: [number, number]; scroll?: number; unsavedText?: string; onActivate?: () => void; focus?: boolean } = {},
   ): void {
     if (this.embedded) return;
     this.document.assignPath(path);
@@ -1849,6 +1858,7 @@ export class TextEditor implements DocumentHost {
     this.pendingScroll = opts.scroll ?? null;
     this.pendingUnsaved = opts.unsavedText ?? null;
     this.onActivate = opts.onActivate ?? null;
+    this.focusOnLoad = opts.focus ?? true;
     const onMap = () => this.activate();
     this.mapHandler = onMap;
     (this.view as any).on('map', onMap);
@@ -1919,7 +1929,10 @@ export class TextEditor implements DocumentHost {
     else this.editorModel.setCursorBufferPosition({ row: 0, column: 0 });
     this.pendingReloadCaret = null;
     this.applyDetectedIndentation(content);
-    if (!reload) this.view.grabFocus(); // a background reload mustn't steal focus
+    // Focus on the first load, unless this is a background open (focusOnLoad false) —
+    // then the file still renders, it just doesn't pull focus. A silent disk-change
+    // reload never grabs.
+    if (!reload && this.focusOnLoad) this.view.grabFocus();
     this.applySyntaxOrLongLineMode(content, path);
     this.diagnostics.render();
     this.inlayHints.scheduleRefresh();
@@ -1958,7 +1971,7 @@ export class TextEditor implements DocumentHost {
     this.diagnostics?.render();
     this.inlayHints?.scheduleRefresh();
     this.gitGutter?.refresh();
-    this.view.grabFocus();
+    if (this.focusOnLoad) this.view.grabFocus(); // background opens render without stealing focus
   }
 
   /** Pick this view's grammar for `path` — tree-sitter when we have it, else the

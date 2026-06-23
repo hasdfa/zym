@@ -57,6 +57,20 @@ export interface TerminalOptions {
   title?: string;
   /** Fired when the shell process exits, with its exit status. */
   onExit?: (status: number) => void;
+  /**
+   * Keep the terminal open (and silent) when its child exits instead of firing
+   * `onExit`: the pane stays on the command's final output with a dim notice, and
+   * no new process is started. Used by one-shot command tabs (e.g. agent actions)
+   * that a host re-runs in place via `run()`. (`onExit` still fires on a spawn
+   * failure, which never produces output worth lingering on.)
+   */
+  keepOpenOnExit?: boolean;
+  /**
+   * Skip session persistence: `serialize()` returns null, so this terminal is left
+   * out of the saved layout and the reopen-last history. For tabs too transient to
+   * restore as a bare shell (e.g. a one-shot agent-action command tab).
+   */
+  transient?: boolean;
 }
 
 export class Terminal {
@@ -69,6 +83,11 @@ export class Terminal {
   protected readonly terminal: VteTerminal;
 
   private readonly onExit: (status: number) => void;
+  private readonly keepOpenOnExit: boolean;
+  private readonly transient: boolean;
+  // A command staged by `run()` while the previous child is still being killed; it
+  // is spawned from the next `child-exited`, so the pty never hosts two children.
+  private pendingRerun: string[] | null = null;
   // The launch directory, retained for session serialization. (The shell may cd
   // elsewhere; tracking the live cwd would need OSC 7 — out of scope for now.)
   protected readonly cwd: string;
@@ -83,6 +102,8 @@ export class Terminal {
 
   constructor(options: TerminalOptions = {}) {
     this.onExit = options.onExit ?? (() => {});
+    this.keepOpenOnExit = options.keepOpenOnExit ?? false;
+    this.transient = options.transient ?? false;
     this.cwd = options.cwd ?? Os.homedir();
     this._title = options.title ?? 'Terminal';
 
@@ -130,8 +151,39 @@ export class Terminal {
       this._title = (Array.isArray(value) ? value[0] : value) || 'Terminal';
       this.emitTitleChange();
     });
-    terminal.on('child-exited', (status: number) => this.onExit(status));
+    terminal.on('child-exited', (status: number) => this.handleChildExit(status));
     return terminal;
+  }
+
+  // The child exited. If a re-run was staged (run() while the old child was still
+  // alive), spawn it now into the freed pty. With `keepOpenOnExit`, stay on the
+  // output with a dim notice rather than firing `onExit` (which would close the
+  // tab) or respawning a shell. Otherwise hand the exit to the host.
+  private handleChildExit(status: number): void {
+    this._pid = null; // the child is gone — so a later run() respawns instead of staging
+    if (this.pendingRerun) {
+      const command = this.pendingRerun;
+      this.pendingRerun = null;
+      this.respawn(command);
+      return;
+    }
+    if (this.keepOpenOnExit) {
+      this.terminal.feed(Array.from(new TextEncoder().encode('\r\n\x1b[2m── process exited ──\x1b[0m\r\n')));
+      return;
+    }
+    this.onExit(status);
+  }
+
+  /** Run `command` in this terminal, reusing its pty and scrollback. A still-running
+   *  child is terminated first and the command spawned once it exits, so the pty
+   *  never hosts two children. Lets a host re-run a one-shot tab in place. */
+  run(command: string[]): void {
+    if (this._pid !== null) {
+      this.pendingRerun = command;
+      this.kill('SIGTERM');
+      return;
+    }
+    this.respawn(command);
   }
 
   // --- Shell process ---------------------------------------------------------
@@ -195,7 +247,8 @@ export class Terminal {
     return this._title;
   }
 
-  /** The spawned child's process id, once spawned (null before / on failure). */
+  /** The spawned child's process id while it runs (null before spawn, on failure,
+   *  and after the child exits). */
   get pid(): number | null {
     return this._pid;
   }
@@ -295,8 +348,10 @@ export class Terminal {
 
   // --- Session integration ---------------------------------------------------
 
-  /** Session state for this tab. Overridden by AgentTerminal for `kind: 'agent'`. */
+  /** Session state for this tab, or null when `transient` (left out of the saved
+   *  layout / reopen history). Overridden by AgentTerminal for `kind: 'agent'`. */
   serialize(): TabState | null {
+    if (this.transient) return null;
     return { kind: 'terminal', cwd: this.cwd };
   }
 

@@ -45,7 +45,9 @@ import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
 import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
 import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
-import { openCommitDiff, openBranchDiff } from './diffViews.ts';
+import { openCommitDiff, openCommitPicker, openBranchDiff, buildCommitDiffView } from './diffViews.ts';
+import { GitLogView } from './GitLogView.ts';
+import type { CommitSummary } from '../git.ts';
 import { openGithubService, type GithubService } from '../github.ts';
 import { registerGithubCommands } from './githubCommands.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
@@ -156,6 +158,11 @@ export class AppWindow {
   // Headless `claude-sdk` agents mounted as center tabs (keyed by their root
   // widget), disposed when their tab closes (see disposeChild).
   private readonly conversations = new Map<Widget, AgentConversation>();
+  // Terminal tabs opened for a `terminal` agent action (set_actions), keyed by the
+  // terminal's root widget. Re-running an action reuses its still-open tab (run the
+  // command in place); the tab is closed when the action is cleared, the agent is
+  // closed, or the user closes the tab (see pruneActionTerminals / disposeChild).
+  private readonly actionTerminals = new Map<Widget, { agent: Agent; actionId: string; terminal: Terminal; child: PanelChild }>();
 
   private readonly workbenchList: WorkbenchList;
   // The top-level split whose start child is the workbench sidebar; its position is
@@ -178,6 +185,11 @@ export class AppWindow {
   // `onClose`; the continuous-diff views (editable + read-only commit/branch) use it
   // to dispose on close. DiffView.forRoot routes commands to the focused one.
   private readonly tabCloseHandlers = new Map<Widget, () => void>();
+  // The commit diff the git log viewer is currently showing in its side split, so a
+  // new selection replaces it (rather than stacking tabs). Cleared when that diff's
+  // tab is closed; the panel is re-derived from the live view (Panel.containing) so a
+  // user-closed split splits fresh next time. Its handle lets us close the old tab.
+  private gitLogDiff: { view: DiffView; child: PanelChild } | null = null;
   // Session modified-status registrations (editors, running agents), keyed by the
   // tab's root widget so the registration is disposed when the tab closes.
   private readonly participants = new Map<Widget, DisposableLike>();
@@ -393,6 +405,21 @@ export class AppWindow {
     // Track the focused widget per panel tab so each panel can restore focus to
     // exactly where it was when it is re-activated (see focusMemory).
     this.window.on('notify::focus-widget', () => this.rememberFocus());
+    // A GtkPaned is a layout container and must never hold keyboard focus. Reparenting a
+    // focused widget into a freshly-built split — opening a work area beside a focused
+    // agent terminal to auto-open an edited file — makes GTK reassign focus onto a bare
+    // structural Paned on the next layout pass, pulling it out of wherever the user was.
+    // Bounce it straight back to the last real focus the moment it lands on a Paned.
+    let lastFocus: Widget | null = null;
+    this.window.on('notify::focus-widget', () => {
+      const f = this.window.getFocus();
+      const onPaned = !!f && (f instanceof Gtk.Paned || f.constructor?.name === 'GtkPaned');
+      if (onPaned) {
+        if (lastFocus && lastFocus.getRoot() !== null) lastFocus.grabFocus();
+        return; // never record the Paned itself as a restore target
+      }
+      lastFocus = f;
+    });
 
     // Publish the window on the global registry and start the keymap manager's
     // CAPTURE-phase key controller.
@@ -603,7 +630,7 @@ export class AppWindow {
   private openFileIn(
     path: string,
     panel: Panel,
-    options: { focus?: boolean; owner?: Workbench<'user' | Agent> } = {},
+    options: { focus?: boolean; owner?: Workbench<'user' | Agent>; select?: boolean } = {},
   ): TextEditor {
     const focus = options.focus ?? true;
     const targetOwner = options.owner ?? this.workbench;
@@ -611,23 +638,24 @@ export class AppWindow {
       ([widget, editor]) => editor.currentFile === path && this.editorOwners.get(widget) === targetOwner,
     )?.[1];
     if (existing) {
-      this.editorChildren.get(existing.root)?.select();
+      if (options.select !== false) this.editorChildren.get(existing.root)?.select();
       if (focus) existing.focus();
       return existing;
     }
-    return this.openFileViewIn(path, panel, { focus, owner: options.owner });
+    return this.openFileViewIn(path, panel, { focus, owner: options.owner, select: options.select });
   }
 
   // Open a *new* view of `path` in `panel` — no reveal-if-open, so the same file can
   // show in two panes as two views sharing one Document (live model + undo). Used by
   // splitPane; openFileIn reveals instead. `owner` is the workbench the editor lives
   // in (its git feeds the gutter); defaults to the active one.
-  private openFileViewIn(path: string, panel: Panel, options: { focus?: boolean; owner?: Workbench<'user' | Agent> } = {}): TextEditor {
-    const { focus = true, owner = this.workbench } = options;
-    const built = this.createEditorTab(path, { owner });
+  private openFileViewIn(path: string, panel: Panel, options: { focus?: boolean; owner?: Workbench<'user' | Agent>; select?: boolean } = {}): TextEditor {
+    const { focus = true, owner = this.workbench, select } = options;
+    const built = this.createEditorTab(path, { owner, focus });
     const child = panel.add(built.widget, {
       title: built.title,
       requireTabBar: built.requireTabBar,
+      select,
     });
     built.onAttached?.(child);
     const editor = this.editors.get(built.widget)!;
@@ -646,6 +674,7 @@ export class AppWindow {
       scroll?: number;
       unsavedText?: string;
       owner?: Workbench<'user' | Agent>;
+      focus?: boolean;
     } = {},
   ): RestoredChild {
     const owner = restore.owner ?? this.workbench;
@@ -671,6 +700,9 @@ export class AppWindow {
       cursor: restore.cursor,
       scroll: restore.scroll,
       unsavedText: restore.unsavedText,
+      // focus: false (a background open — agent auto-open, session restore) loads and
+      // renders when shown, but doesn't grab focus; default true takes it.
+      focus: restore.focus,
       // Announce to the workspace so editor-observing plugins (color preview, …) can
       // attach; registered after load so their first pass sees the file's content.
       onActivate: () => this.editorRegistrations.set(editor.root, zym.workspace.addTextEditor(editor)),
@@ -724,33 +756,72 @@ export class AppWindow {
     this.terminals.get(built.widget)!.focus();
   }
 
-  // Open a `terminal` agent action (set_actions) in a terminal tab in the agent's
-  // own workbench, so its output lands beside the agent. Like runScript, the shell
-  // runs the command then execs a login shell, keeping the tab open on the output.
+  // Open a `terminal` agent action (set_actions) in a dedicated terminal tab in the
+  // agent's own workbench, so its output lands beside the agent. The shell runs the
+  // command once and the tab stays on its output when it exits (no fresh shell is
+  // spawned). Re-running the same action reuses its still-open tab — the command
+  // runs again in place — instead of piling up a tab per run. The tab is cleaned up
+  // when the action is cleared (pruneActionTerminals) or the agent is closed.
   // (Terminal-less actions run as background processes inside the host, not here.)
   private runAgentActionInTerminal(agent: Agent, action: AgentAction): void {
     this.showAgent(agent); // activate the agent's workbench — the action runs beside it
     const shell = process.env.SHELL || '/bin/bash';
+    const command = [shell, '-l', '-c', action.command];
+
+    // Reuse the action's existing tab if it's still around (it lingers on its output
+    // after the command exits): bring it forward and re-run the command in place.
+    const existing = this.findActionTerminal(agent, action.id);
+    if (existing) {
+      existing.child.select();
+      existing.terminal.run(command);
+      existing.terminal.focus();
+      return;
+    }
+
     const built = this.createTerminalTab(agent.effectiveCwd, {
-      command: [shell, '-l', '-c', `${action.command}; exec ${shell} -l`],
+      command,
       title: action.label,
+      keepOpenOnExit: true, // stay on the output when the command exits; don't respawn a shell
+      transient: true, // too short-lived to restore — keep it out of the session
     });
     const child = this.workbench.center.add(built.widget, { title: built.title });
     built.onAttached?.(child);
-    this.terminals.get(built.widget)!.focus();
+    const terminal = this.terminals.get(built.widget)!;
+    this.actionTerminals.set(built.widget, { agent, actionId: action.id, terminal, child });
+    terminal.focus();
+  }
+
+  // The still-open terminal tab for `agent`'s action, or null. (Closed tabs are
+  // dropped from the map by disposeChild, so a hit is always a live tab.)
+  private findActionTerminal(agent: Agent, actionId: string) {
+    for (const entry of this.actionTerminals.values())
+      if (entry.agent === agent && entry.actionId === actionId) return entry;
+    return null;
+  }
+
+  // Close the terminal tabs of `agent`'s actions that no longer exist — the agent
+  // re-registered its actions (set_actions) and dropped these, so their dedicated
+  // terminals are stale. Closing the tab tears down the rest via disposeChild.
+  private pruneActionTerminals(agent: Agent): void {
+    const live = new Set(agent.actions.map((a) => a.id));
+    for (const entry of [...this.actionTerminals.values()])
+      if (entry.agent === agent && !live.has(entry.actionId)) entry.child.close();
   }
 
   // Construct + wire a terminal tab WITHOUT attaching it to a panel. Shared by
   // openTerminal, the script runner, and session restore (a restored terminal is
   // a fresh shell in cwd). `command`/`title` let a caller run something other than
   // a login shell (e.g. a package script).
-  private createTerminalTab(cwd: string, options: { command?: string[]; title?: string } = {}): RestoredChild {
+  private createTerminalTab(cwd: string, options: { command?: string[]; title?: string; keepOpenOnExit?: boolean; transient?: boolean } = {}): RestoredChild {
     let child: PanelChild | null = null;
     const terminal = new Terminal({
       cwd,
       command: options.command,
       title: options.title,
-      // The shell exiting (`exit`/Ctrl-D) closes its tab.
+      keepOpenOnExit: options.keepOpenOnExit,
+      transient: options.transient,
+      // The shell exiting (`exit`/Ctrl-D) closes its tab. A `keepOpenOnExit` tab
+      // (an agent action) instead stays on its output and never fires this.
       onExit: () => child?.close(),
     });
     this.terminals.set(terminal.root, terminal);
@@ -819,6 +890,8 @@ export class AppWindow {
     const agentSubs = new CompositeDisposable();
     this.agentSubs.set(agent, agentSubs);
     agentSubs.add(new Disposable(agent.onTitleChange(() => this.updateAgentTab(agent))));
+    // Drop a `terminal` action's dedicated tab when the agent stops registering it.
+    agentSubs.add(new Disposable(agent.onDidChangeActions(() => this.pruneActionTerminals(agent))));
     // Notify when the agent needs attention while the user isn't looking at it.
     let previousStatus = agent.status;
     agentSubs.add(new Disposable(agent.onDidChangeStatus(() => {
@@ -1198,9 +1271,15 @@ export class AppWindow {
     if (!workbench) return;
     if ([...this.editors.values()].some((editor) => editor.currentFile === path)) return;
     // openPanel splits the agent panel to the right on the first file, then reuses
-    // that work area for the rest. Pass the agent's workbench as owner so the
-    // editor's gutter uses *its* (worktree) git, not the active workbench's.
-    this.openFileIn(path, workbench.center.openPanel, { focus: false, owner: workbench });
+    // that work area for the rest. Pass the agent's workbench as owner so the editor's
+    // gutter uses *its* (worktree) git, not the active workbench's.
+    const panel = workbench.center.openPanel;
+    // focus: false never grabs keyboard focus. select: only the first file reveals
+    // itself — it fills the freshly-created (empty) work area so there's something to
+    // see. Every later edit opens quietly as a background tab in the bar, so the agent's
+    // edits never pull the view off whatever the user is looking at or editing.
+    const select = panel.tabCount === 0;
+    this.openFileIn(path, panel, { focus: false, owner: workbench, select });
   }
 
   // Restart an agent: retire the old one and relaunch with the same cwd, resuming
@@ -1222,6 +1301,10 @@ export class AppWindow {
   // the user's workbench if it was active), and retire it from the registry.
   private closeAgent(agent: Agent): void {
     if (!agent.exited) agent.kill();
+    // Drop the agent's action terminals (set_actions tabs in its workbench center);
+    // disposeChild won't reach them (they're terminals, not editors).
+    for (const entry of [...this.actionTerminals.values()])
+      if (entry.agent === agent) this.disposeChild(entry.terminal.root);
     if (this.workbench.owner === agent) this.activateOwner('user'); // swap away first
     const workbench = this.workbenches.get(agent);
     this.workbenches.delete(agent); // its workbench (center + Files/Git + bottom + tabs) goes
@@ -1328,6 +1411,10 @@ export class AppWindow {
     this.editorOwners.delete(widget);
     this.editorChildren.delete(widget);
     this.terminals.delete(widget);
+    // An agent-action terminal: kill any still-running command (e.g. a dev server)
+    // so a closed/cleared action leaves nothing behind, then drop it from the map.
+    this.actionTerminals.get(widget)?.terminal.kill();
+    this.actionTerminals.delete(widget);
     this.conversations.get(widget)?.dispose(); // kill the claude child + IPC watchers
     this.conversations.delete(widget);
     this.agentChildren.delete(widget);
@@ -2157,13 +2244,22 @@ export class AppWindow {
         description: 'Show every changed file as one continuous diff (multibuffer)',
       },
       'git:diff-commit': {
-        didDispatch: () => void openCommitDiff(),
-        description: 'Diff the last commit (HEAD, against its parent)',
+        // With a revision argument, diff that commit; with none, pick one first.
+        didDispatch: (_e, _el, rev) =>
+          typeof rev === 'string' && rev !== ''
+            ? void openCommitDiff(rev)
+            : openCommitPicker(this.overlay),
+        description: 'Diff a commit against its parent (pick one, or pass a revision)',
         when: () => this.workbench.git.getHead() !== null,
       },
       'git:diff-branch': {
         didDispatch: () => void openBranchDiff(),
         description: 'Diff this branch against master/main (PR-style)',
+        when: () => this.workbench.git.getHead() !== null,
+      },
+      'git:log': {
+        didDispatch: () => this.openGitLog(),
+        description: 'Open the git log (history) viewer',
         when: () => this.workbench.git.getHead() !== null,
       },
       'diff:expand-context': {
@@ -2203,12 +2299,12 @@ export class AppWindow {
       'git:stage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.stageHunkAtCursor(),
         description: 'Stage the hunk under the cursor (continuous diff)',
-        when: () => this.activeContinuousDiff() !== null,
+        when: () => this.activeContinuousDiff()?.live === true, // staging is live-diff only
       },
       'git:unstage-hunk': {
         didDispatch: () => this.activeContinuousDiff()?.unstageHunkAtCursor(),
         description: 'Unstage the hunk under the cursor (continuous diff)',
-        when: () => this.activeContinuousDiff() !== null,
+        when: () => this.activeContinuousDiff()?.live === true, // staging is live-diff only
       },
       'diff:review-comment': {
         didDispatch: () => this.activeContinuousDiff()?.startComment(),
@@ -2399,6 +2495,7 @@ export class AppWindow {
       files,
       cwd,
       editable: true,
+      live: true, // the staging surface: live worktree+index → staging markers + `space h s`/`space h u`
       documents: this.documents,
       git: this.workbench.git, // enables the staged/unstaged gutter marker + `space h s`/`space h u`
       onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
@@ -2427,6 +2524,64 @@ export class AppWindow {
     view.onReviewChange(() => child.setTitle(title())); // show the accumulated-review count
     child.select();
     view.focus();
+  }
+
+  // `git:log` — open the git history viewer as a center tab. Selecting a commit
+  // opens its diff in a split to the right (see openCommitBesideLog).
+  private openGitLog(): void {
+    const cwd = this.workbench.cwd;
+    if (!repoRoot(cwd)) {
+      this.toast('Not in a git repository');
+      return;
+    }
+    const view = new GitLogView({
+      cwd,
+      git: this.workbench.git,
+      onOpenCommit: (commit) => void this.openCommitBesideLog(view, commit),
+    });
+    this.openCenterTab(view.root, {
+      title: `${Icons.git}  Log`,
+      requireTabBar: true,
+      onClose: () => view.dispose(),
+    });
+    view.focus(); // openCenterTab focuses the tab root; move focus into the commit list
+  }
+
+  // Show `commit`'s diff in a split to the right of the `log` viewer, replacing any
+  // diff a previous selection opened there (so browsing j/k/Enter reuses one split
+  // rather than stacking tabs). Focus stays on the log so navigation continues.
+  private async openCommitBesideLog(log: GitLogView, commit: CommitSummary): Promise<void> {
+    const cwd = this.workbench.cwd;
+    const root = repoRoot(cwd);
+    if (!root) return;
+    const built = await buildCommitDiffView(root, commit, cwd);
+    if (!built) {
+      this.toast('Commit has no file changes');
+      return;
+    }
+
+    // Reuse the panel the previous diff lives in (if still open); otherwise split to
+    // the right of the log's own pane. Panel.containing returns null once the user
+    // has closed that split, so we split afresh then.
+    const previous = this.gitLogDiff;
+    let panel = previous ? Panel.containing(previous.view.root) : null;
+    if (!panel) {
+      Panel.containing(log.root)?.activate(); // split relative to the log, not whatever was active
+      panel = this.workbench.center.split('right');
+    }
+    // Add the new diff before closing the old one, so the panel never empties (which
+    // would collapse the split) in between.
+    const child = panel.add(built.view.root, { title: built.title, requireTabBar: true });
+    // disposeChild runs this on close: dispose the view, and forget it if it was the
+    // one we're tracking (so a user-closed split splits fresh next time).
+    this.tabCloseHandlers.set(built.view.root, () => {
+      built.view.dispose();
+      if (this.gitLogDiff?.view === built.view) this.gitLogDiff = null;
+    });
+    previous?.child.close(); // disposes the old view via its own tabCloseHandler
+    this.gitLogDiff = { view: built.view, child };
+    child.select();
+    built.view.focus(); // move focus into the opened diff (o/Enter follows the commit)
   }
 
   // Terminal command: open a shell in a new center-panel tab. Handler only;

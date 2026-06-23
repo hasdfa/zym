@@ -14,7 +14,7 @@
 import { Disposable } from './util/eventKit.ts';
 import { Key } from './keymap/Key.ts';
 import { unreachable } from './util/assert.ts';
-import { parseSelector, matchesRule, elementMatchKeys, type Rule } from './util/selectors.ts';
+import { parseSelector, matchesRule, matchesRuleInChain, elementMatchKeys, elementContext, type ElementContext, type Rule } from './util/selectors.ts';
 import { getActiveElements } from './util/getActiveElements.ts';
 import { GLib, Gtk } from './gi.ts';
 import { zym } from './zym.ts';
@@ -353,7 +353,8 @@ export class KeymapManager {
   // The keymap entries that apply to `element` (indexed under any of its keys and
   // confirmed by the full selector rule).
   private entriesFor(element: Widget): KeymapEntry[] {
-    return elementMatchKeys(element)
+    const ctx = elementContext(element);
+    return elementMatchKeys(ctx)
       .flatMap((key) => this.keymapsByName[key] || [])
       .filter((entry) => matchesRule(element, entry.rule));
   }
@@ -575,21 +576,28 @@ export class KeymapManager {
   private collectMatches(keystrokes: Key[], elements: Widget[]): KeybindingMatch[] {
     const matches: KeybindingMatch[] = [];
 
-    for (const element of elements) {
-      const keymaps = elementMatchKeys(element)
-        .flatMap((key) => this.keymapsByName[key] || []);
+    // Snapshot each element's name/CSS classes once: every element is probed
+    // against many rules and re-visited as an ancestor of deeper elements, so
+    // the native getName()/getCssClasses() calls are read here and reused (both
+    // for bucket lookup and inside the selector walk). The chain doubles as the
+    // ancestor list `matchesRuleInChain` walks, avoiding per-node getParent().
+    const chain: ElementContext[] = elements.map(elementContext);
 
-      if (keymaps.length === 0)
-        continue;
+    for (let index = 0; index < chain.length; index++) {
+      const ctx = chain[index];
 
-      const matchingKeymaps = keymaps.filter(k => matchesRule(element, k.rule));
-      const matchingKeybindings =
-        matchingKeymaps.map(k => matchKeybinding(keystrokes, k.keymap, element, k.priority, k.rule.specificity)).flat();
+      for (const key of elementMatchKeys(ctx)) {
+        const bucket = this.keymapsByName[key];
+        if (bucket === undefined)
+          continue;
 
-      if (matchingKeybindings.length === 0)
-        continue;
-
-      matches.push(...matchingKeybindings);
+        for (const entry of bucket) {
+          if (!matchesRuleInChain(chain, index, entry.rule))
+            continue;
+          collectKeybindingMatches(
+            matches, keystrokes, entry.keymap, ctx.widget, entry.priority, entry.rule.specificity);
+        }
+      }
     }
 
     return matches;
@@ -623,12 +631,36 @@ export class KeymapManager {
   }
 }
 
-function matchKeybinding(queuedKeystrokes: Key[], keymap: Keymap, element: Widget, priority: number, specificity: number): KeybindingMatch[] {
-  const keybindingKeys = Object.keys(keymap);
-  const results: KeybindingMatch[] = [];
+// Parsed keystroke sequence for a keybinding description, memoized by string.
+// A binding's keystrokes never change, but `collectMatches` re-examines every
+// binding on the focus chain on each keypress; without this cache that meant a
+// `split` + array allocation per binding per keystroke (the individual `Key`s
+// are already memoized by `Key.fromDescription`). `null` entries are kept so an
+// unparseable token still fails the match below, as before.
+const keyStackCache = new Map<string, (Key | null)[]>();
 
-  outer: for (const keybinding of keybindingKeys) {
-    const keyStack = keybinding.split(/\s+/).map(d => Key.fromDescription(d));
+function parseKeyStack(keybinding: string): (Key | null)[] {
+  let keyStack = keyStackCache.get(keybinding);
+  if (keyStack === undefined) {
+    keyStack = keybinding.split(/\s+/).map(d => Key.fromDescription(d));
+    keyStackCache.set(keybinding, keyStack);
+  }
+  return keyStack;
+}
+
+// Append every full/partial match of `queuedKeystrokes` against `keymap` to
+// `results` (writing in place to avoid the per-element array allocations the
+// previous `.map(...).flat()` produced on the hot path).
+function collectKeybindingMatches(
+  results: KeybindingMatch[],
+  queuedKeystrokes: Key[],
+  keymap: Keymap,
+  element: Widget,
+  priority: number,
+  specificity: number,
+): void {
+  outer: for (const keybinding of Object.keys(keymap)) {
+    const keyStack = parseKeyStack(keybinding);
 
     if (keyStack.length < queuedKeystrokes.length)
       continue;
@@ -664,6 +696,4 @@ function matchKeybinding(queuedKeystrokes: Key[], keymap: Keymap, element: Widge
       unreachable();
     }
   }
-
-  return results;
 }

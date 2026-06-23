@@ -231,3 +231,5 @@ agent's diff (needs the editor Diff renderer first), and worktree lifecycle
 ### Inspiration
 
 - https://www.reddit.com/r/gnome/comments/1u56coz/gitte_070_is_out_simple_git_client/
+- https://codeberg.org/ckruse/Gitte/src/branch/main/SCREENSHOTS.md
+

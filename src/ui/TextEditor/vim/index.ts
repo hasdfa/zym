@@ -378,6 +378,7 @@ const EDIT_BINDINGS: Record<string, string> = {
 // Misc commands (undo/redo), available while NOT in insert mode.
 const MISC_BINDINGS: Record<string, string> = {
   u: 'Undo',
+  U: 'Redo',
   'ctrl-r': 'Redo',
 };
 

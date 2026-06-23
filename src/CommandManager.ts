@@ -15,7 +15,7 @@
  * a `CommandEvent`.
  */
 import { Emitter, Disposable } from './util/eventKit.ts';
-import { parseSelector, matchesRule, elementMatchKeys, type Rule } from './util/selectors.ts';
+import { parseSelector, matchesRule, elementMatchKeys, elementContext, type Rule } from './util/selectors.ts';
 import { unreachable } from './util/assert.ts';
 import { Gtk } from './gi.ts';
 
@@ -96,7 +96,7 @@ export class CommandManager {
   // of its keys (type, CSS classes, wildcard) plus any registered on the element
   // instance directly. Callers still confirm each with `matchesRule`.
   private bundlesFor(element: Widget): CommandBundle[] {
-    const keyed = elementMatchKeys(element)
+    const keyed = elementMatchKeys(elementContext(element))
       .flatMap((key) => this.commandsByName[key] || []);
     return keyed.concat(this.commandsByElement.get(element) || []);
   }

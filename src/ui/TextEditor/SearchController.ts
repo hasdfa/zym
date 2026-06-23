@@ -43,6 +43,10 @@ export interface SearchState {
 
 const LAYER = 'search';
 
+// Shared "/" register across all SearchController instances — vim's global "/"
+// register so `n`/`N` in any editor continue a search started in another.
+const slashRegister = { query: '', wholeWord: false };
+
 export class SearchController {
   readonly options: SearchOptions = { caseMode: 'smart', useRegex: false };
 
@@ -81,12 +85,13 @@ export class SearchController {
 
   /** Whether a search is active (has matches to step through with n/N). */
   get hasActiveSearch(): boolean {
-    return this.query.length > 0;
+    return this.query.length > 0 || slashRegister.query.length > 0;
   }
 
   setQuery(query: string): SearchState {
     this.query = query;
     this.wholeWord = false;
+    if (query) { slashRegister.query = query; slashRegister.wholeWord = false; }
     this.research(true);
     return this.state;
   }
@@ -100,6 +105,7 @@ export class SearchController {
     this.start(reverse);
     this.query = word;
     this.wholeWord = wholeWord; // `*`/`#` match whole words; `g*`/`g#` match substrings too
+    if (word) { slashRegister.query = word; slashRegister.wholeWord = wholeWord; }
     this.options.useRegex = false; // `word` is literal; whole-word wrapping is separate
     return this.next(); // step in the search direction, off the word under the cursor
   }
@@ -116,11 +122,13 @@ export class SearchController {
    * moved away from the previous match.
    */
   next(): SearchState {
+    this.syncSlashRegister();
     return this.stepFromCursor(!this.reverse);
   }
 
   /** Step to the previous match (opposite the search direction), cursor-relative. */
   previous(): SearchState {
+    this.syncSlashRegister();
     return this.stepFromCursor(this.reverse);
   }
 
@@ -190,6 +198,16 @@ export class SearchController {
       current: this.index < 0 ? 0 : this.index + 1,
       invalid: this.invalid,
     };
+  }
+
+  // Restore the "/" register into this controller when it has no active query,
+  // so `n`/`N` in an editor that hasn't searched yet continue the last search
+  // from any other editor.
+  private syncSlashRegister(): void {
+    if (slashRegister.query && slashRegister.query !== this.query) {
+      this.query = slashRegister.query;
+      this.wholeWord = slashRegister.wholeWord;
+    }
   }
 
   // --- internals -------------------------------------------------------------

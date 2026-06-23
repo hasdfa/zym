@@ -8,14 +8,15 @@ import { Gtk, Adw } from '../../gi.ts';
 import { theme } from '../../theme/theme.ts';
 import { lookupCSSColor } from '../../theme/cssColor.ts';
 import { fonts } from '../../fonts.ts';
-import { MarkdownView } from '../markdown/MarkdownView.ts';
+import { Message } from './Message.ts';
 import { toolMarkup } from '../toolDisplay.ts';
-import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
+import { escapeMarkup, setMarkupSafe } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
 import { summarizeInput, truncateLines } from './format.ts';
 import { StickyListPanel } from './StickyListPanel.ts';
 import { ToolRow } from './ToolRow.ts';
+import { Transcript } from './Transcript.ts';
 import type { SdkSession } from '../../agents/claude-sdk/SdkSession.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
@@ -89,39 +90,40 @@ export class SubagentView {
 
   // Push a page rendering the subagent's captured transcript; live-updates while running.
   private pushPage(id: string): void {
-    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-    box.addCssClass('zym-conversation-transcript');
-    const scroller = new Gtk.ScrolledWindow({ vexpand: true });
-    scroller.setChild(box);
-
+    // The same shared Transcript widget the main conversation uses — it owns the
+    // entries box, the inter-entry spacing (its `.zym-conversation-entry` class), and
+    // stick-to-bottom; this code only builds the entries.
+    const transcript = new Transcript();
     const render = () => {
-      clearChildren(box);
+      transcript.clear();
       const info = this.session.getSubagent(id);
       if (!info) return;
       // The instruction the main agent gave the subagent, at the top (a user turn).
       if (info.prompt) {
-        const promptView = new MarkdownView();
-        promptView.root.addCssClass('zym-conversation-user');
-        box.append(promptView.root);
-        promptView.setMarkdown(info.prompt);
+        const prompt = new Message('user');
+        transcript.appendEntry(prompt.root);
+        prompt.setMarkdown(info.prompt);
       }
       for (const m of info.messages) {
         if (m.kind === 'text') {
-          const view = new MarkdownView();
-          view.root.addCssClass('zym-conversation-assistant');
-          box.append(view.root);
-          view.setMarkdown(m.text);
+          const message = new Message('assistant');
+          transcript.appendEntry(message.root);
+          message.setMarkdown(m.text);
         } else {
+          // The tool call + its result form ONE entry (the result stays tucked under
+          // the call), mirroring a ToolRow + its detail in the main transcript.
+          const entry = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
           const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
           label.addCssClass('zym-conversation-toolrow');
           setMarkupSafe(label, toolMarkup(m.name, m.input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${m.name} ${summarizeInput(m.input)}`);
-          box.append(label);
+          entry.append(label);
           if (m.result && m.result.text.trim()) {
             const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(m.result.text.trim(), 12, 1200) });
             out.addCssClass('zym-conversation-result');
             out.setMarginStart(22);
-            box.append(out);
+            entry.append(out);
           }
+          transcript.appendToolEntry(entry); // a tool entry (not a message)
         }
       }
     };
@@ -140,7 +142,7 @@ export class SubagentView {
     const page = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     page.addCssClass('zym-conversation');
     page.append(header);
-    page.append(scroller);
+    page.append(transcript.root);
 
     const navPage = Adw.NavigationPage.new(page, title);
     navPage.on('hidden', () => sub.dispose()); // stop refreshing once popped

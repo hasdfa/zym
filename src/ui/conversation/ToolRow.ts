@@ -26,6 +26,10 @@ import { setMarkupSafe } from '../proseMarkup.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
+/** A tool row's status: warning / error tint the icon + header (via the Adwaita
+ *  `.warning` / `.error` style classes), or `null` for the neutral default. */
+export type ToolRowStatus = 'warning' | 'error' | null;
+
 export interface ToolRowOptions {
   /** Nerd Font glyph for the leading icon slot (Bash → terminal, …). */
   icon: string;
@@ -36,6 +40,9 @@ export interface ToolRowOptions {
   /** When set, a header click runs this (file tools open their file) instead of
    *  toggling; the details box is then shown inline rather than behind a reveal. */
   onActivate?: () => void;
+  /** Initial status (warning/error): colours the icon + header via the Adwaita
+   *  style class. Equivalent to calling `setStatus` after construction. */
+  status?: ToolRowStatus;
   /** Start expanded (toggle rows only). */
   expanded?: boolean;
   /** Notified on every expand/collapse (toggle rows only) — e.g. Bash re-renders
@@ -48,14 +55,21 @@ export class ToolRow {
   /** The details section below the header — append result/output/JSON/progress here. */
   readonly content: InstanceType<typeof Gtk.Box>;
   private readonly icon: InstanceType<typeof Gtk.Label>;
+  private readonly header: Widget; // the title widget — status-tinted alongside the icon
   private readonly toggle: InstanceType<typeof Gtk.Box>; // BUTTON + DETAILS; the bg-fade target
   private readonly revealer: InstanceType<typeof Gtk.Revealer> | null;
   private readonly onToggle?: (expanded: boolean) => void;
+  // The leading icon's glyph + its explicit colour (used only when no status owns it).
+  private iconGlyph = '';
+  private iconColor?: string;
+  private status: ToolRowStatus = null;
 
   constructor(opts: ToolRowOptions) {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.root.addCssClass('zym-conversation-toolrow-container');
+    // The transcript wraps this in a .transcript-entry-tool box (Transcript.appendToolEntry);
+    // the row itself carries no entry class.
 
+    this.header = opts.header;
     this.icon = new Gtk.Label({ valign: Gtk.Align.START });
     this.icon.addCssClass('zym-conversation-toolrow-icon');
     this.setIcon(opts.icon, opts.iconColor);
@@ -71,6 +85,8 @@ export class ToolRow {
     opts.header.setHexpand(true);
     button.setChild(opts.header);
     this.toggle.append(button);
+
+    if (opts.status) this.setStatus(opts.status);
 
     // Center the icon against the header button — not the whole toggle. A vertical
     // size group ties the icon's height to the button's, so the (top-aligned) icon
@@ -111,8 +127,30 @@ export class ToolRow {
     this.onToggle?.(expanded);
   }
 
-  /** Set the leading icon (glyph + optional color); used for the error ✗ too. */
+  /** Set the leading icon (glyph + optional colour). A status, if set, owns the
+   *  colour (via its Adwaita class), so the explicit colour applies only otherwise. */
   setIcon(glyph: string, color?: string): void {
-    setMarkupSafe(this.icon, iconSpan(glyph, color), glyph);
+    this.iconGlyph = glyph;
+    this.iconColor = color;
+    this.renderIcon();
+  }
+
+  /** Mark the row's status: `warning` / `error` tint the icon AND the header through
+   *  the Adwaita `.warning` / `.error` style classes (no border, no inline colour);
+   *  `null` clears it. Optionally swaps the icon glyph (e.g. ✗ for an error). */
+  setStatus(status: ToolRowStatus, glyph?: string): void {
+    this.status = status;
+    if (glyph !== undefined) this.iconGlyph = glyph;
+    for (const c of ['warning', 'error'] as const) { this.icon.removeCssClass(c); this.header.removeCssClass(c); }
+    if (status) { this.icon.addCssClass(status); this.header.addCssClass(status); }
+    this.renderIcon();
+  }
+
+  // Render the icon glyph. A status colours it through the CSS class, so it must
+  // carry NO inline Pango colour (which would override the class); without a status
+  // the explicit colour (if any) applies.
+  private renderIcon(): void {
+    const markup = this.status ? iconSpan(this.iconGlyph) : iconSpan(this.iconGlyph, this.iconColor);
+    setMarkupSafe(this.icon, markup, this.iconGlyph);
   }
 }

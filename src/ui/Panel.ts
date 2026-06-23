@@ -484,14 +484,19 @@ export class Panel {
   /** Add `child` as a new tab and select it. Pass `requireTabBar` for a child
    *  whose tab title must stay visible at all times (keeps the tab bar shown even
    *  when it is the lone tab). */
-  add(child: Widget, options: { title?: string; requireTabBar?: boolean } = {}): PanelChild {
+  add(child: Widget, options: { title?: string; requireTabBar?: boolean; select?: boolean } = {}): PanelChild {
     const page = this.view.append(child);
     // A direct child of a Panel — a styling hook for whatever lives in a tab.
     child.addCssClass('is-panel-child');
     Panel.childPanels.set(child, this); // back-reference for Panel.containing
     if (options.title) page.setTitle(options.title);
     if (options.requireTabBar) this.forcedBarChildren.add(child);
-    this.view.setSelectedPage(page);
+    // Select (reveal) the new tab unless the caller opts out. Adw moves focus onto the
+    // selected page when this tab view already holds focus, so a background open into a
+    // pane the user is working in passes select:false to stay out of their way (the new
+    // tab waits in the bar). Appending the very first page selects it regardless — but
+    // then the pane held no focus to steal.
+    if (options.select !== false) this.view.setSelectedPage(page);
     this.updateEmptyState();
     return {
       widget: child,
