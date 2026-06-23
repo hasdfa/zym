@@ -183,7 +183,14 @@ export class SearchBar {
     this.shown = true;
     this.panel.setVisible(true);
     this.searchEntry.grabFocus();
-    this.searchEntry.selectRegion(0, -1); // select any prior query so typing replaces it
+    // Sync the entry to the shared "/" register (last confirmed search across
+    // all editors) so every editor opens with the same term, like vim.
+    if (SEARCH_HISTORY.length > 0) {
+      this.suppressChange = true;
+      this.searchEntry.setText(SEARCH_HISTORY[0]);
+      this.suppressChange = false;
+    }
+    this.searchEntry.selectRegion(0, -1); // select query so typing replaces it
     this.render(this.controller.setQuery(this.searchEntry.getText()));
     this.refreshHighlight();
   }
