@@ -109,6 +109,8 @@ const SEQUENCE_BINDINGS: Record<string, string> = {
   'g k': 'MoveUpDisplayLine',
   // gv — reselect the last visual selection.
   'g v': 'SelectPreviousSelection',
+  // gb — select the latest changed/yanked region (the `[`/`]` change marks).
+  'g b': 'SelectLatestChange',
   // Fold motions: zj/zk to the next/previous fold, [z/]z to the current fold's edges.
   'z j': 'MoveToNextFoldStart',
   'z k': 'MoveToPreviousFoldEnd',
