@@ -3,6 +3,9 @@
   "name": "zym",
   "appearance": "dark",
   "ui": {
+    "view": {
+      "bg": "--window-bg-color"
+    },
     "editor": {
       "foreground": "#f1f1f1",
       "background": "#2d2d2d",

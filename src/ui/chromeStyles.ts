@@ -13,7 +13,7 @@ import { theme } from '../theme/theme.ts';
 // switch can re-apply it. Themes without their own background (ui.bg unset)
 // leave the chrome to the system Adwaita styling.
 export function applyChromeStyles(): void {
-  const { surface: { popover: popoverBg, selected: selectedBg } } = theme.ui;
+  const { surface: { selected: selectedBg } } = theme.ui;
   // A theme that follows the system scheme leaves the chrome to Adwaita.
   if (theme.followSystemScheme) {
     styles.remove('theme-chrome');
@@ -51,20 +51,7 @@ export function applyChromeStyles(): void {
     // stays muted throughout (the cat is a calm mascot, the rest reference text).
     // Keycaps derive their chrome from currentColor.
     `#PanelEmptyText, #PanelEmptyEmoticon, #PanelEmptyCat, #PanelEmptyCheatsheet, #PanelEmptyFooter { color: ${muted}; }`,
-    `#PanelEmptyText.is-active, #PanelEmptyEmoticon.is-active { color: ${theme.ui.editor.foreground}; }`,
   ];
-
-  // Selected entries in lists (file tree, picker results). The file-tree
-  // selection is painted only while the tree is focused (`:focus-within`); an
-  // unfocused tree drops it — see FileTree's `:not(:focus-within)` rule — so the
-  // selected row reads as inactive. Pickers are always focused when shown.
-  if (selectedBg) {
-    rules.push(
-      `#FileTree:focus-within listview row:selected,
-       #PickerList row:selected,
-       #WorkbenchList list row:selected { background-color: ${selectedBg}; }`,
-    );
-  }
 
   styles.set(rules.join('\n'), { key: 'theme-chrome' });
 }
