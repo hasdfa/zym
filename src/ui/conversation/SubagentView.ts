@@ -28,7 +28,7 @@ export interface PageNav {
 
 export class SubagentView {
   /** The running-subagents panel; mount `panel.root` in the layout. */
-  readonly panel = new StickyListPanel('Subagents', 'zym-conversation-subagents');
+  readonly panel = new StickyListPanel('Subagents', 'is-below');
   private readonly running = new Map<string, { agentType: string; description: string; status: 'running' | 'completed' }>();
 
   private readonly session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>;
@@ -49,7 +49,7 @@ export class SubagentView {
     const type = typeof i.subagent_type === 'string' ? i.subagent_type : 'agent';
     const desc = typeof i.description === 'string' ? i.description : '';
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('zym-conversation-toolrow');
+    header.addCssClass('conversation-tool-header');
     setMarkupSafe(header, `<b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
     const toolRow = new ToolRow({ icon: NERDFONT.TOOL.SUBAGENT, header, onActivate: () => this.pushPage(id) });
     // Show it in the running panel right away (driven by the spawn, not the later
@@ -72,7 +72,7 @@ export class SubagentView {
     setMarkupSafe(label, `${iconSpan(glyph, color)}  <b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
     const button = new Gtk.Button({ halign: Gtk.Align.START });
     button.addCssClass('flat');
-    button.addCssClass('zym-conversation-subagent-link');
+    button.addCssClass('sticky-list-panel-link');
     button.setChild(label);
     button.on('clicked', () => this.pushPage(id));
     return button;
@@ -90,7 +90,7 @@ export class SubagentView {
   // Push a page rendering the subagent's captured transcript; live-updates while running.
   private pushPage(id: string): void {
     // The same shared Transcript widget the main conversation uses — it owns the
-    // entries box, the inter-entry spacing (its `.zym-conversation-entry` class), and
+    // entries box, the inter-entry spacing (its `.transcript-entry` class), and
     // stick-to-bottom; this code only builds the entries.
     const transcript = new Transcript();
     const render = () => {
@@ -113,12 +113,12 @@ export class SubagentView {
           // the call), mirroring a ToolRow + its detail in the main transcript.
           const entry = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
           const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-          label.addCssClass('zym-conversation-toolrow');
+          label.addCssClass('conversation-tool-header');
           setMarkupSafe(label, toolMarkup(m.name, m.input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${m.name} ${summarizeInput(m.input)}`);
           entry.append(label);
           if (m.result && m.result.text.trim()) {
             const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(m.result.text.trim(), 12, 1200) });
-            out.addCssClass('zym-conversation-result');
+            out.addCssClass('conversation-result');
             out.setMarginStart(22);
             entry.append(out);
           }
@@ -135,11 +135,11 @@ export class SubagentView {
     back.addCssClass('flat');
     back.on('clicked', () => this.nav.pop());
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    header.addCssClass('zym-conversation-subagent-header');
+    header.addCssClass('conversation-page-header');
     header.append(back);
     header.append(new Gtk.Label({ label: title }));
     const page = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    page.addCssClass('zym-conversation');
+    page.addCssClass('conversation-surface');
     page.append(header);
     page.append(transcript.root);
 

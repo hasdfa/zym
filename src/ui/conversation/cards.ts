@@ -14,7 +14,7 @@ type Box = InstanceType<typeof Gtk.Box>;
  *  caller removes the buttons afterwards. */
 export function permissionButtons(decide: (allow: boolean) => void): Box {
   const buttons = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-  buttons.addCssClass('zym-conversation-perm-buttons');
+  buttons.addCssClass('conversation-perm-buttons');
   const allow = new Gtk.Button({ label: 'Allow' });
   allow.addCssClass('suggested-action');
   const deny = new Gtk.Button({ label: 'Deny' });
@@ -29,10 +29,10 @@ export function permissionButtons(decide: (allow: boolean) => void): Box {
  *  tool row). `decide` receives the user's choice; the caller removes the card. */
 export function permissionCard(req: PermissionRequest, decide: (allow: boolean) => void): Box {
   const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-  card.addCssClass('zym-conversation-perm');
+  card.addCssClass('conversation-perm');
   const title = new Gtk.Label({ xalign: 0, label: `Allow ${req.toolName}?` });
   const detail = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: summarizeInput(req.input) });
-  detail.addCssClass('zym-conversation-tool');
+  detail.addCssClass('conversation-perm-detail');
   card.append(title);
   card.append(detail);
   card.append(permissionButtons(decide));
