@@ -24,6 +24,7 @@ import './operator-insert.ts'; // ActivateInsertMode/InsertAfter/Change/…
 import './operator-transform-string.ts'; // gU/gu/g~, r, surround
 import './text-object.ts'; // iw/aw/i(/a"/… (operator + visual targets)
 import './misc-command.ts'; // Undo/Redo/Mark/…
+import './zym-commands.ts'; // GoToFile (gf) / GoogleSearch (gw)
 
 const dasherize = (name: string): string =>
   (name[0].toLowerCase() + name.slice(1)).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
@@ -459,6 +460,16 @@ const LEAP_BINDINGS: Record<string, string> = {
   'g S': 'LeapBackwards',
 };
 
+// zym-original `g`-prefixed commands (see `zym-commands.ts`). `gf` opens the file
+// named under the cursor (normal mode). `gw` opens a Google search for the word
+// under the cursor (normal) or the selection (visual), so it's bound in both.
+const GOTO_FILE_BINDINGS: Record<string, string> = {
+  'g f': 'GoToFile',
+};
+const WEB_SEARCH_BINDINGS: Record<string, string> = {
+  'g w': 'GoogleSearch',
+};
+
 // Motions + operators are bound in every non-insert mode (notably operator-pending,
 // so the motion that follows `d` resolves). Mode-entry keys (i/a) are normal-only.
 const NON_INSERT_BINDINGS: Record<string, string> = {
@@ -500,6 +511,8 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   ...SEARCH_MOTION_BINDINGS,
   ...JUMP_BINDINGS,
   ...MACRO_BINDINGS,
+  ...GOTO_FILE_BINDINGS,
+  ...WEB_SEARCH_BINDINGS,
   // Visual-only commands registered under unique keys so they don't shadow the
   // normal-mode `o`/`O` (open-line) entries above — this map is only enumerated
   // for command registration, so the keys are arbitrary.
@@ -554,6 +567,9 @@ function registerKeymapsOnce(): void {
       ...MULTI_CURSOR_CLEAR,
       // alt-j/k step 5 lines; alt-d/u scroll the view 12 lines (ported from nvim).
       ...ALT_NAV_COMMANDS,
+      // gf opens the file under the cursor; gw Google-searches the word under it.
+      ...toKeymap(GOTO_FILE_BINDINGS),
+      ...toKeymap(WEB_SEARCH_BINDINGS),
     },
     // Motions and operators apply in normal, operator-pending, and visual modes.
     '#TextEditor:not(.insert-mode)': {
@@ -571,6 +587,8 @@ function registerKeymapsOnce(): void {
       ...toKeymap(VISUAL_COMMAND_BINDINGS),
       ...toKeymap(TEXT_OBJECT_BINDINGS),
       ...toKeymap(SEARCH_MOTION_BINDINGS),
+      // gw Google-searches the current selection.
+      ...toKeymap(WEB_SEARCH_BINDINGS),
     },
     // Operator targets in operator-pending mode: text objects, `d/foo` search,
     // and the `o`/`O` occurrence modifiers (`c o p`, `d O w`).

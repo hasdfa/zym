@@ -13,6 +13,11 @@ default (no flag).
   (`ys`/`ds`/`cs`), indent/outdent/join.
 - `gv` reselects the last visual selection; `gb` selects the latest
   changed/yanked region (the `` `[ ``/`` `] `` change marks).
+- **zym-original `g`-commands** (`vim/zym-commands.ts`): `gf` opens the file named
+  under the cursor (resolving against the current file's dir, then the project
+  root, then absolute / `~`); `gw` opens a Google search for the word under the
+  cursor (normal) or the selection (visual). `gw` rather than `go` because `go`
+  stays the occurrence-preset toggle.
 - System clipboard integration; register prefix (`"`).
 - `/` `?` `n` `N` search via the `SearchBar` (incremental highlight, case/regex,
   replace).
