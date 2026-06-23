@@ -11,6 +11,8 @@ default (no flag).
   dot-repeat.
 - find-char (`f`/`F`/`t`/`T`/`;`/`,`), case ops (`gU`/`gu`/`g~`), surround
   (`ys`/`ds`/`cs`), indent/outdent/join.
+- `gv` reselects the last visual selection; `gb` selects the latest
+  changed/yanked region (the `` `[ ``/`` `] `` change marks).
 - System clipboard integration; register prefix (`"`).
 - `/` `?` `n` `N` search via the `SearchBar` (incremental highlight, case/regex,
   replace).

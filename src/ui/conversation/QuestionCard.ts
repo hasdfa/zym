@@ -24,32 +24,18 @@ import type { AgentQuestion, QuestionRequest } from '../../agents/claude-sdk/Sdk
 type Answer = { header: string; labels: string[]; notes?: string };
 
 addStyles(`
-  /* AskUserQuestion: an interactive choice card (info-tinted while open). Split
-     into a choice list (left) + a detail pane (right) for the focused choice. */
-  .zym-conversation-question {
+  /* AskUserQuestion: an interactive choice card (info-tinted while open). Once
+     answered the card becomes a tool row (see QuestionCard.submit) — no border. */
+  #Question .question-card {
     padding: calc(2 * var(--t-spacing));
     border: 1px solid var(--t-ui-status-info);
     border-radius: var(--card-radius);
   }
-  /* Once answered the card becomes a tool row (see QuestionCard.submit) — no border. */
-  .zym-conversation-question-h { font-weight: bold; opacity: 0.6; }
-  .zym-conversation-question-split { }
-  .zym-conversation-question-list { background: transparent; min-width: 150px; }
-  .zym-conversation-question-opt { padding: 2px 4px; }
-  .zym-conversation-question-detail {
-    padding: 2px 12px; opacity: 0.8;
-    border-left: 1px solid var(--t-ui-border);
-  }
-  
-  /* The monospace bits (tool rows, JSON dumps) follow the font store. */
-  .zym-conversation-tool,
-  .zym-conversation-result,
-  .zym-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
-  .zym-q-prompt { margin-bottom: calc(2 * var(--t-spacing)); font-size: var(--t-font-ui-size-large); }
-  .zym-q-switcher button { padding-top: 2px; padding-bottom: 2px; min-height: 0; }
-  .zym-q-hint { opacity: 0.5; font-size: var(--t-font-ui-size-small); }
-  .zym-q-row-focused { background: var(--t-ui-surface-selected); }
-  .zym-q-note { padding-left: calc(4 * var(--t-spacing)); }
+  #Question .question-prompt { margin-bottom: calc(2 * var(--t-spacing)); font-size: var(--t-font-ui-size-large); }
+  #Question .question-switcher button { padding-top: 2px; padding-bottom: 2px; min-height: 0; }
+  #Question .question-hint { opacity: 0.5; font-size: var(--t-font-ui-size-small); }
+  #Question .is-focused { background: var(--t-ui-surface-selected); }
+  #Question .question-note { padding-left: calc(4 * var(--t-spacing)); }
 `);
 
 interface Option {
@@ -76,11 +62,11 @@ export class QuestionCard {
     this.onAnswer = onAnswer;
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
     this.root.setName('Question')
-    this.root.addCssClass('transcript-entry-question');
+    this.root.addCssClass('is-open'); // released on answer; the keymap scopes `space` to #Question.is-open
     this.root.setFocusable(true);
-    
+
     this.container = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
-    this.container.addCssClass('zym-conversation-question');
+    this.container.addCssClass('question-card');
     this.root.append(this.container)
 
     const numbered = this.qs.length > 1; // "1. …, 2. …" only when there's more than one
@@ -89,7 +75,7 @@ export class QuestionCard {
       const switcher = new Adw.InlineViewSwitcher({ stack: this.stack });
       switcher.setDisplayMode(Adw.InlineViewSwitcherDisplayMode.LABELS);
       switcher.setHalign(Gtk.Align.START);
-      switcher.addCssClass('zym-q-switcher');
+      switcher.addCssClass('question-switcher');
       this.container.append(switcher);
     }
     this.container.append(this.stack);
@@ -101,7 +87,7 @@ export class QuestionCard {
       if (q.question) {
         // The number lives in the switcher tab title, so the prompt omits it.
         const prompt = new Gtk.Label({ xalign: 0, wrap: true });
-        prompt.addCssClass('zym-q-prompt');
+        prompt.addCssClass('question-prompt');
         setMarkupSafe(prompt, `<b>${escapeMarkup(q.question)}</b>`, q.question);
         page.append(prompt);
       }
@@ -137,7 +123,7 @@ export class QuestionCard {
         // Revealed note field; typing must reach it, so track focus + handle enter/escape.
         const note = new Adw.EntryRow();
         note.setTitle('Add a note…');
-        note.addCssClass('zym-q-note');
+        note.addCssClass('question-note');
         const fc = new Gtk.EventControllerFocus();
         fc.on('enter', () => { this.editing = true; });
         fc.on('leave', () => {
@@ -161,7 +147,7 @@ export class QuestionCard {
     });
 
     this.hint = new Gtk.Label({ xalign: 0 });
-    this.hint.addCssClass('zym-q-hint');
+    this.hint.addCssClass('question-hint');
     this.container.append(this.hint);
     this.updateHint();
 
@@ -209,8 +195,8 @@ export class QuestionCard {
   // so the indicator is a CSS class rather than the native focus ring).
   private applyFocus(): void {
     this.opts[this.current].forEach((o, oi) => {
-      if (oi === this.focused[this.current]) o.row.addCssClass('zym-q-row-focused');
-      else o.row.removeCssClass('zym-q-row-focused');
+      if (oi === this.focused[this.current]) o.row.addCssClass('is-focused');
+      else o.row.removeCssClass('is-focused');
     });
   }
 
@@ -275,13 +261,13 @@ export class QuestionCard {
     // one-line summary header that expands to the full Q&A. Matches the padding /
     // indent of every other tool row (vs. the old bare, unpadded label).
     clearChildren(this.root);
-    this.root.removeCssClass('zym-conversation-question');
+    this.root.removeCssClass('is-open'); // answered → release the `space` keymap scope
     const picked = answers.filter((a) => a.labels.length > 0);
     const summary = picked.length > 0
       ? picked.map((a) => `${a.header}: ${a.labels.join(', ')}${a.notes ? ` (${a.notes})` : ''}`).join('   ·   ')
       : 'No answer selected';
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('zym-conversation-toolrow');
+    header.addCssClass('conversation-tool-header');
     setMarkupSafe(header, escapeMarkup(summary), summary);
     const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header });
     row.content.append(this.answeredDetails());

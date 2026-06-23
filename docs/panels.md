@@ -47,6 +47,11 @@ widget.
   back to the center when hiding out from under it). Left/top carry no built-in
   content yet, so toggling them is a no-op + toast until a plugin contributes a
   panel there.
+- **Default state**: the user workbench's right dock (Files/Source-Control) is
+  *assigned but hidden* at startup — the `Workbench` constructor calls `setRight`
+  then `setDockVisible('right', false)`, so the dock toggle / `file-tree:` /
+  `git-panel:` focus have content to reveal, but it stays out of the way until
+  asked for. A restored session re-applies the user's last visibility (below).
 - **Session-persisted**: `SessionDocks.visible` (per-side flags) is
   saved/restored with the rest of the dock state; a toggle schedules an
   autosave. Sessions with no `visible` entry restore all sides shown.

@@ -1,8 +1,8 @@
 /*
  * Transcript — the scrollable column of conversation "entries" shared by the main
  * AgentConversation and each subagent page (SubagentView). It is the single owner of:
- *   - the entries box (`.zym-conversation-transcript`),
- *   - the uniform inter-entry spacing (the `.zym-conversation-entry` class, applied
+ *   - the entries box,
+ *   - the uniform inter-entry spacing (the `.transcript-entry` class, applied
  *     ONLY in appendEntry — so no caller ever repeats the class or its style),
  *   - stick-to-bottom autoscroll.
  *
@@ -18,99 +18,36 @@ import { iconSpan } from '../icons.ts';
 type Widget = InstanceType<typeof Gtk.Widget>;
 
 addStyles(`
-  #Transcript { 
+  #Transcript {
     font-size: 1.05em;
   }
-    
-  #Transcript viewport { 
+
+  #Transcript viewport {
     padding: calc(2 * var(--t-spacing)) 0;
   }
-  
-  /* The floating "copy message" button, pinned top-right of the transcript viewport. */
-  .zym-conversation-copy { margin: 10px; padding: 2px 6px; min-height: 0; min-width: 0; opacity: 0.5; }
-  .zym-conversation-copy:hover { opacity: 1; }
-  .zym-conversation-tool { opacity: 0.8; }
-  .zym-conversation-toolrow { opacity: 0.85; }
-  
-  
-  #Transcript .transcript-entry { 
+
+  #Transcript .transcript-entry {
     padding: 0 calc(2 * var(--t-spacing));
     margin-bottom: calc(2 * var(--t-spacing));
   }
-  
-  /* The transcript column + per-entry spacing live in Transcript.ts (the shared widget). */
-  .zym-conversation-row { padding: 6px 0; }
-  
+
   /* Shared tool rows (tool-use / Bash / unknown event): a leading tool icon next to
      a toggle (a flat header button over a collapsible detail). The container owns
      the horizontal padding; the extra left indent nests tool activity under the
-     turn. Only the toggle expands and fades its background to a message bubble's
-     (popover surface) on expand. */
+     turn. (The toggle/expand styling lives in ToolRow.ts.) */
   #Transcript .transcript-entry-tool {
     padding: 0 calc(2 * var(--t-spacing)) 0 calc(6 * var(--t-spacing));
    }
-  
-  /* The leading tool icon. A size group ties its height to the header button's, so
-     the label's own vertical centering keeps the glyph centered on the header row. */
-  .zym-conversation-toolrow-icon { padding-right: 8px; }
-  /* The BUTTON + DETAILS expander: the only part that grows + gains the bubble bg. */
-  .zym-conversation-toolrow-toggle {
-    border-radius: 8px;
-    background: transparent;
-    transition: background 150ms ease;
-  }
-  .zym-conversation-toolrow-expanded { background: var(--t-ui-surface-popover); }
-  /* The header button: a standard Adwaita flat button (its own hover tint), just
-     left-aligned with no min size and rounded to match the toggle. */
-  .zym-conversation-toolrow-button {
-    padding: 6px 8px; min-height: 0; border-radius: 8px;
-  }
-  .zym-conversation-toolrow-detail { padding: 0 8px 6px 8px; }
+
   /* Collapsed file-tool rows (Read/Write/Edit): a non-clickable tool-name label and
      each file path are all flat buttons, so they share the default button padding +
      metrics and line up. The head reads as a muted title; paths read as links. */
-  .zym-conversation-filehead { opacity: 0.85; }
-  .zym-conversation-filepath {
+  #Transcript .transcript-file-icon { padding-right: 8px; }
+  #Transcript .transcript-file-head { opacity: 0.85; }
+  #Transcript .transcript-file-path {
     color: var(--t-ui-text-info);
     font-family: var(--t-font-monospace-family);
   }
-  /* Allow/Deny buttons embedded in a tool row's details (a permission prompt). */
-  .zym-conversation-perm-buttons { margin-top: 4px; }
-  
-  /* Subagent transcript: the "view conversation" link + the pushed page's header. */
-  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
-  .zym-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
-  .zym-conversation-result {
-    opacity: 0.7;
-    background: var(--t-ui-surface-popover);
-    padding: 4px 8px;
-    margin-top: 2px;
-    border-radius: 4px;
-  }
-  /* A Task (subagent) report renders as a fuller markdown card. */
-  .zym-conversation-task-result {
-    background: var(--t-ui-surface-popover);
-    border-left: 3px solid var(--t-ui-surface-selected);
-    padding: 6px 10px;
-    margin-top: 4px;
-    border-radius: 4px;
-  }
-  .zym-conversation-tasks {
-    padding: 8px calc(4 * var(--t-spacing));
-    background: var(--t-ui-surface-popover);
-    border-bottom: 1px solid var(--t-ui-border);
-  }
-  .zym-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
-  /* The running-subagents panel sits below the input card → divider on top, not bottom. */
-  .zym-conversation-subagents { border-top: 1px solid var(--t-ui-border); border-bottom: none; }
-  .zym-conversation-system { opacity: 0.6; font-style: italic; }
-  /* The resume boundary divider: centered, muted, italic. */
-  .zym-conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
-  .zym-conversation-error { color: var(--t-ui-status-error); }
-  /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost.
-     The warning is carried by the ToolRow warning status (icon + header tint),
-     not a border. */
-  .zym-conversation-unknown-body { opacity: 0.75; }
 `);
 
 export interface TranscriptOptions {
@@ -136,7 +73,6 @@ export class Transcript {
 
   constructor(opts: TranscriptOptions = {}) {
     this.box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.box.addCssClass('zym-conversation-transcript');
 
     let child: Widget = this.box;
     if (opts.maxWidth != null) {
@@ -191,9 +127,10 @@ export class Transcript {
 
     if (!this.fileGroup || this.fileGroup.tool !== name) {
       const container = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+      container.addCssClass('transcript-file-row');
 
       const icon = new Gtk.Label({ valign: Gtk.Align.START });
-      icon.addCssClass('zym-conversation-toolrow-icon');
+      icon.addCssClass('transcript-file-icon');
       setMarkupSafe(icon, iconSpan(view.icon), view.icon);
       container.append(icon);
 
@@ -201,7 +138,7 @@ export class Transcript {
       // padding/metrics as the file-path buttons beside it — they line up.
       const head = new Gtk.Button({ valign: Gtk.Align.START });
       head.addCssClass('flat');
-      head.addCssClass('zym-conversation-filehead');
+      head.addCssClass('transcript-file-head');
       head.setCanTarget(false); // a label, not a control — no hover, no click
       head.setFocusable(false);
       const headLabel = new Gtk.Label({ xalign: 0 });
@@ -224,7 +161,7 @@ export class Transcript {
 
     const button = new Gtk.Button({ halign: Gtk.Align.START });
     button.addCssClass('flat');
-    button.addCssClass('zym-conversation-filepath');
+    button.addCssClass('transcript-file-path');
     button.setChild(new Gtk.Label({ xalign: 0, label: display }));
     button.setTooltipText(absPath);
     button.on('clicked', () => opts.onOpenFile(absPath));
