@@ -1,20 +1,19 @@
 /*
  * projectSearch — feed the multibuffer from a project-wide ripgrep search. Splits into a
- * pure part (group match rows into context-padded, merged excerpt regions — unit-tested)
- * and the I/O part (spawn `rg --json`, same streaming pattern as SearchPicker, since Node
- * promise microtasks don't resolve under node-gtk's blocked GLib loop — node-gtk#430).
+ * pure part (group match rows into context-padded, merged excerpt regions, and map the
+ * header flags to rg arguments — both unit-tested) and the I/O part (run `rg --json` through
+ * the process runner, so the giant node-gtk process never forks — docs/process-runner.md).
  *
  * Phase 1a "validated on project-wide search": the multibuffer shows every match grouped by
  * file, each match with a few lines of context, adjacent matches merged into one region.
  */
-import { spawn } from 'node:child_process';
 import * as Path from 'node:path';
+import { runProcess } from '../../process/runner.ts';
 import type { ExcerptInput } from '../SearchResultsView.ts';
 import type { MatchRange } from './MultiBufferModel.ts';
 
 const MAX_MATCHES = 1000; // cap rows parsed from rg across all files
-const MAX_OUTPUT = 16 * 1024 * 1024; // cap accumulated stdout; kill rg past it
-const DEFAULT_CONTEXT = 2; // lines of context each side of a match
+export const DEFAULT_CONTEXT = 2; // lines of context each side of a match
 
 /** Matches in one file, in file order of first appearance; `rows` are 0-based, deduped.
  *  `matches` carries each individual hit's column span (for highlighting), one per rg
@@ -59,13 +58,54 @@ export function matchesToExcerptInputs(
 }
 
 /**
- * Run `rg --json` over `cwd` for `query` and call back with matches grouped by file (file
- * order = first match seen). `code > 1` from rg is a real error (bad regex); 0/1 are
- * matches / none.
+ * Search-tuning flags surfaced in the project-search header, mapped to ripgrep options. The
+ * defaults mirror a friendly search box: smart-case, literal (non-regex) matching, and
+ * ripgrep's own ignore rules (so .gitignore'd and hidden files are skipped).
+ */
+export interface ProjectSearchOptions {
+  /** false (default) → `--smart-case`; true → `--case-sensitive`. */
+  caseSensitive?: boolean;
+  /** `--word-regexp`: match only whole-word occurrences. */
+  wholeWord?: boolean;
+  /** false (default) → `--fixed-strings` (literal); true → treat the query as a regex. */
+  regex?: boolean;
+  /** Restrict the search to files matching these globs (`--glob <g>`). */
+  includeGlobs?: string[];
+  /** Skip files matching these globs (`--glob !<g>`). */
+  excludeGlobs?: string[];
+  /** Also search git-ignored and hidden files (`--no-ignore --hidden`). */
+  includeIgnored?: boolean;
+}
+
+/** Build the `rg --json …` argument list for `query` under `options`. Pure + exported so the
+ *  flag→argument mapping is unit-testable without spawning ripgrep. */
+export function buildRipgrepArgs(query: string, options: ProjectSearchOptions = {}): string[] {
+  const args = ['--json'];
+  args.push(options.caseSensitive ? '--case-sensitive' : '--smart-case');
+  if (options.wholeWord) args.push('--word-regexp');
+  if (!options.regex) args.push('--fixed-strings'); // literal query unless regex is enabled
+  if (options.includeIgnored) args.push('--no-ignore', '--hidden');
+  for (const g of options.includeGlobs ?? []) if (g.trim() !== '') args.push('--glob', g.trim());
+  for (const g of options.excludeGlobs ?? []) if (g.trim() !== '') args.push('--glob', `!${g.trim()}`);
+  // `--` stops a query that starts with `-` being read as a flag; the trailing `.` is the
+  // search path. The path is REQUIRED: the process runner hands rg a pipe on stdin, and rg
+  // searches stdin (blocking forever) whenever it's given no path — so we always pass `.` to
+  // force a recursive directory search of `cwd`.
+  args.push('--', query, '.');
+  return args;
+}
+
+/**
+ * Run `rg --json` over `cwd` for `query` (tuned by `options`) and call back with matches
+ * grouped by file (file order = first match seen). Routes through the process runner — the
+ * broker child spawns rg, so the giant node-gtk process never forks (docs/process-runner.md).
+ * `code > 1` from rg is a real error (bad regex); 0/1 are matches / none; a null code means
+ * the spawn failed (rg most likely isn't installed) or the runner killed an oversized run.
  */
 export function runProjectSearch(
   cwd: string,
   query: string,
+  options: ProjectSearchOptions,
   onDone: (result: { files?: FileMatches[]; error?: string }) => void,
 ): void {
   const q = query.trim();
@@ -73,37 +113,16 @@ export function runProjectSearch(
     onDone({ files: [] });
     return;
   }
-  let proc: ReturnType<typeof spawn>;
-  try {
-    proc = spawn('rg', ['--json', '--smart-case', '--', q], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (e) {
-    onDone({ error: e instanceof Error ? e.message : String(e) });
-    return;
-  }
-
-  let stdout = '';
-  let stderr = '';
-  let done = false;
-  const finish = (result: { files?: FileMatches[]; error?: string }): void => {
-    if (done) return;
-    done = true;
-    onDone(result);
-  };
-
-  proc.on('error', (err) => {
-    finish({ error: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'ripgrep (rg) is not installed' : err.message });
-  });
-  proc.stdout?.on('data', (d) => {
-    stdout += d.toString();
-    if (stdout.length > MAX_OUTPUT) {
-      proc.kill();
-      finish({ files: parseGrouped(stdout, cwd) });
+  runProcess({ file: 'rg', args: buildRipgrepArgs(q, options), cwd }, ({ ok, code, stdout, stderr }) => {
+    if (!ok && code === null) {
+      onDone({ error: stderr.toString().trim() || 'ripgrep (rg) is not installed' });
+      return;
     }
-  });
-  proc.stderr?.on('data', (d) => { stderr += d.toString(); });
-  proc.on('close', (code) => {
-    if (code !== null && code > 1) finish({ error: stderr.trim() || 'search failed' });
-    else finish({ files: parseGrouped(stdout, cwd) });
+    if (code !== null && code > 1) {
+      onDone({ error: stderr.toString().trim() || 'search failed' });
+      return;
+    }
+    onDone({ files: parseGrouped(stdout.toString(), cwd) });
   });
 }
 

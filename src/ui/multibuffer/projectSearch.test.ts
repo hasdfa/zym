@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { matchesToExcerptInputs, byteToColumn } from './projectSearch.ts';
+import { matchesToExcerptInputs, byteToColumn, buildRipgrepArgs } from './projectSearch.ts';
 
 // Pure region-merge math — no rg, no GTK.
 
@@ -67,4 +67,43 @@ test('byteToColumn converts rg byte offsets to codepoint columns (multibyte safe
   assert.equal(byteToColumn('foo bar', 4), 4, 'ASCII: byte == column');
   // 'café ' is 6 bytes (é = 2), 5 codepoints — so byte 6 ("f" of foo) is column 5.
   assert.equal(byteToColumn('café foo', 6), 5, 'multibyte: byte offset > column');
+});
+
+// --- buildRipgrepArgs: flag → ripgrep argument mapping ----------------------
+
+test('default flags: smart-case + literal (fixed-strings), query + path after `--`', () => {
+  assert.deepEqual(buildRipgrepArgs('foo'), ['--json', '--smart-case', '--fixed-strings', '--', 'foo', '.']);
+});
+
+test('case-sensitive replaces smart-case', () => {
+  assert.deepEqual(
+    buildRipgrepArgs('foo', { caseSensitive: true }),
+    ['--json', '--case-sensitive', '--fixed-strings', '--', 'foo', '.'],
+  );
+});
+
+test('regex on drops --fixed-strings; whole-word adds --word-regexp', () => {
+  assert.deepEqual(
+    buildRipgrepArgs('fo+', { regex: true, wholeWord: true }),
+    ['--json', '--smart-case', '--word-regexp', '--', 'fo+', '.'],
+  );
+});
+
+test('include / exclude globs become --glob (exclude is negated)', () => {
+  assert.deepEqual(
+    buildRipgrepArgs('foo', { includeGlobs: ['*.ts', ' '], excludeGlobs: ['*.test.ts'] }),
+    ['--json', '--smart-case', '--fixed-strings', '--glob', '*.ts', '--glob', '!*.test.ts', '--', 'foo', '.'],
+    'blank globs are dropped; exclude patterns are prefixed with !',
+  );
+});
+
+test('includeIgnored adds --no-ignore --hidden', () => {
+  assert.deepEqual(
+    buildRipgrepArgs('foo', { includeIgnored: true }),
+    ['--json', '--smart-case', '--fixed-strings', '--no-ignore', '--hidden', '--', 'foo', '.'],
+  );
+});
+
+test('a query starting with `-` is protected by the `--` separator, before the `.` path', () => {
+  assert.deepEqual(buildRipgrepArgs('-n', { regex: true }).slice(-3), ['--', '-n', '.']);
 });
