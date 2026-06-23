@@ -33,6 +33,7 @@ import { DiffCommentBox, buildCommentCard } from './DiffCommentBox.ts';
 import type { BlockDecorationSpec, BlockDecorationSet, BlockDecorationAnchor } from './TextEditor/BlockDecorationSet.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
+import { CompositeDisposable } from '../util/eventKit.ts';
 import { zym } from '../zym.ts';
 import * as Path from 'node:path';
 
@@ -182,6 +183,7 @@ export class DiffView {
   private lastLineCount = 0; // view buffer line count, to detect line-count-changing edits
   private readonly modifiedHandlers: Array<() => void> = [];
   private readonly modifiedUnsubs: Array<() => void> = [];
+  private readonly disposables = new CompositeDisposable();
   private disposed = false;
 
   private get projection(): ViewProjection {
@@ -477,7 +479,8 @@ export class DiffView {
     this.gapAnchors = dmb.gapAnchors; // kept for the keyboard expand (`expandContextAtCursor`)
     this.headerAnchors = dmb.headerAnchors;
     const specs: BlockDecorationSpec[] = [];
-    dmb.headerAnchors.forEach((h, i) =>
+    dmb.headerAnchors.forEach((h, i) => {
+      const scope = new CompositeDisposable();
       specs.push({
         id: `header:${i}`, // reconcile by ordinal: count changes by delta, content-key rebuilds the widget
         key: DiffView.headerKey(h),
@@ -485,6 +488,7 @@ export class DiffView {
         placement: 'above',
         build: () =>
           buildHeaderWidget(
+            scope,
             h.label,
             h.path,
             () => this.onActivate?.({ path: h.path, row: 0 }),
@@ -493,18 +497,21 @@ export class DiffView {
             // bottom), like clicking any other gap.
             h.leadingRevealRows?.length ? () => this.revealChunk(h.leadingRevealRows!, false) : undefined,
           ),
-      }),
-    );
-    dmb.gapAnchors.forEach((g, i) =>
+        dispose: () => scope.dispose(), // sever the header/gap click controllers when the band is replaced/removed
+      });
+    });
+    dmb.gapAnchors.forEach((g, i) => {
+      const scope = new CompositeDisposable();
       specs.push({
         id: `gap:${i}`,
         key: DiffView.gapKey(g),
         anchor: { viewRow: g.viewRow },
         placement: 'below',
         // Clicking the gap reveals a chunk of its elided lines (extends the window above it).
-        build: () => buildGapWidget(g.label, () => this.revealChunk(g.revealRows, true)),
-      }),
-    );
+        build: () => buildGapWidget(scope, g.label, () => this.revealChunk(g.revealRows, true)),
+        dispose: () => scope.dispose(),
+      });
+    });
     // Accumulated review comments: a read-only card under each commented line (source-anchored, so
     // it tracks the line across re-diffs/edits). Reconciled in the same set by stable id.
     this.pending.forEach((p) =>
@@ -642,7 +649,7 @@ export class DiffView {
       else this.activateRow(this.cursorRow());
       return true;
     });
-    view.addController(keys);
+    this.disposables.addController(view, keys);
 
     if (this.editable) return; // double-click word-select stays while editing
     const click = new Gtk.GestureClick();
@@ -653,7 +660,7 @@ export class DiffView {
       const r = view.getLineAtY(yBuf);
       this.activateRow(asIter(Array.isArray(r) ? r[0] : r).getLine());
     });
-    view.addController(click);
+    this.disposables.addController(view, click);
   }
 
   private cursorRow(): number {
@@ -1039,6 +1046,7 @@ export class DiffView {
       else entry.syntax.dispose();
     }
     this.sources.clear();
+    this.disposables.dispose(); // sever the nav controllers while the source view still exists
     this.editor.dispose();
   }
 }
