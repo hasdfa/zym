@@ -31,8 +31,8 @@ const MAX_RESULTS = 200;
 // Side-preview layout (opt-in via `options.preview`): the card splits into a
 // fixed-width result list on the left and a preview pane on the right. The list
 // is kept at least as wide as the preview (≥ 50% of the card).
-const PREVIEW_LIST_WIDTH = 520; // result-list column width when a preview is shown
-const PREVIEW_PANE_WIDTH = 480; // default preview-pane width
+const PREVIEW_LIST_WIDTH = 640; // result-list column width when a preview is shown
+const PREVIEW_PANE_WIDTH = 600; // default preview-pane width
 const PREVIEW_DELAY_MS = 60; // debounce before refreshing the preview as the selection moves
 // Auto search-debounce: a dataset larger than this re-ranks on a delay (coalesce
 // keystrokes when fuzzy-ranking is costly); anything smaller filters instantly.

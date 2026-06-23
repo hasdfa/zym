@@ -53,14 +53,13 @@ export function openReferencesPicker(
     placeholder: 'Filter references…',
     promptIcon: Icons.search,
     items,
-    // Render the matched line on the left, the `path:line` location as a muted,
-    // croppable detail on the right (yields to the line text when space is tight).
+    // Render the matched line on the left, the `path:line` location as a muted
+    // detail on the right (yields to the line text, cropping from the start, when tight).
     renderRow: (item) => {
       const it = item as ReferenceItem;
       return renderRowSingleLine({
         main: escapeMarkup(it.text),
         detail: `<span size="smaller">${escapeMarkup(it.detailText)}</span>`,
-        cropDetail: true,
       });
     },
     locate: (item) => {
