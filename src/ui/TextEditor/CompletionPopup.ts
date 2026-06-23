@@ -43,6 +43,7 @@ const LABEL_INSET_PX = BORDER_PX + ROW_PADDING_PX + ICON_WIDTH_PX + ICON_MARGIN_
 
 addStyles(`
   #CompletionPopup {
+    background-color: var(--popover-bg-color);
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius-small);
     box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
