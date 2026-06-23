@@ -320,6 +320,31 @@ multibuffer substrate — see
 replaced the earlier tab-hosted `GitStagingView`; its original design is
 recorded in [staging-interface.md](staging-interface.md).
 
+### Git log (history) viewer — `src/ui/GitLogView.ts`
+
+`git:log` opens **one self-contained center tab**: a horizontal `Gtk.Paned`
+with the commit list on the left and the selected commit's read-only diff on
+the right (no side-split panel — the viewer hosts and disposes the embedded
+`DiffView` itself). The left column is a header (branch + upstream ref /
+ahead-behind / HEAD sha) over a live `file:`/`author:`/word **search**
+(picker fzy matcher, AND-combined) over a vim-navigable list of the newest
+`COMMIT_LIMIT` commits (subject over an "author · date · sha" line).
+
+- **Navigation / preview** — `j`/`k`, `g g`/`G` move the selection and
+  **live-preview** that commit's diff in the right pane (debounced
+  ~90 ms + generation-guarded, so a fast scroll only builds the commit it
+  settles on). `o`/`Enter`/`l` load it and move focus *into* the diff. The
+  diff is built by `buildCommitDiffView` (shared with `git:diff-commit`,
+  vs the commit's first parent), so it gets the fold/expand-context commands
+  (`z o`/`z R`/`z m`) for free.
+- **List ↔ diff focus** — the list and the diff are two nested "windows":
+  `ctrl-w l` steps from the list into the diff (`git-log:focus-diff`),
+  `ctrl-w h` steps back out (`git-log:focus-list`). Both commands are
+  registered on the view root so they resolve from anywhere inside the
+  viewer. Keys are scoped under `#GitLogList` (bare nav), `#GitLogSearch`
+  (drop into the list), and `#GitLogView #GitLogList` / `#GitLogView
+  #TextEditor` (the `ctrl-w` focus pair) — see `keymaps/default.ts`.
+
 ## Forge: GitHub — `src/github.ts` + `src/ui/Github*.ts`
 
 Implemented as a concrete **GitHub** integration driven by the `gh` CLI

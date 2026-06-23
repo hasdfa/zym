@@ -9,7 +9,7 @@
  *
  * The input is a buffer-only `TextEditor` (full vim editing); `enter` submits the
  * prompt and `alt-enter` inserts a newline, via commands bound on the prompt
- * container (keymap scoped to `#AgentConversationPrompt #TextEditor`).
+ * container (keymap scoped to `#AgentConversation .conversation-prompt #TextEditor`).
  *
  * It implements the tool-agnostic `Agent` surface (../agents/types.ts), so it is a
  * first-class workbench owner registered in `zym.agents` — the chrome reads
@@ -58,63 +58,103 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
 // the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
 addStyles(`
-  .zym-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
+  #AgentConversation .conversation-surface { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
 
   /* A message queued while the agent is busy — a right-aligned bubble above the prompt. */
-  .zym-conversation-pending {
+  #AgentConversation .conversation-pending {
     background: var(--t-ui-surface-selected);
     border-radius: 10px;
     padding: 6px 10px;
     margin: 0 12px;
   }
-  
+
   /* Agent-registered actions: a row of buttons just above the input card. The
      default action reads as the suggested (accent) button. */
-  .zym-conversation-actions {
+  #AgentConversation .conversation-actions {
     padding: var(--spacing) calc(var(--spacing));
   }
   /* The input + its status strip, as a bordered rounded card with its own bg.
      No top margin — the card sits flush under the transcript (no gap above). */
-  .zym-conversation-input-card {
+  #AgentConversation .conversation-input-card {
     margin: 0 calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing));
     border: 1px solid var(--t-ui-border);
     border-radius: var(--card-radius);
     background: var(--t-ui-surface-popover);
   }
-  
+
   /* Let the card's background show through the editor (no separate editor bg). */
-  #AgentConversationPrompt,
-  #AgentConversationPrompt scrolledwindow,
-  #AgentConversationPrompt textview,
-  #AgentConversationPrompt textview text {
+  #AgentConversation .conversation-prompt,
+  #AgentConversation .conversation-prompt scrolledwindow,
+  #AgentConversation .conversation-prompt textview,
+  #AgentConversation .conversation-prompt textview text {
     background: transparent;
   }
-  
-  .zym-conversation-footer {
+  #AgentConversation .conversation-prompt { padding: 0; }
+
+  #AgentConversation .conversation-footer {
     padding: 6px 12px;
     border-top: 1px solid var(--t-ui-border); /* divider between the input and the status strip */
   }
-  
+
   /* The footer metadata (model name · context tokens) reads as muted secondary text. */
-  .zym-conversation-footer-label { color: var(--t-ui-text-muted); }
-  
-  /* The detail popover: a compact two-column key/value grid. */
-  .zym-context-popover { padding: 6px 4px; }
-  .zym-context-popover-heading { font-weight: bold; margin-bottom: 2px; }
-  .zym-context-popover-caption { color: var(--t-ui-text-muted); }
-  
+  #AgentConversation .conversation-footer-label { color: var(--t-ui-text-muted); }
+
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
-  .zym-conversation-mode { min-height: 0; }
-  .zym-cmode-default { color: var(--t-ui-text-muted); }
-  .zym-cmode-acceptEdits { color: var(--t-ui-status-success); }
-  .zym-cmode-auto { color: var(--t-ui-status-warning); }
-  .zym-cmode-plan { color: var(--t-ui-status-info); }
-  .zym-conversation-perm {
+  #AgentConversation .conversation-mode { min-height: 0; }
+  #AgentConversation .conversation-mode.is-default { color: var(--t-ui-text-muted); }
+  #AgentConversation .conversation-mode.is-acceptEdits { color: var(--t-ui-status-success); }
+  #AgentConversation .conversation-mode.is-auto { color: var(--t-ui-status-warning); }
+  #AgentConversation .conversation-mode.is-plan { color: var(--t-ui-status-info); }
+
+  /* The floating "copy message" button, pinned top-right of the transcript viewport. */
+  #AgentConversation .conversation-copy { margin: 10px; padding: 2px 6px; min-height: 0; min-width: 0; opacity: 0.5; }
+  #AgentConversation .conversation-copy:hover { opacity: 1; }
+
+  /* A single wrapped, left-aligned row (interrupted / error / system / resume). */
+  #AgentConversation .conversation-row { padding: 6px 0; }
+  /* Tool-use header text (tool rows / subagent / monitor / answered question). */
+  #AgentConversation .conversation-tool-header { opacity: 0.85; }
+  #AgentConversation .conversation-system { opacity: 0.6; font-style: italic; }
+  /* The resume boundary divider: centered, muted, italic. */
+  #AgentConversation .conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
+  #AgentConversation .conversation-error { color: var(--t-ui-status-error); }
+  /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost.
+     The warning is carried by the ToolRow warning status (icon + header tint). */
+  #AgentConversation .conversation-unknown-body { opacity: 0.75; }
+
+  /* Truncated tool-output preview tucked under a row. */
+  #AgentConversation .conversation-result {
+    opacity: 0.7;
+    background: var(--t-ui-surface-popover);
+    padding: 4px 8px;
+    margin-top: 2px;
+    border-radius: 4px;
+  }
+  /* A Task (subagent) report renders as a fuller markdown card. */
+  #AgentConversation .conversation-task-result {
+    background: var(--t-ui-surface-popover);
+    border-left: 3px solid var(--t-ui-surface-selected);
+    padding: 6px 10px;
+    margin-top: 4px;
+    border-radius: 4px;
+  }
+
+  /* The pushed subagent/monitor page's header (back button + title). */
+  #AgentConversation .conversation-page-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
+
+  /* The fallback permission card + its allow/deny buttons (cards.ts). */
+  #AgentConversation .conversation-perm {
     padding: 8px;
     border: 1px solid var(--t-ui-surface-selected);
     border-radius: 6px;
   }
-  #AgentConversationPrompt { padding: 0; }
+  #AgentConversation .conversation-perm-buttons { margin-top: 4px; }
+  #AgentConversation .conversation-perm-detail { opacity: 0.8; }
+
+  /* The monospace bits (tool detail, results, JSON dumps) follow the font store. */
+  #AgentConversation .conversation-perm-detail,
+  #AgentConversation .conversation-result,
+  #AgentConversation .conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
 
 // The enter/alt-enter keymap is global (selector-scoped to our prompt), registered
@@ -124,7 +164,7 @@ function registerPromptKeymapOnce(): void {
   if (promptKeymapRegistered) return;
   promptKeymapRegistered = true;
   zym.keymaps.add('agent-conversation', {
-    '#AgentConversationPrompt #TextEditor': {
+    '#AgentConversation .conversation-prompt #TextEditor': {
       enter: 'conversation:submit-prompt',
       'alt-enter': 'conversation:prompt-newline',
     },
@@ -283,7 +323,7 @@ export class AgentConversation implements Agent {
     // relative to the viewport — it stays pinned top-right while the message scrolls.
     this.copyButton = new Gtk.Button();
     this.copyButton.addCssClass('flat');
-    this.copyButton.addCssClass('zym-conversation-copy');
+    this.copyButton.addCssClass('conversation-copy');
     this.copyButton.setChild(iconLabel(NERDFONT.ACTION.COPY));
     this.copyButton.setTooltipText('Copy message');
     this.copyButton.setHalign(Gtk.Align.END);
@@ -313,16 +353,16 @@ export class AgentConversation implements Agent {
     spinner.setSizeRequest(14, 14); // Adw.Spinner fills its allocation otherwise
     this.thinkingFooter.append(spinner);
     this.thinkingLabel = new Gtk.Label({ label: 'Thinking…' });
-    this.thinkingLabel.addCssClass('zym-conversation-system');
+    this.thinkingLabel.addCssClass('conversation-system');
     this.thinkingFooter.append(this.thinkingLabel);
 
     // Above the prompt, in a slide Revealer: a right-aligned "pending" message — a
     // turn the user queued while the agent was busy. Revealed while a message is pending.
     this.pendingBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, halign: Gtk.Align.END });
-    this.pendingBox.addCssClass('zym-conversation-pending');
+    this.pendingBox.addCssClass('conversation-pending');
     this.pendingLabel = new Gtk.Label({ xalign: 1, wrap: true });
     const pendingHint = new Gtk.Label({ xalign: 1, label: 'Pending' });
-    pendingHint.addCssClass('zym-conversation-system');
+    pendingHint.addCssClass('conversation-system');
     this.pendingBox.append(this.pendingLabel);
     this.pendingBox.append(pendingHint);
 
@@ -343,7 +383,7 @@ export class AgentConversation implements Agent {
     this.input.root.setVexpand(false);
     this.input.addCompletionSource(createSlashCommandSource(() => this._slashCommands));
     this.promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.promptContainer.setName('AgentConversationPrompt');
+    this.promptContainer.addCssClass('conversation-prompt');
     this.promptContainer.setVexpand(false);
     this.promptContainer.append(this.input.root);
 
@@ -352,7 +392,7 @@ export class AgentConversation implements Agent {
     this.statusIcon = createAgentStatusIcon(this);
     this.modeDropdown = Gtk.DropDown.newFromStrings(PERMISSION_CYCLE);
     this.modeDropdown.addCssClass('flat');
-    this.modeDropdown.addCssClass('zym-conversation-mode');
+    this.modeDropdown.addCssClass('conversation-mode');
     this.modeDropdown.on('notify::selected', () => {
       if (this.applyingMode) return;
       const mode = PERMISSION_CYCLE[this.modeDropdown.getSelected()];
@@ -362,7 +402,7 @@ export class AgentConversation implements Agent {
     // replaces it while working) · a spacer · then the permission-mode dropdown and
     // the model/context gauge pushed to the RIGHT edge.
     this.footer = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 14 });
-    this.footer.addCssClass('zym-conversation-footer');
+    this.footer.addCssClass('conversation-footer');
     this.footer.append(this.statusIcon.widget);
     this.footer.append(this.thinkingFooter);
     this.footer.append(new Gtk.Box({ hexpand: true })); // spacer → right-aligns the rest
@@ -376,7 +416,7 @@ export class AgentConversation implements Agent {
     // setOverflow(HIDDEN), which clips children to the rounded border so the
     // TextEditor's square background corners don't escape the radius.
     const inputCard = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    inputCard.addCssClass('zym-conversation-input-card');
+    inputCard.addCssClass('conversation-input-card');
     inputCard.setOverflow(Gtk.Overflow.HIDDEN);
     inputCard.append(this.promptContainer);
     inputCard.append(this.footer);
@@ -391,11 +431,11 @@ export class AgentConversation implements Agent {
     // hidden until the agent registers any (see renderActions). A WrapBox so a long
     // row of actions wraps onto further lines instead of overflowing the width.
     this.actionsBar = new Adw.WrapBox({ childSpacing: 6, lineSpacing: 6 });
-    this.actionsBar.addCssClass('zym-conversation-actions');
+    this.actionsBar.addCssClass('conversation-actions');
     this.actionsBar.setVisible(false);
 
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
-    mainBox.addCssClass('zym-conversation');
+    mainBox.addCssClass('conversation-surface');
     mainBox.append(this.tasksPanel.root);
     mainBox.append(transcriptOverlay); // the scroller, with the floating copy button over it
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
@@ -426,7 +466,7 @@ export class AgentConversation implements Agent {
       // A permanent divider marking the boundary between the restored history and
       // the live continuation: "session disconnected …" until the first turn, then
       // "session resumed" (a dim hollow dot reflects the not-yet-live state too).
-      const divider = this.addRow('zym-conversation-resume');
+      const divider = this.addRow('conversation-resume');
       divider.setXalign(0.5);
       divider.setHalign(Gtk.Align.CENTER);
       this.resumeNoteRow = divider;
@@ -476,8 +516,8 @@ export class AgentConversation implements Agent {
       this.modeDropdown.setSelected(index);
       this.applyingMode = false;
     }
-    for (const m of PERMISSION_CYCLE) this.modeDropdown.removeCssClass(`zym-cmode-${m}`);
-    this.modeDropdown.addCssClass(`zym-cmode-${this._permissionMode}`);
+    for (const m of PERMISSION_CYCLE) this.modeDropdown.removeCssClass(`is-${m}`);
+    this.modeDropdown.addCssClass(`is-${this._permissionMode}`);
   }
 
   /** Spawn claude and send the launch prompt (if any). A lazily-resumed agent
@@ -799,7 +839,7 @@ export class AgentConversation implements Agent {
       this.session.onQuestion((req) => this.addQuestionCard(req)),
       this.session.onExit(() => {
         this.endTurn();
-        this.addRow('zym-conversation-system').setText('── process exited ──');
+        this.addRow('conversation-system').setText('── process exited ──');
         this.promptContainer.setSensitive(false);
       }),
     );
@@ -943,7 +983,7 @@ export class AgentConversation implements Agent {
   // A single wrapped, left-aligned row (thinking / tool / system).
   private addRow(cssClass: string): InstanceType<typeof Gtk.Label> {
     const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-    label.addCssClass('zym-conversation-row');
+    label.addCssClass('conversation-row');
     label.addCssClass(cssClass);
     this.transcript.appendToolEntry(label);
     this.transcript.scrollToBottom();
@@ -952,13 +992,13 @@ export class AgentConversation implements Agent {
 
   // An error notice in the conversation flow (refusal / max-turns / API error).
   private addErrorRow(message: string): void {
-    const label = this.addRow('zym-conversation-error');
+    const label = this.addRow('conversation-error');
     setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
   }
 
   // A muted notice that the user interrupted the turn (ctrl-c).
   private addInterruptedRow(): void {
-    const label = this.addRow('zym-conversation-system');
+    const label = this.addRow('conversation-system');
     setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.STOP)}  Interrupted`, 'Interrupted');
   }
 
@@ -977,7 +1017,7 @@ export class AgentConversation implements Agent {
 
     const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, header, status: 'warning' });
     const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-    body.addCssClass('zym-conversation-unknown-body');
+    body.addCssClass('conversation-unknown-body');
     body.setText(json);
     toolRow.content.append(body);
 
@@ -1005,7 +1045,7 @@ export class AgentConversation implements Agent {
     // File tools open their file on click (no toggle); the rest toggle their detail.
     const { icon } = describeTool(name, input, this.cwd);
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('zym-conversation-toolrow');
+    header.addCssClass('conversation-tool-header');
     header.setWrapMode(Pango.WrapMode.WORD_CHAR); // break very long unbroken names instead of forcing the row wide
     setMarkupSafe(header, toolBodyMarkup(name, input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${name} ${summarizeInput(input)}`);
 
@@ -1031,7 +1071,7 @@ export class AgentConversation implements Agent {
         onProgress: (p) => {
           if (!progress) {
             progress = new Gtk.Label({ xalign: 0, wrap: true });
-            progress.addCssClass('zym-conversation-system');
+            progress.addCssClass('conversation-system');
             toolRow.content.append(progress);
           }
           progress.setText(progressLine(p));
@@ -1061,7 +1101,7 @@ export class AgentConversation implements Agent {
     };
 
     const label = new Gtk.Label({ xalign: 0, hexpand: true });
-    label.addCssClass('zym-conversation-toolrow');
+    label.addCssClass('conversation-tool-header');
     // Collapsed: the command is cropped to its first line; the full (multiline)
     // command shows only once expanded.
     const render = (expanded: boolean) => {
@@ -1085,7 +1125,7 @@ export class AgentConversation implements Agent {
         const trimmed = text.trim();
         if (trimmed) {
           const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 40, 4000) });
-          out.addCssClass('zym-conversation-result');
+          out.addCssClass('conversation-result');
           toolRow.content.append(out);
         }
         // A non-zero exit is often normal control flow (grep/test miss), so mark it
@@ -1096,7 +1136,7 @@ export class AgentConversation implements Agent {
       onProgress: (p) => {
         if (!progress) {
           progress = new Gtk.Label({ xalign: 0, wrap: true });
-          progress.addCssClass('zym-conversation-system');
+          progress.addCssClass('conversation-system');
           toolRow.content.append(progress);
         }
         progress.setText(progressLine(p));
@@ -1123,12 +1163,12 @@ export class AgentConversation implements Agent {
     if (!trimmed) return;
     if (name === 'Task' || name === 'Agent') {
       const view = new MarkdownView();
-      view.root.addCssClass('zym-conversation-task-result');
+      view.root.addCssClass('conversation-task-result');
       toolRow.content.append(view.root);
       view.setMarkdown(trimmed);
     } else {
       const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 8, 800) });
-      label.addCssClass('zym-conversation-result');
+      label.addCssClass('conversation-result');
       toolRow.content.append(label);
     }
   }

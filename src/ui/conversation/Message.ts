@@ -17,7 +17,7 @@ export type MessageKind = 'user' | 'assistant' | 'thinking';
 
 addStyles(`
   /* The container owns the gutter around the bubble (#Message is NOT the bubble). */
-  #Message { 
+  #Message {
     padding: 0 calc(2 * var(--t-spacing));
   }
   /* User and assistant share the bubble shape (radius + inner padding); only the
@@ -27,12 +27,12 @@ addStyles(`
     padding: calc(2 * var(--t-spacing));
     border-radius: 10px;
   }
-  #Message.user .message-bubble { background: var(--t-ui-surface-selected); }
-  #Message.assistant .message-bubble { 
+  #Message.is-user .message-bubble { background: var(--t-ui-surface-selected); }
+  #Message.is-assistant .message-bubble {
     background: var(--t-ui-surface-popover);
     border: 1px solid ${theme.ui.border};
   }
-  #Message.thinking .message-bubble { background: transparent; opacity: 0.55; font-style: italic; }
+  #Message.is-thinking .message-bubble { background: transparent; opacity: 0.55; font-style: italic; }
 `);
 
 export class Message {
@@ -46,7 +46,7 @@ export class Message {
     this.kind = kind;
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.root.setName('Message');
-    this.root.addCssClass(kind); // surfaces the kind for the #Message.<kind> styling
+    this.root.addCssClass(`is-${kind}`); // surfaces the kind for the #Message.is-<kind> styling
 
     const bubble = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     bubble.addCssClass('message-bubble');

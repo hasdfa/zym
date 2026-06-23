@@ -21,10 +21,30 @@
  * builds each tool's header and fills `content`.
  */
 import { Gtk } from '../../gi.ts';
+import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';
 import { setMarkupSafe } from '../proseMarkup.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
+
+addStyles(`
+  /* The leading tool icon. A size group ties its height to the header button's, so
+     the label's own vertical centering keeps the glyph centered on the header row. */
+  #ToolRow .tool-row-icon { padding-right: 8px; }
+  /* The BUTTON + DETAILS expander: the only part that grows + gains the bubble bg. */
+  #ToolRow .tool-row-toggle {
+    border-radius: 8px;
+    background: transparent;
+    transition: background 150ms ease;
+  }
+  #ToolRow .tool-row-toggle.is-expanded { background: var(--t-ui-surface-popover); }
+  /* The header button: a standard Adwaita flat button (its own hover tint), just
+     left-aligned with no min size and rounded to match the toggle. */
+  #ToolRow .tool-row-button {
+    padding: 6px 8px; min-height: 0; border-radius: 8px;
+  }
+  #ToolRow .tool-row-detail { padding: 0 8px 6px 8px; }
+`);
 
 /** A tool row's status: warning / error tint the icon + header (via the Adwaita
  *  `.warning` / `.error` style classes), or `null` for the neutral default. */
@@ -66,22 +86,23 @@ export class ToolRow {
 
   constructor(opts: ToolRowOptions) {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    this.root.setName('ToolRow');
     // The transcript wraps this in a .transcript-entry-tool box (Transcript.appendToolEntry);
     // the row itself carries no entry class.
 
     this.header = opts.header;
     this.icon = new Gtk.Label({ valign: Gtk.Align.START });
-    this.icon.addCssClass('zym-conversation-toolrow-icon');
+    this.icon.addCssClass('tool-row-icon');
     this.setIcon(opts.icon, opts.iconColor);
     this.root.append(this.icon);
 
     // The BUTTON + DETAILS column: the expander that grows + gains the bubble bg.
     this.toggle = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true });
-    this.toggle.addCssClass('zym-conversation-toolrow-toggle');
+    this.toggle.addCssClass('tool-row-toggle');
 
     const button = new Gtk.Button();
     button.addCssClass('flat');
-    button.addCssClass('zym-conversation-toolrow-button');
+    button.addCssClass('tool-row-button');
     opts.header.setHexpand(true);
     button.setChild(opts.header);
     this.toggle.append(button);
@@ -96,7 +117,7 @@ export class ToolRow {
     iconSizing.addWidget(button);
 
     this.content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.content.addCssClass('zym-conversation-toolrow-detail');
+    this.content.addCssClass('tool-row-detail');
 
     this.onToggle = opts.onToggle;
     if (opts.onActivate) {
@@ -122,8 +143,8 @@ export class ToolRow {
     if (!this.revealer || expanded === this.revealer.getRevealChild()) return;
     this.revealer.setRevealChild(expanded);
     // Fade only the toggle (BUTTON + DETAILS), not the whole row — a CSS transition.
-    if (expanded) this.toggle.addCssClass('zym-conversation-toolrow-expanded');
-    else this.toggle.removeCssClass('zym-conversation-toolrow-expanded');
+    if (expanded) this.toggle.addCssClass('is-expanded');
+    else this.toggle.removeCssClass('is-expanded');
     this.onToggle?.(expanded);
   }
 

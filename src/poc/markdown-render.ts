@@ -29,25 +29,26 @@ import { preloadGrammars } from '../syntax/grammar.ts';
 // The conversation wrapper CSS, copied from AgentConversation so the preview reads
 // like a real transcript. (MarkdownView's own .zym-md-* styles arrive via import.)
 addStyles(`
-  .zym-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
-  .zym-conversation-transcript { padding: 16px; font-size: 1.05em; }
-  .zym-conversation-user, .zym-conversation-assistant {
+  #MarkdownRenderPoc { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
+  #MarkdownRenderPoc .transcript { padding: 16px; font-size: 1.05em; }
+  #MarkdownRenderPoc .bubble {
     padding: 14px 18px;
     margin: 10px 0;
     border-radius: 10px;
   }
-  .zym-conversation-user { background: var(--t-ui-surface-selected); }
-  .zym-conversation-assistant { background: var(--t-ui-surface-popover); }
+  #MarkdownRenderPoc .bubble.is-user { background: var(--t-ui-surface-selected); }
+  #MarkdownRenderPoc .bubble.is-assistant { background: var(--t-ui-surface-popover); }
 `);
 
 const here = Path.dirname(fileURLToPath(import.meta.url));
 const fixturePath = process.argv[2] ? Path.resolve(process.argv[2]) : Path.join(here, 'markdown-sample.md');
 
-function bubble(cssClass: string, align: number, md: string): InstanceType<typeof Gtk.Box> {
+function bubble(variant: string, align: number, md: string): InstanceType<typeof Gtk.Box> {
   const view = new MarkdownView();
   view.setMarkdown(md);
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-  box.addCssClass(cssClass);
+  box.addCssClass('bubble');
+  box.addCssClass(variant);
   box.setHalign(align);
   box.append(view.root);
   return box;
@@ -68,9 +69,9 @@ app.on('activate', () => {
     const md = Fs.readFileSync(fixturePath, 'utf8');
 
     const messages = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    messages.addCssClass('zym-conversation-transcript');
-    messages.append(bubble('zym-conversation-user', Gtk.Align.END, 'Render every markdown construct so I can check the typography.'));
-    messages.append(bubble('zym-conversation-assistant', Gtk.Align.START, md));
+    messages.addCssClass('transcript');
+    messages.append(bubble('is-user', Gtk.Align.END, 'Render every markdown construct so I can check the typography.'));
+    messages.append(bubble('is-assistant', Gtk.Align.START, md));
 
     // Same column cap as the real transcript: an Adw.Clamp pinned to the left.
     const clamp = new Adw.Clamp();
@@ -83,7 +84,7 @@ app.on('activate', () => {
     scroller.setChild(clamp);
 
     const root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    root.addCssClass('zym-conversation');
+    root.setName('MarkdownRenderPoc');
     root.append(scroller);
 
     const window = new Adw.ApplicationWindow({ application: app });

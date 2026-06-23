@@ -45,9 +45,8 @@ import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
 import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
 import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
-import { openCommitDiff, openCommitPicker, openBranchDiff, buildCommitDiffView } from './diffViews.ts';
+import { openCommitDiff, openCommitPicker, openBranchDiff } from './diffViews.ts';
 import { GitLogView } from './GitLogView.ts';
-import type { CommitSummary } from '../git.ts';
 import { openGithubService, type GithubService } from '../github.ts';
 import { registerGithubCommands } from './githubCommands.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
@@ -58,8 +57,8 @@ import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
 import { SearchResultsView } from './SearchResultsView.ts';
+import { ProjectSearchView } from './ProjectSearchView.ts';
 import { DiffView } from './DiffView.ts';
-import { runProjectSearch, matchesToExcerptInputs } from './multibuffer/projectSearch.ts';
 import { openReferencesPicker } from './ReferencesPicker.ts';
 import { openCommandPicker } from './CommandPicker.ts';
 import { openThemePicker } from './ThemePicker.ts';
@@ -177,19 +176,15 @@ export class AppWindow {
   // Maps an editor's root widget to its center tab handle, so a location jump can
   // reveal an already-open file instead of opening a duplicate tab.
   private readonly editorChildren = new Map<Widget, PanelChild>();
-  // Tab-hosted multibuffers (project:search-results), keyed by root widget so the view
-  // is disposed (freeing its per-source DocumentSyntax parses) when its tab closes.
-  private readonly searchResultsViews = new Map<Widget, SearchResultsView>();
+  // Tab-hosted project-search surfaces (the search-entry header + its results multibuffer),
+  // keyed by root widget so the view is disposed (freeing its per-source DocumentSyntax parses)
+  // when its tab closes.
+  private readonly projectSearchViews = new Map<Widget, ProjectSearchView>();
   // Teardown for a center tab, keyed by its root widget — run (and cleared) when the
   // tab closes (see disposeChild). The generic seam behind `zym.workspace.openTab`'s
   // `onClose`; the continuous-diff views (editable + read-only commit/branch) use it
   // to dispose on close. DiffView.forRoot routes commands to the focused one.
   private readonly tabCloseHandlers = new Map<Widget, () => void>();
-  // The commit diff the git log viewer is currently showing in its side split, so a
-  // new selection replaces it (rather than stacking tabs). Cleared when that diff's
-  // tab is closed; the panel is re-derived from the live view (Panel.containing) so a
-  // user-closed split splits fresh next time. Its handle lets us close the old tab.
-  private gitLogDiff: { view: DiffView; child: PanelChild } | null = null;
   // Session modified-status registrations (editors, running agents), keyed by the
   // tab's root widget so the registration is disposed when the tab closes.
   private readonly participants = new Map<Widget, DisposableLike>();
@@ -1404,8 +1399,8 @@ export class AppWindow {
     this.editorRegistrations.delete(widget);
     this.editors.get(widget)?.dispose(); // explicit teardown, not reliant on the GTK destroy signal
     this.editors.delete(widget);
-    this.searchResultsViews.get(widget)?.dispose(); // free its per-source parses
-    this.searchResultsViews.delete(widget);
+    this.projectSearchViews.get(widget)?.dispose(); // free its results' per-source parses
+    this.projectSearchViews.delete(widget);
     this.tabCloseHandlers.get(widget)?.(); // generic tab teardown (e.g. dispose a hosted diff view)
     this.tabCloseHandlers.delete(widget);
     this.editorOwners.delete(widget);
@@ -2235,9 +2230,12 @@ export class AppWindow {
         when: () => this.workbench.git.getHead() !== null,
       },
       'project:search-results': {
-        didDispatch: () => this.openSearchResults(),
-        description: 'Search the selected text across the project, shown as a multibuffer',
-        when: () => this.activeEditor !== null,
+        didDispatch: () => this.openProjectSearch(this.activeEditor?.getSelectedText().trim() ?? ''),
+        description: 'Project search, seeded with the selected text (multibuffer)',
+      },
+      'project:search-open': {
+        didDispatch: () => this.openProjectSearch(''),
+        description: 'Open project search (full-text, ripgrep) in a multibuffer',
       },
       'git:diff-current-changes': {
         didDispatch: () => void this.openContinuousDiff(),
@@ -2407,45 +2405,21 @@ export class AppWindow {
     };
   }
 
-  /** Search the project for the active editor's selected text and show every match,
-   *  grouped by file with context, in a continuous read-only multibuffer tab. Phase 1a
-   *  of the multibuffer (docs/text-editor/multibuffer.md). */
-  private openSearchResults(): void {
-    const query = this.activeEditor?.getSelectedText().trim() ?? '';
-    if (query === '') {
-      this.toast('Select text to search for');
-      return;
-    }
-    const cwd = this.workbench.cwd;
-    runProjectSearch(cwd, query, (result) => {
-      if (result.error) {
-        this.toast(result.error);
-        return;
-      }
-      const files = result.files ?? [];
-      if (files.length === 0) {
-        this.toast(`No results for “${query}”`);
-        return;
-      }
-      const excerpts = matchesToExcerptInputs(files, { context: 2 });
-      const view = new SearchResultsView({
-        excerpts,
-        cwd,
-        // Editable results: edit in place (write-through to each file's live Document + save),
-        // and replace across files as undo-coordinated steps (G6). NORMAL-mode Enter still
-        // jumps to the file; INSERT-mode Enter is a newline.
-        editable: true,
-        documents: this.documents,
-        onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
-      });
-      const child = this.workbench.center.add(view.root, {
-        title: `${Icons.search}  ${query}`,
-        requireTabBar: true,
-      });
-      this.searchResultsViews.set(view.root, view); // disposeChild tears it down on close
-      child.select();
-      view.focus();
+  /** Open the project-search surface in a tab: a debounced search entry + ripgrep flag
+   *  toggles over an editable results multibuffer (docs/text-editor/multibuffer.md). Seeded
+   *  with `initialQuery` (the editor selection for `space *`) or empty (`space p s`). */
+  private openProjectSearch(initialQuery: string): void {
+    const view = new ProjectSearchView({
+      cwd: this.workbench.cwd,
+      documents: this.documents,
+      initialQuery,
+      onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
     });
+    const title = initialQuery ? `${Icons.search}  ${initialQuery}` : `${Icons.search}  Search`;
+    const child = this.workbench.center.add(view.root, { title, requireTabBar: true });
+    this.projectSearchViews.set(view.root, view); // disposeChild tears it down on close
+    child.select();
+    view.focus();
   }
 
   /** Host `widget` as a center tab: select, focus, and register its `onClose` teardown
@@ -2526,62 +2500,22 @@ export class AppWindow {
     view.focus();
   }
 
-  // `git:log` — open the git history viewer as a center tab. Selecting a commit
-  // opens its diff in a split to the right (see openCommitBesideLog).
+  // `git:log` — open the git history viewer as a single center tab. The viewer is a
+  // self-contained split (commit list | selected commit's diff); it hosts and disposes
+  // the embedded diff itself, so the host just opens + focuses the tab.
   private openGitLog(): void {
     const cwd = this.workbench.cwd;
     if (!repoRoot(cwd)) {
       this.toast('Not in a git repository');
       return;
     }
-    const view = new GitLogView({
-      cwd,
-      git: this.workbench.git,
-      onOpenCommit: (commit) => void this.openCommitBesideLog(view, commit),
-    });
+    const view = new GitLogView({ cwd, git: this.workbench.git });
     this.openCenterTab(view.root, {
       title: `${Icons.git}  Log`,
       requireTabBar: true,
       onClose: () => view.dispose(),
     });
     view.focus(); // openCenterTab focuses the tab root; move focus into the commit list
-  }
-
-  // Show `commit`'s diff in a split to the right of the `log` viewer, replacing any
-  // diff a previous selection opened there (so browsing j/k/Enter reuses one split
-  // rather than stacking tabs). Focus stays on the log so navigation continues.
-  private async openCommitBesideLog(log: GitLogView, commit: CommitSummary): Promise<void> {
-    const cwd = this.workbench.cwd;
-    const root = repoRoot(cwd);
-    if (!root) return;
-    const built = await buildCommitDiffView(root, commit, cwd);
-    if (!built) {
-      this.toast('Commit has no file changes');
-      return;
-    }
-
-    // Reuse the panel the previous diff lives in (if still open); otherwise split to
-    // the right of the log's own pane. Panel.containing returns null once the user
-    // has closed that split, so we split afresh then.
-    const previous = this.gitLogDiff;
-    let panel = previous ? Panel.containing(previous.view.root) : null;
-    if (!panel) {
-      Panel.containing(log.root)?.activate(); // split relative to the log, not whatever was active
-      panel = this.workbench.center.split('right');
-    }
-    // Add the new diff before closing the old one, so the panel never empties (which
-    // would collapse the split) in between.
-    const child = panel.add(built.view.root, { title: built.title, requireTabBar: true });
-    // disposeChild runs this on close: dispose the view, and forget it if it was the
-    // one we're tracking (so a user-closed split splits fresh next time).
-    this.tabCloseHandlers.set(built.view.root, () => {
-      built.view.dispose();
-      if (this.gitLogDiff?.view === built.view) this.gitLogDiff = null;
-    });
-    previous?.child.close(); // disposes the old view via its own tabCloseHandler
-    this.gitLogDiff = { view: built.view, child };
-    child.select();
-    built.view.focus(); // move focus into the opened diff (o/Enter follows the commit)
   }
 
   // Terminal command: open a shell in a new center-panel tab. Handler only;
@@ -3231,20 +3165,20 @@ export class AppWindow {
     return Panel.active?.activeChild ?? this.workbench.center.activePanel.activeChild ?? null;
   }
 
-  /** The project-search multibuffer hosted by the active child, if any. */
+  /** The project-search results multibuffer hosted by the active child, if any. */
   private activeMultibuffer(): SearchResultsView | null {
     const focused = Panel.active?.activeChild;
-    const focusedMb = focused ? this.searchResultsViews.get(focused) : undefined;
+    const focusedMb = focused ? this.projectSearchViews.get(focused)?.results : undefined;
     if (focusedMb) return focusedMb;
     const centerChild = this.workbench.center.activePanel.activeChild;
-    return centerChild ? this.searchResultsViews.get(centerChild) ?? null : null;
+    return centerChild ? this.projectSearchViews.get(centerChild)?.results ?? null : null;
   }
 
   /** The active editable surface (project-search or diff multibuffer) that owns a `save()`. */
   private activeSavableSurface(): { save(): void } | null {
     const widget = this.activeChildWidget();
     if (!widget) return null;
-    return this.searchResultsViews.get(widget) ?? DiffView.forRoot(widget) ?? null;
+    return this.projectSearchViews.get(widget) ?? DiffView.forRoot(widget) ?? null;
   }
 
   /** The diff multibuffer hosted by the active child, if any (for the expand-context commands). */
@@ -3256,7 +3190,7 @@ export class AppWindow {
   /** The search-results multibuffer hosted by the active child, if any (for the collapse commands). */
   private activeSearchResults(): SearchResultsView | null {
     const widget = this.activeChildWidget();
-    return widget ? this.searchResultsViews.get(widget) ?? null : null;
+    return widget ? this.projectSearchViews.get(widget)?.results ?? null : null;
   }
 
   private openDialog() {
