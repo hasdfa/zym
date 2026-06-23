@@ -49,6 +49,7 @@ export const Icons = {
   gitCommit: NERDFONT.GIT.COMMIT, // single-commit diff view
   gitPullRequest: NERDFONT.GIT.PULL_REQUEST, // branch-vs-base (PR-style) diff view
   gitMerge: NERDFONT.GIT.MERGE,
+  gitTag: NERDFONT.GIT.TAG, // tag-ref badge in the log viewer
   github: NERDFONT.SOCIAL.GITHUB,
   modified: NERDFONT.STATUS.DOT, // unsaved/modified marker
   comment: NERDFONT.EDITOR.COMMENT, // review/comment count (continuous diff tab)

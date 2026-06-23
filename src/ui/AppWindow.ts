@@ -94,6 +94,8 @@ import type { WorkspaceEdit, CodeAction, Command } from 'vscode-languageserver-p
 import { NotificationToasts } from './NotificationToasts.ts';
 import { loadKeymaps, ensureUserKeymap } from '../keymaps/load.ts';
 import { loadConfig, configPath } from '../config/load.ts';
+import { setUserInjectionRules } from '../syntax/grammar.ts';
+import { parseInjectionRules } from '../syntax/userInjections.ts';
 import { CompositeDisposable, Disposable, type DisposableLike } from '../util/eventKit.ts';
 import { applyChromeStyles, applyNotificationStyles } from './chromeStyles.ts';
 
@@ -455,6 +457,12 @@ export class AppWindow {
     for (const key of ['lsp.enable', 'lsp.disabledLanguages', 'lsp.servers', 'lsp.autoInstall']) {
       zym.config.onDidChange(key, () => this.configureLsp());
     }
+
+    // Apply user-configured syntax injections (`editor.languageInjections`), and
+    // re-apply + repaint on live edits. After grammars are preloaded, so the rules
+    // attach to already-loaded grammars.
+    this.configureInjections();
+    zym.config.onDidChange('editor.languageInjections', () => this.configureInjections());
 
     // Surface major LSP events (server start/ready/exit/failure) in the
     // notification log; trace-level so they stay out of the way.
@@ -1984,6 +1992,14 @@ export class AppWindow {
       serverOverrides: zym.config.get('lsp.servers') as LspConfig['serverOverrides'],
       autoInstall: zym.config.get('lsp.autoInstall') as boolean,
     });
+  }
+
+  // Apply `editor.languageInjections` to the grammar registry, then repaint open
+  // editors so the change is visible live (the highlighter re-gathers injections
+  // each paint, so no reparse is needed). Bad rules are dropped during parsing.
+  private configureInjections() {
+    setUserInjectionRules(parseInjectionRules(zym.config.get('editor.languageInjections')));
+    for (const editor of zym.workspace.getTextEditors()) editor.repaintSyntax();
   }
 
   // Resolve a navigation (definition/declaration/type-def/impl) at the active

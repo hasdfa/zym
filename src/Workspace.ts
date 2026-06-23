@@ -188,6 +188,12 @@ export class Workspace {
     });
   }
 
+  /** A snapshot of every currently-open text editor — for app-wide refreshes (e.g.
+   *  re-highlighting after the user's `editor.languageInjections` rules change). */
+  getTextEditors(): TextEditor[] {
+    return [...this.editors];
+  }
+
   private removeTextEditor(editor: TextEditor): void {
     if (!this.editors.delete(editor)) return;
     for (const observer of this.observers) {
