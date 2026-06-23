@@ -18,11 +18,33 @@ import { theme } from '../../theme/theme.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
+import { ToolRow } from './ToolRow.ts';
 import type { AgentQuestion, QuestionRequest } from '../../agents/claude-sdk/SdkSession.ts';
 
 type Answer = { header: string; labels: string[]; notes?: string };
 
 addStyles(`
+  /* AskUserQuestion: an interactive choice card (info-tinted while open). Split
+     into a choice list (left) + a detail pane (right) for the focused choice. */
+  .zym-conversation-question {
+    padding: calc(2 * var(--t-spacing));
+    border: 1px solid var(--t-ui-status-info);
+    border-radius: var(--card-radius);
+  }
+  /* Once answered the card becomes a tool row (see QuestionCard.submit) — no border. */
+  .zym-conversation-question-h { font-weight: bold; opacity: 0.6; }
+  .zym-conversation-question-split { }
+  .zym-conversation-question-list { background: transparent; min-width: 150px; }
+  .zym-conversation-question-opt { padding: 2px 4px; }
+  .zym-conversation-question-detail {
+    padding: 2px 12px; opacity: 0.8;
+    border-left: 1px solid var(--t-ui-border);
+  }
+  
+  /* The monospace bits (tool rows, JSON dumps) follow the font store. */
+  .zym-conversation-tool,
+  .zym-conversation-result,
+  .zym-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
   .zym-q-prompt { margin-bottom: calc(2 * var(--t-spacing)); font-size: var(--t-font-ui-size-large); }
   .zym-q-switcher button { padding-top: 2px; padding-bottom: 2px; min-height: 0; }
   .zym-q-hint { opacity: 0.5; font-size: var(--t-font-ui-size-small); }
@@ -38,6 +60,7 @@ interface Option {
 
 export class QuestionCard {
   readonly root: InstanceType<typeof Gtk.Box>;
+  readonly container: InstanceType<typeof Gtk.Box>;
   private readonly stack = new Adw.ViewStack();
   private readonly qs: AgentQuestion[];
   private readonly onAnswer: (answers: Answer[]) => void;
@@ -52,8 +75,13 @@ export class QuestionCard {
     this.qs = req.questions;
     this.onAnswer = onAnswer;
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
-    this.root.addCssClass('zym-conversation-question');
+    this.root.setName('Question')
+    this.root.addCssClass('transcript-entry-question');
     this.root.setFocusable(true);
+    
+    this.container = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
+    this.container.addCssClass('zym-conversation-question');
+    this.root.append(this.container)
 
     const numbered = this.qs.length > 1; // "1. …, 2. …" only when there's more than one
 
@@ -62,9 +90,9 @@ export class QuestionCard {
       switcher.setDisplayMode(Adw.InlineViewSwitcherDisplayMode.LABELS);
       switcher.setHalign(Gtk.Align.START);
       switcher.addCssClass('zym-q-switcher');
-      this.root.append(switcher);
+      this.container.append(switcher);
     }
-    this.root.append(this.stack);
+    this.container.append(this.stack);
 
     this.qs.forEach((q, qi) => {
       this.focused.push(0);
@@ -134,7 +162,7 @@ export class QuestionCard {
 
     this.hint = new Gtk.Label({ xalign: 0 });
     this.hint.addCssClass('zym-q-hint');
-    this.root.append(this.hint);
+    this.container.append(this.hint);
     this.updateHint();
 
     // Keep `current` in sync when the user clicks a switcher tab.
@@ -243,16 +271,49 @@ export class QuestionCard {
     });
     this.onAnswer(answers);
 
-    // Replace the interactive card with a compact record; drop the active border.
+    // Replace the interactive card with a transcript tool row: a check icon + a
+    // one-line summary header that expands to the full Q&A. Matches the padding /
+    // indent of every other tool row (vs. the old bare, unpadded label).
     clearChildren(this.root);
     this.root.removeCssClass('zym-conversation-question');
-    this.root.addCssClass('zym-conversation-question-answered');
     const picked = answers.filter((a) => a.labels.length > 0);
-    const text = picked.length > 0
+    const summary = picked.length > 0
       ? picked.map((a) => `${a.header}: ${a.labels.join(', ')}${a.notes ? ` (${a.notes})` : ''}`).join('   ·   ')
       : 'No answer selected';
-    const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-    setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CHECK, theme.ui.status.success)}  ${escapeMarkup(text)}`, text);
-    this.root.append(label);
+    const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
+    header.addCssClass('zym-conversation-toolrow');
+    setMarkupSafe(header, escapeMarkup(summary), summary);
+    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header });
+    row.content.append(this.answeredDetails());
+    this.root.append(row.root);
+  }
+
+  // The collapsible record of the questions: each prompt, then every offered option
+  // marked selected (a success check) or not (a dim box), with any note.
+  private answeredDetails(): InstanceType<typeof Gtk.Box> {
+    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
+    this.qs.forEach((q, qi) => {
+      const title = q.question || q.header;
+      if (title) {
+        const ql = new Gtk.Label({ xalign: 0, wrap: true });
+        setMarkupSafe(ql, `<b>${escapeMarkup(title)}</b>`, title);
+        box.append(ql);
+      }
+      this.opts[qi].forEach((o, oi) => {
+        const opt = q.options[oi];
+        const selected = o.check.getActive();
+        const note = (o.note.getText() ?? '').trim();
+        const glyph = selected
+          ? iconSpan(NERDFONT.TASK.DONE, theme.ui.status.success)
+          : iconSpan(NERDFONT.TASK.OPEN, undefined, true);
+        const body = selected ? `<b>${escapeMarkup(opt.label)}</b>` : escapeMarkup(opt.label);
+        const extra = note ? ` <span alpha="65%">— ${escapeMarkup(note)}</span>` : '';
+        const label = new Gtk.Label({ xalign: 0, wrap: true });
+        label.setMarginStart(8);
+        setMarkupSafe(label, `${glyph}  ${body}${extra}`, `${opt.label}${note ? ` — ${note}` : ''}`);
+        box.append(label);
+      });
+    });
+    return box;
   }
 }

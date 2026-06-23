@@ -30,6 +30,8 @@ import { iconSpan, iconLabel } from './icons.ts';
 import { clipboard } from './TextEditor/vim/clipboard.ts';
 import { truncateLines, summarizeInput, formatCount, progressLine } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
+import { Transcript } from './conversation/Transcript.ts';
+import { Message, type MessageKind } from './conversation/Message.ts';
 import { permissionCard, permissionButtons } from './conversation/cards.ts';
 import { QuestionCard } from './conversation/QuestionCard.ts';
 import { ToolRow } from './conversation/ToolRow.ts';
@@ -40,6 +42,7 @@ import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
 import { SdkSession, type PermissionRequest, type QuestionRequest, type TaskProgress } from '../agents/claude-sdk/SdkSession.ts';
+import type { Transport, TransportOptions } from '../agents/claude-sdk/transport.ts';
 import { readTranscript, readContextSeed } from '../agents/claude-sdk/transcript.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
@@ -56,99 +59,19 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
 addStyles(`
   .zym-conversation { background: var(--t-ui-editor-background); color: var(--t-ui-editor-foreground); }
-  /* The transcript reads as prose, so it sits a touch larger than the dense chrome
-     around it — every message (bubbles, tool rows, results) inherits this size. */
-  .zym-conversation-transcript { padding: 16px; font-size: 1.05em; }
-  .zym-conversation-row { padding: 6px 0; }
-  /* Shared tool rows (tool-use / Bash / unknown event): a leading tool icon next to
-     a toggle (a flat header button over a collapsible detail). The container owns
-     the horizontal padding (matching the input card); only the toggle expands and
-     fades its background to a message bubble's (popover surface) on expand. */
-  .zym-conversation-toolrow-container { padding: 0 calc(2 * var(--t-spacing)); }
-  /* The leading tool icon. A size group ties its height to the header button's, so
-     the label's own vertical centering keeps the glyph centered on the header row. */
-  .zym-conversation-toolrow-icon { padding-right: 8px; }
-  /* The BUTTON + DETAILS expander: the only part that grows + gains the bubble bg. */
-  .zym-conversation-toolrow-toggle {
-    border-radius: 8px;
-    background: transparent;
-    transition: background 150ms ease;
-  }
-  .zym-conversation-toolrow-expanded { background: var(--t-ui-surface-popover); }
-  /* The header button: flat, left-aligned, no min size. Its own transparent
-     background suppresses the flat hover, so re-add an explicit hover tint
-     (rounded to match the toggle). */
-  .zym-conversation-toolrow-button {
-    padding: 6px 8px; min-height: 0; border-radius: 8px;
-    background: transparent; border: none; box-shadow: none;
-  }
-  .zym-conversation-toolrow-button:hover { background: var(--t-ui-surface-selected); }
-  .zym-conversation-toolrow-detail { padding: 0 8px 6px 8px; }
-  /* Allow/Deny buttons embedded in a tool row's details (a permission prompt). */
-  .zym-conversation-perm-buttons { margin-top: 4px; }
-  /* User and assistant share the bubble shape; only the background differs. The
-     generous margin gives consecutive turns clear visual separation. The assistant
-     prose is capped to a reading measure in code (MarkdownView max-width-chars) —
-     GTK CSS has no max-width. */
-  .zym-conversation-user, .zym-conversation-assistant {
-    padding: 14px 18px;
-    margin: 10px 0;
-    border-radius: 10px;
-  }
-  .zym-conversation-user { background: var(--t-ui-surface-selected); }
-  .zym-conversation-assistant { background: var(--t-ui-surface-popover); }
-  /* The floating "copy message" button, pinned top-right of the transcript viewport. */
-  .zym-conversation-copy { margin: 10px; padding: 2px 6px; min-height: 0; min-width: 0; opacity: 0.5; }
-  .zym-conversation-copy:hover { opacity: 1; }
-  .zym-conversation-thinking { opacity: 0.55; font-style: italic; padding: 0 calc(2 * var(--t-spacing)); }
-  .zym-conversation-tool { opacity: 0.8; }
-  .zym-conversation-toolrow { opacity: 0.85; }
-  .zym-conversation-thinking-row { padding: 6px calc(2 * var(--t-spacing)); }
-  /* A message queued while the agent is busy — a right-aligned bubble above the spinner. */
+
+  /* A message queued while the agent is busy — a right-aligned bubble above the prompt. */
   .zym-conversation-pending {
     background: var(--t-ui-surface-selected);
     border-radius: 10px;
     padding: 6px 10px;
     margin: 0 12px;
   }
-  /* Subagent transcript: the "view conversation" link + the pushed page's header. */
-  .zym-conversation-subagent-link { padding: 1px 4px; min-height: 0; color: var(--t-ui-text-info); }
-  .zym-conversation-subagent-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
-  .zym-conversation-result {
-    opacity: 0.7;
-    background: var(--t-ui-surface-popover);
-    padding: 4px 8px;
-    margin-top: 2px;
-    border-radius: 4px;
-  }
-  /* A Task (subagent) report renders as a fuller markdown card. */
-  .zym-conversation-task-result {
-    background: var(--t-ui-surface-popover);
-    border-left: 3px solid var(--t-ui-surface-selected);
-    padding: 6px 10px;
-    margin-top: 4px;
-    border-radius: 4px;
-  }
-  .zym-conversation-tasks {
-    padding: 8px 12px;
-    background: var(--t-ui-surface-popover);
-    border-bottom: 1px solid var(--t-ui-border);
-  }
-  .zym-conversation-tasks-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }
-  /* The running-subagents panel sits below the input card → divider on top, not bottom. */
-  .zym-conversation-subagents { border-top: 1px solid var(--t-ui-border); border-bottom: none; }
-  .zym-conversation-system { opacity: 0.6; font-style: italic; }
-  /* The resume boundary divider: centered, muted, italic. */
-  .zym-conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
-  .zym-conversation-error { color: var(--t-ui-status-error); }
-  /* An unrecognised stream event, dumped as raw JSON so nothing is silently lost.
-     A warning accent on the shared ToolRow (which owns padding + the expand fade). */
-  .zym-conversation-unknown { border-left: 2px solid var(--t-ui-status-warning); }
-  .zym-conversation-unknown-body { opacity: 0.75; }
+  
   /* Agent-registered actions: a row of buttons just above the input card. The
      default action reads as the suggested (accent) button. */
   .zym-conversation-actions {
-    padding: 6px 8px 0 8px;
+    padding: var(--spacing) calc(var(--spacing));
   }
   /* The input + its status strip, as a bordered rounded card with its own bg.
      No top margin — the card sits flush under the transcript (no gap above). */
@@ -158,6 +81,7 @@ addStyles(`
     border-radius: var(--card-radius);
     background: var(--t-ui-surface-popover);
   }
+  
   /* Let the card's background show through the editor (no separate editor bg). */
   #AgentConversationPrompt,
   #AgentConversationPrompt scrolledwindow,
@@ -165,16 +89,20 @@ addStyles(`
   #AgentConversationPrompt textview text {
     background: transparent;
   }
+  
   .zym-conversation-footer {
     padding: 6px 12px;
     border-top: 1px solid var(--t-ui-border); /* divider between the input and the status strip */
   }
+  
   /* The footer metadata (model name · context tokens) reads as muted secondary text. */
   .zym-conversation-footer-label { color: var(--t-ui-text-muted); }
+  
   /* The detail popover: a compact two-column key/value grid. */
   .zym-context-popover { padding: 6px 4px; }
   .zym-context-popover-heading { font-weight: bold; margin-bottom: 2px; }
   .zym-context-popover-caption { color: var(--t-ui-text-muted); }
+  
   /* The permission-mode dropdown, colored per mode (like Claude Code). */
   .zym-conversation-mode { min-height: 0; }
   .zym-cmode-default { color: var(--t-ui-text-muted); }
@@ -182,32 +110,11 @@ addStyles(`
   .zym-cmode-auto { color: var(--t-ui-status-warning); }
   .zym-cmode-plan { color: var(--t-ui-status-info); }
   .zym-conversation-perm {
-    padding: 8px; margin: 6px 0;
+    padding: 8px;
     border: 1px solid var(--t-ui-surface-selected);
     border-radius: 6px;
   }
-  /* AskUserQuestion: an interactive choice card (info-tinted while open). Split
-     into a choice list (left) + a detail pane (right) for the focused choice. */
-  .zym-conversation-question {
-    padding: calc(2 * var(--t-spacing)); margin: 6px 0;
-    border: 1px solid var(--t-ui-status-info);
-    border-radius: var(--card-radius);
-  }
-  /* Once answered the border is dropped — it's just a record of the choice. */
-  .zym-conversation-question-answered { padding: 6px 0; margin: 6px 0; }
-  .zym-conversation-question-h { font-weight: bold; opacity: 0.6; }
-  .zym-conversation-question-split { }
-  .zym-conversation-question-list { background: transparent; min-width: 150px; }
-  .zym-conversation-question-opt { padding: 2px 4px; }
-  .zym-conversation-question-detail {
-    padding: 2px 12px; opacity: 0.8;
-    border-left: 1px solid var(--t-ui-border);
-  }
   #AgentConversationPrompt { padding: 0; }
-  /* The monospace bits (tool rows, JSON dumps) follow the font store. */
-  .zym-conversation-tool,
-  .zym-conversation-result,
-  .zym-conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
 
 // The enter/alt-enter keymap is global (selector-scoped to our prompt), registered
@@ -248,24 +155,28 @@ export interface AgentConversationOptions {
   onOpenFile?: (path: string) => void;
   /** Run a `terminal` action in a terminal tab (terminal-less ones run in-process). */
   onRunInTerminal?: (action: AgentAction) => void;
+  /** Override how the underlying session's transport is created — a test/POC seam
+   *  to drive the conversation off scripted stream events instead of spawning
+   *  `claude` (forwarded verbatim to SdkSession; see src/poc/conversation-transcript.ts). */
+  createTransport?: (spec: TransportOptions) => Transport;
 }
 
 export class AgentConversation implements Agent {
   readonly root: InstanceType<typeof Adw.NavigationView>; // root page = the conversation; subagent transcripts push pages
   private readonly session: SdkSession;
   private readonly cwd: string;
-  private readonly messages: InstanceType<typeof Gtk.Box>;
-  private readonly scroller: InstanceType<typeof Gtk.ScrolledWindow>;
+  // The scrollable column of entries (entries box + spacing + stick-to-bottom).
+  private readonly transcript = new Transcript({ maxWidth: 820 });
   // A "copy message" button floated over the transcript viewport (so it stays sticky
   // while scrolling a long message); revealed when the pointer is over a message,
   // copying that message's markdown source.
   private readonly copyButton: InstanceType<typeof Gtk.Button>;
   private copyTargetView: MarkdownView | null = null;
   private readonly bubbleViews = new Map<InstanceType<typeof Gtk.Widget>, MarkdownView>();
-  private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // spinner + pending message above the prompt
-  private readonly thinkingLabel: InstanceType<typeof Gtk.Label>; // "Thinking…" + live token count
-  private readonly thinkingRow: InstanceType<typeof Gtk.Box>; // the spinner row (shown while working)
-  private readonly pendingBox: InstanceType<typeof Gtk.Box>; // a queued message shown above the spinner
+  private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // pending (queued) message above the prompt
+  private readonly thinkingLabel: InstanceType<typeof Gtk.Label>; // "Thinking…" + live token count (footer)
+  private readonly thinkingFooter: InstanceType<typeof Gtk.Box>; // footer slot: spinner + label, replaces the status icon while working
+  private readonly pendingBox: InstanceType<typeof Gtk.Box>; // a queued message shown above the prompt
   private readonly pendingLabel: InstanceType<typeof Gtk.Label>;
   private pendingText = ''; // a message submitted while busy, sent once the agent is idle
   private readonly input: TextEditor;
@@ -289,11 +200,6 @@ export class AgentConversation implements Agent {
   // The permanent "session resumed" divider row (boundary between restored history
   // and the live continuation); its text drops the reconnect nudge once connected.
   private resumeNoteRow: InstanceType<typeof Gtk.Widget> | null = null;
-  // While true, keep the transcript pinned to the bottom as its height changes —
-  // enabled on resume so a restored conversation lands at the latest message even
-  // though its height settles over several layout passes. Released when the user
-  // scrolls up. See enableFollowBottom.
-  private followBottom = false;
   // True while rebuilding the transcript from a past session (see restoreTranscript):
   // tool rows render statically and changed-file notifications are suppressed.
   private replaying = false;
@@ -305,7 +211,7 @@ export class AgentConversation implements Agent {
   // let an incoming permission request find its row (permission has no tool_use_id —
   // it correlates by tool name + input; see addPermissionCard).
   private readonly toolRows = new Map<string, {
-    row: ToolRow;
+    row?: ToolRow; // absent for the collapsed Read row (not a ToolRow); see addReadRow
     name: string;
     input: unknown;
     onResult: (isError: boolean, text: string) => void;
@@ -371,24 +277,9 @@ export class AgentConversation implements Agent {
     this.resumeSessionId = options.resume?.sessionId;
     this.onOpenFile = options.onOpenFile;
     this.onRunInTerminal = options.onRunInTerminal;
-    this.session = new SdkSession({ cwd: options.cwd, command: options.command, resume: options.resume });
+    this.session = new SdkSession({ cwd: options.cwd, command: options.command, resume: options.resume, createTransport: options.createTransport });
 
-    this.messages = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.messages.addCssClass('zym-conversation-transcript');
-    // Cap the transcript to a readable column (GTK CSS has no max-width). Adw.Clamp
-    // limits the messages box to `maximumSize`, so every bubble's width is bounded
-    // while user/assistant turns still right/left-align within the column. halign
-    // START pins the column to the left (Clamp centres by default); the threshold
-    // matches the maximum for a hard cap (no gradual tightening).
-    const transcriptClamp = new Adw.Clamp();
-    transcriptClamp.setMaximumSize(820);
-    transcriptClamp.setTighteningThreshold(820);
-    transcriptClamp.setHalign(Gtk.Align.START);
-    transcriptClamp.setChild(this.messages);
-    this.scroller = new Gtk.ScrolledWindow({ vexpand: true });
-    this.scroller.setChild(transcriptClamp);
-
-    // The copy button lives in an overlay OVER the scroller, so it's positioned
+    // The copy button lives in an overlay OVER the transcript, so it's positioned
     // relative to the viewport — it stays pinned top-right while the message scrolls.
     this.copyButton = new Gtk.Button();
     this.copyButton.addCssClass('flat');
@@ -404,7 +295,7 @@ export class AgentConversation implements Agent {
       this.copyButton.setTooltipText('Copied');
     });
     const transcriptOverlay = new Gtk.Overlay();
-    transcriptOverlay.setChild(this.scroller);
+    transcriptOverlay.setChild(this.transcript.root);
     transcriptOverlay.addOverlay(this.copyButton);
     // Track the message under the pointer to target + reveal the button. The
     // controller is on the overlay so moving onto the (overlaid) button isn't a leave.
@@ -413,33 +304,31 @@ export class AgentConversation implements Agent {
     copyMotion.on('leave', () => this.copyButton.setVisible(false));
     transcriptOverlay.addController(copyMotion);
 
-    // Above the prompt, in a slide Revealer: an optional right-aligned "pending"
-    // message (a turn the user queued while the agent was busy) over a "Thinking…"
-    // spinner row. The reveal is shown while working or while a message is pending.
-    this.thinkingRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    this.thinkingRow.addCssClass('zym-conversation-thinking-row');
+    // The footer's left slot: a live "Thinking… (N tokens)" indicator (spinner +
+    // label) that REPLACES the status icon while the agent works (see refreshThinking
+    // + the footer below). Built here so the label exists before onThinkingTokens fires.
+    this.thinkingFooter = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
+    this.thinkingFooter.setVisible(false);
     const spinner = new Adw.Spinner();
-    spinner.setSizeRequest(16, 16); // Adw.Spinner fills its allocation otherwise
-    this.thinkingRow.append(spinner);
+    spinner.setSizeRequest(14, 14); // Adw.Spinner fills its allocation otherwise
+    this.thinkingFooter.append(spinner);
     this.thinkingLabel = new Gtk.Label({ label: 'Thinking…' });
     this.thinkingLabel.addCssClass('zym-conversation-system');
-    this.thinkingRow.append(this.thinkingLabel);
+    this.thinkingFooter.append(this.thinkingLabel);
 
+    // Above the prompt, in a slide Revealer: a right-aligned "pending" message — a
+    // turn the user queued while the agent was busy. Revealed while a message is pending.
     this.pendingBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, halign: Gtk.Align.END });
     this.pendingBox.addCssClass('zym-conversation-pending');
-    this.pendingBox.setVisible(false);
     this.pendingLabel = new Gtk.Label({ xalign: 1, wrap: true });
     const pendingHint = new Gtk.Label({ xalign: 1, label: 'Pending' });
     pendingHint.addCssClass('zym-conversation-system');
     this.pendingBox.append(this.pendingLabel);
     this.pendingBox.append(pendingHint);
 
-    const thinkingContent = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
-    thinkingContent.append(this.pendingBox);
-    thinkingContent.append(this.thinkingRow);
     this.thinkingReveal = new Gtk.Revealer();
     this.thinkingReveal.setTransitionType(Gtk.RevealerTransitionType.SLIDE_UP);
-    this.thinkingReveal.setChild(thinkingContent);
+    this.thinkingReveal.setChild(this.pendingBox);
     this.thinkingReveal.setRevealChild(false);
 
     // A buffer-only editor (full vim editing) as the prompt input, wrapped in a
@@ -469,10 +358,16 @@ export class AgentConversation implements Agent {
       const mode = PERMISSION_CYCLE[this.modeDropdown.getSelected()];
       if (mode) this.session.setPermissionMode(mode);
     });
+    // Footer layout: a LEFT slot (the status icon, or the thinking indicator that
+    // replaces it while working) · a spacer · then the permission-mode dropdown and
+    // the model/context gauge pushed to the RIGHT edge.
     this.footer = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 14 });
     this.footer.addCssClass('zym-conversation-footer');
     this.footer.append(this.statusIcon.widget);
+    this.footer.append(this.thinkingFooter);
+    this.footer.append(new Gtk.Box({ hexpand: true })); // spacer → right-aligns the rest
     this.footer.append(this.modeDropdown);
+    this.modelContext.widget.setHexpand(false); // the spacer owns the slack, not the gauge
     this.footer.append(this.modelContext.widget);
     this.updateFooter();
 
@@ -537,24 +432,9 @@ export class AgentConversation implements Agent {
       this.resumeNoteRow = divider;
       this.refreshResumeNote();
       if (this.deferredStart) this.setStatus('disconnected');
-      this.enableFollowBottom(); // land at the latest message once layout settles
+      // The Transcript follows the bottom by default, so the restored transcript lands
+      // at the latest message as its height settles over the first few layout passes.
     }
-  }
-
-  // Pin the transcript to the bottom as its height changes, until the user scrolls
-  // up. Restored content is appended before the widget is laid out, and its height
-  // settles over several frames (markdown wrapping/measuring), so a one-shot scroll
-  // lands short; following `changed` re-pins until the final height is reached.
-  private enableFollowBottom(): void {
-    if (this.followBottom) return;
-    this.followBottom = true;
-    const adj = this.scroller.getVadjustment();
-    adj.on('changed', () => { if (this.followBottom) adj.setValue(adj.getUpper() - adj.getPageSize()); });
-    adj.on('value-changed', () => {
-      // A user scroll away from the bottom releases the follow (a programmatic pin
-      // lands at the bottom, so it never trips this).
-      if (adj.getUpper() - adj.getPageSize() - adj.getValue() > 4) this.followBottom = false;
-    });
   }
 
   // Set the resume divider's text: while disconnected it nudges the user to send a
@@ -842,7 +722,7 @@ export class AgentConversation implements Agent {
       this.session.onUserMessage(({ text }) => {
         this.endTurn();
         this.thinkingLabel.setText('Thinking…'); // reset the live token count for the new turn
-        this.addMarkdownBlock('zym-conversation-user', Gtk.Align.END).setMarkdown(text);
+        this.addMarkdownBlock('user').setMarkdown(text);
       }),
       // Live "Thinking… (N tokens)" while the model reasons before producing output.
       this.session.onThinkingTokens(({ tokens }) => {
@@ -856,25 +736,25 @@ export class AgentConversation implements Agent {
       this.session.onMonitorUpdate(({ id }) => this.monitorView.update(id)),
       this.session.onAssistantStart(() => {
         this.assistantRaw = '';
-        this.assistantView = this.addMarkdownBlock('zym-conversation-assistant', Gtk.Align.START);
+        this.assistantView = this.addMarkdownBlock('assistant');
       }),
       this.session.onAssistantText(({ delta }) => {
         if (!this.assistantView) {
           this.assistantRaw = '';
-          this.assistantView = this.addMarkdownBlock('zym-conversation-assistant', Gtk.Align.START);
+          this.assistantView = this.addMarkdownBlock('assistant');
         }
         this.assistantRaw += delta;
         this.assistantView.setMarkdown(this.assistantRaw);
-        this.scrollToBottom();
+        this.transcript.scrollToBottom();
       }),
       this.session.onAssistantThinking(({ delta }) => {
         if (!this.thinkingView) {
           this.thinkingRaw = '';
-          this.thinkingView = this.addMarkdownBlock('zym-conversation-thinking', Gtk.Align.START);
+          this.thinkingView = this.addMarkdownBlock('thinking');
         }
         this.thinkingRaw += delta;
         this.thinkingView.setMarkdown(this.thinkingRaw);
-        this.scrollToBottom();
+        this.transcript.scrollToBottom();
       }),
       this.session.onToolUse(({ id, name, input }) => {
         if (this.handleTaskTool(id, name, input)) return; // TaskCreate/TaskUpdate → tasks panel, no row
@@ -885,18 +765,18 @@ export class AgentConversation implements Agent {
         if (this.replaying) {
           if (name === 'Agent' && this.session.getSubagent(id)) {
             this.endTurn();
-            this.messages.append(this.subagentView.spawn(id, input));
-            this.scrollToBottom();
+            this.transcript.appendToolEntry(this.subagentView.spawn(id, input));
+            this.transcript.scrollToBottom();
             return;
           }
           this.recordChangedFile(name, input); this.endTurn(); this.addToolRow(id, name, input); return;
         }
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
-        if (name === 'Agent') { this.endTurn(); this.messages.append(this.subagentView.spawn(id, input)); this.scrollToBottom(); return; }
+        if (name === 'Agent') { this.endTurn(); this.transcript.appendToolEntry(this.subagentView.spawn(id, input)); this.transcript.scrollToBottom(); return; }
         if (name === 'Monitor') {
           const mi = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
           const desc = typeof mi.description === 'string' ? mi.description : typeof mi.command === 'string' ? mi.command : 'monitor';
-          this.endTurn(); this.messages.append(this.monitorView.spawn(id, desc)); this.scrollToBottom(); return;
+          this.endTurn(); this.transcript.appendToolEntry(this.monitorView.spawn(id, desc)); this.transcript.scrollToBottom(); return;
         }
         this.recordChangedFile(name, input);
         this.endTurn(); // close the current message; post-tool text opens a fresh bubble
@@ -943,15 +823,15 @@ export class AgentConversation implements Agent {
     }
   }
 
-  // Reveal the strip above the prompt when the agent is working (the spinner) or a
-  // message is queued (the pending bubble); both can show at once.
+  // While working, the footer's thinking indicator replaces the status icon; a queued
+  // message reveals the pending bubble above the prompt. The two are independent.
   private refreshThinking(): void {
     const working = this._status === 'working';
     const pending = this.pendingText !== '';
-    this.thinkingRow.setVisible(working);
+    this.statusIcon.widget.setVisible(!working);
+    this.thinkingFooter.setVisible(working);
     this.pendingLabel.setText(this.pendingText);
-    this.pendingBox.setVisible(pending);
-    this.thinkingReveal.setRevealChild(working || pending);
+    this.thinkingReveal.setRevealChild(pending);
   }
 
   private recordChangedFile(toolName: string, input: unknown): void {
@@ -1031,20 +911,15 @@ export class AgentConversation implements Agent {
     this.thinkingRaw = '';
   }
 
-  // A markdown message block (user / assistant / thinking): a styled container
-  // (bubble background, alignment) wrapping a MarkdownView; returns the view so the
-  // caller can stream into it via setMarkdown.
-  private addMarkdownBlock(cssClass: string, align: number): MarkdownView {
-    const view = new MarkdownView();
-    const bubble = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    bubble.addCssClass(cssClass);
-    bubble.setHalign(align);
-    bubble.append(view.root);
-    this.messages.append(bubble);
-    // Register the bubble as a copy target (skip thinking — it's an ephemeral note).
-    if (cssClass !== 'zym-conversation-thinking') this.bubbleViews.set(bubble, view);
-    this.scrollToBottom();
-    return view;
+  // A markdown message block (user / assistant / thinking) as a shared Message;
+  // returns its view so the caller can stream into it via setMarkdown.
+  private addMarkdownBlock(kind: MessageKind): MarkdownView {
+    const message = new Message(kind);
+    this.transcript.appendEntry(message.root); // a MESSAGE entry (not a tool entry)
+    // Register the message as a copy target (skip thinking — it's an ephemeral note).
+    if (kind !== 'thinking') this.bubbleViews.set(message.root, message.view);
+    this.transcript.scrollToBottom();
+    return message.view;
   }
 
   // Point the floating copy button at the message under the pointer, revealing it
@@ -1070,8 +945,8 @@ export class AgentConversation implements Agent {
     const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
     label.addCssClass('zym-conversation-row');
     label.addCssClass(cssClass);
-    this.messages.append(label);
-    this.scrollToBottom();
+    this.transcript.appendToolEntry(label);
+    this.transcript.scrollToBottom();
     return label;
   }
 
@@ -1097,17 +972,17 @@ export class AgentConversation implements Agent {
     try { json = JSON.stringify(event, null, 2); } catch { json = String(event); }
 
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
+    header.setWrapMode(Pango.WrapMode.WORD_CHAR); // break very long unbroken names instead of forcing the row wide
     setMarkupSafe(header, `unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
 
-    const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, iconColor: theme.ui.status.warning, header });
-    toolRow.root.addCssClass('zym-conversation-unknown');
+    const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, header, status: 'warning' });
     const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
     body.addCssClass('zym-conversation-unknown-body');
     body.setText(json);
     toolRow.content.append(body);
 
-    this.messages.append(toolRow.root);
-    this.scrollToBottom();
+    this.transcript.appendToolEntry(toolRow.root);
+    this.transcript.scrollToBottom();
   }
 
   // A tool-use row (shared ToolRow): a status slot (red ✗ only on failure) + the
@@ -1115,6 +990,13 @@ export class AgentConversation implements Agent {
   // File tools open their file on click instead of toggling; Bash gets a bespoke row.
   private addToolRow(id: string, name: string, input: unknown): void {
     if (name === 'Bash') { this.addBashRow(id, input); return; }
+    // Read/Write/Edit/… collapse into one row per consecutive run of the same tool —
+    // the Transcript builds it; we only wire the (failure-only) result back here.
+    if (this.onOpenFile && toolFilePath(name, input)) {
+      const onResult = this.transcript.appendFileTool(name, input, { cwd: this.cwd, onOpenFile: this.onOpenFile });
+      if (id) this.toolRows.set(id, { name, input, onResult });
+      return;
+    }
 
     const filePath = toolFilePath(name, input);
     const opensFile = !!(filePath && this.onOpenFile);
@@ -1124,6 +1006,7 @@ export class AgentConversation implements Agent {
     const { icon } = describeTool(name, input, this.cwd);
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
     header.addCssClass('zym-conversation-toolrow');
+    header.setWrapMode(Pango.WrapMode.WORD_CHAR); // break very long unbroken names instead of forcing the row wide
     setMarkupSafe(header, toolBodyMarkup(name, input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${name} ${summarizeInput(input)}`);
 
     const toolRow = new ToolRow({
@@ -1136,7 +1019,7 @@ export class AgentConversation implements Agent {
     const todos = (input as { todos?: unknown })?.todos;
     if (name === 'TodoWrite' && Array.isArray(todos)) toolRow.content.append(renderTodos(todos));
 
-    this.messages.append(toolRow.root);
+    this.transcript.appendToolEntry(toolRow.root);
     if (id) {
       // Background-task rows (run_in_background) get a live progress line.
       let progress: InstanceType<typeof Gtk.Label> | null = null;
@@ -1153,13 +1036,12 @@ export class AgentConversation implements Agent {
           }
           progress.setText(progressLine(p));
           toolRow.setExpanded(true); // surface live progress as it streams in
-          this.scrollToBottom();
+          this.transcript.scrollToBottom();
         },
       });
     }
-    this.scrollToBottom();
+    this.transcript.scrollToBottom();
   }
-
 
   // Bash (shared ToolRow): no icon — the command (monospace) is the header that
   // toggles the detail (its output). Collapsed shows the first line; expanded shows
@@ -1192,7 +1074,7 @@ export class AgentConversation implements Agent {
     render(false);
 
     const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header: label, onToggle: render });
-    this.messages.append(toolRow.root);
+    this.transcript.appendToolEntry(toolRow.root);
 
     let progress: InstanceType<typeof Gtk.Label> | null = null;
     if (id) this.toolRows.set(id, {
@@ -1206,10 +1088,9 @@ export class AgentConversation implements Agent {
           out.addCssClass('zym-conversation-result');
           toolRow.content.append(out);
         }
-        if (isError) {
-          toolRow.setIcon(NERDFONT.STATUS.CROSS, theme.ui.status.error); // ✗ replaces the terminal icon
-          toolRow.setExpanded(true);
-        }
+        // A non-zero exit is often normal control flow (grep/test miss), so mark it
+        // (✗ + error tint) but DON'T auto-expand — the user opens the output if wanted.
+        if (isError) toolRow.setStatus('error', NERDFONT.STATUS.CROSS);
       },
       // Background-bash progress (run_in_background); shown in the detail body.
       onProgress: (p) => {
@@ -1220,10 +1101,10 @@ export class AgentConversation implements Agent {
         }
         progress.setText(progressLine(p));
         toolRow.setExpanded(true);
-        this.scrollToBottom();
+        this.transcript.scrollToBottom();
       },
     });
-    this.scrollToBottom();
+    this.transcript.scrollToBottom();
   }
 
   // Fill a non-Bash tool row's result: a red ✗ on failure (which also expands the
@@ -1231,7 +1112,7 @@ export class AgentConversation implements Agent {
   // preview otherwise, into the row's collapsible detail section.
   private fillToolResult(toolRow: ToolRow, name: string, isError: boolean, text: string): void {
     if (isError) {
-      toolRow.setIcon(NERDFONT.STATUS.CROSS, theme.ui.status.error); // ✗ replaces the tool icon
+      toolRow.setStatus('error', NERDFONT.STATUS.CROSS); // ✗ + error-tinted icon/header
       toolRow.setExpanded(true); // surface the failure without a click
     }
     // File tools (Read/Write/Edit/…): the file is opened on the side via the
@@ -1256,7 +1137,7 @@ export class AgentConversation implements Agent {
     const row = this.toolRows.get(id);
     if (!row) return;
     row.onResult(isError, text);
-    this.scrollToBottom();
+    this.transcript.scrollToBottom();
   }
 
   private addPermissionCard(req: PermissionRequest): void {
@@ -1271,17 +1152,17 @@ export class AgentConversation implements Agent {
       });
       entry.row.content.append(buttons);
       entry.row.setExpanded(true);
-      this.scrollToBottom();
+      this.transcript.scrollToBottom();
       return;
     }
     // Fallback (no matching row — e.g. the request raced ahead of its tool-use row):
     // a standalone card in the transcript flow.
     const card = permissionCard(req, (allow) => {
       this.session.respondPermission(req.id, { allow });
-      this.messages.remove(card); // answered — drop it from the transcript
+      this.transcript.removeEntry(card); // answered — drop it from the transcript
     });
-    this.messages.append(card);
-    this.scrollToBottom();
+    this.transcript.appendToolEntry(card);
+    this.transcript.scrollToBottom();
   }
 
   // The tool row a permission request belongs to: the most recently added row whose
@@ -1291,27 +1172,22 @@ export class AgentConversation implements Agent {
     const target = stableJson(req.input);
     let match: { row: ToolRow } | undefined;
     for (const entry of this.toolRows.values()) {
-      if (entry.name === req.toolName && stableJson(entry.input) === target) match = entry;
+      if (entry.row && entry.name === req.toolName && stableJson(entry.input) === target) match = { row: entry.row };
     }
     return match;
   }
 
   private addQuestionCard(req: QuestionRequest): void {
     const card = new QuestionCard(req, (answers) => this.session.answerQuestion(req.id, answers));
-    this.messages.append(card.root);
-    this.scrollToBottom();
+    this.transcript.appendEntry(card.root);
+    // The card grabs keyboard focus on map (for j/k nav), which scrolls its focused
+    // option into view — before it's measured that can fling the transcript to the
+    // top and release stick-to-bottom. Our map handler runs AFTER the card's, so it
+    // re-arms following and re-pins, landing the new question in view like any entry.
+    card.root.on('map', () => this.transcript.scrollToBottom(true)); // re-arm + re-pin
+    this.transcript.scrollToBottom();
   }
 
-  // Defer to a tick callback: the appended widget isn't laid out yet, so the
-  // vadjustment's upper is stale until the next layout pass (microtasks never run
-  // under the GLib loop — see memory `queuemicrotask-dead-under-glib-loop`).
-  private scrollToBottom(): void {
-    this.scroller.addTickCallback(() => {
-      const adj = this.scroller.getVadjustment();
-      adj.setValue(adj.getUpper() - adj.getPageSize());
-      return false; // GLib SOURCE_REMOVE — run once
-    });
-  }
 }
 
 /** Remove every child of a box (GTK4 has no clear()). */
