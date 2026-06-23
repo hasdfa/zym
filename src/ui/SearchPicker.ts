@@ -61,8 +61,8 @@ export function openSearchPicker(host: Overlay, cwd: string, onSelect: SearchTar
         escapeMarkup(t.slice(it.matchStart, it.matchEnd)) +
         '</span>' +
         escapeMarkup(t.slice(it.matchEnd));
-      // Smaller, croppable `path:line`: it yields to the matched line when space is tight.
-      return renderRowSingleLine({ main, detail: `<span size="smaller">${escapeMarkup(it.detailText)}</span>`, cropDetail: true });
+      // Smaller `path:line`: it yields to the matched line (cropping from the start) when space is tight.
+      return renderRowSingleLine({ main, detail: `<span size="smaller">${escapeMarkup(it.detailText)}</span>` });
     },
     fetch: (query, onResult, onError) => {
       const q = query.trim();

@@ -64,12 +64,6 @@ export interface RowParts {
   detailMuted?: boolean;
   /** Dim the whole row (e.g. a command shown but not currently applicable). */
   dim?: boolean;
-  /**
-   * Make the detail the column that crops, not the main. Ellipsizes the detail
-   * from the *start* (keeping a path's `filename:line` tail visible) so the main
-   * keeps priority on the row's width. Single-line only.
-   */
-  cropDetail?: boolean;
 }
 
 /** The leading icon column (a glyph in the icon font), or null when there's none.
@@ -117,8 +111,9 @@ export function renderRowSingleLine(parts: RowParts): InstanceType<typeof Gtk.Wi
 
   // Main label on the left, a right-aligned muted detail on the right. The main
   // label expands and ellipsizes so a long label crops to the picker width rather
-  // than pushing the detail off the edge; the detail keeps its natural width so it
-  // always shows in full (unless `cropDetail`).
+  // than pushing the detail off the edge; the secondary detail is the column that
+  // yields first when the row is tight (see its ellipsize below), so the main keeps
+  // priority.
   const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
   box.setHexpand(true);
   const main = new Gtk.Label({ xalign: 0, useMarkup: true });
@@ -128,11 +123,10 @@ export function renderRowSingleLine(parts: RowParts): InstanceType<typeof Gtk.Wi
   box.append(main);
   const detail = new Gtk.Label({ xalign: 1, useMarkup: true });
   detail.setMarkup(parts.detail);
-  if (parts.cropDetail) {
-    // Let the detail shrink so it — not the main — yields when the row is tight:
-    // ellipsizing from the start keeps the path's `filename:line` tail visible.
-    detail.setEllipsize(Pango.EllipsizeMode.START);
-  }
+  // The detail is the secondary column, so it yields when the row is tight: it
+  // ellipsizes from the *start*, keeping its informative tail visible (a path's
+  // `filename:line`, a date, a keybinding) while the main label keeps priority.
+  detail.setEllipsize(Pango.EllipsizeMode.START);
   // Dimmed by default; an un-muted detail keeps the spacing but not the opacity
   // (the caller's markup sets its own emphasis).
   if (parts.detailMuted === false) detail.setMarginStart(16);

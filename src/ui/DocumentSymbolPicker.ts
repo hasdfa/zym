@@ -70,10 +70,9 @@ export async function openDocumentSymbolPicker(
       const detail = sym.containerName
         ? `${sym.containerName}  :${sym.point.row + 1}`
         : `:${sym.point.row + 1}`;
-      return renderRowSingleLine({ 
-        main, 
+      return renderRowSingleLine({
+        main,
         detail: `<span size="smaller">${escapeMarkup(detail)}</span>`,
-        cropDetail: true,
       });
     },
     locate: (item) => {

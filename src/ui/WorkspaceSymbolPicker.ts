@@ -60,12 +60,11 @@ export function openWorkspaceSymbolPicker(
       const main = escapeMarkup(sym.name);
       const rel = Path.relative(cwd, sym.path);
       const detail = sym.containerName ? `${sym.containerName}  ${rel}` : rel;
-      // Smaller, croppable path: it yields to the symbol name when space is tight.
-      return renderRowSingleLine({ 
+      // Smaller path: it yields to the symbol name (cropping from the start) when space is tight.
+      return renderRowSingleLine({
         icon: glyph,
-        main, 
-        detail: `<span size="smaller">${escapeMarkup(detail)}</span>`, 
-        cropDetail: true
+        main,
+        detail: `<span size="smaller">${escapeMarkup(detail)}</span>`,
       });
     },
     locate: (item) => {
