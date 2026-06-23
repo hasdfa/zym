@@ -445,7 +445,7 @@ export class AgentTerminal extends Terminal implements Agent {
   // background (and foreground) with the theme's editor colors. Themes without
   // their own background keep the inherited colors.
   private applyThemeColors() {
-    const { background: bg, foreground: fg } = theme.ui.editor;
+    const { bg, fg } = theme.ui.view;
     if (!bg) return;
     this.terminal.setColors(parseColor(fg), parseColor(bg), null);
   }

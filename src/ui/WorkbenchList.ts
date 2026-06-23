@@ -183,6 +183,7 @@ export class WorkbenchList {
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.root.setName('WorkbenchList'); // selector identity + CSS (#WorkbenchList)
+    this.root.addCssClass('navigation-sidebar')
     this.registerCommands();
     this.root.append(this.buildHeader());
     this.root.append(this.scrolled);

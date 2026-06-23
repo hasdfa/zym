@@ -3,31 +3,33 @@
  * the consumers that can't read CSS: Pango markup (`<span foreground="…">`),
  * GtkTextTag, draw-func colors, and the GtkSourceView scheme XML. CSS itself reads
  * `var(--accent-color)` natively and never needs this. This module is the *mechanism*;
- * the color knowledge it reads (APP_COLORS, FALLBACK_COLORS) lives in theme.ts with
- * the rest of the design tokens.
+ * the color knowledge it reads (APP_COLORS, FALLBACK_COLORS) lives in adwaitaColors.ts
+ * with the rest of the design tokens.
  *
- * `lookupCSSColor(theme, '--accent-color')` resolves any CSS-variable name —
+ * `lookupCSSColor(scheme, '--accent-color')` resolves any CSS-variable name —
  * libadwaita's *or* one of ours (info / hint) — through one path, in three layers:
  *   1. the **app-color registry** (APP_COLORS) — first-class semantic tokens that
  *      libadwaita has no variable for (info / hint).
- *   2. GTK's **named-color registry** via `style_context.lookup_color` — reads
- *      libadwaita's `@define-color` names (underscore form: `accent_color`), kept
- *      alongside its CSS variables. (Validated against the catalog in poc/adwaita-probe.)
+ *   2. a **probe widget** styled with `color: var(--name)`, read back via
+ *      `gtk_widget_get_color()` — GTK's full CSS engine, so it resolves everything
+ *      libadwaita exposes: plain vars, `color-mix()` (e.g. `--border-color`), `alpha()`,
+ *      and the named accent palette. Needs a display, so it's skipped headless. (Replaces
+ *      the deprecated `style_context.lookup_color`; validated in poc/adwaita-probe.)
  *   3. the static **fallback** palette (FALLBACK_COLORS) — for headless / no-display
  *      runs (tests, offscreen snapshots) where layer 2 can't resolve.
  *
  * Everything is a `#rrggbb[aa]` string end to end: the registries hold strings, and
- * the one non-string input — the `Gdk.RGBA` from `lookup_color` — is stringified at
- * the boundary by `gdkRgbaToString`, so no `Gdk.RGBA` is ever passed around. The
- * light/dark **scheme comes from the passed `theme`** (`theme.appearance`); this
- * module reads it, never the live `Adw.StyleManager`. It registers no signal handlers
- * and owns no scheme state — callers listen for scheme changes themselves and pass a
- * fresh `theme`. Results are **cached** by `scheme:name` so a flip just routes to fresh
+ * the one non-string input — the `Gdk.RGBA` from the probe's `get_color` — is stringified
+ * at the boundary by `gdkRgbaToString`, so no `Gdk.RGBA` is ever passed around. The
+ * light/dark **`scheme` is passed in by the caller**; this module never reads the live
+ * `Adw.StyleManager`. It registers no signal handlers and owns no scheme state — callers
+ * track scheme changes themselves and pass the current one. Results are **cached** by
+ * `scheme:name` so a flip just routes to fresh
  * keys (layer-2 values are constant within a scheme); layer-3 results aren't cached,
  * since a display may appear after an early headless read and should then win.
  */
 import { Gdk, Gtk } from '../gi.ts';
-import { APP_COLORS, FALLBACK_COLORS, type Theme } from './theme.ts';
+import { APP_COLORS, FALLBACK_COLORS, type Scheme } from './adwaitaColors.ts';
 
 /** A `Gdk.RGBA` (0–1 doubles) as a `#rrggbb` string, or `#rrggbbaa` when not fully
  *  opaque. The single point where a `Gdk.RGBA` turns into the string the rest of the
@@ -56,29 +58,55 @@ const cache = new Map<string, string>();
 // Cached once it exists; `??=` keeps retrying while null so an early headless read
 // doesn't pin it. No display → no GTK widgets, so layer 2 is skipped (tests/offscreen).
 let display: InstanceType<typeof Gdk.Display> | null = null;
-// The style context backing `lookup_color`, from a throwaway widget; reused across calls.
-let styleContext: InstanceType<typeof Gtk.StyleContext> | null = null;
+// One display-wide provider holding a `#<id> { color: var(--name); }` rule per probed
+// variable; reloaded as new names appear. A fresh probe label reads a rule back through
+// GTK's CSS engine (see `probeResolve`).
+let probeProvider: InstanceType<typeof Gtk.CssProvider> | null = null;
+// CSS-variable name → the probe element id carrying its `color: var(--name)` rule.
+const probeIds = new Map<string, string>();
 
-/** Look up a libadwaita `@define-color` (live scheme) as a string, or `null` when the
- *  name isn't registered. Only called once a display is known to exist. */
-function gtkLookup(cssName: string): string | null {
-  if (!styleContext) styleContext = new Gtk.Label().getStyleContext();
-  // CSS-variable name (`--accent-color`) → GTK named color (`accent_color`).
-  const named = cssName.replace(/^--/, '').replace(/-/g, '_');
-  // node-gtk returns `[ok, Gdk.RGBA]` for `gboolean lookup_color(name, out color)`.
-  const [ok, rgba] = styleContext.lookupColor(named) as [boolean, any];
-  return ok && rgba ? gdkRgbaToString(rgba) : null;
+/**
+ * Resolve a CSS-variable color (live scheme) to a string via a probe widget's computed
+ * `color`, or `null` when there's no display (headless) — the non-deprecated replacement
+ * for `lookup_color`. Styling a probe `color: var(--name)` and reading it back with
+ * `gtk_widget_get_color()` runs the full CSS engine, so `color-mix()` (`--border-color`),
+ * `alpha()`, and the named accent palette all resolve — not just `@define-color` names.
+ *
+ * The label is built **fresh per call**: a reused label freezes at the scheme it first
+ * computed and never tracks an `Adw.StyleManager` dark/light flip, whereas a fresh,
+ * unrooted label resolves synchronously against the display's providers (no realize /
+ * present needed). The `scheme:name` cache in `lookupCSSColor` means a fresh label is
+ * only built on a cache miss.
+ */
+function probeResolve(name: string): string | null {
+  display ??= Gdk.Display.getDefault();
+  if (!display) return null; // headless → caller falls through to FALLBACK_COLORS
+  let id = probeIds.get(name);
+  if (id === undefined) {
+    id = `zymColorProbe_${name.replace(/^--/, '').replace(/[^a-z0-9]/gi, '_')}`;
+    probeIds.set(name, id);
+    if (!probeProvider) {
+      probeProvider = new Gtk.CssProvider();
+      Gtk.StyleContext.addProviderForDisplay(display, probeProvider, Gtk.STYLE_PROVIDER_PRIORITY_USER);
+    }
+    // Reload with a color rule for every probed variable seen so far.
+    probeProvider.loadFromString([...probeIds].map(([n, i]) => `#${i} { color: var(${n}); }`).join('\n'));
+  }
+  const label = new Gtk.Label(); // fresh per resolve — tracks the live scheme
+  label.setName(id);
+  // node-gtk returns the out `GdkRGBA` directly for `void get_color(out color)`.
+  const rgba = label.getColor();
+  return rgba ? gdkRgbaToString(rgba) : null;
 }
 
 /**
  * Resolve a CSS-variable color to a `#rrggbb[aa]` string for interpolation into Pango
  * markup / GtkTextTag / scheme XML — the single path, in three layers: app registry →
- * GTK `lookup_color` → static fallback. The scheme is `theme.appearance`; the caller
- * keeps it in step with the live Adwaita scheme, so GTK (which always reports the live
- * scheme) agrees. Throws if the name resolves nowhere (an unknown variable).
+ * CSS-engine probe → static fallback. The caller passes the `scheme` and keeps it in step
+ * with the live Adwaita scheme, so GTK (which always reports the live scheme) agrees.
+ * Throws if the name resolves nowhere (an unknown variable).
  */
-export function lookupCSSColor(theme: Theme, name: string): string {
-  const scheme = theme.appearance;
+export function lookupCSSColor(scheme: Scheme, name: string): string {
   const key = `${scheme}:${name}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
@@ -90,14 +118,12 @@ export function lookupCSSColor(theme: Theme, name: string): string {
     return app[scheme];
   }
 
-  // 2. live libadwaita named color — only when there's a display to read it from.
-  display ??= Gdk.Display.getDefault();
-  if (display) {
-    const color = gtkLookup(name);
-    if (color !== null) {
-      cache.set(key, color);
-      return color;
-    }
+  // 2. live libadwaita value — probe the CSS engine (returns null headless, where the
+  //    static fallback below answers instead).
+  const probed = probeResolve(name);
+  if (probed !== null) {
+    cache.set(key, probed);
+    return probed;
   }
 
   // 3. static fallback — used headless; NOT cached (a display may arrive later and
@@ -114,6 +140,6 @@ export function lookupCSSColor(theme: Theme, name: string): string {
  * backgrounds that want a translucent shade (e.g. a selection background of
  * `--accent-bg-color` at 25%). Returns `#rrggbbaa`.
  */
-export function lookupCSSColorAlpha(theme: Theme, name: string, factor: number): string {
-  return withAlpha(lookupCSSColor(theme, name), factor);
+export function lookupCSSColorAlpha(scheme: Scheme, name: string, factor: number): string {
+  return withAlpha(lookupCSSColor(scheme, name), factor);
 }

@@ -72,7 +72,11 @@ export function createSourceScheme(theme: Theme): StyleScheme {
 
 function schemeXml(id: string, theme: Theme): string {
   const { ui, syntax } = theme;
+  const fg = ui.view.fg;
+  const bg = ui.view.bg;
   const styles = [
+    `<style name="text" foreground="${fg}" background="${bg}"/>`,
+    `<style name="line-numbers" foreground="${syntax.comment}" background="${bg}"/>`,
     // GtkSourceAnnotation colors come from these scheme styles: AnnotationStyle.ERROR
     // uses diff:removed-line fg, WARNING uses diff:changed-line fg, ACCENT uses
     // diff:added-line fg (see GtkSource docs). Define them so error-lens annotations

@@ -30,6 +30,7 @@ One theme per file, `src/theme/<name>.json`, loaded by name
   "appearance": "dark",          // light | dark
   "ui": {                        // concern-grouped nested colors (mirrors ThemeUi 1:1)
     "editor": { "foreground": "#f1f1f1", "background": "#2d2d2d", "lineNumber": "#888888" },
+    "view":   { "fg": "--view-fg-color", "bg": "--view-bg-color" }, // Adwaita vars → resolved to RGB at load
     "text":   { "muted": "#5b6268", "accent": "#c678dd" },
     "border": "#434346",
     "surface":{ "popover": "#383838", "selected": "#3f4b5b" },
@@ -54,8 +55,12 @@ theme JSON's `ui.editor.background` is read in code as exactly
 - **`ui`** — concern-grouped nested objects. Every field is optional and
   deep-merged over `DEFAULT_THEME.ui`. Values are CSS colors
   (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` or `rgb()/rgba()`); `#rrggbbaa` for
-  tints that compose over text (search/diff/flash). The dual cases use a
-  camelCase sibling rather than a node that's both a leaf and a branch:
+  tints that compose over text (search/diff/flash). A value may also be an
+  **Adwaita CSS-variable reference** (`--view-bg-color`, `--card-bg-color`, …),
+  which the loader resolves to a concrete RGB color at load (via the
+  `cssColor` bridge → `lookupCSSColor`) so non-CSS consumers get a literal —
+  this is how `view.{fg,bg}` default to `--view-{fg,bg}-color`. The dual cases
+  use a camelCase sibling rather than a node that's both a leaf and a branch:
   `search.matchCurrent` (not `match.current`), `diff.addedWord` /
   `diff.removedWord`.
 - **`syntax`** — tree-sitter capture name → a `color` plus optional

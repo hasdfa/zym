@@ -17,6 +17,8 @@ import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { alpha as withAlpha, darken, formatHEXA, lighten, parse } from 'color-bits';
+import { lookupCSSColor } from './cssColor.ts';
+import type { Scheme } from './adwaitaColors.ts';
 
 // --- Internal (consumed) shape ---------------------------------------------
 
@@ -40,6 +42,18 @@ export interface ThemeUi {
     background: string;
     /** Line-number gutter foreground. */
     lineNumber: string;
+  };
+  /**
+   * The base libadwaita "view" surface colors — the fg/bg of content areas (text views,
+   * lists). Defaults point at the Adwaita CSS variables (`--view-fg-color` /
+   * `--view-bg-color`) and are resolved to concrete RGB at load (see adaptTheme /
+   * resolveCssVarsInPlace), so consumers always read a literal color.
+   */
+  view: {
+    /** View foreground (`--view-fg-color`). */
+    fg: string;
+    /** View background (`--view-bg-color`). */
+    bg: string;
   };
   text: {
     /** De-emphasized text (secondary labels, subtitles). */
@@ -190,6 +204,7 @@ interface ThemeFromFile {
 /** A theme file's `ui`: the same concern groups as `ThemeUi`, each field optional. */
 interface ThemeFromFileUi {
   editor?: Partial<ThemeUi['editor']>;
+  view?: Partial<ThemeUi['view']>;
   text?: Partial<ThemeUi['text']>;
   border?: string;
   shadow?: string;
@@ -202,8 +217,10 @@ interface ThemeFromFileUi {
 }
 
 /*
- * The built-in default theme — a complete dark `Theme` of concrete RGB colors (no CSS
- * variables, so any value is safe to interpolate into Pango markup as well as CSS). It
+ * The built-in default theme — a complete dark `Theme` of concrete RGB colors, the one
+ * exception being `view.{fg,bg}`, which point at the Adwaita `--view-*-color` variables
+ * the loader resolves to RGB (see resolveCssVarsInPlace). Resolved values are safe to
+ * interpolate into Pango markup as well as CSS. It
  * is the single source of color defaults: `loadTheme` deep-merges a theme file's `ui`
  * over `DEFAULT_THEME.ui` (a theme's own values always win), so every `theme.ui.*`
  * field is guaranteed filled and the rest of the app never needs an inline color
@@ -220,6 +237,7 @@ export const DEFAULT_THEME: Theme = {
   spacing: 8,
   ui: {
     editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
+    view: { fg: '--view-fg-color', bg: '--view-bg-color' },
     text: { muted: '#9a9996', accent: '#c678dd' },
     border: 'rgba(0, 0, 0, 0.3)',
     shadow: 'rgba(0, 0, 0, 0.3)',
@@ -236,68 +254,12 @@ export const DEFAULT_THEME: Theme = {
 
 // --- Adwaita design-language colors ----------------------------------------
 //
-// Concrete color knowledge for the layers that can't read CSS — kept here with the
-// rest of the design tokens. `src/theme/cssColor.ts` is the *mechanism* that maps a
-// CSS-variable name to a value, reading the two tables below; CSS itself reads the
-// variables natively and needs neither. This is salvaged, self-contained scaffolding
-// for the Adwaita styling migration (see STYLING-PLAN.md) — nothing in the app wires
-// it up yet, so it changes no rendering.
-
-/** Light/dark color scheme — the key into the Adwaita / app color tables below. */
-export type Scheme = 'light' | 'dark';
-
-/**
- * App-owned semantic colors with no libadwaita equivalent — `info` and `hint`
- * (used by diagnostics: info-circle, lightbulb). Reified as first-class tokens
- * shaped like Adwaita's semantic sets: a `-color` (standalone, on neutral bg),
- * `-bg-color` (fill), and `-fg-color` (text on the fill). Keyed by CSS-variable
- * name so the same map drives `lookupCSSColor` and the emitted CSS variables
- * (see `appColorVariables`). Values track the Adwaita palette per scheme — the
- * standalone color lightens on dark / darkens on light, like Adwaita's own.
- */
-export const APP_COLORS: Record<string, Record<Scheme, string>> = {
-  '--info-color': { dark: '#78aeff', light: '#1565c0' },
-  '--info-bg-color': { dark: '#3584e4', light: '#3584e4' },
-  '--info-fg-color': { dark: '#ffffff', light: '#ffffff' },
-  '--hint-color': { dark: '#7bdff4', light: '#00788c' },
-  '--hint-bg-color': { dark: '#218998', light: '#0d96a8' },
-  '--hint-fg-color': { dark: '#ffffff', light: '#ffffff' },
-};
-
-/**
- * Last-resort concrete values for the libadwaita colors our chrome maps onto, so a
- * no-display run (tests, offscreen snapshots) still gets a sane color when
- * `lookup_color` can't resolve. Captured from live libadwaita (poc/adwaita-probe).
- * Not exhaustive — only the names we actually resolve through the bridge.
- */
-export const FALLBACK_COLORS: Record<string, Record<Scheme, string>> = {
-  '--window-bg-color': { dark: '#222226', light: '#fafafb' },
-  '--window-fg-color': { dark: '#ffffff', light: '#000006' },
-  '--view-bg-color': { dark: '#1d1d20', light: '#ffffff' },
-  '--view-fg-color': { dark: '#ffffff', light: '#000006' },
-  '--accent-color': { dark: '#81d0ff', light: '#0461be' },
-  '--accent-bg-color': { dark: '#3584e4', light: '#3584e4' },
-  '--accent-fg-color': { dark: '#ffffff', light: '#ffffff' },
-  '--popover-bg-color': { dark: '#36363a', light: '#ffffff' },
-  '--card-bg-color': { dark: '#36363a', light: '#ffffff' },
-  '--success-color': { dark: '#78e9ab', light: '#007c3d' },
-  '--warning-color': { dark: '#ffc252', light: '#905400' },
-  '--error-color': { dark: '#ff938c', light: '#c30000' },
-  '--shade-color': { dark: '#00000640', light: '#00000612' },
-};
-
-/**
- * The app-color registry (APP_COLORS) as CSS custom-property declarations for the
- * given scheme — one line per entry (`--info-color: #…;`). The CSS-side half of the
- * bridge: emit this on a root widget so CSS consumers can read `var(--info-color)`
- * natively, in lockstep with what `lookupCSSColor` returns for the non-CSS side.
- * Not currently wired into any stylesheet (see STYLING-PLAN.md). Newline-joined.
- */
-export function appColorVariables(scheme: Scheme): string {
-  return Object.entries(APP_COLORS)
-    .map(([name, byScheme]) => `${name}: ${byScheme[scheme]};`)
-    .join('\n');
-}
+// The concrete color knowledge for the layers that can't read CSS lives in
+// `adwaitaColors.ts` (kept apart so `theme.ts` and `cssColor.ts` can both read it
+// without an import cycle). Re-exported here so `theme.ts` stays the public entry point
+// for these tokens.
+export { APP_COLORS, FALLBACK_COLORS, appColorVariables } from './adwaitaColors.ts';
+export type { Scheme } from './adwaitaColors.ts';
 
 /** Load the owned theme `<name>.json` from next to this module. */
 export function loadTheme(name: string): Theme {
@@ -332,8 +294,9 @@ function diffTones(
 /**
  * Normalize an on-disk `ThemeFromFile` into the internal `Theme` the app consumes:
  * deep-merge the file's `ui` over `DEFAULT_THEME.ui` (concern by concern), fill +
- * flag `editor.background` (see followSystemScheme), derive the diff tints, and split
- * each `syntax` token into the color + style maps. Exported for tests.
+ * flag `editor.background` (see followSystemScheme), derive the diff tints, resolve any
+ * Adwaita CSS-variable-valued field to concrete RGB (see resolveCssVarsInPlace), and
+ * split each `syntax` token into the color + style maps. Exported for tests.
  */
 export function adaptTheme(file: ThemeFromFile): Theme {
   if (file.appearance !== 'light' && file.appearance !== 'dark') {
@@ -365,6 +328,7 @@ export function adaptTheme(file: ThemeFromFile): Theme {
 
   const ui: ThemeUi = {
     editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? surface.popover },
+    view: { ...D.view, ...f.view },
     text: { ...D.text, ...f.text },
     border: f.border ?? D.border,
     shadow: f.shadow ?? D.shadow,
@@ -395,8 +359,32 @@ export function adaptTheme(file: ThemeFromFile): Theme {
     if (Object.keys(s).length > 0) syntaxStyle[capture] = s;
   }
 
+  // Fill any field still pointing at an Adwaita CSS variable (e.g. the `view.{fg,bg}`
+  // defaults → `--view-{fg,bg}-color`) with a concrete RGB color, before markup defaults
+  // read the palette.
+  resolveCssVarsInPlace(ui as unknown as Record<string, unknown>, file.appearance);
+
   applyMarkupDefaults(syntax, syntaxStyle, ui);
   return { name: file.name, appearance: file.appearance, followSystemScheme, spacing: file.spacing ?? DEFAULT_THEME.spacing, ui, syntax, syntaxStyle };
+}
+
+/**
+ * Resolve any UI field whose value is an Adwaita CSS-variable reference (`--name`) to a
+ * concrete `#rrggbb[aa]` string via the bridge (`lookupCSSColor`), recursively and in
+ * place. A theme — or our own defaults, e.g. `view.bg` → `--view-bg-color` — may point a
+ * chrome field at a libadwaita variable; non-CSS consumers (Pango markup, GtkTextTag,
+ * scheme XML) need a literal color, so the loader fills it. With no display this resolves
+ * to the static fallback (FALLBACK_COLORS); a post-display refill would re-resolve against
+ * the live Adwaita scheme. Concrete values (`#…`, `rgba(…)`) are left untouched.
+ */
+function resolveCssVarsInPlace(node: Record<string, unknown>, scheme: Scheme): void {
+  for (const [key, value] of Object.entries(node)) {
+    if (typeof value === 'string') {
+      if (value.startsWith('--')) node[key] = lookupCSSColor(scheme, value);
+    } else if (value && typeof value === 'object') {
+      resolveCssVarsInPlace(value as Record<string, unknown>, scheme);
+    }
+  }
 }
 
 /**

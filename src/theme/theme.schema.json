@@ -47,6 +47,21 @@
             }
           }
         },
+        "view": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Base libadwaita view surface colors; defaults point at --view-fg-color / --view-bg-color and are resolved to RGB at load.",
+          "properties": {
+            "fg": {
+              "$ref": "#/$defs/color",
+              "description": "View foreground (--view-fg-color)."
+            },
+            "bg": {
+              "$ref": "#/$defs/color",
+              "description": "View background (--view-bg-color)."
+            }
+          }
+        },
         "text": {
           "type": "object",
           "additionalProperties": false,
@@ -187,8 +202,8 @@
   "$defs": {
     "color": {
       "type": "string",
-      "description": "A CSS color: #rgb, #rgba, #rrggbb, #rrggbbaa, or rgb()/rgba().",
-      "pattern": "^(#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\\([^)]*\\))$"
+      "description": "A CSS color: #rgb, #rgba, #rrggbb, #rrggbbaa, rgb()/rgba(), or an Adwaita CSS-variable reference like --view-bg-color (resolved to RGB at load).",
+      "pattern": "^(#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\\([^)]*\\)|--[a-zA-Z][a-zA-Z0-9-]*)$"
     },
     "syntaxToken": {
       "type": "object",
