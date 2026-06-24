@@ -17,7 +17,7 @@ import { iconSpan } from '../icons.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
-addStyles(`
+addStyles(/* css */`
   #Transcript {
     font-size: 1.05em;
   }
@@ -41,11 +41,11 @@ addStyles(`
 
   /* Collapsed file-tool rows (Read/Write/Edit): a non-clickable tool-name label and
      each file path are all flat buttons, so they share the default button padding +
-     metrics and line up. The head reads as a muted title; paths read as links. */
+     metrics and line up. The head reads as a muted title; paths read as links (the
+     .link class supplies the accent color). */
   #Transcript .transcript-file-icon { padding-right: 8px; }
   #Transcript .transcript-file-head { opacity: 0.85; }
   #Transcript .transcript-file-path {
-    color: var(--t-ui-text-info);
     font-family: var(--t-font-monospace-family);
   }
 `);
@@ -161,6 +161,7 @@ export class Transcript {
 
     const button = new Gtk.Button({ halign: Gtk.Align.START });
     button.addCssClass('flat');
+    button.addCssClass('link');
     button.addCssClass('transcript-file-path');
     button.setChild(new Gtk.Label({ xalign: 0, label: display }));
     button.setTooltipText(absPath);
