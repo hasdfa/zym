@@ -45,18 +45,19 @@ export class Sidebar {
       onToggleCollapsed: (collapsed) => this.setCollapsed(collapsed),
     });
 
-    const column = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    column.setName('WorkbenchSidebar'); // selector identity for CSS
+    const sidebar = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    sidebar.setName('WorkbenchSidebar'); // selector identity for CSS
+    sidebar.addCssClass('sidebar-pane')
     this.list.root.setHexpand(true);
     this.list.root.setVexpand(true); // fill the sidebar (height + width)
-    column.append(this.list.root);
+    sidebar.append(this.list.root);
 
-    // A top-level horizontal paned splits the sidebar column from the content (the
+    // A top-level horizontal paned splits the sidebar sidebar from the content (the
     // header bar + workbench, wrapped by the toast overlay), so the sidebar spans from
     // the window's top edge to its bottom; its width (the split position) is toggled
     // between expanded / collapsed by the list's robot button.
     this.root = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.root.setStartChild(column);
+    this.root.setStartChild(sidebar);
     this.root.setEndChild(content);
     this.root.setPosition(SIDEBAR_WIDTH);
     this.root.setResizeStartChild(false); // window resize grows the content, not the sidebar
