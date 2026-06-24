@@ -973,10 +973,11 @@ export class SyntaxController {
     // Bodies are collapsed out of the view, so there are no hidden view rows to reveal.
   }
 
-  /** Every foldable region's inclusive line span (header → close), for the vim
-   *  fold motions and the `iz`/`az` text object. */
+  /** Every foldable region's inclusive line span (header → close) in DOCUMENT (buffer) rows —
+   *  for the vim fold motions (`zj`/`zk`/`[z`/`]z`) and the `iz`/`az` text object, which speak
+   *  `buffer`. Driven from the parse (document coords), independent of the rendered fold state. */
   foldRegions(): Array<{ startRow: number; endRow: number }> {
-    return [...this.foldsByHeaderLine.values()].map((r) => ({ startRow: r.startLine, endRow: r.endLine }));
+    return this.docSyntax.foldRanges().map((r) => ({ startRow: r.startRow, endRow: r.endRow }));
   }
 
   /**
@@ -988,14 +989,14 @@ export class SyntaxController {
    * function or with no parse tree.
    */
   functionRangeAt(row: number, column: number): NodeRowRange | null {
-    const [docRow, docCol] = this.documentPos(row, column);
-    return this.toScreenRowRange(this.docSyntax.functionRangeAt(docRow, docCol));
+    // (row, column) are BUFFER (document) coords — the vim layer's space — so query + return
+    // document rows directly (no screen round-trip). Identity vs. the old path with no fold active.
+    return this.docSyntax.functionRangeAt(row, column);
   }
 
-  /** The class/interface/enum enclosing `(row, column)`, for the `ic`/`ac` text object. */
+  /** The class/interface/enum enclosing buffer `(row, column)`, for the `ic`/`ac` text object. */
   classRangeAt(row: number, column: number): NodeRowRange | null {
-    const [docRow, docCol] = this.documentPos(row, column);
-    return this.toScreenRowRange(this.docSyntax.classRangeAt(docRow, docCol));
+    return this.docSyntax.classRangeAt(row, column);
   }
 
   /** Structural scopes (class/function/…) enclosing view `(row, column)`, outermost first,
@@ -1016,16 +1017,6 @@ export class SyntaxController {
       const e = this.foldHost!.screenPointFromDocument(this.buffer, new Point(t.endRow, t.endColumn));
       return { ...t, startRow: s.row, startColumn: s.column, endRow: e.row, endColumn: e.column };
     });
-  }
-
-  /** Translate a model-coord NodeRowRange to this view's lines (identity unless folded). */
-  private toScreenRowRange(r: NodeRowRange | null): NodeRowRange | null {
-    if (!r || !this.screenFolded) return r;
-    const vl = (row: number): number => this.foldHost!.screenLineForDocumentLine(this.buffer, row);
-    return {
-      outer: { startRow: vl(r.outer.startRow), endRow: vl(r.outer.endRow) },
-      inner: { startRow: vl(r.inner.startRow), endRow: vl(r.inner.endRow) },
-    };
   }
 
   /** Digit width to pad line numbers to, so the gutter doesn't jitter while scrolling.

@@ -52,6 +52,26 @@ test('zj / zk move to the next / previous fold; [z / ]z to the current fold edge
   assert.equal(row(), 5);
 });
 
+test('dd on a closed fold deletes the whole fold span, not just the header line', () => {
+  // The provider reports rows 1–3 as one collapsed fold (header through footer).
+  const fold = { startRow: 1, endRow: 3 };
+  const buffer = new GtkSource.Buffer();
+  buffer.setText(LINES, -1); // line0 … line10
+  const view = new GtkSource.View({ buffer });
+  const editor = new EditorModel(view, buffer);
+  editor.setFoldProvider({
+    isFoldedAtRow: (row) => row >= fold.startRow && row <= fold.endRow,
+    foldRangeAtRow: (row) => (row >= fold.startRow && row <= fold.endRow ? fold : null),
+    unfoldRow: () => {},
+    foldableRanges: () => [fold],
+  });
+  const vimState = new VimState(editor, new StatusBarManager());
+  editor.setCursorBufferPosition(new Point(1, 0)); // on the fold header
+  vimState.operationStack.run('Delete');
+  vimState.operationStack.run('Delete'); // dd — linewise, expands through the fold
+  assert.equal(editor.getText(), 'line0\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n');
+});
+
 test('diz deletes the fold body; daz deletes the whole block', () => {
   const code = 'def f():\n    a = 1\n    b = 2\n    c = 3\nafter\n';
   const fold = [{ startRow: 0, endRow: 3 }];

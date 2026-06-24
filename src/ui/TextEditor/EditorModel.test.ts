@@ -341,6 +341,13 @@ test('a fold makes buffer↔screen row/point conversions go through the transfor
   assert.deepEqual(m.getLastCursor().getScreenPosition().toArray(), [2, 2]);
 });
 
+test('a marker (vim mark) set past a fold round-trips in buffer space', () => {
+  const { m } = modelWithMultilineFold();
+  // The GTK mark lives in screen space (rides edits), but the marker API translates buffer↔screen.
+  const marker = m.markBufferPosition(new Point(4, 2));
+  assert.deepEqual(marker.getStartBufferPosition().toArray(), [4, 2]);
+});
+
 test('duplicateLineBelow copies the line and moves the cursor onto the copy', () => {
   const m = model('one\ntwo\nthree\n');
   m.setCursorBufferPosition(new Point(1, 2)); // on "two"

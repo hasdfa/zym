@@ -147,17 +147,29 @@ screen-era, which broke two interactions found in GUI testing:
   `getFold{Start,End}RowForRow` helpers now use it (replacing the unmodeled
   `displayLayer.foldsMarkerLayer`). Locked by a real-`SyntaxController` test.
 
-**Known follow-ups (not blocking; niche, no-fold path unaffected):**
-- `SyntaxController.foldRegions()` (→ `getFoldableRanges`, the `zj`/`zk`/`[z`/`]z`
-  fold motions + `iz`/`az` text object) and `functionRangeAt`/`classRangeAt` (the
-  `if`/`af`/`ic`/`ac` text objects) still return/consume SCREEN rows. Correct while
-  no fold is active (identity); only wrong when one of those motions is used WITH a
-  fold collapsed. Convert to document rows next.
-- `dd` on a closed fold deletes only the header row, not the whole fold (vim deletes
-  the fold). Reveal-on-edit only fires when the buffer range's screen projection
-  touches the placeholder.
-- `Selection`/`MarkerLayer`/`Marker` inherit the transform via the bridge but weren't
-  separately audited; spot-check vim marks (`m`/`` ` ``) across a fold.
+**Fold-provider follow-ups A1–A5 (DONE):**
+- **A1** — `SyntaxController.foldRegions()` (→ `getFoldableRanges`, the
+  `zj`/`zk`/`[z`/`]z` fold motions + `iz`/`az` text object) now returns DOCUMENT
+  rows, driven from `docSyntax.foldRanges()`.
+- **A2** — `functionRangeAt`/`classRangeAt` (`if`/`af`/`ic`/`ac` text objects) now
+  take/return DOCUMENT rows directly (the only caller is the buffer-space vim
+  FoldProvider); the screen round-trip + dead `toScreenRowRange` were removed.
+- **A3** — `dd` on a closed fold deletes the whole fold span: already handled by the
+  buffer-space `getFoldEndRowForRow` fix above (`applyWise('linewise')` +
+  `MoveToRelativeLine` expand through it); locked by a `vim/fold.test.ts` test.
+- **A4** — `foldBufferRow`/`toggleFoldAtBufferRow`/`isFoldableAtBufferRow`/
+  `foldBufferRange` are **dead code** (NOT implemented, intentionally): the vim
+  z-fold `MiscCommand`s are unbound — `FOLD_KEYMAP` routes `zc`/`zo`/`za`/`zr`/`zm`
+  to the working editor `fold:*` commands — and `saveEditorState` crashes earlier on
+  the unmodeled `editor.displayLayer`. They belong to the `as any` / vim-port track,
+  not the coordinate work.
+- **A5** — `Selection` (head/tail) and `MarkerLayer`/`Marker` (vim `m`/`` ` ``) route
+  through the translating bridge (`iterAtPoint`/`pointAtIter`), so they're
+  buffer-faithful across a fold; locked by an `EditorModel.test.ts` marker round-trip.
+
+**Remaining (genuinely separate):** the vim `as any` / port track (52 casts,
+including the dead fold/`displayLayer` code in A4) and Stage 3 (soft-wrap into
+screen Points). Both independent of the coordinate inversion.
 
 ## Stage 3 — soft-wrap into screen coordinates (later, optional)
 
