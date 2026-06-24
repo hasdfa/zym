@@ -27,9 +27,22 @@ import { keycap } from './Keycap.ts';
 // installed unconditionally here rather than with the theme chrome (which only
 // applies when the theme defines its own background).
 addStyles(/* css */`
-  #Panel tabbar tabbox { padding: 0; }
-  #Panel tabbar > revealer > box { padding: 0; }
   #Panel tabbar { border-bottom: 1px solid var(--border-color); }
+  #Panel tabbar > revealer > box { padding: 0; }
+  #Panel tabbar tabbox { 
+    padding: 0;
+    background-color: var(--window-bg-color);
+  }
+  #Panel tab {
+    border-radius: 0;
+  }
+  #Panel tab:selected {
+    background-color: alpha(white, 0.05);
+  }
+  #Panel tab .tab-title {
+    max-height: 10px;
+    transform: scale(1);
+  }
   #Panel tabboxchild {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
