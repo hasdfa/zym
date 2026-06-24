@@ -12,6 +12,7 @@ import { Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
+import { theme } from '../../theme/theme.ts';
 import { escapeMarkup, markupLabel, clearChildren, setLineHeight } from '../proseMarkup.ts';
 import { iconLabel } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
@@ -235,10 +236,11 @@ function cell(text: string, align: 'left' | 'center' | 'right' | null, cssClass:
 
 // --- helpers -----------------------------------------------------------------
 
-// Inline markdown → Pango markup, with the app monospace font for inline code,
-// dimmed to 70% alpha to set code spans apart from the prose (no color shift).
 function inline(text: string): string {
-  return markdownToPango(text, { codeFontFamily: fonts.monospaceFamily, codeAlpha: '70%' });
+  return markdownToPango(text, {
+    codeFontFamily: fonts.monospaceFamily,
+    codeColor: theme.syntax.string
+  });
 }
 
 // Tree-sitter highlight, null on unsupported language or any failure (→ plain code).
