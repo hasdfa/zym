@@ -24,7 +24,7 @@ import type { AgentQuestion, QuestionRequest } from '../../agents/claude-sdk/Sdk
 
 type Answer = { header: string; labels: string[]; notes?: string };
 
-addStyles(`
+addStyles(/* css */`
   /* AskUserQuestion: an interactive choice card (info-tinted while open). Once
      answered the card becomes a tool row (see QuestionCard.submit) — no border. */
   #Question .question-card {

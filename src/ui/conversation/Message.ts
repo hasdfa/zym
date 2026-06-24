@@ -7,7 +7,6 @@
  * stream markdown via `setMarkdown`.
  */
 import { Gtk } from '../../gi.ts';
-import { theme } from '../../theme/theme.ts';
 import { addStyles } from '../../styles.ts';
 import { MarkdownView } from '../markdown/MarkdownView.ts';
 
@@ -15,7 +14,7 @@ import { MarkdownView } from '../markdown/MarkdownView.ts';
  *  thinking — a dim, italic reasoning aside (no surface of its own). */
 export type MessageKind = 'user' | 'assistant' | 'thinking';
 
-addStyles(`
+addStyles(/* css */`
   /* The container owns the gutter around the bubble (#Message is NOT the bubble). */
   #Message {
     padding: 0 calc(2 * var(--t-spacing));
@@ -27,12 +26,18 @@ addStyles(`
     padding: calc(2 * var(--t-spacing));
     border-radius: 10px;
   }
-  #Message.is-user .message-bubble { background: var(--t-ui-surface-selected); }
-  #Message.is-assistant .message-bubble {
-    background: var(--t-ui-surface-popover);
-    border: 1px solid var(--border-color);
+  #Message.is-user .message-bubble {
+    background: color-mix(in srgb, var(--card-bg-color), var(--accent-color) 50%);
   }
-  #Message.is-thinking .message-bubble { background: transparent; opacity: 0.55; font-style: italic; }
+  #Message.is-assistant .message-bubble {
+    // background: var(--card-bg-color);
+    // border: 1px solid var(--border-color);
+  }
+  #Message.is-thinking .message-bubble { 
+    background: transparent;
+    opacity: 0.55;
+    font-style: italic;
+  }
 `);
 
 export class Message {
@@ -49,6 +54,7 @@ export class Message {
     this.root.addCssClass(`is-${kind}`); // surfaces the kind for the #Message.is-<kind> styling
 
     const bubble = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    bubble.addCssClass('card');
     bubble.addCssClass('message-bubble');
     // User turns hug the right; assistant and thinking hug the left.
     bubble.setHalign(kind === 'user' ? Gtk.Align.END : Gtk.Align.START);

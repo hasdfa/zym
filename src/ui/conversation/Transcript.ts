@@ -46,6 +46,7 @@ addStyles(/* css */`
   #Transcript .transcript-file-icon { padding-right: 8px; }
   #Transcript .transcript-file-head { opacity: 0.85; }
   #Transcript .transcript-file-path {
+    color: var(--window-fg-color);
     font-family: var(--t-font-monospace-family);
   }
 `);

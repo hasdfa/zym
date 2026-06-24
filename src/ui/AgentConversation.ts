@@ -57,8 +57,11 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
 // the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
-addStyles(`
-  #AgentConversation .conversation-surface { background: var(--view-bg-color); color: var(--t-ui-editor-foreground); }
+addStyles(/* css */`
+  #AgentConversation .conversation-surface {
+    color: var(--view-fg-foreground);
+    background: var(--window-bg-color); // FIXME: use view-bg-color
+  }
 
   /* A message queued while the agent is busy — a right-aligned bubble above the prompt. */
   #AgentConversation .conversation-pending {
@@ -77,9 +80,9 @@ addStyles(`
      No top margin — the card sits flush under the transcript (no gap above). */
   #AgentConversation .conversation-input-card {
     margin: 0 calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing));
-    border: 1px solid var(--t-ui-border);
+    border: 1px solid var(--border-color);
     border-radius: var(--card-radius);
-    background: var(--t-ui-surface-popover);
+    background: var(--card-bg-color);
   }
 
   /* Let the card's background show through the editor (no separate editor bg). */
@@ -93,7 +96,7 @@ addStyles(`
 
   #AgentConversation .conversation-footer {
     padding: 6px 12px;
-    border-top: 1px solid var(--t-ui-border); /* divider between the input and the status strip */
+    border-top: 1px solid var(--border-color); /* divider between the input and the status strip */
   }
 
   /* The footer metadata (model name · context tokens) reads as muted secondary text. */
@@ -125,27 +128,26 @@ addStyles(`
   /* Truncated tool-output preview tucked under a row. */
   #AgentConversation .conversation-result {
     opacity: 0.7;
-    background: var(--t-ui-surface-popover);
+    background: var(--card-bg-color);
     padding: 4px 8px;
     margin-top: 2px;
     border-radius: 4px;
   }
   /* A Task (subagent) report renders as a fuller markdown card. */
   #AgentConversation .conversation-task-result {
-    background: var(--t-ui-surface-popover);
-    border-left: 3px solid var(--t-ui-surface-selected);
+    background: var(--card-bg-color);
     padding: 6px 10px;
     margin-top: 4px;
     border-radius: 4px;
   }
 
   /* The pushed subagent/monitor page's header (back button + title). */
-  #AgentConversation .conversation-page-header { padding: 6px; border-bottom: 1px solid var(--t-ui-border); }
+  #AgentConversation .conversation-page-header { padding: 6px; border-bottom: 1px solid var(--border-colo); }
 
   /* The fallback permission card + its allow/deny buttons (cards.ts). */
   #AgentConversation .conversation-perm {
     padding: 8px;
-    border: 1px solid var(--t-ui-surface-selected);
+    border: 1px solid var(--t-ui-status-info);
     border-radius: 6px;
   }
   #AgentConversation .conversation-perm-buttons { margin-top: 4px; }

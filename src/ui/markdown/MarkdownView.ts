@@ -12,7 +12,6 @@ import { Gtk } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
-import { theme } from '../../theme/theme.ts';
 import { escapeMarkup, markupLabel, clearChildren, setLineHeight } from '../proseMarkup.ts';
 import { iconLabel } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
@@ -26,41 +25,41 @@ const COPY_GLYPH = NERDFONT.ACTION.COPY;
 // Colors as CSS variables (--t-ui-*); code blocks read the font store's monospace
 // family (--t-font-monospace-family). See docs/styling.md.
 addStyles(/* css */`
-  .zym-md { }
-  .zym-md-code {
+  .MarkdownView { }
+  .MarkdownView-code {
     background: var(--view-bg-color);
     padding: 8px 10px;
     border-radius: 6px;
     font-family: var(--t-font-monospace-family);
   }
-  .zym-md-quote {
+  .MarkdownView-quote {
     border-left: 3px solid var(--border-color);
     padding-left: 10px;
     opacity: 0.85;
   }
-  .zym-md-table {
+  .MarkdownView-table {
     border-top: 1px solid var(--border-color);
     border-left: 1px solid var(--border-color);
     border-radius: 4px;
   }
-  .zym-md-th, .zym-md-cell {
+  .MarkdownView-th, .MarkdownView-cell {
     border-right: 1px solid var(--border-color);
     border-bottom: 1px solid var(--border-color);
     padding: 4px 10px;
   }
-  .zym-md-th { font-weight: bold; }
-  .zym-md-copy { 
+  .MarkdownView-th { font-weight: bold; }
+  .MarkdownView-copy { 
     margin: 8px;
     opacity: 0.45;
   }
-  .zym-md-copy:hover { opacity: 1; }
+  .MarkdownView-copy:hover { opacity: 1; }
   
   /* Breathing room between block widgets. NOTE: consecutive prose blocks are merged
-     into a single .zym-md-flow label, so prose spacing (paragraphs, headings, lists)
+     into a single .MarkdownView-flow label, so prose spacing (paragraphs, headings, lists)
      is governed by LINE_HEIGHT and the blank-line joins below — not these margins.
      Only code blocks and tables are standalone widgets these margins reach. */
-  .zym-md-code { margin: 6px 0; }
-  .zym-md-table { margin: 6px 0; }
+  .MarkdownView-code { margin: 6px 0; }
+  .MarkdownView-table { margin: 6px 0; }
 `);
 
 // Prose line spacing: looser than a single-line label so wrapped paragraphs are
@@ -71,7 +70,7 @@ const LINE_HEIGHT = 1.4
 // full blank line; a heading instead hugs the block beneath it via a blank line with
 // a small line-height (a heading reads as a label for the body that follows it).
 // There is no per-paragraph margin in a single Pango label, so spacing is done with
-// these blank lines — see the .zym-md-flow note in the stylesheet above.
+// these blank lines — see the .MarkdownView-flow note in the stylesheet above.
 const BLOCK_GAP = '\n\n';
 const HEADING_GAP = '\n<span line_height="0.35"> </span>\n';
 
@@ -84,7 +83,8 @@ export class MarkdownView {
 
   constructor() {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
-    this.root.addCssClass('zym-md');
+    this.root.addCssClass('document');
+    this.root.addCssClass('MarkdownView');
   }
 
   /** The markdown source last passed to `setMarkdown` (for copy-to-clipboard). */
@@ -110,7 +110,7 @@ export class MarkdownView {
         markup += (flow[i - 1].type === 'heading' ? HEADING_GAP : BLOCK_GAP) + flow[i].markup;
       }
       const label = markupLabel(markup, markup);
-      label.addCssClass('zym-md-flow');
+      label.addCssClass('MarkdownView-flow');
       this.root.append(label);
       flow = [];
     };
@@ -181,7 +181,7 @@ function renderCode(lang: string | undefined, code: string): Widget {
   // doesn't take a header row. It sits flush in the corner (no margin).
   const copy = new Gtk.Button();
   copy.addCssClass('flat');
-  copy.addCssClass('zym-md-copy');
+  copy.addCssClass('MarkdownView-copy');
   copy.setChild(iconLabel(COPY_GLYPH));
   copy.setTooltipText('Copy');
   copy.setHalign(Gtk.Align.END);
@@ -191,7 +191,7 @@ function renderCode(lang: string | undefined, code: string): Widget {
   copy.on('clicked', () => { clipboard.write(code); copy.setTooltipText('Copied'); });
 
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-  box.addCssClass('zym-md-code');
+  box.addCssClass('MarkdownView-code');
   box.append(label);
 
   // Overlay the button so it doesn't take a header row.
@@ -207,14 +207,14 @@ function renderTable(
   rows: string[][],
 ): Widget {
   const grid = new Gtk.Grid({ columnSpacing: 0, rowSpacing: 0 });
-  grid.addCssClass('zym-md-table');
+  grid.addCssClass('MarkdownView-table');
   grid.setHalign(Gtk.Align.START);
   headers.forEach((header, col) => {
-    grid.attach(cell(header, aligns[col], 'zym-md-th'), col, 0, 1, 1);
+    grid.attach(cell(header, aligns[col], 'MarkdownView-th'), col, 0, 1, 1);
   });
   rows.forEach((cells, r) => {
     for (let col = 0; col < headers.length; col++) {
-      grid.attach(cell(cells[col] ?? '', aligns[col], 'zym-md-cell'), col, r + 1, 1, 1);
+      grid.attach(cell(cells[col] ?? '', aligns[col], 'MarkdownView-cell'), col, r + 1, 1, 1);
     }
   });
   return grid;
@@ -239,7 +239,7 @@ function cell(text: string, align: 'left' | 'center' | 'right' | null, cssClass:
 function inline(text: string): string {
   return markdownToPango(text, {
     codeFontFamily: fonts.monospaceFamily,
-    codeColor: theme.syntax.string
+    // codeColor: theme.syntax.string
   });
 }
 
