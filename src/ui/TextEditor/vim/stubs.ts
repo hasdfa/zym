@@ -424,7 +424,12 @@ export class SequentialPasteManager {
   private isSequentialPaste(operator: PasteOperator): boolean {
     return (
       Boolean(this.vimState.getConfig('sequentialPaste')) &&
-      this.vimState.operationStack.getLastCommandName() === operator.name
+      this.vimState.operationStack.getLastCommandName() === operator.name &&
+      // The previous paste must have actually pasted something. A no-op paste
+      // (empty register) leaves the range map empty yet still records its name as
+      // the last command, so without this the next paste would target an absent
+      // LastPastedRange. See sequential-paste.test.ts.
+      this.pastedRangeBySelection.size > 0
     );
   }
 

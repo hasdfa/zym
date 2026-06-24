@@ -49,6 +49,22 @@ test('a second paste cycles to the next yank-history entry (yank-pop)', () => {
   assert.equal(editor.getText(), 'a b c .a....\n');
 });
 
+test('repeated paste with an empty register is a harmless no-op', () => {
+  // A first paste with nothing in the register cancels without recording a
+  // pasted range, but still becomes the "last command". The next paste must not
+  // treat that no-op as a sequence to cycle (which used to crash resolving an
+  // absent LastPastedRange). Regression for the empty-register PutAfter crash.
+  const { editor, vimState, run, at } = setup('a b c .....\n');
+  // The unnamed register and the yank ring are process-wide singletons; clear
+  // both so the register is genuinely empty regardless of preceding tests.
+  vimState.globalState.reset('register');
+  vimState.globalState.reset('clipboardHistory');
+  at(6);
+  run('PutAfter'); // nothing yanked -> no-op
+  run('PutAfter'); // must not crash, still a no-op
+  assert.equal(editor.getText(), 'a b c .....\n');
+});
+
 test('a non-paste command breaks the sequence (next paste is normal)', () => {
   const { editor, run, at, yankWord } = setup('a b c .....\n');
   yankWord(0);
