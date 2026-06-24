@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activeThemeName, adaptTheme, availableThemes, DEFAULT_THEME_NAME, loadTheme } from './theme.ts';
+import { activeThemeName, adaptTheme, availableThemes, DEFAULT_THEME_NAME, loadTheme, themeUiCssVariables } from './theme.ts';
 
 /** A minimal dark theme; pass `ui`/`syntax` overrides in per-test. */
 const base = (over: { ui?: unknown; syntax?: unknown } = {}) =>
@@ -113,4 +113,28 @@ test('syntax token splits into color + style; preserves key order', () => {
 
 test('invalid appearance throws', () => {
   assert.throws(() => adaptTheme({ name: 'x', appearance: 'twilight' as never }), /appearance must be/);
+});
+
+test('definedPaths records file-set leaves, not filled defaults', () => {
+  const t = base({ ui: { sidebar: { bg: '#111111' }, status: { error: '#ff0000' } } });
+  assert.ok(t.definedPaths.has('sidebar.bg'));
+  assert.ok(t.definedPaths.has('status.error'));
+  assert.ok(!t.definedPaths.has('sidebar.fg')); // sibling the file left out
+  assert.ok(!t.definedPaths.has('editor.background')); // filled from surface.popover, not file-set
+});
+
+test('themeUiCssVariables: aliased token emits the libadwaita name only when the theme sets it', () => {
+  const css = themeUiCssVariables(base({ ui: { sidebar: { bg: '#123456' } } }));
+  // aliased + set → libadwaita name, and NO --t-ui- twin
+  assert.match(css, /(^|\n)--sidebar-bg-color: #123456;/);
+  assert.ok(!css.includes('--t-ui-sidebar-bg'));
+  // aliased + unset → omitted entirely (libadwaita's own var stands)
+  assert.ok(!css.includes('--sidebar-fg-color'));
+  assert.ok(!css.includes('--t-ui-sidebar-fg'));
+});
+
+test('themeUiCssVariables: a theme that sets no aliased surface emits no libadwaita overrides; custom tokens still emit', () => {
+  const css = themeUiCssVariables(base());
+  assert.ok(!/(^|\n)--(view|card|sidebar|secondary-sidebar)-[a-z]+-color:/.test(css));
+  assert.match(css, /--t-ui-status-error: /); // custom tokens always emitted
 });

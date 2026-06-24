@@ -313,15 +313,17 @@ styles.addStatic(`
   }
 `);
 
-// Active-theme color tokens as CSS variables on the root window. Every `theme.ui.*`
-// leaf becomes `--t-ui-<dashed-path>` (e.g. `theme.ui.editor.background` →
-// `--view-bg-color`), so CSS under `#AppWindow` reads a theme color as
-// `var(--t-ui-…)` instead of interpolating the literal. See themeUiCssVariables and
-// docs/styling.md. (Markup / GtkTextTag consumers can't read CSS vars and still use
-// `theme.ui.*` directly.) Static today because `theme` is load-constant; when live
-// theme-switching lands this becomes a keyed sheet re-set on theme change.
+// Active-theme color tokens as CSS variables, on `window` so they reach every top-level
+// (the main window + its overlays/popovers/FloatingCards, and separate windows like the
+// preferences editor). `themeUiCssVariables` splits them (see ADWAITA_ALIASES): the
+// libadwaita-aliased surfaces are emitted under their `--…-color` name — and only when the
+// theme defines them, so unset ones fall through to libadwaita and keep following the OS —
+// while every custom token is emitted as `--t-ui-<path>` for our own widgets. (Markup /
+// GtkTextTag consumers can't read CSS vars and still use `theme.ui.*` directly.) Static
+// today because `theme` is load-constant; when live theme-switching lands this becomes a
+// keyed sheet re-set on theme change.
 styles.addStatic(`
-  #AppWindow {
+  window {
     --t-spacing: ${theme.spacing}px;
     ${themeUiCssVariables(theme).replace(/\n/g, '\n    ')}
   }

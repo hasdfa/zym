@@ -43,6 +43,14 @@ export interface ThemeUi {
     /** Line-number gutter foreground. */
     lineNumber: string;
   };
+
+  // --- libadwaita-backed surfaces -------------------------------------------
+  // The next four concerns (view / card / sidebar / secondarySidebar) alias onto
+  // libadwaita CSS variables — see `ADWAITA_ALIASES`. Each leaf is emitted under its
+  // `--…-color` name, but ONLY when the theme file sets it; an unset one is omitted so
+  // libadwaita's own variable stands and keeps following the OS scheme. Everything
+  // OUTSIDE this block is a custom token, emitted as `--t-ui-<path>` unconditionally.
+  // This is the transitioning-to-Adwaita-variables side of the split.
   /**
    * The base libadwaita "view" surface colors — the fg/bg of content areas (text views,
    * lists). Defaults point at the Adwaita CSS variables (`--view-fg-color` /
@@ -104,6 +112,8 @@ export interface ThemeUi {
     /** Secondary-sidebar shade (`--secondary-sidebar-shade-color`). */
     shade: string;
   };
+  // --- end libadwaita-backed surfaces; everything below is a custom token ----
+
   text: {
     /** De-emphasized text (secondary labels, subtitles). */
     muted: string;
@@ -211,6 +221,14 @@ export interface Theme {
   /** Base spacing unit in px (margins / gaps between content chrome); `--t-spacing`. */
   spacing: number;
   ui: ThemeUi;
+  /**
+   * The dotted `ui` leaf paths the theme FILE explicitly set (e.g. `sidebar.bg`,
+   * `status.error`) — not the filled-in defaults. The emission gate for the
+   * libadwaita-aliased tokens reads this: an aliased token is written as a `--…-color`
+   * override only when its path is in here (otherwise libadwaita's own variable stands).
+   * See `themeUiCssVariables` / `ADWAITA_ALIASES`.
+   */
+  definedPaths: ReadonlySet<string>;
   syntax: SyntaxColors;
   /** Per-capture font styling (bold/italic/scale/background/…). */
   syntaxStyle: SyntaxStyles;
@@ -288,6 +306,9 @@ export const DEFAULT_THEME: Theme = {
   appearance: 'dark',
   followSystemScheme: false,
   spacing: 8,
+  // Built-in defaults are not "file-defined", so the aliased surfaces (view/card/
+  // sidebar) emit nothing and pass through to libadwaita's own variables.
+  definedPaths: new Set<string>(),
   ui: {
     editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
     view: { fg: '--view-fg-color', bg: '--view-bg-color' },
@@ -374,6 +395,11 @@ export function adaptTheme(file: ThemeFromFile): Theme {
   const f = file.ui ?? {};
   const D = DEFAULT_THEME.ui;
 
+  // Record the leaf paths the FILE set (before any default-filling), so the emission
+  // gate knows which libadwaita-aliased tokens to override vs. leave to libadwaita.
+  const definedPaths = new Set<string>();
+  collectDefinedPaths(f as Record<string, unknown>, [], definedPaths);
+
   // status drives the diff tints, so resolve it first; the diff.* keys still win
   // where the theme sets them, and the word tints fall back to their line tint.
   const status = { ...D.status, ...f.status };
@@ -436,7 +462,17 @@ export function adaptTheme(file: ThemeFromFile): Theme {
   resolveCssVarsInPlace(ui as unknown as Record<string, unknown>, file.appearance);
 
   applyMarkupDefaults(syntax, syntaxStyle, ui);
-  return { name: file.name, appearance: file.appearance, followSystemScheme, spacing: file.spacing ?? DEFAULT_THEME.spacing, ui, syntax, syntaxStyle };
+  return { name: file.name, appearance: file.appearance, followSystemScheme, spacing: file.spacing ?? DEFAULT_THEME.spacing, ui, definedPaths, syntax, syntaxStyle };
+}
+
+/** Collect the dotted paths of every string leaf in a theme file's `ui` (recursively),
+ *  into `out` — the set of fields the file explicitly set (the emission gate). */
+function collectDefinedPaths(node: Record<string, unknown>, path: string[], out: Set<string>): void {
+  for (const [key, value] of Object.entries(node)) {
+    const next = [...path, key];
+    if (typeof value === 'string') out.add(next.join('.'));
+    else if (value && typeof value === 'object') collectDefinedPaths(value as Record<string, unknown>, next, out);
+  }
 }
 
 /**
@@ -554,22 +590,68 @@ export function activeThemeName(): string {
 export const theme = loadTheme(activeThemeName());
 
 /**
- * The theme's `ui.*` color tokens as CSS custom-property declarations — one per leaf,
- * named `--t-ui-<dashed-path>`: `theme.ui.editor.background` → `--view-bg-color`,
- * `theme.ui.search.matchCurrent` → `--t-ui-search-match-current` (camelCase keys are
- * dashed). Installed once on the root `#AppWindow` selector (see src/styles.ts) so any
- * CSS under the window can read a theme color as `var(--t-ui-…)` instead of interpolating
- * the literal. Pango markup can't read CSS variables, so markup / GtkTextTag consumers
- * still read `theme.ui.*` directly. Returns the declaration lines, newline-joined.
+ * The single source of the "transitioning to libadwaita variables vs. our custom tokens"
+ * split: the `ui` leaf paths that ALIAS onto a libadwaita CSS variable, mapped to its name.
+ * An aliased token is emitted under this name — and only when the theme file sets it (see
+ * `themeUiCssVariables`), so an unset one is omitted and libadwaita's own variable stands
+ * (and keeps following the OS scheme). Every `ui` leaf NOT listed here is a custom token,
+ * emitted as `--t-ui-<path>` unconditionally. Start small (the surface families); migrate
+ * more concerns deliberately (e.g. `border` → `--border-color`, whose `currentColor` idiom
+ * needs thought first).
+ */
+export const ADWAITA_ALIASES: Record<string, string> = {
+  'view.fg': '--view-fg-color',
+  'view.bg': '--view-bg-color',
+  'card.fg': '--card-fg-color',
+  'card.bg': '--card-bg-color',
+  'sidebar.fg': '--sidebar-fg-color',
+  'sidebar.bg': '--sidebar-bg-color',
+  'sidebar.backdrop': '--sidebar-backdrop-color',
+  'sidebar.border': '--sidebar-border-color',
+  'sidebar.shade': '--sidebar-shade-color',
+  'secondarySidebar.fg': '--secondary-sidebar-fg-color',
+  'secondarySidebar.bg': '--secondary-sidebar-bg-color',
+  'secondarySidebar.backdrop': '--secondary-sidebar-backdrop-color',
+  'secondarySidebar.border': '--secondary-sidebar-border-color',
+  'secondarySidebar.shade': '--secondary-sidebar-shade-color',
+};
+
+/**
+ * The theme's `ui.*` color tokens as CSS custom-property declarations, split by
+ * `ADWAITA_ALIASES`:
+ *
+ * - An **aliased** leaf (`view`/`card`/`sidebar`/`secondarySidebar`) is emitted under its
+ *   libadwaita name (`view.bg` → `--view-bg-color`) **only when the theme file set it**
+ *   (`t.definedPaths`); an unset one is omitted so libadwaita's own variable stands and
+ *   keeps following the OS scheme. It gets no `--t-ui-*` twin (which would be a stale
+ *   snapshot that doesn't track the OS).
+ * - A **custom** leaf (everything else) is always emitted as `--t-ui-<dashed-path>`
+ *   (`search.matchCurrent` → `--t-ui-search-match-current`).
+ *
+ * Installed on the `window` selector (see src/styles.ts) so the libadwaita overrides
+ * retrofit stock chrome (and separate windows) while the `--t-ui-*` tokens stay available
+ * to our own widgets. Pango markup / GtkTextTag consumers can't read CSS variables and
+ * still read `theme.ui.*` directly (always a resolved literal). Newline-joined.
  */
 export function themeUiCssVariables(t: Theme): string {
   const dash = (key: string): string => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
   const lines: string[] = [];
   const walk = (node: Record<string, unknown>, path: string[]): void => {
     for (const [key, value] of Object.entries(node)) {
-      const next = [...path, dash(key)];
-      if (typeof value === 'string') lines.push(`--t-ui-${next.join('-')}: ${value};`);
-      else if (value && typeof value === 'object') walk(value as Record<string, unknown>, next);
+      const next = [...path, key];
+      if (typeof value === 'string') {
+        const dotted = next.join('.');
+        const alias = ADWAITA_ALIASES[dotted];
+        if (alias) {
+          // Aliased: emit the libadwaita name, gated on the theme having set it.
+          if (t.definedPaths.has(dotted)) lines.push(`${alias}: ${value};`);
+        } else {
+          // Custom: always emit as --t-ui-<dashed-path>.
+          lines.push(`--t-ui-${next.map(dash).join('-')}: ${value};`);
+        }
+      } else if (value && typeof value === 'object') {
+        walk(value as Record<string, unknown>, next);
+      }
     }
   };
   walk(t.ui as unknown as Record<string, unknown>, []);

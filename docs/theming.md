@@ -12,11 +12,20 @@ and [system-integration.md](system-integration.md) (following the OS
 light/dark preference — the remaining gap).
 
 Every `theme.ui.*` token is also exported as a CSS variable
-(`themeUiCssVariables` in `theme.ts` → `--t-ui-<dashed-path>`, installed on
-`#AppWindow` by `src/styles.ts`), so CSS reads a theme color as
-`var(--t-ui-editor-background)` rather than interpolating the literal. The
-when-to-use-which rule (CSS variable vs. `theme.ui.*` in markup / tags / keyed
-sheets) lives in [styling.md](styling.md) → Colors.
+(`themeUiCssVariables` in `theme.ts`, installed on `window` by `src/styles.ts`),
+so CSS reads a theme color as a `var(…)` rather than interpolating the literal.
+Emission is **split** (we're migrating onto libadwaita's own variables — see
+[CSS variables: the libadwaita ⇄ custom split](#css-variables-the-libadwaita--custom-split)):
+
+- a token that aliases a libadwaita variable (`view`/`card`/`sidebar`/
+  `secondarySidebar`, per `ADWAITA_ALIASES`) is emitted under its `--…-color`
+  name (`view.bg` → `--view-bg-color`) **only when the theme file sets it**, so
+  unset ones fall through to libadwaita and keep following the OS;
+- every other token is always emitted as `--t-ui-<dashed-path>`
+  (`var(--t-ui-editor-background)`).
+
+The when-to-use-which rule (CSS variable vs. `theme.ui.*` in markup / tags /
+keyed sheets) lives in [styling.md](styling.md) → Colors.
 
 ## The file format
 
@@ -122,6 +131,48 @@ dotted longest-prefix `resolveByCaptureName`.)
 
 `adaptTheme` is exported so tests can feed synthetic theme objects
 (`src/theme/theme.test.ts`).
+
+## CSS variables: the libadwaita ⇄ custom split
+
+We're migrating the chrome onto **libadwaita's own CSS variables** so stock
+widgets pick up the theme for free, while our not-yet-migrated tokens keep
+working. The dividing line is one registry, `ADWAITA_ALIASES` in `theme.ts` —
+the `ui` leaf paths that map onto a libadwaita variable (today the surface
+families `view` / `card` / `sidebar` / `secondarySidebar`). `themeUiCssVariables`
+emits each `ui` leaf accordingly:
+
+- **aliased** (`path` in `ADWAITA_ALIASES`) → emitted under the libadwaita name
+  (`view.bg` → `--view-bg-color`), **but only when the theme file set the
+  token** (`theme.definedPaths`). An unset aliased token is **omitted**, so
+  libadwaita's own variable stands and keeps following the OS light/dark scheme.
+  It gets **no** `--t-ui-*` twin — that would be a load-time snapshot that
+  doesn't track the OS. (`adwaita.json` sets none of these, so all four
+  surfaces stay fully native; `zym.json` sets `view.bg`, so only
+  `--view-bg-color` is overridden.)
+- **custom** (everything else) → always emitted as `--t-ui-<dashed-path>`
+  (`status.error` → `--t-ui-status-error`). These have no libadwaita equivalent,
+  so there's nothing to fall through to — they're emitted unconditionally
+  (`theme.ui.*` is always a resolved literal).
+
+`theme.definedPaths` (a `ReadonlySet` of dotted leaf paths) is what makes the
+gate possible: `adaptTheme` records which fields the **file** set, *before*
+default-filling, so a filled-in default (`editor.background` ←
+`surface.popover`) is correctly treated as unset.
+
+Two properties this buys us. **No probe poisoning:** the `cssColor` probe reads
+libadwaita variables (`--view-bg-color`, …) to resolve a theme's
+Adwaita-variable-valued fields; because we only *override* the aliased names a
+theme explicitly set — and a theme's own value is a literal or a reference to a
+*different* variable (`zym.json`'s `view.bg: --window-bg-color`) — the names we
+read and the names we write never collide, so re-resolution never reads our own
+output back. **Free OS-following:** every surface a theme leaves alone keeps
+libadwaita's live value. The sheet is installed on `window` (not `#AppWindow`)
+so the overrides reach every top-level — the main window's overlays / popovers /
+FloatingCards *and* separate windows like the preferences editor.
+
+Still static today (`theme` is load-constant); when live theme-switching lands
+it becomes a keyed sheet re-emitted on change (see
+[system-integration.md](system-integration.md)).
 
 ## Diff tints
 
