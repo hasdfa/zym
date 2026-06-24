@@ -14,7 +14,8 @@
  * `onActivateUser`. Each agent row shows a status indicator + title + a changed-
  * files badge and stays in sync as agents launch, exit, or rename.
  *
- * The assembled widget (header bar + scrollable list) is exposed via `root`.
+ * The assembled widget — an `Adw.ToolbarView` with the header bar as a top bar
+ * over the scrollable list — is exposed via `root`.
  */
 import * as Os from 'node:os';
 import * as Path from 'node:path';
@@ -104,7 +105,7 @@ interface RowHandle {
 }
 
 export class WorkbenchList {
-  readonly root: InstanceType<typeof Gtk.Box>;
+  readonly root: InstanceType<typeof Adw.ToolbarView>;
 
   private readonly listBox: InstanceType<typeof Gtk.ListBox>;
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
@@ -140,16 +141,17 @@ export class WorkbenchList {
     this.iconAttrs = Pango.AttrList.new();
     this.iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
 
-    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    // An Adw.ToolbarView holds the project-title header bar as a top bar over the
+    // scrollable workbench list, so the bar matches the window header beside it and
+    // the view manages the seam (and undershoot shadow) between header and list.
+    this.root = new Adw.ToolbarView();
     this.root.setName('WorkbenchList'); // selector identity + CSS (#WorkbenchList)
-    this.root.addCssClass('sidebar-pane');
-    
-    this.root.append(this.buildHeader());
-    
+    this.root.addTopBar(this.buildHeader());
+
     this.scrolled = new Gtk.ScrolledWindow();
     this.scrolled.setVexpand(true);
-    this.root.append(this.scrolled);
-    
+    this.root.setContent(this.scrolled);
+
     this.listBox = new Gtk.ListBox();
     this.listBox.addCssClass('navigation-sidebar')
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);

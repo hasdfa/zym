@@ -317,3 +317,97 @@ Adds `/tmp/zym-leak/probe-controllers.mjs` (the A/B/C variant bisection) to the
 #2 toolkit. App internals are reachable from the inspector via `globalThis.zym`
 (`.workspace`, `.commands`, `.notifications`, `.agents`, …), which is how the
 toast path was driven live without a synthetic repro.
+
+---
+
+# Investigation #4: `GtkSource.Annotation.new()` churn — a `.new()`-pin leak, not a controller leak
+
+Status: **RESOLVED UPSTREAM — root cause was node-gtk#446, now FIXED in node-gtk;
+re-proven collected; app-level workaround reverted.** Hunt run against the live
+editor I was running inside (PID `3843893`, started *after* the #1/#2/#3 fixes) via
+the Node inspector (`SIGUSR1` → CDP on `127.0.0.1:9229`). This is a **different
+leak class** from #1/#2/#3: not a connected-controller closure pin (node-gtk#455)
+but the **transfer-full `.new()` return that node-gtk used to never free
+(node-gtk#446)** — i.e. rule 5 ("no GObject churn in poll/hot paths"), not rule 9.
+The proper fix was upstream: **node-gtk#446 was fixed** (binary rebuilt
+2026-06-24 11:19:59) and the temporary app-level diff-and-skip in `VirtualText.ts`
+was reverted (see Resolution below).
+
+## Symptom / signature
+
+`process.memoryUsage()`: RSS **1449 MB**, `heapUsed` **190 MB**, `external` 55 MB
+— the classic flat-JS-heap / fat-native-RSS node-gtk pin. Two **post-GC**
+heapsnapshots ~5 min apart (`cdp.mjs snapshot` GCs first) showed
+`GtkSourceAnnotation` **1040 → 1541 (+501)**, with correlated `Point +462`,
+`Range +230`, `Marker +22`, `GtkTextMark +22`. (`GtkLabel` sat at ~21.7k but was
+**not growing** — historical residue, see below.)
+
+## Proof chain
+
+| Signal | Evidence |
+|---|---|
+| Active retention (not GC lag) | +501 `GtkSourceAnnotation` across two **post-GC** snapshots. |
+| Detached but pinned | `retain.mjs leakB path GtkSourceAnnotation` → every sample rooted at **`(Global handles)` depth 1**, no widget-tree path (they've been `removeAll()`'d off the provider). |
+| Single creation site | only `src/ui/TextEditor/VirtualText.ts:59`, `GtkSource.Annotation.new(text, null, line, style)`. |
+| Allocator (sampling) | repeated stacks under git `pollOnce` rebuild widgets, but the annotation churn is driven by `InlayHintController.apply` / `GitBlameController` / `DiagnosticsView`, which re-push their full list on edit/cursor/fold/re-fetch. |
+| Isolated `.new()` repro (live, in-process) | created 1000 `GtkSource.Annotation.new()`, dropped all JS refs, forced GC twice → **1000/1000 survive** ⇒ #446, independent of provider/controllers. |
+| Not mutable / not freeable | annotation proto has only `description`/`line`/`style` **getters** (setting them is a no-op); node-gtk exposes no `unref`/`free` → can't pool-and-mutate, can't reclaim. |
+
+## Root cause (decisive)
+
+`VirtualText.setAnnotations()` did `provider.removeAll()` then
+`addAnnotation(GtkSource.Annotation.new(...))` per item on **every** call. The
+producers — `InlayHintController` (`apply()` from both `refresh()` and
+`rerender()`), `GitBlameController` (per cursor move), `DiagnosticsView` (per
+diagnostics push) — recompute and re-push their full list constantly, almost
+always identical to what's already rendered. Each rebuild leaks one permanently-
+pinned native `GtkSource.Annotation` per line (#446). `removeAll()` only drops the
+provider's reference; the persistent handle keeps the native object forever.
+
+## Resolution — node-gtk#446 fixed upstream
+
+The real fix was in node-gtk: transfer-full `.new()` returns now downgrade their
+toggle-ref and are freed once JS drops them. Re-ran the isolated repro
+(`/tmp/zym-leak/repro446.cjs`: create N via `.new()`, drop refs, spin the GLib
+loop, `global.gc()`, count `WeakRef` survivors) against the **rebuilt** binary
+(`/home/romgrk/src/node-gtk/build/Release/node_gtk.node`, 2026-06-24 11:19:59):
+
+| Variant | Old binary | Rebuilt |
+|---|---|---|
+| `GtkSource.Annotation.new()` dropped | 1000/1000 pinned | **0/1000 collected** |
+| `addAnnotation → removeAll → drop` (the VirtualText path) | leaked | **0/1000 collected** |
+| controls (plain object, `new Gtk.Button()`) | collected | collected |
+
+So `VirtualText`'s rebuild-per-update no longer leaks. The temporary app-level
+diff-and-skip guard I had added to `src/ui/TextEditor/VirtualText.ts` was
+**reverted** (file back to HEAD) — the upstream fix is the correct layer. Rule 5
+still applies as guidance (churning `.new()` in a hot path is needless native
+alloc/GC pressure), so a diff-and-skip in `VirtualText` remains a reasonable
+*perf* optimization if the churn ever shows up in a profile, but it is no longer a
+correctness/leak requirement.
+
+Note: the running editor that exhibited the leak (PID `3843893`) still has the
+**old** node-gtk mapped; it keeps its accumulated annotations until restarted. The
+freshly-restarted instance (PID `4102255`, started 11:20:55 — after the rebuild)
+loads the fixed binary.
+
+## Aside — the ~21.7k `GtkLabel` residue (not this leak)
+
+Large but **flat** across the window (≈ +0 over 5 min), all at `(Global handles)`
+depth 1 — accumulated detached labels from earlier churn (the still-open
+`NotificationToasts` follow-up from #1/#3 — 75 notifications retained — plus diff/
+completion/git-row churn over the ~12 h uptime). Reclaimed only by restart; not
+actively growing, so not the active leak. Track under the #3 NotificationToasts
+follow-up.
+
+## Tooling / recipe (unchanged from #2)
+
+```sh
+kill -SIGUSR1 <editor-pid>
+WS=$(curl -s 127.0.0.1:9229/json/list | jq -r '.[0].webSocketDebuggerUrl')
+WS=$WS node /tmp/zym-leak/cdp.mjs snapshot leakA.heapsnapshot      # GCs first
+WS=$WS node /tmp/zym-leak/cdp.mjs snapshot leakB.heapsnapshot      # minutes later
+node /tmp/zym-leak/analyze.mjs leakA.heapsnapshot leakB.heapsnapshot   # growers
+node /tmp/zym-leak/retain.mjs  leakB.heapsnapshot path GtkSourceAnnotation
+# isolated #446 check: require('node-gtk').require('GtkSource'); 1000× .new(); drop; gc; count WeakRef survivors
+```

@@ -104,25 +104,27 @@ What already exists and is reused, not rebuilt:
   The agent list / sidebar is `WorkbenchList` (not a separate `AgentList`).
 - **`src/ui/Sidebar.ts`** — assembles the **WorkbenchSidebar** (the full-height
   column at the very left of the window, outside/left of the header bar). It owns
-  the `WorkbenchList` (exposed as `sidebar.list`), wraps it in the sidebar column,
-  and splits that column from the window content with a top-level horizontal
-  `Gtk.Paned` (its `root`, whose start child is the sidebar and whose end child is
-  the host-supplied `content`). It also owns the collapse/expand width toggle: the
-  list's robot button fires `onToggleCollapsed`, and the sidebar applies the
-  `Gtk.Paned` position (between `SIDEBAR_COLLAPSED_WIDTH` and `SIDEBAR_WIDTH`).
-  AppWindow constructs one `Sidebar`, forwarding the agent callbacks, and never
-  touches the list/paned directly.
+  the `WorkbenchList` (exposed as `sidebar.list`) and wraps it in the
+  `#WorkbenchSidebar` column box, exposed as its `root`. AppWindow owns the
+  top-level horizontal `Gtk.Paned` (`AppWindow.sidebarPaned`, class
+  `AppWindow--paned`) whose start child is `sidebar.root` and whose end child is the
+  content (header bar + workbench wrapped in the toast overlay). The collapse/expand
+  width toggle is the list's robot button firing `onToggleCollapsed`, which AppWindow
+  applies to the paned position (between `SIDEBAR_COLLAPSED_WIDTH` and
+  `SIDEBAR_WIDTH`). AppWindow constructs one `Sidebar`, forwarding the agent
+  callbacks, and never touches the list directly.
 - **`src/ui/WorkbenchList.ts`** — the contents of the WorkbenchSidebar column.
   Each entry is associated with a particular **workbench**: the first ("default",
   selected-by-default) row is the **user** (person glyph + name, as a pseudo-agent
   — `onActivateUser`), the rest are the running agents (status indicator + title
   + changed-files badge). **Never empty** (the user row is always present → no
-  empty state); every row is one header-bar tall. Its top is an
-  `Adw.HeaderBar` (themed to match the window header bar) whose only content is
-  a flat **logo button** (a square placeholder glyph for now — will become the
-  real logo — styled like the git branch button) that collapses the sidebar to
-  icons-only / expands to icons+text — the width change is requested via
-  `onToggleCollapsed` (the `Sidebar` applies it).
+  empty state). The header bar + scrollable list are assembled in an
+  `Adw.ToolbarView` (its `root`): the project-title `Adw.HeaderBar` (themed to
+  match the window header bar) is a **top bar** over the list as **content**, so
+  the bar matches the window header beside it and the view manages the seam
+  between header and list. Collapsing the sidebar to icons-only / expanding to
+  icons+text is requested via `onToggleCollapsed` (the `Sidebar` applies the
+  width).
 - **`src/ui/AgentPicker.ts`** — fuzzy quick-switcher over running agents, with
   a *Start agent: `<query>`* action that launches a new agent with the typed
   prompt.
@@ -377,9 +379,12 @@ can re-root independently. Pieces and how they connect:
   separately, so it gets its own branch/status. The repo is disposed when the
   last holder releases.
 - **Chrome follows the active workbench** — `activateWorkbench` →
-  `rebindGitChrome()` re-points `GitBranchButton.setRepo`,
+  `HeaderBar.rebind()` re-points `GitBranchButton.setRepo`,
   `GithubService.rebind`, `GithubButtons.setRepo` and the upstream-behind watch
-  at `this.workbench.{git, cwd}`.
+  at the active `workbench.{git, cwd}`. The header bar (`src/ui/HeaderBar.ts`)
+  owns this git-chrome lifecycle — the branch button + GitHub pill, the
+  per-workbench health cluster, the upstream-behind "pull" prompt, and the
+  background auto-fetch — read off a `getWorkbench` accessor supplied by AppWindow.
 - **Agent → editor bridge** (cooperative dynamic detection). Data flow for a
   worktree the agent creates mid-session:
   1. agent runs `git worktree add … && cd …`, then calls the **`set_worktree`**

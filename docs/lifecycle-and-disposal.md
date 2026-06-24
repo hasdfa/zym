@@ -138,6 +138,22 @@ handler (rule 2). Native leak = `app.run()` frame dominates CPU with JS idle
   sampling profiler, which named `new SearchResultsView` under the rg-result
   callback). Fixed by tracking the controllers (`trackController`) and severing
   them in `dispose()` (`detachControllers(this.editor.sourceView)`) — rule 9.
+- **Virtual-text annotations churned native GObjects on every keystroke —
+  resolved upstream (node-gtk#446 fixed).** A *different* class from the
+  controller-pin leaks: `VirtualText.setAnnotations` rebuilds its set with
+  `GtkSource.Annotation.new()` per item on every call, and its producers (inlay
+  hints, git blame, error-lens diagnostics) re-push their full list on every edit /
+  cursor move / fold / LSP re-fetch. node-gtk *used to* pin every transfer-full
+  `.new()` return with a persistent handle and never free it, so the running editor
+  leaked `GtkSourceAnnotation` at ~100/min while editing (live: +501 over 5 min,
+  all rooted at `(Global handles)` depth 1; isolated repro: 1000/1000 `.new()`
+  returns survived forced GC). **node-gtk#446 has since been fixed**: re-running the
+  repro against the rebuilt binary collects 0/1000 (including the `addAnnotation →
+  removeAll → drop` path), so the churn is no longer a permanent leak and the
+  app-level diff-and-skip workaround was reverted. Rule 5 still stands as guidance
+  (churning `.new()` in a hot path is needless native-alloc/GC pressure even when it
+  no longer leaks) but the catastrophic permanent-pin consequence is gone. See
+  `LEAK.md` Investigation #4.
 - **The controller-pin leak was systemic — ~13 sites, one per component** — an
   audit of every `addController` call found that only the two already-patched
   components severed their controllers; the rest (`DiffView`, `CompletionController`,

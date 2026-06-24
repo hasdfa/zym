@@ -36,19 +36,16 @@ import { AGENT_CONFIGS, resolveAgentKind, type AgentKind } from '../agents/confi
 import { listResumableSessions, recordSessionWorktree, relativeTime, type AgentSession } from '../agentSessions.ts';
 import { PROJECT_NAME } from './WorkbenchList.ts';
 import { Sidebar } from './Sidebar.ts';
-import { WorkbenchStatus } from './WorkbenchStatus.ts';
+import { HeaderBar } from './HeaderBar.ts';
 import { GitPanel } from './GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons } from './icons.ts';
 import { agentTabTitle } from './agentStatusIcon.ts';
-import { GitBranchButton } from './GitBranchButton.ts';
-import { GithubButtons } from './GithubButtons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
 import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
 import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
 import { openCommitDiff, openCommitPicker, openBranchDiff } from './diffViews.ts';
 import { GitLogView } from './GitLogView.ts';
-import { openGithubService, type GithubService } from '../github.ts';
 import { registerGithubCommands } from './githubCommands.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
@@ -99,6 +96,7 @@ import { setUserInjectionRules } from '../syntax/grammar.ts';
 import { parseInjectionRules } from '../syntax/userInjections.ts';
 import { CompositeDisposable, Disposable, type DisposableLike } from '../util/eventKit.ts';
 import { applyNotificationStyles } from './chromeStyles.ts';
+import { addStyles } from '../styles.ts';
 
 // The identifier under the cursor (for prefilling the rename prompt). Codepoint-
 // aware: columns are codepoints, so index the line as codepoints.
@@ -115,9 +113,15 @@ function wordUnderCursor(doc: LspDocument): string {
 const DEFAULT_WIDTH = 1400;
 const DEFAULT_HEIGHT = 950;
 const TOAST_TIMEOUT = 15;
-// Shared `replaceKey` for the upstream-pull lifecycle, so the "behind" prompt,
-// the "pulling…" spinner, and the result all transform one toast in place.
-const PULL_NOTICE_KEY = 'git:pull';
+// Expanded width (px) of the workbench sidebar — the full-height column at the very
+// left of the window, outside (left of) the header bar — and its collapsed width
+// (icons only). These are the two positions of the top-level sidebar↔content split.
+const SIDEBAR_WIDTH = 280;
+const SIDEBAR_COLLAPSED_WIDTH = 48;
+
+addStyles(/* css */`
+  .AppWindow--paned { opacity: 0 }
+`)
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 
@@ -160,9 +164,9 @@ export class AppWindow {
   // closed, or the user closes the tab (see pruneActionTerminals / disposeChild).
   private readonly actionTerminals = new Map<Widget, { agent: Agent; actionId: string; terminal: Terminal; child: PanelChild }>();
 
-  // The workbench sidebar: the full-height column at the very left of the window plus
-  // the top-level split that separates it from the content. Owns the `WorkbenchList`
-  // (`this.sidebar.list`) and the collapse/expand width toggle.
+  // The workbench sidebar: the full-height `#WorkbenchSidebar` column at the very left
+  // of the window. Owns the `WorkbenchList` (`this.sidebar.list`); it's the start child
+  // of `sidebarPaned`, whose width this window toggles on collapse/expand.
   private readonly sidebar: Sidebar;
   // Commit-message editor tabs: the message file each is bound to, so closing the
   // tab can commit (git-style: write the message, save, close to commit).
@@ -199,6 +203,11 @@ export class AppWindow {
   // Content-area overlay: hosts the active workbench (swapped on agent switch) and
   // the notification toasts — floats below the header bar, right of the sidebar.
   private readonly contentOverlay: InstanceType<typeof Gtk.Overlay>;
+  // The top-level horizontal split: the full-height sidebar column on the start side,
+  // the window content (header bar + workbench, wrapped by the toast overlay) on the
+  // end. Its position is the sidebar width, toggled between expanded and collapsed by
+  // the list's robot button (see setSidebarCollapsed).
+  private readonly sidebarPaned: InstanceType<typeof Gtk.Paned>;
   // Window-level overlay wrapping everything (sidebar + header + content): the host
   // for floating pickers, so they cover the whole window rather than just the content.
   private readonly overlay: InstanceType<typeof Gtk.Overlay>;
@@ -217,23 +226,11 @@ export class AppWindow {
   private workbench!: Workbench<'user' | Agent>;
   private readonly workbenches = new Map<'user' | Agent, Workbench<'user' | Agent>>();
 
-  // Header-bar git chrome. The GitRepo itself lives on the active workbench
-  // (`this.workbench.git`); these widgets are re-pointed at it on switch.
-  private readonly branchButton: GitBranchButton;
-  // Reactive GitHub PR/CI model (busy-aware) shared by the header buttons.
-  private readonly github: GithubService;
-  // Header-bar links to the repository / PR / issue on GitHub.
-  private readonly githubButtons: GithubButtons;
-  // Right-aligned header cluster: diagnostics pill + LSP status indicator.
-  private readonly workbenchStatus: WorkbenchStatus;
-  // Last-seen upstream "behind" count, to fire the pull notification only on the
-  // transition into being behind (not on every status poll while behind).
-  private lastBehind = 0;
-  // Unsubscribe for the upstream-behind watch on the active workbench's git;
-  // swapped by `rebindGitChrome` on every workbench switch.
-  private upstreamUnsub: (() => void) | null = null;
-  // Background git fetch interval timer (null when disabled).
-  private autoFetchTimer: NodeJS.Timeout | null = null;
+  // The window's Adwaita header bar: the branch button + GitHub PR/CI pill and the
+  // per-workbench health cluster (diagnostics + LSP). It owns the git-chrome
+  // lifecycle (rebind on workbench switch, upstream-behind prompt, auto-fetch); the
+  // GitRepo it reflects lives on the active workbench (`this.workbench.git`).
+  private readonly headerBar: HeaderBar;
 
   // Watches the user config file and syncs edits into zym.config; cancelled on
   // close.
@@ -258,28 +255,18 @@ export class AppWindow {
     // across workbenches, so a switch reparents nothing.
     const userWorkbench = this.buildWorkbench('user', process.cwd());
     this.workbench = userWorkbench; // the active workbench until a person is switched
+    // Publish the active-workbench provider now, before any consumer (the header bar
+    // below) reads it; activateWorkbench just re-points `this.workbench` behind it.
+    zym.workspace.setActiveWorkbenchProvider(() => this.workbench);
 
-    // Header-bar git chrome targets the *active* workbench's git/cwd;
-    // activateWorkbench re-points it (setRepo/rebind) on a person switch. The
-    // click/picker closures read `this.workbench` lazily, so they always act on
-    // the workbench shown when invoked.
-    this.branchButton = new GitBranchButton(this.workbench.git,
-      () => openBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git));
-    this.github = openGithubService(this.workbench.git, {
-      cwd: this.workbench.cwd,
-      remoteNames: () => {
-        const upstream = (zym.config.get('git.remotes.upstream') as string) || 'upstream';
-        const origin = (zym.config.get('git.remotes.origin') as string) || 'origin';
-        return [upstream, origin];
-      },
-    });
-    this.githubButtons = new GithubButtons({
-      git: this.workbench.git,
-      github: this.github,
-      cwd: this.workbench.cwd,
+    // The header bar's git chrome targets the *active* workbench's git/cwd;
+    // activateWorkbench re-points it (headerBar.rebind) on a person switch. The
+    // click/picker closures read the active workbench / `this.overlay` lazily, so
+    // they always act on the workbench shown when invoked.
+    this.headerBar = new HeaderBar({
+      getWorkbench: () => zym.workspace.getActiveWorkbench()!,
+      onBranchPicker: () => openBranchPicker(this.overlay, this.workbench.cwd, this.workbench.git),
       onShowChecks: () => openGithubCIChecksPicker(this.overlay, this.workbench.cwd),
-    });
-    this.workbenchStatus = new WorkbenchStatus({
       onOpenDiagnostics: () => this.toggleDiagnosticsPanel(),
       onOpenLog: () => this.toggleNotificationLog(),
       // Pill + LSP indicator scope to the active workbench's worktree.
@@ -326,7 +313,7 @@ export class AppWindow {
     });
 
     const toolbarView = new Adw.ToolbarView();
-    toolbarView.addTopBar(this.buildHeaderBar());
+    toolbarView.addTopBar(this.headerBar.root);
     // Content-area overlay: wraps the active workbench (below the header bar, right
     // of the sidebar) and hosts the toasts. Pickers use the window-level overlay
     // built below instead, so they aren't clipped to the content.
@@ -338,12 +325,11 @@ export class AppWindow {
     toolbarView.setContent(this.contentOverlay);
     this.toastOverlay.setChild(toolbarView);
 
-    // Workbench sidebar: a full-height column at the very left of the window, *outside*
-    // the header bar, split from the content (the header bar + workbench, wrapped by
-    // the toast overlay). The Sidebar owns the WorkbenchList and the collapse/expand
-    // width toggle; its agent callbacks route into the active-workbench machinery.
+    // Workbench sidebar: a full-height column (`#WorkbenchSidebar`) at the very left of
+    // the window, *outside* the header bar. The Sidebar owns the WorkbenchList; its
+    // agent callbacks route into the active-workbench machinery, and the list's robot
+    // button forwards collapse/expand here to resize the split below.
     this.sidebar = new Sidebar({
-      content: this.toastOverlay,
       onActivate: (agent) => this.showAgent(agent),
       onActivateUser: () => this.activateOwner('user'), // the user row → user workbench
       onRestart: (agent) => this.restartAgent(agent),
@@ -351,13 +337,26 @@ export class AppWindow {
       onClose: (agent) => this.closeAgent(agent),
       onRename: (agent) => this.renameAgentPrompt(agent),
       onOpenChanges: (agent) => this.openAgentChanges(agent),
+      onToggleCollapsed: (collapsed) => this.setSidebarCollapsed(collapsed),
     });
+
+    // Top-level horizontal split: the full-height sidebar column on the start side, the
+    // content (the header bar + workbench, wrapped by the toast overlay) on the end, so
+    // the sidebar spans from the window's top edge to its bottom. Window resize grows
+    // the content, not the sidebar; the split position is the toggled sidebar width.
+    this.sidebarPaned = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
+    this.sidebarPaned.addCssClass('AppWindow--paned');
+    this.sidebarPaned.setStartChild(this.sidebar.root);
+    this.sidebarPaned.setEndChild(this.toastOverlay);
+    this.sidebarPaned.setPosition(SIDEBAR_WIDTH);
+    this.sidebarPaned.setResizeStartChild(false);
+    this.sidebarPaned.setShrinkStartChild(false);
 
     // Window-level overlay over the whole layout (sidebar + header + content), so
     // floating pickers cover the entire window rather than being clipped to the
     // content area (where they slid under the sidebar).
     this.overlay = new Gtk.Overlay();
-    this.overlay.setChild(this.sidebar.root);
+    this.overlay.setChild(this.sidebarPaned);
 
     // Bridge the notification manager to the toast stack. Only actionable
     // User-facing severities (info/success/warning/error/fatal) pop a transient
@@ -406,7 +405,6 @@ export class AppWindow {
     zym.workspace.setActiveEditorProvider(() => this.activeEditor);
     // Expose closed-tab reopening app-wide; the history stack lives on the workspace.
     zym.workspace.setTabReopener((state) => this.reopenTab(state));
-    zym.workspace.setActiveWorkbenchProvider(() => this.workbench);
     zym.workspace.setTabHost((widget, options) => this.openCenterTab(widget, options));
     // Expose diff-review delivery app-wide so the decoupled commit/branch diff views (diffViews.ts)
     // can route comments to an agent without reaching into the AppWindow.
@@ -467,10 +465,10 @@ export class AppWindow {
 
     // Bind the header git chrome (branch button, GitHub model/buttons) and the
     // upstream-behind watch to the active (user) workbench; activateWorkbench
-    // re-points them on a person switch. Seeds lastBehind so an already-behind
+    // re-points them on a person switch. Seeds the behind-count so an already-behind
     // repo doesn't toast on launch.
-    this.rebindGitChrome();
-    this.startAutoFetch();
+    this.headerBar.rebind();
+    this.headerBar.startAutoFetch();
 
     // Closing the window consults the session's modified participants first: an
     // editor with unsaved edits or a running agent blocks the quit behind a
@@ -502,6 +500,12 @@ export class AppWindow {
     if (!restored && initialFile) this.openFile(initialFile);
   }
 
+  // Apply the sidebar collapse/expand width to the top-level split: the list's robot
+  // button toggles between icons-only and icons+text and forwards the new state here.
+  private setSidebarCollapsed(collapsed: boolean): void {
+    this.sidebarPaned.setPosition(collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH);
+  }
+
   // Apply restored window geometry. Size only takes effect before the window is
   // mapped (a GTK4 constraint), so the launch path calls this pre-`present`; for a
   // session:restore on an already-shown window only `maximize` has visible effect.
@@ -516,12 +520,7 @@ export class AppWindow {
   // the clean-exit path and, after confirmation, the unsaved-work path.
   private teardownAndQuit() {
     this.sessionController.flush(); // final autosave before the workbench goes away
-    if (this.autoFetchTimer) clearInterval(this.autoFetchTimer);
-    this.upstreamUnsub?.();
-    this.branchButton.dispose();
-    this.githubButtons.dispose();
-    this.workbenchStatus.dispose();
-    this.github.dispose();
+    this.headerBar.dispose();
     this.configWatcher.dispose();
     this.keymapWatcher.dispose();
     this.sidebar.dispose();
@@ -1547,8 +1546,8 @@ export class AppWindow {
     this.workbench = workbench;
     this.contentOverlay.setChild(workbench.root); // show this workbench
     this.sidebar.list.selectAgent(workbench.owner === 'user' ? null : workbench.owner);
-    this.rebindGitChrome(); // header branch/GitHub now reflect this workbench's root
-    this.workbenchStatus.refresh(); // diagnostics pill + LSP indicator → this workbench
+    this.headerBar.rebind(); // header branch/GitHub now reflect this workbench's root
+    this.headerBar.refreshStatus(); // diagnostics pill + LSP indicator → this workbench
     this.updateViewedAgent();
     this.focusActivePane();
   }
@@ -1563,19 +1562,6 @@ export class AppWindow {
       if (isUnderRoot(path, wb.cwd) && wb.cwd.length > best.length) best = wb.cwd;
     }
     return best;
-  }
-
-  // Re-point the header git chrome (branch button, GitHub model + buttons) and the
-  // upstream-behind watch at the active workbench's git/cwd. Idempotent (the
-  // widgets no-op when the repo is unchanged), so it also seeds the initial bind.
-  private rebindGitChrome(): void {
-    const { git, cwd } = this.workbench;
-    this.branchButton.setRepo(git);
-    this.github.rebind(git, cwd);
-    this.githubButtons.setRepo(git, cwd);
-    this.upstreamUnsub?.();
-    this.lastBehind = git.getAheadBehind()?.behind ?? 0;
-    this.upstreamUnsub = git.onChange(() => this.checkUpstream());
   }
 
   // Re-root an agent's workbench after it moves into a worktree: swap the pooled
@@ -1597,11 +1583,11 @@ export class AppWindow {
       if (owner === workbench) this.editors.get(root)?.setGitRepo(git);
     }
     releaseGitRepo(oldGit);
-    if (this.workbench === workbench) this.rebindGitChrome();
+    if (this.workbench === workbench) this.headerBar.rebind();
     // Diagnostics ownership shifts on a re-root (paths under the old/new root change
     // hands), so re-scope every workbench's panel and the active header status.
     for (const wb of this.workbenches.values()) wb.diagnosticsPanel.refresh();
-    this.workbenchStatus.refresh();
+    this.headerBar.refreshStatus();
   }
 
   // The cooperative-detection safety net: if an agent created a worktree (spotted
@@ -1653,27 +1639,6 @@ export class AppWindow {
     // Tab add/close/switch and split changes all route through here — a good,
     // cheap signal to (debounced-)persist the session.
     this.sessionController?.scheduleAutosave();
-  }
-
-  // --- Header bar ------------------------------------------------------------
-
-  private buildHeaderBar() {
-    const header = new Adw.HeaderBar();
-    header.setName('Header'); // CSS identity (#Header)
-    // The branch button and the GitHub PR pill are separate controls.
-    header.packStart(this.branchButton.root);
-    header.packStart(this.githubButtons.root);
-
-    // Per-workbench health signals (diagnostics + LSP) sit at the right edge,
-    // opposite the git/GitHub controls.
-    header.packEnd(this.workbenchStatus.root);
-
-    // The project name and the unsaved-changes marker live in the sidebar
-    // (WorkbenchList) header, so the centre title slot would otherwise fall back
-    // to the window title ("node"/project name) — duplicative. Clear it with an
-    // empty widget so the bar shows only its packed controls.
-    header.setTitleWidget(new Gtk.Box());
-    return header;
   }
 
   /** The tab title for an editor, prefixed with the modified dot when unsaved. */
@@ -2680,7 +2645,7 @@ export class AppWindow {
         // refresh ~10s out. The service stays busy until then, so the CI segment
         // shows the in-progress (loading) look in the meantime.
         didDispatch: () =>
-          this.runGit(() => this.workbench.git.push(), 'Push', () => this.github.scheduleRefresh(10000)),
+          this.runGit(() => this.workbench.git.push(), 'Push', () => this.headerBar.github.scheduleRefresh(10000)),
         description: 'Push to the remote',
         when: () => this.workbench.git.getBranch() !== null,
       },
@@ -2728,7 +2693,7 @@ export class AppWindow {
     // GitHub-specific commands (pickers + open-on-web) live in their own module.
     registerGithubCommands({
       overlay: this.overlay,
-      github: this.github,
+      github: this.headerBar.github,
       cwd: () => this.workbench.cwd,
       git: () => this.workbench.git,
       toast: (message) => this.toast(message),
@@ -2743,21 +2708,6 @@ export class AppWindow {
       zym.notifications.addTrace(`${label} succeeded`);
       onSuccess?.();
     } else zym.notifications.addError(`${label} failed`);
-  }
-
-  // Like `runGit`, but surfaces progress as a single in-place toast: a sticky
-  // loading notice that transforms into success/error when the operation finishes
-  // (the LSP install flow). All three share one `replaceKey` so the prompt that
-  // triggered it, the spinner, and the result are the same card.
-  private async runGitWithProgress(
-    op: () => Promise<GitOpResult>,
-    label: string,
-    replaceKey: string,
-  ) {
-    zym.notifications.addInfo(`${label}…`, { replaceKey, loading: true, dismissable: true });
-    const result = await op();
-    if (result.isOk()) zym.notifications.addSuccess(`${label} succeeded`, { replaceKey });
-    else zym.notifications.addError(`${label} failed`, { replaceKey });
   }
 
   // Stash the working-tree changes (visible success, since it's a manual action).
@@ -2809,38 +2759,6 @@ export class AppWindow {
       if (result.isOk()) zym.notifications.addSuccess(amend ? 'Amended HEAD' : 'Committed');
       else zym.notifications.addError(amend ? 'Amend failed' : 'Commit failed', { detail: result.unwrapErr().message.trim() });
     });
-  }
-
-  // On the transition into being behind the upstream, post an info notification
-  // offering to pull. Only fires when `behind` goes from 0 to positive, so a
-  // repo that stays behind across status polls isn't re-toasted every tick.
-  private checkUpstream() {
-    const behind = this.workbench.git.getAheadBehind()?.behind ?? 0;
-    if (behind > 0 && this.lastBehind === 0) {
-      const commits = behind === 1 ? 'commit' : 'commits';
-      // Sticky + a shared `replaceKey` so the prompt persists until acted on and
-      // clicking Pull transforms this same toast into pulling…→pulled (mirrors the
-      // LSP install flow).
-      zym.notifications.addInfo(`Upstream is ahead by ${behind} ${commits}`, {
-        detail: 'Your branch is behind its upstream — pull to update.',
-        replaceKey: PULL_NOTICE_KEY,
-        dismissable: true,
-        buttons: [{ text: 'Pull', onDidClick: () => this.runGitWithProgress(() => this.workbench.git.pull(), 'Pull', PULL_NOTICE_KEY) }],
-      });
-    }
-    this.lastBehind = behind;
-  }
-
-  // Periodically `git fetch` in the background so the upstream-behind check sees
-  // remote activity. Quiet (no success notification); the resulting onChange
-  // drives the branch button and `checkUpstream`. `git.autoFetchMinutes` of 0
-  // disables it. (Read once at startup.)
-  private startAutoFetch() {
-    const minutes = Number(zym.config.get('git.autoFetchMinutes') ?? 0);
-    if (!(minutes > 0)) return;
-    this.autoFetchTimer = setInterval(() => {
-      if (this.workbench.git.getBranch() !== null) void this.workbench.git.fetch();
-    }, minutes * 60_000);
   }
 
   // Notification log: show/hide the bottom-dock history, and clear it. Handlers
