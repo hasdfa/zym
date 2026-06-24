@@ -37,9 +37,6 @@ export const PROJECT_NAME = Path.basename(process.cwd());
 const ROW_TRANSITION_MS = 250;
 
 addStyles(/* css */`
-  #WorkbenchList {
-    background-color: var(--sidebar-bg-color); 
-  }
   /* The unsaved-changes marker (a small dot) next to the project title — warning-colored. */
   .zym-modified-dot { color: var(--t-ui-status-warning); }
   
@@ -145,6 +142,7 @@ export class WorkbenchList {
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.root.setName('WorkbenchList'); // selector identity + CSS (#WorkbenchList)
+    this.root.addCssClass('sidebar-pane');
     
     this.root.append(this.buildHeader());
     
