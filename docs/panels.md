@@ -8,7 +8,10 @@ center editor groups **and** the docks (Files/Source-Control side dock, the
 bottom Notifications/Diagnostics/Keybindings docks) — is a `Panel`.
 
 - **`Panel`** — one tab strip. `add(widget, { title?, requireTabBar? })` is
-  the *only* way content enters a panel.
+  the *only* way content enters a panel. With no tabs it shows the
+  **welcome surface** (`welcomePanel()`, `src/ui/WelcomePanel.ts`): a sleeping
+  cat over a keybinding cheatsheet and a charitable callout, shown in *any*
+  empty panel (no per-panel variant).
 - **`PanelGroup`** (center) — a binary tree of `Split` (Gtk.Paned) branches
   and `Leaf`/`Panel` leaves; any split layout is expressible.
   Splitting/closing reshapes the tree; the root leaf may sit empty (shows the

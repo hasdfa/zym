@@ -1397,9 +1397,8 @@ export class AppWindow {
   // Build a fresh center (one person's splittable editor area). Every center
   // shares the same callbacks — they operate on the shared per-widget maps, and
   // only the *active* center fires interactive events (the others are detached).
-  private makeCenter(welcomeEmptyState: boolean): PanelGroup {
+  private makeCenter(): PanelGroup {
     return new PanelGroup({
-      welcomeEmptyState, // the user's central pane shows the cat + cheatsheet when empty
       onActiveChanged: () => this.onActiveTabChanged(),
       onTabCloseRequest: (widget) => {
         // An agent's terminal tab is never closed/destroyed here, whatever its state:
@@ -1499,7 +1498,7 @@ export class AppWindow {
    */
   private buildWorkbench(owner: 'user' | Agent, cwd: string): Workbench<'user' | Agent> {
     const git = acquireGitRepo(cwd);
-    const center = this.makeCenter(owner === 'user');
+    const center = this.makeCenter();
     const fileTree = new FileTree({
       rootPath: cwd,
       onOpenFile: (path) => this.openFile(path),

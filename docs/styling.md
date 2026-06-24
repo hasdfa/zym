@@ -57,7 +57,7 @@ them. Four patterns, in preference order:
   with several `label`s). Give it a short, unprefixed element class, scoped
   under the id: `#MultiBufferHeader .icon`, `#FileTree .header`.
 - **`.is-…` / `.has-…`** — boolean state classes toggled at runtime, read
-  off any of the above: `#Panel.is-active`, `#Picker.has-prompt`,
+  off any of the above: `#Panel.active-empty`, `#Picker.has-prompt`,
   `#Terminal .view.is-normal`. Adjectives only — no value-bearing classes
   (`.is-mode-normal`, not `.mode2`).
 
@@ -218,7 +218,7 @@ The one real-image exception is a **bundled symbolic SVG**: a monochrome
 `*-symbolic.svg` shipped under `assets/`, turned into a recoloring `Gtk.Image`
 by `symbolicImage(file, size)` (`icons.ts`). It loads as a `Gtk.IconPaintable`,
 so GTK tints it to the widget's `color` like any symbolic icon — it follows the
-theme and state classes (`.is-active`, …). Reserve it for art a glyph can't
+theme and whatever color its context sets. Reserve it for art a glyph can't
 supply (the empty-panel sleeping cat, `cat-sleeping-symbolic.svg`); still never
 pull named icons from the *system* theme (`Gtk.Image(iconName)`).
 
