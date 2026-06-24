@@ -67,6 +67,43 @@ export interface ThemeUi {
     /** Card background (`--card-bg-color`). */
     bg: string;
   };
+  /**
+   * The libadwaita "sidebar" surface colors — the chrome of navigation/utility panes
+   * that flank the content (file tree, agent list). Like `view`/`card`, the defaults
+   * point at the Adwaita CSS variables (`--sidebar-*-color`) and are resolved to concrete
+   * RGB at load (see adaptTheme / resolveCssVarsInPlace), so consumers always read a
+   * literal color. The dimmer companion surface for a second, nested pane is the sibling
+   * `secondarySidebar` concern.
+   */
+  sidebar: {
+    /** Sidebar foreground (`--sidebar-fg-color`). */
+    fg: string;
+    /** Sidebar background (`--sidebar-bg-color`). */
+    bg: string;
+    /** Sidebar background when the window is unfocused (`--sidebar-backdrop-color`). */
+    backdrop: string;
+    /** Sidebar edge border toward the content (`--sidebar-border-color`). */
+    border: string;
+    /** Sidebar shade for scroll-under / elevation (`--sidebar-shade-color`). */
+    shade: string;
+  };
+  /**
+   * The libadwaita "secondary sidebar" surface colors — the dimmer companion surface for a
+   * second, nested pane beside `sidebar`. Same shape and defaulting as `sidebar`, pointing
+   * at the Adwaita `--secondary-sidebar-*` variables (resolved to RGB at load).
+   */
+  secondarySidebar: {
+    /** Secondary-sidebar foreground (`--secondary-sidebar-fg-color`). */
+    fg: string;
+    /** Secondary-sidebar background (`--secondary-sidebar-bg-color`). */
+    bg: string;
+    /** Secondary-sidebar background when the window is unfocused (`--secondary-sidebar-backdrop-color`). */
+    backdrop: string;
+    /** Secondary-sidebar edge border (`--secondary-sidebar-border-color`). */
+    border: string;
+    /** Secondary-sidebar shade (`--secondary-sidebar-shade-color`). */
+    shade: string;
+  };
   text: {
     /** De-emphasized text (secondary labels, subtitles). */
     muted: string;
@@ -218,6 +255,8 @@ interface ThemeFromFileUi {
   editor?: Partial<ThemeUi['editor']>;
   view?: Partial<ThemeUi['view']>;
   card?: Partial<ThemeUi['card']>;
+  sidebar?: Partial<ThemeUi['sidebar']>;
+  secondarySidebar?: Partial<ThemeUi['secondarySidebar']>;
   text?: Partial<ThemeUi['text']>;
   border?: string;
   shadow?: string;
@@ -231,9 +270,9 @@ interface ThemeFromFileUi {
 
 /*
  * The built-in default theme — a complete dark `Theme` of concrete RGB colors, the
- * exceptions being `view.{fg,bg}` / `card.{fg,bg}`, which point at the Adwaita
- * `--view-*-color` / `--card-*-color` variables the loader resolves to RGB (see
- * resolveCssVarsInPlace). Resolved values are safe to
+ * exceptions being `view.{fg,bg}` / `card.{fg,bg}` / `sidebar.*`, which point at the
+ * Adwaita `--view-*-color` / `--card-*-color` / `--sidebar-*-color` variables the loader
+ * resolves to RGB (see resolveCssVarsInPlace). Resolved values are safe to
  * interpolate into Pango markup as well as CSS. It
  * is the single source of color defaults: `loadTheme` deep-merges a theme file's `ui`
  * over `DEFAULT_THEME.ui` (a theme's own values always win), so every `theme.ui.*`
@@ -253,6 +292,20 @@ export const DEFAULT_THEME: Theme = {
     editor: { foreground: '#ffffff', background: '#1e1e1e', lineNumber: '#888888' },
     view: { fg: '--view-fg-color', bg: '--view-bg-color' },
     card: { fg: '--card-fg-color', bg: '--card-bg-color' },
+    sidebar: {
+      fg: '--sidebar-fg-color',
+      bg: '--sidebar-bg-color',
+      backdrop: '--sidebar-backdrop-color',
+      border: '--sidebar-border-color',
+      shade: '--sidebar-shade-color',
+    },
+    secondarySidebar: {
+      fg: '--secondary-sidebar-fg-color',
+      bg: '--secondary-sidebar-bg-color',
+      backdrop: '--secondary-sidebar-backdrop-color',
+      border: '--secondary-sidebar-border-color',
+      shade: '--secondary-sidebar-shade-color',
+    },
     text: { muted: '#9a9996', accent: '#c678dd' },
     border: 'rgba(0, 0, 0, 0.3)',
     shadow: 'rgba(0, 0, 0, 0.3)',
@@ -345,6 +398,8 @@ export function adaptTheme(file: ThemeFromFile): Theme {
     editor: { ...D.editor, ...f.editor, background: f.editor?.background ?? surface.popover },
     view: { ...D.view, ...f.view },
     card: { ...D.card, ...f.card },
+    sidebar: { ...D.sidebar, ...f.sidebar },
+    secondarySidebar: { ...D.secondarySidebar, ...f.secondarySidebar },
     text: { ...D.text, ...f.text },
     border: f.border ?? D.border,
     shadow: f.shadow ?? D.shadow,

@@ -24,6 +24,17 @@ test('loadTheme("adwaita") resolves the libadwaita-derived palette', () => {
   assert.equal(t.ui.view.bg, '#1d1d20'); // --view-bg-color (dark)
   assert.equal(t.ui.card.fg, '#ffffff'); // --card-fg-color (dark)
   assert.equal(t.ui.card.bg, '#36363a'); // --card-bg-color (dark)
+  // sidebar / secondarySidebar likewise default to --sidebar-* / --secondary-sidebar-*.
+  assert.equal(t.ui.sidebar.bg, '#2e2e32'); // --sidebar-bg-color (dark)
+  assert.equal(t.ui.sidebar.shade, '#00000640'); // --sidebar-shade-color (dark)
+  assert.equal(t.ui.secondarySidebar.bg, '#28282c'); // --secondary-sidebar-bg-color (dark)
+});
+
+test('secondarySidebar is a sibling concern that deep-merges over its defaults', () => {
+  const t = base({ ui: { secondarySidebar: { bg: '#123456' } } });
+  assert.equal(t.ui.secondarySidebar.bg, '#123456'); // overridden
+  assert.equal(t.ui.secondarySidebar.fg, '#ffffff'); // sibling kept (--secondary-sidebar-fg-color dark)
+  assert.equal(t.ui.sidebar.bg, '#2e2e32'); // sidebar concern unaffected (--sidebar-bg-color dark)
 });
 
 test('availableThemes lists the shipped theme files, excluding the schema', () => {

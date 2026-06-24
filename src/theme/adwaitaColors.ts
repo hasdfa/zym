@@ -46,6 +46,18 @@ export const FALLBACK_COLORS: Record<string, Record<Scheme, string>> = {
   '--popover-bg-color': { dark: '#36363a', light: '#ffffff' },
   '--card-bg-color': { dark: '#36363a', light: '#ffffff' },
   '--card-fg-color': { dark: '#ffffff', light: '#000006' },
+  // Sidebar surfaces (libadwaita ≥1.4). Light fg/border/shade carry alpha (rgb(0 0 6 / x%)
+  // → #000006aa): fg 80% → cc, border 36%/7% → 5c/12, shade 25%/7% → 40/12.
+  '--sidebar-bg-color': { dark: '#2e2e32', light: '#ebebed' },
+  '--sidebar-fg-color': { dark: '#ffffff', light: '#000006cc' },
+  '--sidebar-backdrop-color': { dark: '#28282c', light: '#f2f2f4' },
+  '--sidebar-border-color': { dark: '#0000065c', light: '#00000612' },
+  '--sidebar-shade-color': { dark: '#00000640', light: '#00000612' },
+  '--secondary-sidebar-bg-color': { dark: '#28282c', light: '#f3f3f5' },
+  '--secondary-sidebar-fg-color': { dark: '#ffffff', light: '#000006cc' },
+  '--secondary-sidebar-backdrop-color': { dark: '#252529', light: '#f6f6fa' },
+  '--secondary-sidebar-border-color': { dark: '#0000065c', light: '#00000612' },
+  '--secondary-sidebar-shade-color': { dark: '#00000640', light: '#00000612' },
   '--success-color': { dark: '#78e9ab', light: '#007c3d' },
   '--warning-color': { dark: '#ffc252', light: '#905400' },
   '--error-color': { dark: '#ff938c', light: '#c30000' },

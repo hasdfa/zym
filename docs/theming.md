@@ -32,6 +32,8 @@ One theme per file, `src/theme/<name>.json`, loaded by name
     "editor": { "foreground": "#f1f1f1", "background": "#2d2d2d", "lineNumber": "#888888" },
     "view":   { "fg": "--view-fg-color", "bg": "--view-bg-color" }, // Adwaita vars → resolved to RGB at load
     "card":   { "fg": "--card-fg-color", "bg": "--card-bg-color" }, // ditto
+    "sidebar":{ "bg": "--sidebar-bg-color" },                  // ditto; { fg,bg,backdrop,border,shade }
+    "secondarySidebar": { "bg": "--secondary-sidebar-bg-color" }, // ditto; same shape as sidebar
     "text":   { "muted": "#5b6268", "accent": "#c678dd" },
     "border": "#434346",
     "surface":{ "popover": "#383838", "selected": "#3f4b5b" },
@@ -61,7 +63,9 @@ theme JSON's `ui.editor.background` is read in code as exactly
   which the loader resolves to a concrete RGB color at load (via the
   `cssColor` bridge → `lookupCSSColor`) so non-CSS consumers get a literal —
   this is how `view.{fg,bg}` / `card.{fg,bg}` default to `--view-{fg,bg}-color`
-  / `--card-{fg,bg}-color`. The dual cases
+  / `--card-{fg,bg}-color`, and how the sibling `sidebar.{fg,bg,backdrop,border,shade}`
+  / `secondarySidebar.{…}` concerns default to the libadwaita `--sidebar-*` /
+  `--secondary-sidebar-*` variables. The dual cases
   use a camelCase sibling rather than a node that's both a leaf and a branch:
   `search.matchCurrent` (not `match.current`), `diff.addedWord` /
   `diff.removedWord`.

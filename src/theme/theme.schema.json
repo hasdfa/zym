@@ -77,6 +77,60 @@
             }
           }
         },
+        "sidebar": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "libadwaita sidebar surface colors (navigation/utility panes); defaults point at --sidebar-*-color and are resolved to RGB at load. The nested companion pane is the sibling `secondarySidebar` concern.",
+          "properties": {
+            "fg": {
+              "$ref": "#/$defs/color",
+              "description": "Sidebar foreground (--sidebar-fg-color)."
+            },
+            "bg": {
+              "$ref": "#/$defs/color",
+              "description": "Sidebar background (--sidebar-bg-color)."
+            },
+            "backdrop": {
+              "$ref": "#/$defs/color",
+              "description": "Sidebar background when the window is unfocused (--sidebar-backdrop-color)."
+            },
+            "border": {
+              "$ref": "#/$defs/color",
+              "description": "Sidebar border toward the content (--sidebar-border-color)."
+            },
+            "shade": {
+              "$ref": "#/$defs/color",
+              "description": "Sidebar shade for scroll-under / elevation (--sidebar-shade-color)."
+            }
+          }
+        },
+        "secondarySidebar": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "libadwaita secondary-sidebar surface colors (a second, nested pane beside the sidebar); same shape as `sidebar`, defaults point at --secondary-sidebar-*-color and are resolved to RGB at load.",
+          "properties": {
+            "fg": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary-sidebar foreground (--secondary-sidebar-fg-color)."
+            },
+            "bg": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary-sidebar background (--secondary-sidebar-bg-color)."
+            },
+            "backdrop": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary-sidebar background when the window is unfocused (--secondary-sidebar-backdrop-color)."
+            },
+            "border": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary-sidebar border (--secondary-sidebar-border-color)."
+            },
+            "shade": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary-sidebar shade (--secondary-sidebar-shade-color)."
+            }
+          }
+        },
         "text": {
           "type": "object",
           "additionalProperties": false,
