@@ -362,6 +362,12 @@ export class Document implements TextEditorSource {
     return this.pvFor(buffer)?.foldDocumentText(fold) ?? '';
   }
 
+  /** The DOCUMENT row span `[startRow, endRow]` a fold covers — for the vim buffer-space fold
+   *  motions (j/k treat a closed fold as one line). */
+  foldDocumentRowSpan(buffer: SourceBuffer, fold: any): [number, number] {
+    return this.pvFor(buffer)?.foldDocumentRowSpan(fold) ?? [0, 0];
+  }
+
   /** Whether a fold handle is still live (not subsumed by an enclosing fold). */
   isFoldAlive(fold: any): boolean {
     if (!fold) return false;
@@ -383,6 +389,20 @@ export class Document implements TextEditorSource {
   /** Text of DOCUMENT row `row` (no newline) — for LSP column-encoding of document ranges. */
   documentLineText(row: number): string {
     return this.lineText(row);
+  }
+
+  /** Number of DOCUMENT lines — the unfolded line count (the editor's `buffer` row count for a
+   *  single-file editor, ≥ the collapsed screen row count whenever a fold is active). */
+  documentLineCount(): number {
+    return this.model.getLineCount();
+  }
+
+  /** DOCUMENT text within `[start, end)` (codepoint columns), including any text a fold currently
+   *  collapses on the view — so the editor's `buffer`-space reads/scans see the real source. */
+  documentTextInRange(start: Point, end: Point): string {
+    const a = asIter(this.model.getIterAtLineOffset(start.row, start.column));
+    const b = asIter(this.model.getIterAtLineOffset(end.row, end.column));
+    return this.model.getText(a, b, true);
   }
 
   /** Document line (0-based) shown at SCREEN line `screenLine` — for the line-number gutter. */

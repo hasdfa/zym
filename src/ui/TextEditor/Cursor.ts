@@ -33,22 +33,23 @@ export class Cursor {
     return this.selection.getHeadBufferPosition();
   }
 
-  /** Identity stub — see docs/text-editor/coordinates.md. */
+  /** The cursor's screen position (buffer→screen through the fold transform; see
+   *  docs/text-editor/coordinates.md). Identity until a fold is active. */
   getScreenPosition(): Point {
-    return this.getBufferPosition();
+    return this.editor.screenPositionForBufferPosition(this.getBufferPosition());
   }
 
   getScreenRow(): number {
-    return this.getBufferRow();
+    return this.getScreenPosition().row;
   }
 
   getScreenColumn(): number {
-    return this.getBufferColumn();
+    return this.getScreenPosition().column;
   }
 
-  /** Move the cursor to a screen position. Identity stub — see docs/text-editor/coordinates.md. */
+  /** Move the cursor to a screen position (screen→buffer through the fold transform). */
   setScreenPosition(point: PointLike, options?: unknown): void {
-    this.setBufferPosition(point, options);
+    this.setBufferPosition(this.editor.bufferPositionForScreenPosition(point), options);
   }
 
   /**

@@ -565,9 +565,18 @@ export class TextEditor implements DocumentHost {
       unfoldAt: (off) => this.syntax.unfoldAtViewOffset(off),
       unfoldAll: () => this.syntax.unfoldAll(),
       screenPointFromDocument: (p) => this.document.screenPointFromDocument(this.buffer, p),
+      documentPointFromScreen: (p) => this.document.documentPointFromScreen(this.buffer, p),
+      documentLineForScreenLine: (row) => this.document.documentLineForScreenLine(this.buffer, row),
+      screenLineForDocumentLine: (row) => this.document.screenLineForDocumentLine(this.buffer, row),
       documentLineText: (row) => this.document.documentLineText(row),
+      documentLineCount: () => this.document.documentLineCount(),
+      documentTextInRange: (start, end) => this.document.documentTextInRange(start, end),
+      documentText: () => this.document.getText(),
       revealFoldsMatching: (test) => this.syntax.revealFoldsMatching(test),
     });
+    // A multibuffer keeps `buffer == screen` (folding off), so the buffer↔screen fold transform
+    // stays identity there — its FoldAccess translators model a single document, not the stitch.
+    this.editorModel.setMultiSource(this.multiSource);
     // Real (tree-sitter) indent source for `=`/paste-reindent/new lines.
     this.editorModel.setIndentSource((row) => this.syntax.indentLevelForRow(row));
     // Default indentation from config; `loadFile` detects and overrides per file.
@@ -576,9 +585,13 @@ export class TextEditor implements DocumentHost {
       width: (zym.config.get('editor.tabLength') as number) || TAB_WIDTH,
     });
     // Let motions see/reveal folds (the fold state lives in SyntaxController).
+    // The vim layer speaks `buffer` (== document for a single file), so fold queries are in
+    // document rows: a closed fold's whole span counts as one line (j/k skip it), and a motion
+    // landing inside a fold reveals it.
     this.editorModel.setFoldProvider({
-      isFoldedAtRow: (row) => this.syntax.isLineHidden(row),
-      unfoldRow: (row) => this.syntax.unfoldRow(row),
+      isFoldedAtRow: (row) => this.syntax.documentFoldRangeAtRow(row) != null,
+      foldRangeAtRow: (row) => this.syntax.documentFoldRangeAtRow(row),
+      unfoldRow: (row) => this.syntax.unfoldDocumentRow(row),
       foldableRanges: () => this.syntax.foldRegions(),
       functionRangeAt: (row, column) => this.syntax.functionRangeAt(row, column),
       classRangeAt: (row, column) => this.syntax.classRangeAt(row, column),
@@ -1743,16 +1756,20 @@ export class TextEditor implements DocumentHost {
    *  character of the region it revealed — Vim leaves you at the top of what was unfolded. */
   private placeCaretInRevealedFold(range: RevealedRange | null): void {
     if (!range) return;
-    const [[startRow, startCol], [endRow, endCol]] = range;
-    for (let row = startRow; row <= endRow; row++) {
+    // `RevealedRange` is in SCREEN coords (view offsets); the cursor/editor speak `buffer`, so
+    // translate the restored body span to buffer rows before scanning for its first non-blank char.
+    const [[sScreenRow, sScreenCol], [eScreenRow, eScreenCol]] = range;
+    const start = this.editorModel.bufferPositionForScreenPosition(new Point(sScreenRow, sScreenCol));
+    const end = this.editorModel.bufferPositionForScreenPosition(new Point(eScreenRow, eScreenCol));
+    for (let row = start.row; row <= end.row; row++) {
       const text = this.editorModel.lineTextForBufferRow(row);
-      const from = row === startRow ? startCol : 0;
-      const to = row === endRow ? endCol : text.length;
+      const from = row === start.row ? start.column : 0;
+      const to = row === end.row ? end.column : text.length;
       const rel = text.slice(from, to).search(/\S/);
       if (rel >= 0) return this.editorModel.setCursorBufferPosition(new Point(row, from + rel));
     }
     // Wholly-blank revealed region (shouldn't happen for code): rest at its start.
-    this.editorModel.setCursorBufferPosition(new Point(startRow, startCol));
+    this.editorModel.setCursorBufferPosition(start);
   }
 
   // --- Auto-close brackets / quotes (insert mode) ----------------------------

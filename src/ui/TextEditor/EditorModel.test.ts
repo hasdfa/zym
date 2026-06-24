@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../gi.ts';
-import { EditorModel } from './EditorModel.ts';
+import { EditorModel, type FoldAccess } from './EditorModel.ts';
 import { Document } from './Document.ts';
+import { unwrapIter } from './iter.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
 
@@ -15,6 +16,62 @@ function model(text: string): EditorModel {
   buffer.setText(text, -1);
   const view = new GtkSource.View({ buffer });
   return new EditorModel(view, buffer);
+}
+
+/** Text of `buffer` row `row` (no trailing newline). */
+function viewLine(buffer: InstanceType<typeof GtkSource.Buffer>, row: number): string {
+  const start = unwrapIter(buffer.getIterAtLine(row));
+  const end = start.copy();
+  if (!end.endsLine()) end.forwardToLineEnd();
+  return buffer.getText(start, end, true);
+}
+
+/** An IDENTITY FoldAccess over `buffer` (screen == buffer == document), for fold tests that
+ *  fabricate the collapsed view directly — `overrides` supply the fold-specific bits. */
+function identityFoldAccess(
+  buffer: InstanceType<typeof GtkSource.Buffer>,
+  overrides: Partial<FoldAccess>,
+): FoldAccess {
+  return {
+    placeholderRanges: () => [],
+    unfoldAt: () => false,
+    unfoldAll: () => {},
+    screenPointFromDocument: (p) => p,
+    documentPointFromScreen: (p) => p,
+    documentLineForScreenLine: (row) => row,
+    screenLineForDocumentLine: (row) => row,
+    documentLineText: (row) => viewLine(buffer, row),
+    documentLineCount: () => buffer.getLineCount(),
+    documentTextInRange: (a, b) =>
+      buffer.getText(unwrapIter(buffer.getIterAtLineOffset(a.row, a.column)), unwrapIter(buffer.getIterAtLineOffset(b.row, b.column)), true),
+    documentText: () => buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true),
+    revealFoldsMatching: () => {},
+    ...overrides,
+  };
+}
+
+/** A FoldAccess wired to a real folded `Document` + its view buffer — the true buffer↔screen
+ *  transform (`document == buffer` for a single file). `overrides` supply the reveal hooks. */
+function documentFoldAccess(
+  doc: Document,
+  buffer: InstanceType<typeof GtkSource.Buffer>,
+  overrides: Partial<FoldAccess>,
+): FoldAccess {
+  return {
+    placeholderRanges: () => [],
+    unfoldAt: () => false,
+    unfoldAll: () => {},
+    screenPointFromDocument: (p) => doc.screenPointFromDocument(buffer, p),
+    documentPointFromScreen: (p) => doc.documentPointFromScreen(buffer, p),
+    documentLineForScreenLine: (row) => doc.documentLineForScreenLine(buffer, row),
+    screenLineForDocumentLine: (row) => doc.screenLineForDocumentLine(buffer, row),
+    documentLineText: (row) => doc.documentLineText(row),
+    documentLineCount: () => doc.documentLineCount(),
+    documentTextInRange: (a, b) => doc.documentTextInRange(a, b),
+    documentText: () => doc.getText(),
+    revealFoldsMatching: () => {},
+    ...overrides,
+  };
 }
 
 test('reports buffer shape including the trailing empty line', () => {
@@ -176,14 +233,10 @@ function modelWithFold() {
   const view = new GtkSource.View({ buffer });
   const m = new EditorModel(view, buffer);
   const unfolded: number[] = [];
-  m.setFoldAccess({
+  m.setFoldAccess(identityFoldAccess(buffer, {
     placeholderRanges: () => [[2, 7]],
     unfoldAt: (off) => { unfolded.push(off); return true; },
-    unfoldAll: () => {},
-    screenPointFromDocument: (p) => p,
-    documentLineText: () => '',
-    revealFoldsMatching: () => {},
-  });
+  }));
   return { m, buffer, unfolded };
 }
 
@@ -236,17 +289,56 @@ test('editing across a fold reveals it and edits the real (former-folded) text',
   const m = new EditorModel(view, buffer);
   const fold = doc.foldScreenRange(buffer, 2, 5, '[...]'); // collapse "XYZ" → view "ab[...]cd"
   let folded = true;
-  m.setFoldAccess({
+  m.setFoldAccess(documentFoldAccess(doc, buffer, {
     placeholderRanges: () => (folded ? [doc.foldPlaceholderRange(buffer, fold!)] : []),
     unfoldAt: () => { doc.unfoldScreen(buffer, fold!); folded = false; return true; },
-    unfoldAll: () => {},
-    screenPointFromDocument: (p) => p,
-    documentLineText: () => '',
-    revealFoldsMatching: () => {},
-  });
-  // Delete a range crossing the placeholder → reveal + delete the real content.
-  m.setTextInBufferRange(new Range(new Point(0, 2), new Point(0, 3)), '');
+  }));
+  // A BUFFER-space delete spanning the fold's source range ("XYZ", document cols 2–5) reveals it
+  // and deletes the real (former-folded) text — the cursor/vim layer speaks buffer coordinates.
+  m.setTextInBufferRange(new Range(new Point(0, 2), new Point(0, 5)), '');
   assert.equal(doc.getText(), 'abcd\n', 'the former-folded XYZ was deleted from the model');
+});
+
+// --- buffer ↔ screen is real once a fold is active (docs/text-editor/coordinates.md) --------
+//
+// A multi-line fold: collapse view offsets 11–23 ("\nline2\nline3") of 'line0\nline1\nline2\n
+// line3\nline4\n' → the screen buffer 'line0\nline1[2]\nline4\n' (4 screen rows over 6 buffer rows).
+function modelWithMultilineFold() {
+  const doc = new Document();
+  doc.setText('line0\nline1\nline2\nline3\nline4\n');
+  const buffer = doc.createView();
+  const view = new GtkSource.View({ buffer });
+  const m = new EditorModel(view, buffer);
+  const fold = doc.foldScreenRange(buffer, 11, 23, '[2]');
+  m.setFoldAccess(documentFoldAccess(doc, buffer, {
+    placeholderRanges: () => [doc.foldPlaceholderRange(buffer, fold!)],
+  }));
+  return { m, buffer, doc };
+}
+
+test('a fold makes buffer-space reads see the unfolded source, not the collapsed screen', () => {
+  const { m, buffer } = modelWithMultilineFold();
+  assert.equal(m.getLineCount(), 6, 'buffer line count is the document, not the 4 screen rows');
+  assert.equal(buffer.getLineCount(), 4, 'the view buffer IS the (collapsed) screen');
+  assert.equal(m.lineTextForBufferRow(2), 'line2', 'a folded (hidden) row reads its real source');
+  assert.equal(m.lineTextForBufferRow(4), 'line4', 'a buffer row past the fold');
+  assert.deepEqual(m.getEofBufferPosition().toArray(), [5, 0]);
+  assert.equal(m.getTextInBufferRange(new Range(new Point(2, 0), new Point(3, 5))), 'line2\nline3');
+});
+
+test('a fold makes buffer↔screen row/point conversions go through the transform', () => {
+  const { m } = modelWithMultilineFold();
+  // 'line4' is buffer row 4 but screen row 2 (rows 2–3 collapsed onto row 1).
+  assert.equal(m.screenRowForBufferRow(4), 2);
+  assert.equal(m.bufferRowForScreenRow(2), 4);
+  assert.deepEqual(m.screenPositionForBufferPosition(new Point(4, 3)).toArray(), [2, 3]);
+  assert.deepEqual(m.bufferPositionForScreenPosition(new Point(2, 3)).toArray(), [4, 3]);
+
+  // The cursor speaks buffer coordinates; its screen position folds down.
+  m.setCursorBufferPosition(new Point(4, 2));
+  assert.deepEqual(m.getCursorBufferPosition().toArray(), [4, 2]);
+  assert.deepEqual(m.getCursorScreenPosition().toArray(), [2, 2]);
+  assert.deepEqual(m.getLastCursor().getScreenPosition().toArray(), [2, 2]);
 });
 
 test('duplicateLineBelow copies the line and moves the cursor onto the copy', () => {

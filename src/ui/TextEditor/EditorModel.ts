@@ -55,10 +55,22 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
-/** Fold state, supplied by the host (SyntaxController) so motions can see folds. */
+/** Codepoint length of `s` — the column convention (GtkTextIter offsets count codepoints, not
+ *  UTF-16 units), so a non-BMP char (emoji) counts as one column. */
+function cpLength(s: string): number {
+  let n = 0;
+  for (const _ of s) n++;
+  return n;
+}
+
+/** Fold state, supplied by the host (SyntaxController) so motions can see folds. Rows are
+ *  `buffer` (document) rows — the vim layer's space. */
 export interface FoldProvider {
-  /** Whether `row` is hidden inside a collapsed fold. */
+  /** Whether `row` is part of a collapsed fold (header through footer). */
   isFoldedAtRow(row: number): boolean;
+  /** The buffer row span `[startRow, endRow]` of the collapsed fold covering `row`, or null —
+   *  the vim fold motions treat it as one line, so j/k skip a closed fold. */
+  foldRangeAtRow?(row: number): { startRow: number; endRow: number } | null;
   /** Reveal `row` by unfolding the fold(s) that hide it. */
   unfoldRow(row: number): void;
   /** Inclusive `[startRow, endRow]` of every foldable region (for fold motions /
@@ -83,20 +95,39 @@ export interface FunctionRange {
   inner: Range;
 }
 
-/** How EditorModel reaches the fold projection: placeholder ranges are atomic to the
- *  cursor, editing one reveals it, and search runs over the unfolded document. */
+/**
+ * How EditorModel reaches the single-document fold projection — the real `buffer ↔ screen`
+ * transform (see docs/text-editor/coordinates.md). For a single-file editor `document == buffer`,
+ * so these `document`-named translators (shared with the LSP/gutter `FoldHost` surface) ARE the
+ * editor's `buffer` translators: `screen` is the collapsed view buffer, `buffer` the unfolded
+ * source. Placeholder ranges are atomic to the cursor, editing one reveals it, and search runs
+ * over the unfolded document. Only wired for single-document editors — a multibuffer keeps
+ * `buffer == screen` (folding off), so its EditorModel never routes through this (see `foldProjection`).
+ */
 export interface FoldAccess {
-  /** View-offset [start, end) ranges of every collapsed-fold placeholder. */
+  /** Screen-offset [start, end) ranges of every collapsed-fold placeholder. */
   placeholderRanges(): Array<[number, number]>;
-  /** Unfold the fold whose placeholder contains `viewOffset`; true if one did. */
-  unfoldAt(viewOffset: number): boolean;
+  /** Unfold the fold whose placeholder contains `screenOffset`; true if one did. */
+  unfoldAt(screenOffset: number): boolean;
   /** Expand every fold (so a search sees the whole document). */
   unfoldAll(): void;
-  /** MODEL caret → VIEW caret (folds shift lines/cols); for rendering LSP results. */
+  /** BUFFER point → SCREEN point (a position inside a fold collapses to its placeholder). */
   screenPointFromDocument(point: Point): Point;
-  /** MODEL line text (no newline) — for LSP column-encoding of model-space ranges. */
+  /** SCREEN point → BUFFER point (folds shift lines/cols). */
+  documentPointFromScreen(point: Point): Point;
+  /** The BUFFER row shown at SCREEN row `screenRow`. */
+  documentLineForScreenLine(screenRow: number): number;
+  /** The SCREEN row showing BUFFER row `bufferRow` (its start). */
+  screenLineForDocumentLine(bufferRow: number): number;
+  /** BUFFER line text (no newline) — the real source line, even when collapsed on screen. */
   documentLineText(row: number): string;
-  /** Reveal folds whose collapsed model content matches `test` (search). */
+  /** Number of BUFFER lines (the unfolded line count). */
+  documentLineCount(): number;
+  /** BUFFER text within `[start, end)` — the real source, including fold-collapsed content. */
+  documentTextInRange(start: Point, end: Point): string;
+  /** The entire BUFFER text, including text hidden by folds. */
+  documentText(): string;
+  /** Reveal folds whose collapsed buffer content matches `test` (search). */
   revealFoldsMatching(test: (text: string) => boolean): void;
 }
 
@@ -320,22 +351,46 @@ export class EditorModel {
   // --- Point ↔ TextIter bridge ----------------------------------------------
 
   /**
-   * An iter at `point`, clamped into the buffer. Rows past the end land on the
-   * last row; columns past a line's end land at its end (before the newline).
+   * A view (screen) iter at BUFFER `point`. Translates buffer→screen through the fold projection
+   * (a buffer position inside a collapsed fold lands on its placeholder), then builds the iter;
+   * identity — the raw view bridge — when there is no projection. The buffer point is clamped in
+   * BUFFER space first (the projection needs a real source position).
    */
   iterAtPoint(point: PointLike): TextIter {
-    const p = Point.fromObject(point);
-    const lastRow = this.getLastBufferRow();
-    const row = clamp(p.row, 0, lastRow);
-    const iter = this.iterAtLineStart(row);
+    const buffer = this.clampBufferPoint(point);
+    const screen = this.foldProjection ? this.foldProjection.screenPointFromDocument(buffer) : buffer;
+    return this.screenIterAtPoint(screen);
+  }
 
+  /** The BUFFER `Point` for view `iter` — translates the iter's screen position through the fold
+   *  projection (screen→buffer); identity when there is none. */
+  pointAtIter(iter: TextIter): Point {
+    const screen = new Point(iter.getLine(), iter.getLineOffset());
+    return this.foldProjection ? this.foldProjection.documentPointFromScreen(screen) : screen;
+  }
+
+  /** A view iter at SCREEN `point`, clamped into the view buffer. The raw GTK bridge (screen in,
+   *  screen iter out) — `iterAtPoint` is the buffer-space wrapper that translates first. */
+  private screenIterAtPoint(point: PointLike): TextIter {
+    const p = Point.fromObject(point);
+    const lastRow = this.buffer.getLineCount() - 1;
+    const iter = this.iterAtLineStart(clamp(p.row, 0, lastRow));
     const maxColumn = this.maxColumnForLineStart(iter);
     iter.setLineOffset(clamp(p.column, 0, maxColumn));
     return iter;
   }
 
-  /** The `Point` for `iter`. */
-  pointAtIter(iter: TextIter): Point {
+  /** `point` clamped to a real BUFFER position (row into the buffer, column into that line) —
+   *  without round-tripping through the view, so it's valid even for a position inside a fold. */
+  private clampBufferPoint(point: PointLike): Point {
+    const p = Point.fromObject(point);
+    const row = clamp(p.row, 0, this.getLastBufferRow());
+    return new Point(row, clamp(p.column, 0, this.lineLength(row)));
+  }
+
+  /** `point` clamped to a real SCREEN position in the view buffer. */
+  private clampScreenPoint(point: PointLike): Point {
+    const iter = this.screenIterAtPoint(point);
     return new Point(iter.getLine(), iter.getLineOffset());
   }
 
@@ -355,18 +410,23 @@ export class EditorModel {
 
   // --- Buffer shape ----------------------------------------------------------
 
-  /** Number of lines in the buffer. */
+  /** Number of lines in the buffer (the unfolded count — ≥ the view's screen-row count when a
+   *  fold is active). */
   getLineCount(): number {
-    return this.buffer.getLineCount();
+    return this.foldProjection ? this.foldProjection.documentLineCount() : this.buffer.getLineCount();
   }
 
-  /** Index of the last row. */
+  /** Index of the last buffer row. */
   getLastBufferRow(): number {
-    return this.buffer.getLineCount() - 1;
+    return this.getLineCount() - 1;
   }
 
-  /** The end-of-file position. */
+  /** The end-of-file position (in buffer space). */
   getEofBufferPosition(): Point {
+    if (this.foldProjection) {
+      const row = this.getLastBufferRow();
+      return new Point(row, this.lineLength(row));
+    }
     return this.pointAtIter(this.buffer.getEndIter());
   }
 
@@ -400,30 +460,35 @@ export class EditorModel {
 
   /** `point` clamped to a real position within the buffer. */
   clipBufferPosition(point: PointLike): Point {
-    return this.pointAtIter(this.iterAtPoint(point));
+    return this.clampBufferPoint(point);
   }
 
-  // Identity stubs: `screen` should fold/wrap-project `buffer` (WIP) — see
-  // docs/text-editor/coordinates.md.
+  // buffer ↔ screen (the fold transform; identity without a projection — see
+  // docs/text-editor/coordinates.md). A buffer position inside a collapsed fold maps to its
+  // placeholder; a screen position on a placeholder maps back to the fold's source start.
   screenPositionForBufferPosition(point: PointLike, _options?: unknown): Point {
-    return this.clipBufferPosition(point);
+    const buffer = this.clampBufferPoint(point);
+    return this.foldProjection ? this.foldProjection.screenPointFromDocument(buffer) : buffer;
   }
 
   bufferPositionForScreenPosition(point: PointLike, _options?: unknown): Point {
-    return this.clipBufferPosition(point);
+    const screen = this.clampScreenPoint(point);
+    return this.foldProjection ? this.foldProjection.documentPointFromScreen(screen) : screen;
   }
 
   bufferRowForScreenRow(screenRow: number): number {
-    return clamp(screenRow, 0, this.getLastBufferRow());
+    const clamped = clamp(screenRow, 0, this.buffer.getLineCount() - 1);
+    return this.foldProjection ? this.foldProjection.documentLineForScreenLine(clamped) : clamped;
   }
 
   screenRowForBufferRow(bufferRow: number): number {
-    return clamp(bufferRow, 0, this.getLastBufferRow());
+    const clamped = clamp(bufferRow, 0, this.getLastBufferRow());
+    return this.foldProjection ? this.foldProjection.screenLineForDocumentLine(clamped) : clamped;
   }
 
-  /** Clamp a screen position. Identity stub — see docs/text-editor/coordinates.md. */
+  /** Clamp a position into the screen (view) buffer — stays in screen space. */
   clipScreenPosition(point: PointLike, _options?: unknown): Point {
-    return this.clipBufferPosition(point);
+    return this.clampScreenPoint(point);
   }
 
   /** The visible screen-row range as `[firstVisibleScreenRow, lastVisibleScreenRow]`. */
@@ -450,19 +515,24 @@ export class EditorModel {
 
   /** The entire buffer text, including text hidden by folds. */
   getText(): string {
+    if (this.foldProjection) return this.foldProjection.documentText();
     const [start, end] = this.buffer.getBounds();
     return this.buffer.getText(start, end, true);
   }
 
-  /** The text within `range`. */
+  /** The text within `range` (buffer space — reads the real source across folds). */
   getTextInBufferRange(range: RangeLike): string {
     const r = Range.fromObject(range);
+    if (this.foldProjection) {
+      return this.foldProjection.documentTextInRange(this.clampBufferPoint(r.start), this.clampBufferPoint(r.end));
+    }
     return this.buffer.getText(this.iterAtPoint(r.start), this.iterAtPoint(r.end), true);
   }
 
 
   /** The text of `row`, excluding its trailing newline. */
   lineTextForBufferRow(row: number): string {
+    if (this.foldProjection) return this.foldProjection.documentLineText(clamp(row, 0, this.getLastBufferRow()));
     const start = this.iterAtLineStart(clamp(row, 0, this.getLastBufferRow()));
     const end = start.copy();
     if (!end.endsLine()) end.forwardToLineEnd();
@@ -475,6 +545,7 @@ export class EditorModel {
    * over-counts on non-BMP characters — see the column-convention note up top.
    */
   lineLength(row: number): number {
+    if (this.foldProjection) return cpLength(this.foldProjection.documentLineText(clamp(row, 0, this.getLastBufferRow())));
     const start = this.iterAtLineStart(clamp(row, 0, this.getLastBufferRow()));
     const end = start.copy();
     if (!end.endsLine()) end.forwardToLineEnd();
@@ -488,6 +559,12 @@ export class EditorModel {
    */
   bufferRangeForBufferRow(row: number, options: { includeNewline?: boolean } = {}): Range {
     const clamped = clamp(row, 0, this.getLastBufferRow());
+    if (this.foldProjection) {
+      const start = new Point(clamped, 0);
+      if (!options.includeNewline) return new Range(start, new Point(clamped, this.lineLength(clamped)));
+      // To the start of the next row, or the buffer EOF on the last row.
+      return new Range(start, clamped < this.getLastBufferRow() ? new Point(clamped + 1, 0) : this.getEofBufferPosition());
+    }
     const start = this.iterAtLineStart(clamped);
     const end = start.copy();
     if (options.includeNewline) end.forwardLine();
@@ -535,6 +612,26 @@ export class EditorModel {
   /** Wire the fold projection (the editor passes its SyntaxController's view). */
   setFoldAccess(access: FoldAccess): void {
     this.foldAccess = access;
+  }
+
+  // Whether the backing stitches several documents (a multibuffer): its view buffer is the
+  // `buffer` space itself (folding is off, so `buffer == screen`), so the `buffer ↔ screen`
+  // fold transform must stay identity here — a multibuffer's FoldAccess translators model a
+  // SINGLE document and would mistranslate the stitch. See `foldProjection`.
+  private isMultiSource = false;
+  setMultiSource(multiSource: boolean): void {
+    this.isMultiSource = multiSource;
+  }
+
+  /**
+   * The single-document fold transform that makes `buffer ≠ screen` — or null when there is
+   * none, so the `buffer ↔ screen` conversions and the buffer-space reads stay identity (the
+   * view buffer already IS the buffer). Null for: buffer-only editors (no projection) and
+   * multibuffers (`buffer == screen`, folding off). When non-null, `document == buffer` (a
+   * single full-file excerpt), so its `document`-named translators are the `buffer` ones.
+   */
+  private get foldProjection(): FoldAccess | null {
+    return this.isMultiSource ? null : this.foldAccess;
   }
 
   /** Reveal folds whose collapsed content matches — so a search finds matches inside
@@ -1251,9 +1348,15 @@ export class EditorModel {
     this.foldProvider = provider;
   }
 
-  /** Whether `row` is hidden inside a collapsed fold (so motions skip past it). */
+  /** Whether `row` is part of a collapsed fold (so motions skip past it). */
   isFoldedAtBufferRow(row: number): boolean {
     return this.foldProvider?.isFoldedAtRow(row) ?? false;
+  }
+
+  /** The buffer row span `[startRow, endRow]` of the collapsed fold covering `row`, or null —
+   *  the vim fold motions skip a closed fold as one line. */
+  foldRowRangeAt(row: number): { startRow: number; endRow: number } | null {
+    return this.foldProvider?.foldRangeAtRow?.(row) ?? null;
   }
 
   /** Reveal `row` if a fold hides it (e.g. a motion landed inside a fold). */
@@ -1679,8 +1782,9 @@ export class EditorModel {
     this.view.scrollToIter(this.iterAtPoint(point), this.scrollMarginFraction(), false, 0, 0);
   }
 
-  scrollToScreenPosition(point: PointLike, options?: unknown): void {
-    this.scrollToBufferPosition(point, options);
+  scrollToScreenPosition(point: PointLike, _options?: unknown): void {
+    if (!this.view.getRealized()) return;
+    this.view.scrollToIter(this.screenIterAtPoint(point), this.scrollMarginFraction(), false, 0, 0);
   }
 
   // --- Viewport & pixel geometry ---------------------------------------------
@@ -1693,27 +1797,27 @@ export class EditorModel {
   // `getVisibleRect`/`getLineAtY`/`getIterLocation`, which need interactive
   // verification.
 
-  /** The topmost buffer row currently visible (row 0 when not realized). */
+  /** The topmost screen row currently visible (row 0 when not realized). */
   getFirstVisibleScreenRow(): number {
     return this.visibleRowRange()[0];
   }
 
-  /** The bottommost buffer row currently visible (last row when not realized). */
+  /** The bottommost screen row currently visible (last row when not realized). */
   getLastVisibleScreenRow(): number {
     return this.visibleRowRange()[1];
   }
 
-  /** The inclusive `[first, last]` visible buffer rows; whole buffer if unrealized. */
+  /** The inclusive `[first, last]` visible SCREEN rows (view lines); whole view if unrealized. */
   private visibleRowRange(): [number, number] {
-    if (!this.view.getRealized()) return [0, this.getLastBufferRow()];
+    if (!this.view.getRealized()) return [0, this.buffer.getLineCount() - 1];
     const rect = this.view.getVisibleRect() as PixelRect;
-    const top = this.bufferRowAtY(rect.y);
-    const bottom = this.bufferRowAtY(rect.y + Math.max(0, rect.height - 1));
+    const top = this.screenRowAtY(rect.y);
+    const bottom = this.screenRowAtY(rect.y + Math.max(0, rect.height - 1));
     return [top, bottom];
   }
 
-  /** The buffer row whose line box contains buffer-coordinate `y`. */
-  private bufferRowAtY(y: number): number {
+  /** The screen row (view line) whose line box contains buffer-coordinate `y`. */
+  private screenRowAtY(y: number): number {
     // get_line_at_y has out-args (iter, line_top); node-gtk returns them as an array.
     const result = this.view.getLineAtY(y);
     const iter = Array.isArray(result) ? result[0] : result;
@@ -1790,7 +1894,7 @@ export class EditorModel {
 
   /** Document-pixel top/left of `point`'s character cell (scroll-independent). */
   pixelPositionForScreenPosition(point: PointLike): { top: number; left: number } {
-    const cell = this.view.getIterLocation(this.iterAtPoint(point)) as PixelRect;
+    const cell = this.view.getIterLocation(this.screenIterAtPoint(point)) as PixelRect;
     return { top: cell.y, left: cell.x };
   }
 
@@ -1834,20 +1938,20 @@ export class EditorModel {
     return { point: this.pointAtIter(unwrapIter(target)), goalX: x };
   }
 
-  /** The buffer Point nearest a document-pixel `top` (column 0). */
+  /** The screen Point nearest a document-pixel `top` (column 0). */
   screenPositionForPixelPosition(pixel: { top: number }): Point {
     const top = Math.max(0, Math.round(pixel.top));
     // `getLineAtY` needs a realized, laid-out view; off-screen it returns junk.
     // Approximate by uniform line height otherwise (keeps headless a safe no-op).
     const row = this.view.getRealized()
-      ? this.bufferRowAtY(top)
-      : clamp(Math.round(top / this.getLineHeightInPixels()), 0, this.getLastBufferRow());
+      ? this.screenRowAtY(top)
+      : clamp(Math.round(top / this.getLineHeightInPixels()), 0, this.buffer.getLineCount() - 1);
     return new Point(row, 0);
   }
 
-  /** Identity stub — see docs/text-editor/coordinates.md. */
+  /** The primary cursor's screen position (buffer→screen through the fold transform). */
   getCursorScreenPosition(): Point {
-    return this.getCursorBufferPosition();
+    return this.screenPositionForBufferPosition(this.getCursorBufferPosition());
   }
 
   /** Atom's scroll-past-end editor option; not modeled. */

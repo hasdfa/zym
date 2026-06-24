@@ -106,6 +106,9 @@ export class MultiBufferDocument implements TextEditorSource {
   foldDocumentText(_buffer: SourceBuffer, fold: any): string {
     return this.pv.foldDocumentText(fold);
   }
+  foldDocumentRowSpan(_buffer: SourceBuffer, fold: any): [number, number] {
+    return this.pv.foldDocumentRowSpan(fold);
+  }
   isFoldAlive(fold: any): boolean {
     return this.pv.isFoldAlive(fold);
   }
@@ -123,5 +126,19 @@ export class MultiBufferDocument implements TextEditorSource {
   }
   documentLineText(row: number): string {
     return this.pv.documentLineText(row);
+  }
+  // A multibuffer keeps `buffer == screen` (folding off), so its "document" line count / text is
+  // the stitched view buffer itself. Inert for the editor's buffer↔screen transform (which is
+  // gated off for multibuffer) — present to satisfy the FoldHost contract.
+  documentLineCount(): number {
+    return this.pv.buffer.getLineCount();
+  }
+  documentTextInRange(start: Point, end: Point): string {
+    const buf = this.pv.buffer as any;
+    const iter = (line: number, col: number): any => {
+      const r = buf.getIterAtLineOffset(line, col);
+      return Array.isArray(r) ? r[r.length - 1] : r;
+    };
+    return buf.getText(iter(start.row, start.column), iter(end.row, end.column), true);
   }
 }

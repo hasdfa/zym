@@ -496,6 +496,15 @@ export class ProjectionView {
     return src ? src.getText(iterAtOffset(src, fold.start), iterAtOffset(src, fold.end), true) : '';
   }
 
+  /** The DOCUMENT row span `[startRow, endRow]` a fold covers (its buffer offsets → source rows;
+   *  `buffer == document` for the single-file fold case). The vim layer treats `[startRow, endRow]`
+   *  as one line, so j/k skip a closed fold. */
+  foldDocumentRowSpan(fold: Fold): [number, number] {
+    const src = this.soleSource();
+    if (!src) return [0, 0];
+    return [iterAtOffset(src, fold.start).getLine(), iterAtOffset(src, fold.end).getLine()];
+  }
+
   /** Whether a fold handle is still live (not subsumed by an enclosing fold / deleted). */
   isFoldAlive(fold: Fold): boolean {
     return this.projection.foldSpans().includes(fold);

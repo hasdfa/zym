@@ -45,10 +45,16 @@ export interface FoldHost {
   documentPointFromScreen(buffer: SourceBuffer, point: Point): Point;
   screenPointFromDocument(buffer: SourceBuffer, point: Point): Point;
   documentLineText(row: number): string;
+  /** Number of document (unfolded) lines. */
+  documentLineCount(): number;
+  /** Document text within `[start, end)` (codepoint columns), including fold-collapsed content. */
+  documentTextInRange(start: Point, end: Point): string;
   /** False once an enclosing fold has subsumed this one (its marks are gone). */
   isFoldAlive(fold: any): boolean;
   /** The document text a fold currently collapses (for matching during search). */
   foldDocumentText(buffer: SourceBuffer, fold: any): string;
+  /** The DOCUMENT row span `[startRow, endRow]` a fold covers (for buffer-space fold motions). */
+  foldDocumentRowSpan(buffer: SourceBuffer, fold: any): [number, number];
 }
 
 // Paint newly-revealed lines this often *during* a scroll (a throttle, not a trailing
@@ -1116,6 +1122,34 @@ export class SyntaxController {
    */
   revealLine(_line: number): boolean {
     return false; // no hidden view rows; a folded body simply isn't in the view
+  }
+
+  /**
+   * The DOCUMENT row span `[startRow, endRow]` of the collapsed fold containing document `row`
+   * (header through footer), or null when `row` isn't inside a closed fold. The vim layer now
+   * speaks `buffer` (== document for a single file), so its fold motions treat this span as one
+   * line — j/k skip a closed fold instead of stepping through its hidden rows.
+   */
+  documentFoldRangeAtRow(row: number): { startRow: number; endRow: number } | null {
+    if (!this.foldHost) return null;
+    for (const handle of this.activeFolds) {
+      const [s, e] = this.foldHost.foldDocumentRowSpan(this.buffer, handle);
+      if (row >= s && row <= e) return { startRow: s, endRow: e };
+    }
+    return null;
+  }
+
+  /** Reveal the collapsed fold whose hidden body contains document `row` (vim `foldopen`, when a
+   *  motion lands the cursor inside a fold). No-op on a visible row or a fold header. */
+  unfoldDocumentRow(row: number): void {
+    if (!this.foldHost) return;
+    for (const handle of this.activeFolds) {
+      const [s, e] = this.foldHost.foldDocumentRowSpan(this.buffer, handle);
+      if (row > s && row <= e) {
+        this.toggleFold(this.regionForHandle(handle, undefined));
+        return;
+      }
+    }
   }
 
   setFoldAtCursor(folded: boolean): RevealedRange | null {

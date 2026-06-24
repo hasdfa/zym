@@ -70,15 +70,33 @@ The vocabulary above is the target; the code is mid-migration.
   and `SyntaxController`'s internal translators (`documentRow` / `screenRow` /
   `documentPos` / `screenIterForDocument` / …) are all on **document / buffer /
   screen**. This was a rename-only change (no behavior change).
-- `EditorModel` / `Cursor` / `Selection` still operate directly on the
-  materialized *view* buffer and treat `screen` = `buffer` = identity (the
-  `*ForScreenPosition` methods are clamp-only stubs). Correct only with no fold
-  or wrap active; the vim layer "ignores folds" as a consequence. (Stage 2.)
+- **Stage 2 done (folds) — `EditorModel` / `Cursor` speak `buffer`; `buffer ↔
+  screen` is the real fold transform.** The **decision: vim motions operate on
+  `buffer`** (unfolded, Atom-faithful) — the ported callers assume Atom's
+  `*BufferPosition` = unfolded text, and this page already assigns vim to
+  `buffer`. So `EditorModel`'s buffer-space API (cursor/selection positions, line
+  text, counts, scan, EOF) reads the **unfolded source**, and its `screen` methods
+  (`screenPositionForBufferPosition` / `bufferPositionForScreenPosition` /
+  `screenRowForBufferRow` / `bufferRowForScreenRow` / `clipScreenPosition` /
+  the `screen↔buffer` ranges, plus `Cursor.get/setScreenPosition`) delegate to the
+  fold transform. Mechanics:
+  - The materialized **view buffer IS `screen`** (a fold physically replaces text
+    with a `[N]` placeholder). `EditorModel` translates at its GTK bridge —
+    `iterAtPoint` (buffer→screen) / `pointAtIter` (screen→buffer) — and routes
+    content reads to the headless document. `screenIterAtPoint` is the raw
+    screen-in/screen-iter-out bridge for the genuine screen callers
+    (`pixelPositionForScreenPosition`, `clipScreenPosition`, scroll-to-screen).
+  - For a single-file editor `document == buffer`, so the `FoldAccess`
+    translators (the `document`-named `FoldHost` surface) ARE the `buffer` ones.
+  - Gated to **single-document editors** (`EditorModel.foldProjection`): a
+    multibuffer keeps `buffer == screen` (folding off) and buffer-only editors have
+    no projection — both stay identity. With **no active fold the transform is
+    identity**, so the whole no-fold path (and the full test suite) is byte-for-byte
+    unchanged. Validated by `EditorModel.test.ts`'s fold-active tests.
 - Soft-wrap is GTK-rendered; only `gj`/`gk` thread it (via pixels), not the
-  Point-based screen coordinates.
-- **Stage 2 target:** `EditorModel` speaks `buffer` and delegates `buffer ↔
-  screen` to `ViewProjection` (folds) + GTK (wrap); the vendored vim layer keeps
-  its Atom `buffer`/`screen` method names unchanged.
+  Point-based screen coordinates. (Stage 3.)
+- **Stage 3 target:** model soft-wrap in `screen` coordinates too, so a wrapped
+  buffer row spans several screen rows in Point space (today wrap is pixel-only).
 
 ## Old → new name map
 

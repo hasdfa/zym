@@ -68,6 +68,19 @@ test('foldAll collapses nested folds without eating past the footer', () => {
   assert.equal(doc.getText(), NESTED, 'model never mutated by folding');
 });
 
+test('documentFoldRangeAtRow reports a closed fold span in DOCUMENT rows (vim j/k skip a fold)', () => {
+  if (!hasJs) return;
+  const { syntax } = setup(NESTED);
+  syntax.foldAll();
+  // The interface is document rows 0–3, the class 5–12 (the blank line 4 sits between, unfolded).
+  // The vim layer speaks `buffer` (== document), so the whole span reads as one folded line —
+  // j/k must skip it instead of stepping through the now-hidden body rows.
+  assert.deepEqual(syntax.documentFoldRangeAtRow(0), { startRow: 0, endRow: 3 }); // the header itself
+  assert.deepEqual(syntax.documentFoldRangeAtRow(2), { startRow: 0, endRow: 3 }); // a hidden body row
+  assert.equal(syntax.documentFoldRangeAtRow(4), null);                          // the blank line
+  assert.deepEqual(syntax.documentFoldRangeAtRow(8), { startRow: 5, endRow: 12 });
+});
+
 test('unfoldAll restores the text exactly and re-highlights (no delimiter-colored body)', () => {
   if (!hasJs) return;
   const { syntax, text, tagsAt, doc } = setup(NESTED);

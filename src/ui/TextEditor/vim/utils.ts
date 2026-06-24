@@ -1106,27 +1106,15 @@ function getTraversalForText (text: string): Point {
   return new Point(row, text.length - lastIndex)
 }
 
-function getRowAmongFoldedRowIntersectsBufferRow (editor: any, bufferRow: number, which: 'min' | 'max'): number {
-  // TODO(vim-ts): tighten — displayLayer.foldsMarkerLayer not modeled on EditorModel.
-  const bufferRange = editor.bufferRangeForBufferRow(bufferRow)
-  const markers = editor.displayLayer.foldsMarkerLayer.findMarkers({intersectsRange: bufferRange})
-  if (!markers.length) {
-    throw new Error('getRowAmongFoldedRowIntersectsBufferRow() called for non-folded bufferRow!')
-  }
-  const ranges = markers.map((marker: any) => marker.getRange())
-  return which === 'min'
-    ? Math.min(...ranges.map((range: any) => range.start.row))
-    : Math.max(...ranges.map((range: any) => range.end.row))
-}
-
-// Return min row among folds intersecting screenRow of bufferRow if bufferRow was folded.
+// The first/last BUFFER row of the collapsed fold covering `row` (header → footer), or `row`
+// itself when it isn't folded — so a fold motion treats a closed fold as one line. Backed by the
+// EditorModel fold projection (the upstream `displayLayer.foldsMarkerLayer` isn't modeled).
 function getFoldStartRowForRow (editor: EditorModel, row: number): number {
-  return editor.isFoldedAtBufferRow(row) ? getRowAmongFoldedRowIntersectsBufferRow(editor, row, 'min') : row
+  return editor.foldRowRangeAt(row)?.startRow ?? row
 }
 
-// Return max row among folds intersecting screenRow of bufferRow if bufferRow was folded.
 function getFoldEndRowForRow (editor: EditorModel, row: number): number {
-  return editor.isFoldedAtBufferRow(row) ? getRowAmongFoldedRowIntersectsBufferRow(editor, row, 'max') : row
+  return editor.foldRowRangeAt(row)?.endRow ?? row
 }
 
 function doesRangeStartAndEndWithSameIndentLevel (editor: EditorModel, range: Range): boolean {
