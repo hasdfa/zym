@@ -98,7 +98,7 @@ import { loadConfig, configPath } from '../config/load.ts';
 import { setUserInjectionRules } from '../syntax/grammar.ts';
 import { parseInjectionRules } from '../syntax/userInjections.ts';
 import { CompositeDisposable, Disposable, type DisposableLike } from '../util/eventKit.ts';
-import { applyChromeStyles, applyNotificationStyles } from './chromeStyles.ts';
+import { applyNotificationStyles } from './chromeStyles.ts';
 
 // The identifier under the cursor (for prefilling the rename prompt). Codepoint-
 // aware: columns are codepoints, so index the line as codepoints.
@@ -351,7 +351,6 @@ export class AppWindow {
       onClose: (agent) => this.closeAgent(agent),
       onRename: (agent) => this.renameAgentPrompt(agent),
       onOpenChanges: (agent) => this.openAgentChanges(agent),
-      gitFor: (agent) => this.workbenches.get(agent)?.git ?? null,
     });
 
     // Window-level overlay over the whole layout (sidebar + header + content), so
@@ -370,7 +369,6 @@ export class AppWindow {
       if (TOAST_TYPES.has(notification.getType())) this.notificationToasts.show(notification);
     });
 
-    applyChromeStyles();
     applyNotificationStyles();
 
     this.window = new Adw.ApplicationWindow({ application: app });
@@ -1599,9 +1597,6 @@ export class AppWindow {
       if (owner === workbench) this.editors.get(root)?.setGitRepo(git);
     }
     releaseGitRepo(oldGit);
-    // Sidebar branch line: re-read + re-subscribe now that the git is swapped (the
-    // row can't observe the swap itself without racing the re-root).
-    if (workbench.owner !== 'user') this.sidebar.list.refreshAgent(workbench.owner);
     if (this.workbench === workbench) this.rebindGitChrome();
     // Diagnostics ownership shifts on a re-root (paths under the old/new root change
     // hands), so re-scope every workbench's panel and the active header status.

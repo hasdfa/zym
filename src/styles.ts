@@ -103,6 +103,7 @@ class StyleManager {
     const file = HOT_RELOAD ? callerFile() : null;
     if (this.ready) this.track(file, this.install(css, PRIORITY));
     else this.queued.push({ css, file });
+    console.log(file)
     if (file) this.watch(file);
   }
 

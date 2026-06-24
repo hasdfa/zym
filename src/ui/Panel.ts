@@ -26,7 +26,7 @@ import { keycap } from './Keycap.ts';
 // Adwaita puts around and between them. Structural, not color-derived, so it's
 // installed unconditionally here rather than with the theme chrome (which only
 // applies when the theme defines its own background).
-addStyles(`
+addStyles(/* css */`
   #Panel tabbar tabbox { padding: 0; }
   #Panel tabbar > revealer > box { padding: 0; }
   #Panel tabbar { border-bottom: 1px solid var(--border-color); }
@@ -41,8 +41,11 @@ addStyles(`
      with a thin selection-colored outline. */
   #Panel.active-empty,
   #Panel .active-empty {
-    outline: 1px solid var(--t-ui-surface-selected);
-    outline-offset: -1px;
+    outline: 1px solid alpha(var(--accent-color), 0.5);
+    outline-offset: 0px;
+  }
+  #PanelEmptyState {
+    opacity: var(--dim-opacity);
   }
   /* Welcome empty state (the user's central pane): the sleeping cat over a
      cheatsheet and a charitable callout, styled after nvim's start screen — the

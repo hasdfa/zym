@@ -35,7 +35,7 @@ export class Sidebar {
   // between expanded and collapsed by the list's robot button.
   readonly root: InstanceType<typeof Gtk.Paned>;
   // The workbench list filling the sidebar column (user row + running agents). Exposed
-  // so the host can drive selection / modified marker / focus / branch refresh.
+  // so the host can drive selection / modified marker / focus.
   readonly list: WorkbenchList;
 
   constructor(options: SidebarOptions) {
