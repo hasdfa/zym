@@ -48,6 +48,10 @@ addStyles(/* css */`
     margin-right: calc(1.5 * var(--t-spacing));
   }
   
+  .Workbenchrow--label {
+    font-weight: bold;
+  }
+  
   /* Per-row edited-files count — a flat, muted button (click opens the files). */
   #WorkbenchRow .workbenchrow-files {
     min-width: 0;
@@ -62,7 +66,7 @@ addStyles(/* css */`
      brightens the files button fully. */
   #WorkbenchRow .workbenchrow-files label {
     color: var(--t-ui-editor-foreground);
-    opacity: 0.75;
+    opacity: 0.55;
     font-size: var(--t-font-ui-size-small);
   }
   #WorkbenchRow .workbenchrow-files:hover label { opacity: 1; }
@@ -359,6 +363,7 @@ export class WorkbenchList {
     const icon = new Gtk.Label({ label: USER_GLYPH });
     icon.setAttributes(this.iconAttrs);
     const label = new Gtk.Label({ label: this.userName, xalign: 0, hexpand: true, ellipsize: Pango.EllipsizeMode.END });
+    label.addCssClass('Workbenchrow--label')
     return this.rowContent(icon, label);
   }
 
