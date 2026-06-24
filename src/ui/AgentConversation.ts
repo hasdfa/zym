@@ -45,6 +45,8 @@ import { SdkSession, type PermissionRequest, type QuestionRequest, type TaskProg
 import type { Transport, TransportOptions } from '../agents/claude-sdk/transport.ts';
 import { readTranscript, readContextSeed } from '../agents/claude-sdk/transcript.ts';
 import { writeCustomTitle, readSessionName } from '../agentSessions.ts';
+import { createOneShotAgent, type OneShotAgent } from '../agents/oneshot.ts';
+import { generateAgentName } from '../agents/autoName.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
 import type { AgentAction } from '../agents/actions.ts';
@@ -192,8 +194,12 @@ export interface AgentConversationOptions {
   /** Resume a past conversation (`--resume`/`--continue`) instead of starting fresh.
    *  On a `sessionId` resume the prior transcript is rebuilt into the view. */
   resume?: AgentResume;
-  /** An initial prompt to send once the session starts. */
+  /** An initial prompt to send once the session starts — what the agent is told
+   *  (may include zym's editor instructions, e.g. worktree setup). */
   prompt?: string;
+  /** The user's own prompt, free of zym's editor instructions — context for
+   *  auto-naming, so a generated title reflects the task and not our scaffolding. */
+  userPrompt?: string;
   /** Open a file the agent touched (makes file-tool rows clickable). */
   onOpenFile?: (path: string) => void;
   /** Run a `terminal` action in a terminal tab (terminal-less ones run in-process). */
@@ -202,7 +208,13 @@ export interface AgentConversationOptions {
    *  to drive the conversation off scripted stream events instead of spawning
    *  `claude` (forwarded verbatim to SdkSession; see src/poc/conversation-transcript.ts). */
   createTransport?: (spec: TransportOptions) => Transport;
+  /** Override the one-shot agent used for auto-naming (test seam; default
+   *  `createOneShotAgent()` → `claude -p --model sonnet`). */
+  oneShot?: OneShotAgent;
 }
+
+// The kind's default title, shown when nothing has named the session.
+const DEFAULT_TITLE = 'claude (sdk)';
 
 export class AgentConversation implements Agent {
   readonly root: InstanceType<typeof Adw.NavigationView>; // root page = the conversation; subagent transcripts push pages
@@ -303,6 +315,18 @@ export class AgentConversation implements Agent {
   // Claude's session name — set by the local `/rename` command (and seeded from the
   // transcript on resume). Mirrors AgentTerminal._sessionName.
   private _sessionName: string | null = null;
+  // A transient, in-app-only title (never persisted): the "…" placeholder shown
+  // while auto-naming runs. Wins over the persisted names while set; cleared on
+  // completion (success → the new name; failure → reverts to the previous name).
+  private _transientName: string | null = null;
+  // The one-shot agent backing auto-rename + its in-flight guard.
+  private readonly oneShot: OneShotAgent;
+  // The user's own launch prompt (no editor instructions) and the first genuine
+  // user turn — naming context, preferring the clean launch prompt.
+  private readonly userPrompt?: string;
+  private firstUserText: string | null = null;
+  private autoNaming = false;
+  private disposed = false;
   private _changedFiles: string[] = [];
   // The agent's current working directory: its launch cwd, or a worktree it has
   // since moved into (announced via the set_worktree bridge tool).
@@ -320,11 +344,13 @@ export class AgentConversation implements Agent {
     this.cwd = options.cwd;
     this._effectiveCwd = options.cwd;
     this.launchPrompt = options.prompt;
+    this.userPrompt = options.userPrompt;
     this.baseCommand = options.command;
     this.resumeSessionId = options.resume?.sessionId;
     this.onOpenFile = options.onOpenFile;
     this.onRunInTerminal = options.onRunInTerminal;
     this.session = new SdkSession({ cwd: options.cwd, command: options.command, resume: options.resume, createTransport: options.createTransport });
+    this.oneShot = options.oneShot ?? createOneShotAgent();
 
     // The copy button lives in an overlay OVER the transcript, so it's positioned
     // relative to the viewport — it stays pinned top-right while the message scrolls.
@@ -539,7 +565,15 @@ export class AgentConversation implements Agent {
   start(): void {
     if (!this.deferredStart) {
       this.session.start();
-      if (this.launchPrompt) this.session.prompt(this.launchPrompt);
+      if (this.launchPrompt) {
+        this.session.prompt(this.launchPrompt);
+        // Auto-name a fresh agent from the user's prompt — namingContext() strips zym's
+        // editor instructions (config-gated, non-blocking, runs alongside the first
+        // turn). No-op if there's no user prompt or it's somehow already named.
+        if (zym.config.get('agent.autoName') === true && !this._sessionName && !this._displayName) {
+          void this.autoRename(this.namingContext());
+        }
+      }
     }
     this.input.focusInsert(); // ready to type immediately, not vim normal mode
   }
@@ -556,9 +590,10 @@ export class AgentConversation implements Agent {
 
   // --- Agent surface ----------------------------------------------------------
 
-  // A pinned name (`agent:rename`) wins, then Claude's session name (`/rename` /
+  // A transient auto-naming title (placeholder / failed fallback) wins while set;
+  // then a pinned name (`agent:rename`), then Claude's session name (`/rename` /
   // resumed transcript title), then the default. Mirrors AgentTerminal.title.
-  get title(): string { return this._displayName ?? this._sessionName ?? 'claude (sdk)'; }
+  get title(): string { return this._transientName ?? this._displayName ?? this._sessionName ?? DEFAULT_TITLE; }
   get status(): AgentStatus { return this._status; }
   get permissionMode(): AgentMode { return this._permissionMode; }
   get changedFiles(): string[] { return this._changedFiles.slice(); }
@@ -666,6 +701,7 @@ export class AgentConversation implements Agent {
   onDidChangeWorktree(cb: () => void): () => void { return push(this.worktreeHandlers, cb); }
 
   dispose(): void {
+    this.disposed = true; // an in-flight auto-rename must not touch a torn-down view
     this.actionProcesses.stopAll(); // terminate any terminal-less action processes
     this.subs.dispose();
     this.statusIcon.dispose();
@@ -775,12 +811,60 @@ export class AgentConversation implements Agent {
     const parsed = parseLocalCommand(text);
     if (!parsed) return false;
     if (!parsed.name) {
-      zym.notifications.addInfo('Usage: /rename <name>'); // bare /rename: `R` opens an interactive prompt
+      void this.autoRename(this.namingContext()); // bare `/rename` → auto-generate a name
       return true;
     }
-    this.setSessionName(parsed.name);
-    zym.notifications.addInfo(`Renamed to “${parsed.name}”`);
+    this.setSessionName(parsed.name); // the visible title change is the confirmation
     return true;
+  }
+
+  /** The best text to name this session from: the user's own launch prompt (free of
+   *  zym's editor instructions), else the first genuine user turn (also captured
+   *  while replaying a resumed transcript). */
+  private namingContext(): string {
+    return (this.userPrompt ?? this.firstUserText ?? '').trim();
+  }
+
+  /** Auto-generate and apply a session name from `context` via the one-shot agent.
+   *  Non-blocking (runs alongside the live turn) and silent on success — only a
+   *  failure raises a toast. No-op without context or while one is already running. */
+  private async autoRename(context: string): Promise<void> {
+    const text = context.trim();
+    if (!text || this.autoNaming) return;
+    this.autoNaming = true;
+    this.setTransientName('…'); // show a placeholder while the one-shot runs (display only, not persisted)
+    try {
+      const result = await generateAgentName(this.oneShot, text, { cwd: this.cwd });
+      if (this.disposed) return;
+      if (result) {
+        this.setSessionName(result.name); // persist like /rename
+        this.setTransientName(null); // drop the placeholder → the real name shows (the confirmation)
+      } else {
+        this.failNaming();
+      }
+    } catch (err) {
+      if (this.disposed) return;
+      this.failNaming(err);
+    } finally {
+      this.autoNaming = false;
+    }
+  }
+
+  /** A transient, in-app-only display title (the auto-naming placeholder / fallback);
+   *  never persisted to the transcript. Null clears it. */
+  private setTransientName(name: string | null): void {
+    this._transientName = name;
+    this.emitTitle();
+  }
+
+  /** Auto-naming failed: drop the placeholder — reverting to the previous name, or
+   *  the kind default if there was none — and warn. */
+  private failNaming(err?: unknown): void {
+    this.setTransientName(null);
+    zym.notifications.addWarning(
+      err ? 'Auto-rename failed' : 'Could not generate an agent name',
+      err ? { detail: String((err as Error)?.message ?? err) } : undefined,
+    );
   }
 
   /** Set Claude's session name (`/rename`): update the live title and persist it to
@@ -806,6 +890,10 @@ export class AgentConversation implements Agent {
         for (const handler of this.permissionModeHandlers) handler();
       }),
       this.session.onUserMessage(({ text }) => {
+        // Capture the first genuine user turn (context for an empty `/rename`), but skip
+        // the launch turn's echo — it may carry zym's editor instructions; `userPrompt`
+        // holds the clean version and is preferred in namingContext().
+        if (this.firstUserText === null && text !== this.launchPrompt) this.firstUserText = text;
         this.endTurn();
         this.thinkingLabel.setText('Thinking…'); // reset the live token count for the new turn
         this.addMarkdownBlock('user').setMarkdown(text);

@@ -408,10 +408,24 @@ function branchWorktreeInstruction(branch: string): string {
   `;
 }
 
+/** A launch prompt split into the two things downstream cares about separately:
+ *  what the agent is told vs. what the *user* actually asked for. */
+export interface LaunchPrompt {
+  /** The agent's first turn: zym's editor instructions (worktree setup, if any)
+   *  followed by the user's prompt. Undefined when there's nothing to send. */
+  agentPrompt: string | undefined;
+  /** The user's own prompt, free of zym's instructions — the context for
+   *  auto-naming, so a generated title reflects the task and not our scaffolding.
+   *  Undefined when the user typed nothing. */
+  userPrompt: string | undefined;
+}
+
 /** Assemble the launch prompt for `openAgent` from the user's prompt and the chosen
- *  worktree option (see NEW_WORKTREE_INSTRUCTION). */
-export function launchPrompt(prompt: string, worktree: WorktreeChoice): string | undefined {
-  if ('current' in worktree) return prompt || undefined; // run in the cwd, no worktree setup
+ *  worktree option (see NEW_WORKTREE_INSTRUCTION). Keeps the user's prompt separate
+ *  from the prepended editor instructions so each can be routed independently. */
+export function launchPrompt(prompt: string, worktree: WorktreeChoice): LaunchPrompt {
+  const userPrompt = prompt || undefined;
+  if ('current' in worktree) return { agentPrompt: userPrompt, userPrompt }; // run in the cwd, no worktree setup
   const instruction = 'create' in worktree ? NEW_WORKTREE_INSTRUCTION : branchWorktreeInstruction(worktree.branch);
-  return prompt ? `${instruction}\n\n${prompt}` : instruction;
+  return { agentPrompt: prompt ? `${instruction}\n\n${prompt}` : instruction, userPrompt };
 }

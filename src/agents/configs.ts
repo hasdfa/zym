@@ -58,8 +58,12 @@ export interface AgentLaunch {
   cwd: string;
   /** Base argv (default `['claude']`). */
   command?: string[];
-  /** An initial prompt to launch with. */
+  /** An initial prompt to launch with — what the agent is told (may include zym's
+   *  editor instructions, e.g. worktree setup). */
   prompt?: string;
+  /** The user's own prompt, free of zym's editor instructions — context for
+   *  auto-naming (claude-sdk). Undefined when the user typed nothing. */
+  userPrompt?: string;
   /** Resume a past conversation. Both kinds honour it: claude-tui via `--resume`,
    *  claude-sdk via `--resume` plus rebuilding the transcript from disk. */
   resume?: AgentResume;
@@ -99,7 +103,7 @@ export const AGENT_CONFIGS: Record<AgentKind, AgentConfig> = {
   'claude-sdk': {
     kind: 'claude-sdk',
     options: claudeSdkLaunchOptions,
-    create: (l) => new AgentConversation({ cwd: l.cwd, command: l.command, prompt: l.prompt, resume: l.resume, onOpenFile: l.onOpenFile, onRunInTerminal: l.onRunInTerminal }),
+    create: (l) => new AgentConversation({ cwd: l.cwd, command: l.command, prompt: l.prompt, userPrompt: l.userPrompt, resume: l.resume, onOpenFile: l.onOpenFile, onRunInTerminal: l.onRunInTerminal }),
   },
 };
 

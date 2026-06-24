@@ -850,7 +850,7 @@ export class AppWindow {
    * terminal already spawned in its constructor; the headless kind spawns here).
    */
   private openAgent(
-    options: { kind?: AgentKind; prompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[]; background?: boolean } = {},
+    options: { kind?: AgentKind; prompt?: string; userPrompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[]; background?: boolean } = {},
   ): Agent {
     // Both kinds can resume now (claude-sdk rebuilds its transcript from disk), so a
     // resume no longer forces the terminal agent — it respects the configured kind
@@ -858,7 +858,7 @@ export class AppWindow {
     const kind = options.kind ?? resolveAgentKind(zym.config.get('agent.implementation'));
     const cwd = options.cwd ?? process.cwd();
     const agent = AGENT_CONFIGS[kind].create({
-      cwd, command: options.command, prompt: options.prompt, resume: options.resume, title: options.title,
+      cwd, command: options.command, prompt: options.prompt, userPrompt: options.userPrompt, resume: options.resume, title: options.title,
       onOpenFile: (path) => this.openFile(path),
       onRunInTerminal: (action) => this.runAgentActionInTerminal(agent, action),
     });
@@ -991,7 +991,8 @@ export class AppWindow {
       defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
       initialWorktree: 'current', // a review runs against the working tree by default
       onLaunch: ({ prompt, command, cwd, kind, worktree, background }) => {
-        const agent = this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind, background });
+        const { agentPrompt, userPrompt } = launchPrompt(prompt, worktree);
+        const agent = this.openAgent({ prompt: agentPrompt, userPrompt, command, cwd, kind, background });
         this.deliverToAgent(agent, message, { submit: true, reveal: false });
       },
     });
@@ -2555,8 +2556,10 @@ export class AppWindow {
         cwd: this.workbench.cwd,
         defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
         mode,
-        onLaunch: ({ prompt, command, cwd, kind, worktree, background }) =>
-          this.openAgent({ prompt: launchPrompt(prompt, worktree), command, cwd, kind, background }),
+        onLaunch: ({ prompt, command, cwd, kind, worktree, background }) => {
+          const { agentPrompt, userPrompt } = launchPrompt(prompt, worktree);
+          this.openAgent({ prompt: agentPrompt, userPrompt, command, cwd, kind, background });
+        },
       });
     zym.commands.add('#AppWindow', {
       'terminal:new': { didDispatch: () => this.openTerminal(), description: 'Open a new terminal' },

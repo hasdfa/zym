@@ -151,6 +151,13 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     description:
       "Automatically open a file in the agent's own workbench right dock when the agent first edits it (without switching to that workbench).",
   },
+  'agent.autoName': {
+    type: 'boolean',
+    default: false,
+    description:
+      'When launching an agent with a prompt, auto-generate its session name from that prompt ' +
+      'via a one-shot `claude -p --model sonnet` call. An empty `/rename` triggers the same naming on demand.',
+  },
   'git.remotes.upstream': {
     type: 'string',
     default: 'upstream',

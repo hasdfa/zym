@@ -238,7 +238,29 @@ open-changes), mirroring FileTree; hover action buttons on rows.
 
 **Rename** — `AgentTerminal.rename()` pins a display name over the CLI's
 reported title (`renamed` reports whether pinned); `agent:rename` prompts via
-the picker (the `R` key in the list).
+the picker (the `R` key in the list). The `claude-sdk` kind also handles a
+typed **`/rename`** client-side (headless claude lacks it) — see
+[agents/claude-sdk.md](agents/claude-sdk.md).
+
+**Auto-name** — an optional one-shot LLM names a session from its task. A
+**one-shot agent** (`src/agents/oneshot.ts`: `OneShotAgent` interface +
+`createOneShotAgent()`, hardcoded to `claude -p --model sonnet` but behind a
+config-shaped seam) runs a prompt to completion via the process runner and
+returns text; `src/agents/autoName.ts` wraps it to turn a task prompt into
+`{ name, description }` (pure, lenient `buildNamePrompt`/`parseAgentName`).
+Triggers (`claude-sdk`): on launch when `agent.autoName` is set, and on an empty
+`/rename` on demand. Both name from the **user's own prompt**, never zym's
+scaffolding: `launchPrompt` returns `{ agentPrompt, userPrompt }` — `agentPrompt`
+(editor instructions + user prompt) is the first turn, `userPrompt` is what the
+namer sees — threaded through `openAgent` → `AgentLaunch.userPrompt` →
+`AgentConversation`. The naming context prefers `userPrompt`, falling back to the
+first genuine user turn (the launch echo is skipped). While the one-shot runs the
+title shows a transient `…` placeholder (in-app only, never persisted); on
+success it's replaced by the `name` (persisted like `/rename`) **silently** — the
+title change in the sidebar/tab is the confirmation; on failure it's dropped,
+reverting to the previous name (the kind default if it had none) plus a warning
+toast. The `description` is captured but not yet surfaced. The one-shot is
+injectable (`AgentConversationOptions.oneShot`) for tests.
 
 **Tab affordance** — the agent's tab title is prefixed with a status glyph
 (`agentTabTitle` in AppWindow), refreshed on status change; mirrors the sidebar

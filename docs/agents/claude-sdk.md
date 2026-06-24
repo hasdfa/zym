@@ -281,9 +281,25 @@ agent; turns are `{type:'user',...}` lines on stdin.
   line). On resume, `readSessionName` re-reads it (custom title, else
   `ai-title`) to seed the title — headless has no live OSC title channel.
   `/rename` is also injected into the slash-completion list (the CLI's
-  `init` won't offer it). Bare `/rename` (no arg) just hints at the `R`
-  rename prompt. Cross-kind, the resume picker label already reads the same
-  `custom-title`.
+  `init` won't offer it). Cross-kind, the resume picker label already reads
+  the same `custom-title`.
+- **Auto-name = a one-shot `claude -p --model sonnet`** (`src/agents/oneshot.ts`
+  + `autoName.ts`), separate from the persistent streaming session. Bare
+  `/rename` (no arg) regenerates a name on demand; launching with
+  `agent.autoName` set names a fresh agent. Both name from the **user's own
+  prompt** (`launchPrompt`'s `userPrompt`, with zym's worktree/editor
+  instructions stripped — else the title would describe our scaffolding),
+  falling back to the first genuine user turn. Non-blocking (runs alongside the
+  first turn): while the one-shot runs the title shows a transient `…`
+  placeholder (`_transientName`, in-app display only — never persisted), which
+  on success is dropped for the generated `name` (applied exactly like a typed
+  `/rename`, persisted to the transcript — the title change is the confirmation,
+  silent otherwise) and on failure is dropped to revert to the previous name (the
+  kind default `'claude (sdk)'` if it had none) plus a warning toast. The one-shot
+  parses a `--output-format json` envelope (`parseOneShotEnvelope`) and the
+  name out of fenced/prose JSON (`parseAgentName`, lenient). Injectable via
+  `AgentConversationOptions.oneShot` for tests; the model/argv are hardcoded
+  today behind a config-shaped seam (`ClaudeOneShotConfig`).
 - **Unknown event types** (`dispatch`→false, e.g. an inbound
   `control_request`) are surfaced as a raw-JSON row, never dropped.
 - **Debug log** is opt-in via `ZYM_SDK_DEBUG` (off in tests).
