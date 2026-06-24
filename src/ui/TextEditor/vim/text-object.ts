@@ -906,7 +906,9 @@ class LastPastedRange extends TextObject {
     for (selection of this.editor.getSelections()) {
       // TODO(vim-ts): tighten — getPastedRangeForSelection returns `unknown` upstream.
       const range = this.vimState.sequentialPasteManager.getPastedRangeForSelection(selection) as any
-      selection.setBufferRange(range)
+      // A selection with no recorded paste (e.g. a cursor added since the last
+      // paste) has no range to restore — skip it rather than crash in setBufferRange.
+      if (range) selection.setBufferRange(range)
     }
     return true
   }
