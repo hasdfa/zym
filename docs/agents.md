@@ -389,16 +389,12 @@ can re-root independently. Pieces and how they connect:
   4. `AppWindow.reRootWorkbench` swaps the workbench's pooled git, re-roots
      `FileTree`/`GitPanel` in place (`setRoot`), re-points the gutters of
      editors owned by that workbench (`TextEditor.setGitRepo` →
-     `GitGutter.setGit`, tracked via `editorOwners`), rebinds chrome if active,
-     and refreshes the sidebar branch line (`WorkbenchList.refreshAgent`).
+     `GitGutter.setGit`, tracked via `editorOwners`), and rebinds chrome if
+     active.
 - **Validator** (safety net) — a `PostToolUse(Bash)` hook greps for `git
   worktree add <path>` and writes it to `$ZYM_STATUS_FILE.wtcreate`; if the
   agent settles to idle without a matching `set_worktree`, `AppWindow` warns
   once.
-- **Sidebar branch line** — two-line agent rows (name / branch). The branch
-  reads the workbench git's `getBranch()` and re-renders on its `onChange`
-  (in-place checkouts); a worktree move re-points it via host-driven
-  `refreshAgent` (avoids a read-before-swap race).
 - **Launch-time** — the launcher's worktree-scoped flows
   (`agent:new-in-worktree` / `-this-worktree` / `-worktree`) seed the worktree
   choice up front; the agent then realizes it via `set_worktree`, which re-roots

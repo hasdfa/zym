@@ -116,12 +116,7 @@ re-appliable.
   `export const`) — a `theme:changed` event the chrome/pickers/syntax
   subscribe to (mirrors how `notify::dark` already drives the editor
   scheme). See [theming.md](theming.md).
-- [ ] **Restyle on theme change** — the chrome styles
-  (`AppWindow.applyChromeStyles`, already keyed/replaceable), picker
-  highlight color, syntax controller, and diagnostics colors re-apply
-  from the new palette. *Unblocked:* colors are centralized in
-  `theme.ui.*` (see Current state), so each consumer just re-reads the
-  palette — no scattered literals to chase.
+- [ ] **Restyle on theme change**
 - [ ] **Wire `core.followSystemColorScheme`** — when false, ignore OS
   appearance and hold the configured variant; when true (default),
   follow it.

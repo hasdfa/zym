@@ -7,54 +7,6 @@
 import { styles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 
-// Paint the window chrome (header bar, file tree, status/command bar, panel tab
-// bars) plus popover surfaces (pickers) and selected entries with the theme's
-// colors. Installed as a single keyed, replaceable stylesheet so a future theme
-// switch can re-apply it. Themes without their own background (ui.bg unset)
-// leave the chrome to the system Adwaita styling.
-export function applyChromeStyles(): void {
-  // A theme that follows the system scheme leaves the chrome to Adwaita.
-  if (theme.followSystemScheme) {
-    styles.remove('theme-chrome');
-    return;
-  }
-  const border = theme.ui.border;
-  // De-emphasized text for the empty-panel placeholder.
-  const muted = theme.ui.text.muted;
-  const rules = [
-    `#Header, #WorkbenchList .workbench-header {
-      box-shadow: none;
-      border-bottom: 1px solid ${border};
-    }`,
-    `#WorkbenchRow { padding: 2px 12px; }`,
-    `#Panel tabbar .box {
-      box-shadow: none;
-      padding: 0;
-      min-height: 0;
-    }`,
-    `#Panel tabbar tabbox { padding: 0; min-height: 0; }`,
-    // Square (un-rounded) tabs, separated by vertical borders.
-    `#Panel tabbar tab {
-      min-height: 0;
-      padding: 2px 12px;
-      border-radius: 0;
-      border-right: 1px solid ${border};
-    }`,
-    `#Panel tabbar tab:first-child { border-left: 1px solid ${border}; }`,
-    `#Panel tabbar tab:selected {
-      box-shadow: inset 0 -2px ${border};
-    }`,
-    // The empty-panel placeholder blends into the app background; its text, face,
-    // cat, cheatsheet and footer are all de-emphasized. The plain face brightens
-    // to the foreground color when this is the active panel; the welcome state
-    // stays muted throughout (the cat is a calm mascot, the rest reference text).
-    // Keycaps derive their chrome from currentColor.
-    `#PanelEmptyText, #PanelEmptyEmoticon, #PanelEmptyCat, #PanelEmptyCheatsheet, #PanelEmptyFooter { color: ${muted}; }`,
-  ];
-
-  styles.set(rules.join('\n'), { key: 'theme-chrome' });
-}
-
 // Severity styling shared by the toasts and the log: each `notification-<type>`
 // colors its icon, and a toast card gets a matching left accent border, so the
 // severity is legible at a glance. Colors come from the theme's semantic keys

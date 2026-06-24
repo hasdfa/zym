@@ -23,10 +23,9 @@ import { zym } from '../zym.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
-import { createAgentStatusIcon, agentBranchMarkup } from './agentStatusIcon.ts';
+import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { Icons, iconLabel } from './icons.ts';
 import { NERDFONT } from './nerdfont.ts';
-import type { GitRepo } from '../git.ts';
 import type { Agent } from '../agents/types.ts';
 
 const USER_GLYPH = NERDFONT.SOCIAL.USER; // the default/user entry
@@ -41,31 +40,16 @@ addStyles(/* css */`
   #WorkbenchList {
     background-color: var(--sidebar-bg-color); 
   }
-  #WorkbenchList list {
-    background-color: var(--sidebar-bg-color); 
-  }
-  /* Each row is as tall as the header bar (an Adw.HeaderBar is 47px), so the list
-     reads as a column of header-height entries. */
-  #WorkbenchRow {
-    min-height: 47px;
-  }
   /* The unsaved-changes marker (a small dot) next to the project title — warning-colored. */
   .zym-modified-dot { color: var(--t-ui-status-warning); }
-  /* A transparent left border keeps the row content from shifting when the active
-     row gains its accent indicator; a subtle bottom border separates the rows.
-     The row height itself lives on the content box (#WorkbenchRow) rather than the
-     row, so the add/remove revealer can animate the row from 0 → full height
-     without min-height pinning it open. */
-  #WorkbenchList list row {
-    border-left: 3px solid transparent;
-    border-bottom: 1px solid var(--t-ui-border);
+  
+  #WorkbenchRow {
+    padding: calc(0.4 * var(--t-spacing)) calc(2 * var(--t-spacing));
   }
-  /* The active row is marked by an accent left-border indicator rather than a
-     filled background. */
-  #WorkbenchList list row:selected {
-    color: var(--t-ui-editor-foreground);
-    border-left-color: var(--t-ui-status-info);
+  .Workbenchrow--icon {
+    margin-right: calc(1.5 * var(--t-spacing));
   }
+  
   /* Per-row edited-files count — a flat, muted button (click opens the files). */
   #WorkbenchRow .workbenchrow-files {
     min-width: 0;
@@ -75,20 +59,15 @@ addStyles(/* css */`
     background: none;
     box-shadow: none;
   }
-  /* Secondary row text (edited-files count, branch/worktree line): the editor
-     foreground dimmed via opacity rather than the theme's muted gray, which sat
-     too dark to read on the sidebar. Hover brightens the files button fully. */
+  /* The edited-files count: the editor foreground dimmed via opacity rather than
+     the theme's muted gray, which sat too dark to read on the sidebar. Hover
+     brightens the files button fully. */
   #WorkbenchRow .workbenchrow-files label {
     color: var(--t-ui-editor-foreground);
     opacity: 0.75;
     font-size: var(--t-font-ui-size-small);
   }
   #WorkbenchRow .workbenchrow-files:hover label { opacity: 1; }
-  #WorkbenchRow .workbenchrow-branch {
-    color: var(--t-ui-editor-foreground);
-    opacity: 0.75;
-    font-size: var(--t-font-ui-size-small);
-  }
 `);
 
 export interface WorkbenchListOptions {
@@ -108,9 +87,6 @@ export interface WorkbenchListOptions {
   onRename?: (agent: Agent) => void;
   /** Open the files an agent has edited — the changed-files badge / `o` key. */
   onOpenChanges?: (agent: Agent) => void;
-  /** The git repo for an agent's workbench, so the row's branch line tracks live
-   *  branch changes (in-place checkouts), not only worktree moves. */
-  gitFor?: (agent: Agent) => GitRepo | null;
   /** Display name for the default (user) entry; defaults to the OS username. */
   userName?: string;
 }
@@ -128,9 +104,6 @@ interface RowHandle {
   revealer: InstanceType<typeof Gtk.Revealer>;
   unsubs: Array<() => void>;
   removing: boolean;
-  // Re-read the branch line + re-subscribe to the workbench's git. Driven by the
-  // host after a re-root (the git instance was swapped). Agent rows only.
-  refreshBranch?: () => void;
 }
 
 export class WorkbenchList {
@@ -170,23 +143,25 @@ export class WorkbenchList {
     this.iconAttrs = Pango.AttrList.new();
     this.iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
 
+    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    this.root.setName('WorkbenchList'); // selector identity + CSS (#WorkbenchList)
+    
+    this.root.append(this.buildHeader());
+    
+    this.scrolled = new Gtk.ScrolledWindow();
+    this.scrolled.setVexpand(true);
+    this.root.append(this.scrolled);
+    
     this.listBox = new Gtk.ListBox();
+    this.listBox.addCssClass('navigation-sidebar')
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
     this.listBox.on('row-activated', (row: any) => {
       const handle = this.handleForRow(row);
       if (handle && !handle.removing) this.activate(handle.entry);
     });
-
-    this.scrolled = new Gtk.ScrolledWindow();
     this.scrolled.setChild(this.listBox);
-    this.scrolled.setVexpand(true);
 
-    this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('WorkbenchList'); // selector identity + CSS (#WorkbenchList)
-    this.root.addCssClass('navigation-sidebar')
     this.registerCommands();
-    this.root.append(this.buildHeader());
-    this.root.append(this.scrolled);
 
     // Reconcile the list whenever the global agent set changes — added/removed
     // agents animate their rows in/out rather than snapping the whole list.
@@ -314,11 +289,10 @@ export class WorkbenchList {
   // (rebuild), false leaves it collapsed for `animateIn` to play.
   private createHandle(entry: Entry, reveal: boolean): RowHandle {
     const unsubs: Array<() => void> = [];
-    let refreshBranch: (() => void) | undefined;
     const content =
       entry.kind === 'user'
         ? this.buildUserContent()
-        : this.buildAgentContent(entry.agent, unsubs, (fn) => { refreshBranch = fn; });
+        : this.buildAgentContent(entry.agent, unsubs);
 
     const revealer = new Gtk.Revealer({
       // Fade + height-slide (rather than a hard SLIDE_DOWN): the opacity ramp masks
@@ -330,8 +304,9 @@ export class WorkbenchList {
     revealer.setChild(content);
 
     const row = new Gtk.ListBoxRow();
+    row.setName('WorkbenchRow')
     row.setChild(revealer);
-    return { entry, row, revealer, unsubs, removing: false, refreshBranch };
+    return { entry, row, revealer, unsubs, removing: false };
   }
 
   // Play the slide-open transition. The flip to revealed is deferred one loop turn so
@@ -369,12 +344,11 @@ export class WorkbenchList {
     this.timers.add(id);
   }
 
-  // The content box carrying the #WorkbenchRow identity (the Revealer's child). When
-  // collapsed it holds only the leading icon; expanded, the icon plus the trailing
-  // widgets.
+  // The row content box carrying the. When collapsed it holds only the leading
+  // icon; expanded, the icon plus the trailing widgets.
   private rowContent(icon: InstanceType<typeof Gtk.Widget>, ...trailing: InstanceType<typeof Gtk.Widget>[]): InstanceType<typeof Gtk.Box> {
-    const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    box.setName('WorkbenchRow');
+    const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    icon.addCssClass('Workbenchrow--icon')
     box.append(icon);
     if (!this.collapsed) for (const w of trailing) box.append(w);
     return box;
@@ -393,7 +367,6 @@ export class WorkbenchList {
   private buildAgentContent(
     agent: Agent,
     unsubs: Array<() => void>,
-    registerRefresh?: (fn: () => void) => void,
   ): InstanceType<typeof Gtk.Box> {
     // Status indicator (shared with the agent picker): a colored dot, or the cog
     // glyph while working. Shown in both modes; kept in sync.
@@ -408,7 +381,7 @@ export class WorkbenchList {
     unsubs.push(agent.onTitleChange(() => label.setText(agent.title)));
 
     // Changed-files badge (pencil + count) — a flat button that opens the edited
-    // files; hidden until the agent edits one. Sits at the top-right, by the name.
+    // files; hidden until the agent edits one. Sits at the row's trailing edge.
     const filesLabel = new Gtk.Label({ useMarkup: true });
     const files = new Gtk.Button();
     files.setChild(filesLabel);
@@ -420,44 +393,8 @@ export class WorkbenchList {
     updateFiles();
     unsubs.push(agent.onDidChangeFiles(updateFiles));
 
-    // Second line: the agent's current branch/worktree, read live from the
-    // workbench's git so an in-place branch change (checkout/commit, via the git's
-    // onChange) updates it. A worktree *move* swaps the git instance, so the host
-    // calls the registered `refresh` after the re-root to re-subscribe to the new
-    // git and re-read — driving it from there (not the agent's onDidChangeWorktree)
-    // avoids a races where the row would read the not-yet-swapped git. Hidden when
-    // the agent isn't inside a repo.
-    const branch = new Gtk.Label({ xalign: 0, ellipsize: Pango.EllipsizeMode.END });
-    branch.addCssClass('workbenchrow-branch');
-    let gitUnsub: (() => void) | null = null;
-    const updateBranch = () => {
-      const git = this.options.gitFor?.(agent) ?? null;
-      const liveBranch = git ? git.getBranch() : agent.worktree?.branch ?? null;
-      const markup = agentBranchMarkup(agent.worktree, liveBranch);
-      if (markup) branch.setMarkup(markup);
-      branch.setVisible(markup !== null);
-    };
-    const resubscribeGit = () => {
-      gitUnsub?.();
-      gitUnsub = this.options.gitFor?.(agent)?.onChange(updateBranch) ?? null;
-    };
-    updateBranch();
-    resubscribeGit();
-    registerRefresh?.(() => { resubscribeGit(); updateBranch(); });
-    unsubs.push(() => gitUnsub?.());
-
-    // Two-line row: [name | files] on top, [branch/worktree] below, in a column
-    // beside the status dot.
-    const titleLine = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    titleLine.append(label);
-    titleLine.append(files);
-    const column = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    column.setHexpand(true);
-    column.setValign(Gtk.Align.CENTER);
-    column.append(titleLine);
-    column.append(branch);
-
-    return this.rowContent(dot, column);
+    // Single-line row: [status dot | name | files badge].
+    return this.rowContent(dot, label, files);
   }
 
   // The live rows (everything not mid-removal) — the source of truth for navigation
@@ -530,13 +467,6 @@ export class WorkbenchList {
     const row = this.listBox.getSelectedRow() ?? this.liveHandles()[0]?.row;
     if (row) row.grabFocus();
     else this.listBox.grabFocus();
-  }
-
-  /** Re-read an agent row's branch line and re-subscribe it to the workbench's git.
-   *  Called by the host after a re-root swaps the workbench's git instance. */
-  refreshAgent(agent: Agent): void {
-    const handle = this.handles.find((h) => h.entry.kind === 'agent' && h.entry.agent === agent);
-    handle?.refreshBranch?.();
   }
 
   /** Select the row for `agent`, or the default user row when `null`. Called when
