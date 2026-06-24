@@ -233,6 +233,39 @@ function readTitlesFromTail(file: string, size: number): { customTitle?: string;
   }
 }
 
+/** Append a `/rename` custom-title record to a session's transcript — the same
+ *  append-only line the TUI's `/rename` writes — so the name persists and the
+ *  resume picker (via `readTitlesFromTail` → `customTitle`) shows it. `cwd` is the
+ *  launch cwd: Claude keeps the transcript there even after a dynamic worktree
+ *  move, matching where `--resume` resolves. No-op if the transcript doesn't exist
+ *  yet (a brand-new session with no live id) — the rename stays in-memory only. */
+export function writeCustomTitle(cwd: string, sessionId: string, title: string): void {
+  const file = Path.join(transcriptDir(cwd), `${sessionId}.jsonl`);
+  try {
+    if (!Fs.existsSync(file)) return; // nothing to append to yet
+    const line = JSON.stringify({ type: 'custom-title', customTitle: title, sessionId });
+    Fs.appendFileSync(file, `${line}\n`); // O_APPEND: atomic per line vs. claude's own appends
+  } catch {
+    /* best effort — the in-memory name still updates the live title */
+  }
+}
+
+/** The persisted name for a session: its `/rename` custom title, else Claude's
+ *  auto title (`ai-title`). Used to seed a resumed headless agent's title, which
+ *  has no live OSC channel to learn it from. Null when the transcript has neither
+ *  (or doesn't exist). */
+export function readSessionName(cwd: string, sessionId: string): string | null {
+  const file = Path.join(transcriptDir(cwd), `${sessionId}.jsonl`);
+  let size: number;
+  try {
+    size = Fs.statSync(file).size;
+  } catch {
+    return null; // no transcript for this session
+  }
+  const { customTitle, aiTitle } = readTitlesFromTail(file, size);
+  return customTitle ?? aiTitle ?? null;
+}
+
 /**
  * The session's terminal title (its `/rename` name or skill-set title), or null
  * if it has none. The terminal-title skill prefixes titles with the project name

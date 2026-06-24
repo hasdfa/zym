@@ -9,6 +9,16 @@ export function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + '…' : text;
 }
 
+/** A zym-local slash command parsed out of a prompt line — one the headless CLI
+ *  doesn't handle so the UI runs it client-side. Today only `/rename` (the rest
+ *  go to claude as a turn). `name` is the rename argument (empty for bare
+ *  `/rename`); null when `text` isn't a local command. */
+export function parseLocalCommand(text: string): { command: 'rename'; name: string } | null {
+  const match = /^\/rename(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (!match) return null;
+  return { command: 'rename', name: (match[1] ?? '').trim() };
+}
+
 /** First `maxLines` lines of `text`, capped at `maxChars`, ellipsised when truncated. */
 export function truncateLines(text: string, maxLines: number, maxChars: number): string {
   if (!text) return '';

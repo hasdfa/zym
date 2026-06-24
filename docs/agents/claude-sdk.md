@@ -267,6 +267,23 @@ agent; turns are `{type:'user',...}` lines on stdin.
   it as an interactive question card and return the selection as the
   permission **`deny` message** (lands as the tool_result, flagged
   `is_error:true` — unavoidable; claude reads it fine).
+- **`/rename` is a TUI-local command — headless `claude -p` lacks it.**
+  Verified: a `/rename foo` turn returns the synthetic
+  `"/rename isn't available in this environment."` and `/rename` is absent
+  from `init.slash_commands`. So `AgentConversation.submit()` intercepts it
+  **client-side** (`handleLocalCommand` → `parseLocalCommand`), exactly as
+  the interactive TUI does, and never forwards it as a turn. It sets the
+  agent's session name (`_sessionName`, distinct from the pinned
+  `agent:rename` `_displayName` which still wins) and **persists like the
+  TUI**: `agentSessions.writeCustomTitle` appends the same
+  `{"type":"custom-title","customTitle","sessionId"}` line the TUI writes to
+  `~/.claude/projects/<encoded-launch-cwd>/<id>.jsonl` (O_APPEND, atomic per
+  line). On resume, `readSessionName` re-reads it (custom title, else
+  `ai-title`) to seed the title — headless has no live OSC title channel.
+  `/rename` is also injected into the slash-completion list (the CLI's
+  `init` won't offer it). Bare `/rename` (no arg) just hints at the `R`
+  rename prompt. Cross-kind, the resume picker label already reads the same
+  `custom-title`.
 - **Unknown event types** (`dispatch`→false, e.g. an inbound
   `control_request`) are surfaced as a raw-JSON row, never dropped.
 - **Debug log** is opt-in via `ZYM_SDK_DEBUG` (off in tests).

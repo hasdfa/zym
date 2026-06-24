@@ -28,7 +28,7 @@ import { toolBodyMarkup, toolFilePath, describeTool } from './toolDisplay.ts';
 import { escapeMarkup, setMarkupSafe } from './proseMarkup.ts';
 import { iconSpan, iconLabel } from './icons.ts';
 import { clipboard } from './TextEditor/vim/clipboard.ts';
-import { truncateLines, summarizeInput, formatCount, progressLine } from './conversation/format.ts';
+import { truncateLines, summarizeInput, formatCount, progressLine, parseLocalCommand } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { Transcript } from './conversation/Transcript.ts';
 import { Message, type MessageKind } from './conversation/Message.ts';
@@ -44,6 +44,7 @@ import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
 import { SdkSession, type PermissionRequest, type QuestionRequest, type TaskProgress } from '../agents/claude-sdk/SdkSession.ts';
 import type { Transport, TransportOptions } from '../agents/claude-sdk/transport.ts';
 import { readTranscript, readContextSeed } from '../agents/claude-sdk/transcript.ts';
+import { writeCustomTitle, readSessionName } from '../agentSessions.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Agent, AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
 import type { AgentAction } from '../agents/actions.ts';
@@ -297,7 +298,11 @@ export class AgentConversation implements Agent {
   private _status: AgentStatus = 'idle';
   private _permissionMode: AgentMode = 'default';
   private readonly permissionModeHandlers: Array<() => void> = [];
+  // A user-pinned override (`agent:rename`); wins over everything when set.
   private _displayName: string | null = null;
+  // Claude's session name — set by the local `/rename` command (and seeded from the
+  // transcript on resume). Mirrors AgentTerminal._sessionName.
+  private _sessionName: string | null = null;
   private _changedFiles: string[] = [];
   // The agent's current working directory: its launch cwd, or a worktree it has
   // since moved into (announced via the set_worktree bridge tool).
@@ -383,7 +388,9 @@ export class AgentConversation implements Agent {
       padding: 16,
     });
     this.input.root.setVexpand(false);
-    this.input.addCompletionSource(createSlashCommandSource(() => this._slashCommands));
+    // `/rename` is a zym-local command (headless claude rejects it), so it's offered
+    // alongside the CLI's own slash commands rather than coming from `init`.
+    this.input.addCompletionSource(createSlashCommandSource(() => ['rename', ...this._slashCommands]));
     this.promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.promptContainer.addCssClass('conversation-prompt');
     this.promptContainer.setVexpand(false);
@@ -492,6 +499,11 @@ export class AgentConversation implements Agent {
   // Rebuild the conversation rows from a past session's on-disk transcript, by
   // replaying its domain events through the same row handlers a live turn uses.
   private restoreTranscript(cwd: string, sessionId: string): void {
+    // Seed the title from the transcript (`/rename` custom title, else Claude's auto
+    // title). Headless has no live OSC channel, so without this a resumed agent
+    // would lose its name. A pinned `agent:rename` name, if any, still wins.
+    const name = readSessionName(cwd, sessionId);
+    if (name) { this._sessionName = name; this.emitTitle(); }
     const entries = readTranscript(cwd, sessionId);
     if (entries.length === 0) return;
     this.replaying = true;
@@ -544,7 +556,9 @@ export class AgentConversation implements Agent {
 
   // --- Agent surface ----------------------------------------------------------
 
-  get title(): string { return this._displayName ?? 'claude (sdk)'; }
+  // A pinned name (`agent:rename`) wins, then Claude's session name (`/rename` /
+  // resumed transcript title), then the default. Mirrors AgentTerminal.title.
+  get title(): string { return this._displayName ?? this._sessionName ?? 'claude (sdk)'; }
   get status(): AgentStatus { return this._status; }
   get permissionMode(): AgentMode { return this._permissionMode; }
   get changedFiles(): string[] { return this._changedFiles.slice(); }
@@ -745,11 +759,38 @@ export class AgentConversation implements Agent {
     const text = this.input.getText().trim();
     if (!text) return;
     this.input.setText('');
+    if (this.handleLocalCommand(text)) return; // client-side slash command (e.g. /rename), not a turn
     this.ensureConnected(); // a lazily-resumed agent spawns claude on its first turn
     if (this._status === 'idle') { this.session.prompt(text); return; }
     // The agent is busy — queue (accumulate) the message; it's sent on next idle.
     this.pendingText = this.pendingText ? `${this.pendingText}\n\n${text}` : text;
     this.refreshThinking();
+  }
+
+  /** Run a zym-local slash command the headless CLI can't (today only `/rename`,
+   *  which `claude -p` rejects as "not available in this environment"). Mirrors the
+   *  TUI's client-side handling. Returns true when `text` was a local command (so
+   *  it isn't sent to claude as a turn). */
+  private handleLocalCommand(text: string): boolean {
+    const parsed = parseLocalCommand(text);
+    if (!parsed) return false;
+    if (!parsed.name) {
+      zym.notifications.addInfo('Usage: /rename <name>'); // bare /rename: `R` opens an interactive prompt
+      return true;
+    }
+    this.setSessionName(parsed.name);
+    zym.notifications.addInfo(`Renamed to “${parsed.name}”`);
+    return true;
+  }
+
+  /** Set Claude's session name (`/rename`): update the live title and persist it to
+   *  the transcript, exactly as the TUI does, so it survives resume and labels the
+   *  resume picker. A pinned `agent:rename` name still wins (see `title`). */
+  private setSessionName(name: string): void {
+    this._sessionName = name;
+    this.emitTitle();
+    const id = this.sessionId ?? this.resumeSessionId;
+    if (id) writeCustomTitle(this.cwd, id, name);
   }
 
   // --- session → state + rows -------------------------------------------------

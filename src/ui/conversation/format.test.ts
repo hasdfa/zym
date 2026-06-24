@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { truncate, truncateLines, summarizeInput, formatCount, progressLine } from './format.ts';
+import { truncate, truncateLines, summarizeInput, formatCount, progressLine, parseLocalCommand } from './format.ts';
 
 test('truncate adds an ellipsis past max', () => {
   assert.equal(truncate('hello', 10), 'hello');
@@ -34,4 +34,13 @@ test('progressLine composes head + meta', () => {
     progressLine({ id: 't', description: 'done', tokens: 0, toolUses: 0, durationMs: 0, status: 'completed', done: true }),
     '✓ done',
   );
+});
+
+test('parseLocalCommand recognizes /rename and its argument', () => {
+  assert.deepEqual(parseLocalCommand('/rename my session'), { command: 'rename', name: 'my session' });
+  assert.deepEqual(parseLocalCommand('  /rename  spaced  '), { command: 'rename', name: 'spaced' });
+  assert.deepEqual(parseLocalCommand('/rename'), { command: 'rename', name: '' }); // bare → no arg
+  assert.equal(parseLocalCommand('/clear'), null); // a real CLI command, not local
+  assert.equal(parseLocalCommand('rename without slash'), null);
+  assert.equal(parseLocalCommand('please /rename this'), null); // only at line start
 });
