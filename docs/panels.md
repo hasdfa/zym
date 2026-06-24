@@ -55,6 +55,12 @@ widget.
 - **Session-persisted**: `SessionDocks.visible` (per-side flags) is
   saved/restored with the rest of the dock state; a toggle schedules an
   autosave. Sessions with no `visible` entry restore all sides shown.
+  `SessionDocks.sizes` carries each *shown* side's resized extent (width
+  for left/right, height for top/bottom) — `Workbench.dockSizes()` reads
+  the live allocations, `setDockSizes()` re-applies them so a dragged
+  Gtk.Paned handle survives a restore (an absent side falls back to its
+  default width / `DOCK_FRACTION` height). The center `PanelGroup`'s own
+  split positions ride along in the layout tree (`PanelNode.split.position`).
 
 ## Active / focus management
 
@@ -66,7 +72,9 @@ Governing rules, implemented in `Panel` + `PanelGroup`:
   becoming the active panel and deactivating the previous one (a leaf *or* a
   dock). The center's `PanelGroup` syncs its active **leaf** via the
   `onActivate` callback (so "where new tabs open" follows focus); docks just
-  flip active state.
+  flip active state. The active leaf is **session-persisted**: `serializeLayout`
+  marks it (`PanelNode.leaf.active`) and `restoreLayout` re-activates it (not
+  just the first leaf), so a restore puts focus back where it was.
 - **Overlay exception.** Focus moving onto an overlay (command palette, file
   picker, popover that isn't parented inside a panel) fires no panel's `enter`,
   so the active panel is left unchanged. Activation is `enter`-only — we never

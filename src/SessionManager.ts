@@ -38,7 +38,7 @@ export type TabState =
 
 /** The split tree of one workspace: `leaf` tab strips joined by `split` panes. */
 export type PanelNode =
-  | { type: 'leaf'; tabs: TabState[]; activeIndex: number }
+  | { type: 'leaf'; tabs: TabState[]; activeIndex: number; active?: boolean }
   | {
       type: 'split';
       orientation: 'horizontal' | 'vertical';
@@ -77,11 +77,13 @@ export interface SessionState {
   activeWorkspace: number;
   /** Window-level, shared across workspaces. `visible` is the per-side dock-
    *  visibility toggle (left/right/top/bottom); absent in pre-existing sessions,
-   *  treated as all-shown on restore. */
+   *  treated as all-shown on restore. `sizes` holds each side's resized extent
+   *  (width for left/right, height for top/bottom), so a dragged Gtk.Paned handle
+   *  is restored; absent sides fall back to their default size. */
   docks?: {
     notificationLog: boolean;
-    leftSplit?: number;
     visible?: { left: boolean; right: boolean; top: boolean; bottom: boolean };
+    sizes?: { left?: number; right?: number; top?: number; bottom?: number };
   };
   /** Window geometry, restored with the session. */
   window?: { width: number; height: number; maximized: boolean };

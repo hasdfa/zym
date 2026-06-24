@@ -75,8 +75,8 @@ These shape everything below:
 ## Current state holders (what a session must capture)
 
 - **`PanelGroup` (center)** — the splittable tree: `Split` branches
-  (orientation + position) and `Panel` leaves (a tab strip). Tabs host
-  one of:
+  (orientation + resized divider `position`) and `Panel` leaves (a tab
+  strip, the focused one flagged `active`). Tabs host one of:
   - **`TextEditor`** — `currentFile` + cursor/scroll (vim buffer
     model).
   - **`Terminal`** — a shell; only its `cwd` is meaningful (process
@@ -86,8 +86,8 @@ These shape everything below:
 - **`FileTree` (left dock)** — `rootPath` + which directories are
   expanded.
 - **`AgentManager` (`zym.agents`)** — the live agent registry.
-- **Docks** — notification log visible/hidden; left-paned split
-  position.
+- **Docks** — notification log visible/hidden; per-side visibility and
+  resized extents (the dock Gtk.Paned dimensions).
 
 AppWindow holds the maps that tie widgets to tabs (`editors`,
 `terminals`, `agentChildren`), so it is the natural orchestrator;
@@ -142,10 +142,11 @@ interface SessionParticipant {
 - **`TextEditor`** → `isModified()` reads the buffer's modified flag
   (dirty since last save); `saveModified()` writes the file when it
   has a path.
-- **`AgentTerminal`** → `isModified()` is true while the agent is
-  **running** (`status !== 'exited'`); `getModifiedLabel()` → e.g.
-  `"claude (running)"`. No `saveModified` (nothing to flush); on quit
-  the process is killed. It's listed in the exit prompt as live work.
+- **`AgentTerminal` / `AgentConversation`** → **not** modified
+  (`isModified()` is `false`). A running agent has nothing to flush and
+  is killed on quit, so it never blocks the exit prompt — only unsaved
+  editors do. (`getModifiedLabel()` is kept for the Agent surface but
+  unused while `isModified` is false.)
 - **`Terminal`** (plain shell) → default *not* modified; never blocks
   exit.
 
@@ -163,9 +164,9 @@ type TabState =
   | { kind: 'agent';    command: string[]; cwd: string; prompt?: string; sessionId?: string };
 
 type PanelNode =
-  | { type: 'leaf';  tabs: TabState[]; activeIndex: number }
+  | { type: 'leaf';  tabs: TabState[]; activeIndex: number; active?: boolean } // active → the focused leaf
   | { type: 'split'; orientation: 'horizontal' | 'vertical';
-      position: number; start: PanelNode; end: PanelNode };
+      position: number; start: PanelNode; end: PanelNode };                    // position = the resized Gtk.Paned divider
 
 // One root's working state. A window switches its active root by swapping which
 // WorkspaceState is live (re-rooting FileTree/GitRepo/title) — see agents.md.
@@ -181,22 +182,27 @@ interface SessionState {
   name?: string;                // user-given; absent → label = basename(primaryRoot)
   savedAt: string;              // ISO timestamp, stamped by save()
   workspaces: WorkspaceState[]; // runtime writes one user workspace + one per live agent
-  activeWorkspace: number;      // index into workspaces; currently 0
+  activeWorkspace: number;      // index into workspaces of the focused workbench (0 = user)
   // window-level, shared. `visible` = per-side dock-visibility toggle
-  // (left/right/top/bottom); absent → all sides shown.
-  docks?: { notificationLog: boolean; leftSplit?: number;
-            visible?: { left: boolean; right: boolean; top: boolean; bottom: boolean } };
+  // (left/right/top/bottom); absent → all sides shown. `sizes` = each side's resized
+  // extent (width left/right, height top/bottom) so a dragged Gtk.Paned is restored.
+  docks?: { notificationLog: boolean;
+            visible?: { left: boolean; right: boolean; top: boolean; bottom: boolean };
+            sizes?: { left?: number; right?: number; top?: number; bottom?: number } };
   window?: { width: number; height: number; maximized: boolean };
 }
 ```
 
 `workspaces[0].root` is the **primary root** — the hash source and the
-default label. `activeWorkspace` is always 0; the runtime carries no
-root-switch yet, so restore rebuilds `workspaces[0]` (the user
-workspace) and relaunches the rest as agent workbenches. Layering
-multi-root on later means: let the active-root switch swap which
-workspace drives `FileTree`/`GitRepo`/`GitBranchButton`/title — no
-format change.
+default label. `workspaces[0]` is always the **user** workspace; the
+runtime carries no root-switch yet, so restore rebuilds it and
+relaunches the rest as agent workbenches. `activeWorkspace` records the
+**focused workbench** at save time — 0 for the user, else the active
+agent's index — and restore re-activates it (`activateWorkspace`):
+focus follows the user back to wherever they were (the user workbench
+or one of the relaunched agents). Layering multi-root on later means:
+let the active-root switch swap which workspace drives
+`FileTree`/`GitRepo`/`GitBranchButton`/title — no format change.
 
 `SessionManager` resolves the path
 (`<state>/zym/sessions/<slug(name) ?? hash(primaryRoot)>.json`),
@@ -222,9 +228,9 @@ Naming/identity).
   `close-request` blocks (`return true`) and shows an
   `Adw.AlertDialog` listing the modified widgets with **Save all /
   Discard / Cancel**; it proceeds to `onQuit()` only on Save-all
-  (after saves) or Discard. "Save all" applies only to participants
-  with `saveModified` (editors); running agents have nothing to save,
-  so they're listed for awareness and killed on quit.
+  (after saves) or Discard. Only unsaved **editors** are modified, so
+  the prompt is purely about unwritten edits; running agents are *not*
+  modified — they never appear and are killed on quit without a prompt.
 
 ## Config schema (`session.*`)
 

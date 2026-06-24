@@ -21,10 +21,12 @@ import type { DockSide } from './ui/Workbench.ts';
 
 export interface SessionDocks {
   notificationLog: boolean;
-  leftSplit?: number;
   // Per-side dock visibility (the dock-visibility toggle). Absent in sessions saved
   // before this existed, so restore treats a missing entry as "shown".
   visible?: Record<DockSide, boolean>;
+  // Per-side resized extent (width for left/right, height for top/bottom) so a dragged
+  // Gtk.Paned handle is restored. Absent sides fall back to their default size.
+  sizes?: Partial<Record<DockSide, number>>;
 }
 
 export interface SessionControllerOptions {
@@ -56,8 +58,16 @@ export interface SessionControllerOptions {
   /** One `WorkspaceState` per open agent workbench (root + layout + `agent`
    *  identity), appended after the user workspace. Empty when no agents. */
   serializeAgentWorkspaces?: () => WorkspaceState[];
-  /** Relaunch an agent workbench (resumed) from its saved workspace. */
-  restoreAgent?: (workspace: WorkspaceState) => void;
+  /** Relaunch an agent workbench (resumed) from its saved workspace; returns a handle
+   *  (the relaunched agent) so `activateWorkspace` can focus it, or null on failure. */
+  restoreAgent?: (workspace: WorkspaceState) => unknown;
+  /** Index into the serialized workspaces of the workbench that currently has focus
+   *  (0 = the user workspace, n = the nth agent workspace). Used for serialization. */
+  getActiveWorkspace?: () => number;
+  /** Focus the restored active workspace after a restore. `index` is the saved
+   *  `activeWorkspace`; `restored[i]` is the handle `restoreAgent` returned for
+   *  workspace `i + 1` (null when it couldn't relaunch). */
+  activateWorkspace?: (index: number, restored: unknown[]) => void;
 }
 
 export class SessionController {
@@ -83,11 +93,15 @@ export class SessionController {
       fileTree: { expanded: this.opts.fileTree.serializeExpanded() },
     };
     // The user workspace is primary (index 0); each open agent workbench follows.
+    const workspaces = [user, ...(this.opts.serializeAgentWorkspaces?.() ?? [])];
+    // The focused workbench is restored as the active one; clamp a stale index to a
+    // workspace that actually exists.
+    const active = this.opts.getActiveWorkspace?.() ?? 0;
     return {
       version: SESSION_VERSION,
       savedAt: '', // stamped by SessionManager.save
-      workspaces: [user, ...(this.opts.serializeAgentWorkspaces?.() ?? [])],
-      activeWorkspace: 0,
+      workspaces,
+      activeWorkspace: active >= 0 && active < workspaces.length ? active : 0,
       docks: this.opts.getDocks(),
       window: this.opts.getWindow?.(),
     };
@@ -150,11 +164,17 @@ export class SessionController {
 
     // Relaunch the agent workbenches (resumed to their conversation/worktree). This
     // only runs on an explicit restore / opt-in launch, so re-running them is the
-    // user's intent, not a surprise.
+    // user's intent, not a surprise. The returned handles are aligned with
+    // `workspaces[1..]` so `activateWorkspace` can focus the one that had focus.
+    const restored: unknown[] = [];
     for (const ws of state.workspaces.slice(1)) {
-      if (ws.agent) this.opts.restoreAgent?.(ws);
+      restored.push(ws.agent ? this.opts.restoreAgent?.(ws) ?? null : null);
     }
     this.restoringState = null;
+
+    // Re-focus the workbench that was active when the session was saved (the user
+    // workspace, or one of the relaunched agents).
+    this.opts.activateWorkspace?.(state.activeWorkspace, restored);
 
     if (this.missing.length > 0) {
       const n = this.missing.length;

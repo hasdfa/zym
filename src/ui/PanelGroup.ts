@@ -110,6 +110,9 @@ export class PanelGroup {
   // The most recently active non-pinned leaf — the work area opens land in when the
   // pinned panel itself is active. Stale entries (a collapsed leaf) are filtered out.
   private lastWorkArea: Leaf | null = null;
+  // The leaf marked `active` while a `restoreLayout` build is in flight, so the saved
+  // focused pane (not just the first leaf) becomes active once the tree is assembled.
+  private pendingActiveLeaf: Leaf | null = null;
 
   constructor(options: PanelGroupOptions = {}) {
     this.options = options;
@@ -334,7 +337,8 @@ export class PanelGroup {
         if (child === activeWidget) activeIndex = tabs.length;
         tabs.push(state);
       }
-      return { type: 'leaf', tabs, activeIndex };
+      // Mark the focused leaf so restore re-activates it (not just the first leaf).
+      return { type: 'leaf', tabs, activeIndex, active: node === this.active || undefined };
     }
     const orientation =
       node.paned.getOrientation() === Gtk.Orientation.HORIZONTAL ? 'horizontal' : 'vertical';
@@ -350,9 +354,10 @@ export class PanelGroup {
   /**
    * Replace the whole tree with one rebuilt from `node`, building each tab
    * through `buildChild`. Intended for a fresh group (at restore time); the prior
-   * tree is discarded. The first leaf becomes active.
+   * tree is discarded. The leaf saved as `active` becomes active (else the first).
    */
   restoreLayout(node: PanelNode, buildChild: (state: TabState) => RestoredChild | null): void {
+    this.pendingActiveLeaf = null;
     const newRoot = this.buildNode(node, buildChild);
     const current = this.root.getFirstChild();
     if (current) this.root.remove(current);
@@ -360,10 +365,13 @@ export class PanelGroup {
     this.rootNode = newRoot;
     this.root.append(newRoot.widget);
 
-    const first = firstLeaf(newRoot);
-    this.active = first;
-    first.panel.activate(); // onActivate early-returns (active already set); sync below
-    this.options.onActiveChanged?.(first.panel.activeChild);
+    // Re-activate the saved focused leaf if it was marked (and survived its tabs),
+    // else fall back to the first leaf.
+    const active = this.pendingActiveLeaf ?? firstLeaf(newRoot);
+    this.pendingActiveLeaf = null;
+    this.active = active;
+    active.panel.activate(); // onActivate early-returns (active already set); sync below
+    this.options.onActiveChanged?.(active.panel.activeChild);
     this.updateWelcomeState();
   }
 
@@ -386,6 +394,8 @@ export class PanelGroup {
       // Reselect the intended active tab; if it was dropped, the last-added tab
       // (already selected by `add`) stands in.
       if (activeHandleIndex >= 0) handles[activeHandleIndex].select();
+      // Remember the saved focused leaf so restoreLayout re-activates it.
+      if (node.active) this.pendingActiveLeaf = leaf;
       return leaf;
     }
 

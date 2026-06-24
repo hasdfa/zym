@@ -122,6 +122,11 @@ export class Workbench<TOwner = unknown> {
   private readonly dockVisible: Record<DockSide, boolean> = {
     left: true, right: true, top: true, bottom: true,
   };
+  // A side's preferred extent (width for left/right, height for top/bottom), set when
+  // a saved session restores a resized dock. `applyDock` uses it in place of the
+  // default size, so a restored dock keeps the dragged size across show/hide; unset
+  // sides fall back to the defaults below.
+  private readonly dockSize: Partial<Record<DockSide, number>> = {};
 
   constructor(owner: TOwner, contents: WorkbenchContents, options: { showSideDock: boolean }) {
     this.owner = owner;
@@ -245,6 +250,30 @@ export class Workbench<TOwner = unknown> {
     return { ...this.dockVisible };
   }
 
+  /** The currently-shown sides' resized extents (width for left/right, height for
+   *  top/bottom), for session persistence. A hidden/empty side reports nothing (it
+   *  carries no live allocation), so it restores at its default size. */
+  dockSizes(): Partial<Record<DockSide, number>> {
+    const out: Partial<Record<DockSide, number>> = {};
+    for (const side of DOCK_SIDES) {
+      if (!this.isDockVisible(side)) continue;
+      const root = this.dockContent[side]!.root;
+      const size = side === 'left' || side === 'right' ? root.getWidth() : root.getHeight();
+      if (size > 0) out[side] = size;
+    }
+    return out;
+  }
+
+  /** Apply persisted dock extents (a restored resize). Stored as each side's preferred
+   *  size and pushed into the live Paned, so the dock opens at the saved size. */
+  setDockSizes(sizes: Partial<Record<DockSide, number>>): void {
+    for (const side of DOCK_SIDES) {
+      const size = sizes[side];
+      if (typeof size === 'number' && size > 0) this.dockSize[side] = size;
+    }
+    for (const side of DOCK_SIDES) if (this.isDockVisible(side)) this.applyDockExtent(side);
+  }
+
   // Push a side's effective state (content if visible, else null) into its Paned slot.
   private applyDock(side: DockSide) {
     const panel = this.dockVisible[side] ? this.dockContent[side] : null;
@@ -254,19 +283,50 @@ export class Workbench<TOwner = unknown> {
         break;
       case 'right':
         this.hCenterRight.setEndChild(panel?.root ?? null);
-        // Give the dock a stable width (it doesn't resize with the window); the user
-        // can still drag the handle wider. Min-width, so a narrow file tree won't
-        // collapse it.
-        if (panel) panel.root.setSizeRequest(SIDEBAR_WIDTH, -1);
         break;
       case 'top':
         this.vTop.setStartChild(panel?.root ?? null);
-        if (panel) this.sizeDock(this.vTop, DOCK_FRACTION); // top is the start child
         break;
       case 'bottom':
         this.vBottom.setEndChild(panel?.root ?? null);
-        if (panel) this.sizeDock(this.vBottom, 1 - DOCK_FRACTION); // bottom is the end child
         break;
+    }
+    if (panel) this.applyDockExtent(side);
+  }
+
+  // Size a side's Paned to the restored extent if one was saved, else the default
+  // (a fixed width for the side docks, a fraction of the column for top/bottom).
+  //
+  // Start-child sides (left width, top height) map straight onto the paned position,
+  // which GTK honours even before allocation. End-child sides (right width, bottom
+  // height) need the container's current extent to convert into a start-child
+  // position, so they keep their default min-width request and only restore the
+  // saved size once the paned has been allocated (0 before first map → fall back to
+  // the default, which a later show re-applies once sized).
+  private applyDockExtent(side: DockSide) {
+    const stored = this.dockSize[side];
+    switch (side) {
+      case 'left':
+        this.hLeft.setPosition(stored ?? SIDEBAR_WIDTH);
+        break;
+      case 'right': {
+        // Keep the min-width request (the dock doesn't resize with the window; the
+        // user can still drag it). Restore the dragged width via the divider position.
+        this.dockContent.right?.root.setSizeRequest(SIDEBAR_WIDTH, -1);
+        const width = this.hCenterRight.getWidth();
+        if (stored != null && width > 0) this.hCenterRight.setPosition(Math.max(0, width - stored));
+        break;
+      }
+      case 'top':
+        if (stored != null) this.vTop.setPosition(stored);
+        else this.sizeDock(this.vTop, DOCK_FRACTION); // top is the start child
+        break;
+      case 'bottom': {
+        const height = this.vBottom.getHeight();
+        if (stored != null && height > 0) this.vBottom.setPosition(Math.max(0, height - stored));
+        else this.sizeDock(this.vBottom, 1 - DOCK_FRACTION); // bottom is the end child
+        break;
+      }
     }
   }
 

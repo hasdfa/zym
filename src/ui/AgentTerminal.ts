@@ -313,12 +313,14 @@ export class AgentTerminal extends Terminal implements Agent {
     };
   }
 
-  /** A running agent is live work — it blocks exit until confirmed. */
+  /** A running agent is not "modified" work: it has nothing to flush and is killed
+   *  on quit, so it never blocks the exit prompt (only unsaved editors do). */
   isModified(): boolean {
-    return !this.exited;
+    return false;
   }
 
-  /** Exit-prompt label, e.g. "claude (running)". */
+  /** Exit-prompt label, e.g. "claude (running)" — unused while `isModified` is
+   *  false, kept to satisfy the Agent surface. */
   getModifiedLabel(): string {
     return `${this.title} (running)`;
   }

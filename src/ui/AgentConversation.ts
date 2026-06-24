@@ -621,7 +621,10 @@ export class AgentConversation implements Agent {
       sessionId: this.sessionId ?? this.resumeSessionId ?? undefined,
     };
   }
-  isModified(): boolean { return !this.exited; }
+  // A running agent is not "modified" work: nothing to flush, killed on quit, so it
+  // never blocks the exit prompt (only unsaved editors do). The label is kept for
+  // the Agent surface but unused while isModified is false.
+  isModified(): boolean { return false; }
   getModifiedLabel(): string { return `${this.title}${this._status === 'disconnected' ? ' (resumed)' : ' (running)'}`; }
 
   onDidChangeStatus(cb: () => void): () => void { return push(this.statusHandlers, cb); }

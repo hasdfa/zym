@@ -44,6 +44,37 @@ test('save then load round-trips a session for a root', () => {
   assert.deepEqual(loaded!.workspaces[0].layout, { type: 'leaf', tabs: [tab], activeIndex: 0 });
 });
 
+test('round-trips the focused workspace, active leaf, split position, and dock sizes', () => {
+  const { manager } = makeManager();
+  const root = '/home/me/project';
+  // A split whose end leaf is the focused one; a resized divider; a second
+  // (agent) workspace that is the active one; per-side dock extents.
+  const layout: SessionState['workspaces'][number]['layout'] = {
+    type: 'split',
+    orientation: 'horizontal',
+    position: 480,
+    start: { type: 'leaf', tabs: [], activeIndex: 0 },
+    end: { type: 'leaf', tabs: [], activeIndex: 0, active: true },
+  };
+  const state: SessionState = {
+    version: SESSION_VERSION,
+    savedAt: '',
+    activeWorkspace: 1,
+    workspaces: [
+      { root, layout },
+      { root: '/home/me/project/.worktrees/agent', layout: { type: 'leaf', tabs: [], activeIndex: 0 } },
+    ],
+    docks: { notificationLog: false, sizes: { right: 320, bottom: 180 } },
+  };
+
+  manager.save(state);
+  const loaded = manager.load(root)!;
+
+  assert.equal(loaded.activeWorkspace, 1);
+  assert.deepEqual(loaded.workspaces[0].layout, layout);
+  assert.deepEqual(loaded.docks?.sizes, { right: 320, bottom: 180 });
+});
+
 test('save stamps savedAt with an ISO timestamp', () => {
   const { manager } = makeManager();
   const state = sessionFor('/r');

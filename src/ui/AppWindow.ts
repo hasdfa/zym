@@ -287,6 +287,7 @@ export class AppWindow {
       getDocks: () => ({
         notificationLog: this.workbench.bottomDock === 'notifications',
         visible: this.workbench.dockVisibility(),
+        sizes: this.workbench.dockSizes(),
       }),
       applyDocks: (docks) => {
         if (docks.notificationLog && this.workbench.bottomDock !== 'notifications') this.toggleNotificationLog();
@@ -294,9 +295,16 @@ export class AppWindow {
         // so a side restored as hidden stays hidden even though its content is present.
         if (docks.visible)
           for (const side of DOCK_SIDES) this.workbench.setDockVisible(side, docks.visible[side] !== false);
+        // Restore resized dock extents last, once each side's visibility is settled.
+        if (docks.sizes) this.workbench.setDockSizes(docks.sizes);
       },
       serializeAgentWorkspaces: () => this.serializeAgentWorkspaces(),
       restoreAgent: (ws) => this.restoreAgent(ws),
+      getActiveWorkspace: () => this.activeWorkspaceIndex(),
+      activateWorkspace: (index, restored) => {
+        const agent = index > 0 ? (restored[index - 1] as Agent | null) : null;
+        this.activateOwner(agent ?? 'user');
+      },
       getWindow: () => ({
         width: this.window.getWidth(),
         height: this.window.getHeight(),
@@ -494,9 +502,9 @@ export class AppWindow {
     }
     this.window.present();
 
+    // restore() re-focuses the workbench that was active when the session was saved
+    // (the user workspace, or one of the relaunched agents) via activateWorkspace.
     const restored = willRestore && this.sessionController.restore();
-    // Relaunching agents activates each in turn; settle back on the user workbench.
-    if (restored) this.activateOwner('user');
     if (!restored && initialFile) this.openFile(initialFile);
   }
 
@@ -1063,16 +1071,35 @@ export class AppWindow {
     return out;
   }
 
+  // The index, into the serialized workspaces, of the workbench that currently has
+  // focus: 0 for the user, else the active agent's position among the serialized
+  // agent workspaces. Mirrors serializeAgentWorkspaces' ordering and skips so the
+  // index lines up; an agent that didn't serialize falls back to the user (0).
+  private activeWorkspaceIndex(): number {
+    if (this.workbench.owner === 'user') return 0;
+    let i = 1;
+    for (const agent of zym.agents.getAgents()) {
+      const workbench = this.workbenches.get(agent);
+      const state = agent.serialize();
+      if (!workbench || !state || state.kind !== 'agent') continue;
+      if (agent === this.workbench.owner) return i;
+      i++;
+    }
+    return 0;
+  }
+
   // Relaunch an agent workbench from its saved workspace, resumed to its
   // conversation/worktree. Resolving the conversation via resumeOptions also
   // restores the worktree (and avoids re-running the original launch prompt); a
   // session that's since vanished falls back to a bare resume, and an agent that
   // never reported a session id is relaunched fresh with its original prompt.
-  private restoreAgent(ws: WorkspaceState): void {
+  // Returns the relaunched agent (or null when it was skipped) so the caller can
+  // re-focus the workbench that had focus when the session was saved.
+  private restoreAgent(ws: WorkspaceState): Agent | null {
     const a = ws.agent;
-    if (!a) return;
+    if (!a) return null;
     // Don't duplicate an agent that's already open (explicit restore over a live session).
-    if (a.sessionId && zym.agents.getAgents().some((ag) => ag.sessionId === a.sessionId)) return;
+    if (a.sessionId && zym.agents.getAgents().some((ag) => ag.sessionId === a.sessionId)) return null;
     // Restore as the kind that was saved (older sessions have no tag → claude-tui).
     const kind: AgentKind = a.agentKind ?? 'claude-tui';
     let agent: Agent;
@@ -1096,6 +1123,7 @@ export class AppWindow {
         }
       }
     }
+    return agent;
   }
 
   // Resume a past conversation: pick one of the project's saved sessions (newest
@@ -2827,8 +2855,8 @@ export class AppWindow {
       },
       'session:restore': {
         didDispatch: () => {
-          if (this.sessionController.restore()) this.activateOwner('user'); // settle on user after agent relaunches
-          else this.toast('No saved session for this folder');
+          // restore() re-focuses the saved active workbench (via activateWorkspace).
+          if (!this.sessionController.restore()) this.toast('No saved session for this folder');
         },
         description: 'Restore the last session',
       },
