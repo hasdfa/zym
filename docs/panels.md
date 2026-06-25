@@ -15,15 +15,22 @@ bottom Notifications/Diagnostics/Keybindings docks) — is a `Panel`.
 - **`PanelGroup`** (center) — a binary tree of `Split` (Gtk.Paned) branches
   and `Leaf`/`Panel` leaves; any split layout is expressible.
   Splitting/closing reshapes the tree; the root leaf may sit empty (shows the
-  placeholder). Supports a `pinned` leaf (an agent's terminal) that can't be
-  split or collapsed; opens beside it land in the work area (`openPanel` /
-  `ensureWorkArea`).
+  placeholder). Still supports a `pinned` leaf (a center leaf that can't be split
+  or collapsed; opens beside it land in the work area via `openPanel` /
+  `ensureWorkArea`), though agents no longer use it — the agent widget lives in the
+  window-level agent sidebar (below), leaving the agent center an ordinary work area.
 - **`Workbench`** — fixed dock slots (left/right/top/bottom, nested
   Gtk.Paned) around the center. One Workbench per "person" (the user, each
   agent); switching person swaps which Workbench the window shows (see
   docs/agents.md). The Files/Source-Control dock lives in the **right** slot —
   note the misleading `leftPanel` field / `revealLeftTab` names, which dock via
   `setRight`.
+- **`AgentSidebar`** (`src/ui/AgentSidebar.ts`) — not a workbench slot but a
+  **window-level** full-height column (its own `Adw.ToolbarView` header + a
+  `Gtk.Stack` of every open agent's widget), shown between the WorkbenchList and the
+  content for an agent workbench. AppWindow attaches/detaches it on its own
+  `agentPaned` and flips the visible stack page on switch (see docs/agents.md "agent
+  secondary sidebar"). It's a top-level focus zone, so `ctrl-w h/l` reaches it.
 
 ## Dock visibility (toggleable docks)
 
@@ -49,7 +56,8 @@ widget.
   `AppWindow.toggleDockSide` (focuses into a freshly-shown dock; falls focus
   back to the center when hiding out from under it). Left/top carry no built-in
   content yet, so toggling them is a no-op + toast until a plugin contributes a
-  panel there.
+  panel there. (The agent widget is *not* a dock — it's the window-level agent
+  sidebar; see `AgentSidebar` above.)
 - **Default state**: the user workbench's right dock (Files/Source-Control) is
   *assigned but hidden* at startup — the `Workbench` constructor calls `setRight`
   then `setDockVisible('right', false)`, so the dock toggle / `file-tree:` /
@@ -125,9 +133,10 @@ not-yet-finalized page). The rule: **never `add()` into an unrooted tab view.**
   **re-attaches (roots) the panel via `setRight` before re-adding the tab**
   (unparenting any closed page first), so the `add()` always targets a rooted
   view.
-- **Agents** — each agent's terminal is pinned into its own Workbench's center
-  (`PanelGroup.pinChild`); the agent tab-close is vetoed and switching person
-  just swaps the shown Workbench, so the process keeps running.
+- **Agents** — each agent's widget is a `Gtk.Stack` page in the window-level
+  `AgentSidebar`, not a tab — so it's inherently uncloseable (no tab, no close
+  button). Switching person flips the visible page and swaps the shown Workbench, so
+  the process keeps running and the agent's state is preserved (nothing reparented).
 
 ## Focus memory
 

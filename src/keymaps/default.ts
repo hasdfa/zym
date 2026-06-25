@@ -175,6 +175,7 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'ctrl-w g j': 'dock:toggle-bottom',
     'ctrl-w g k': 'dock:toggle-top',
     'ctrl-w g l': 'dock:toggle-right', // right dock = Files / Source Control
+    'ctrl-w g a': 'agent-sidebar:toggle', // the agent "secondary sidebar"
 
     // Cycle the active workbench (the user / each agent) — previous / next.
     'super-,': 'workbench:previous',
