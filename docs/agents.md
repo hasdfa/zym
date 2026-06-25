@@ -83,7 +83,7 @@ What already exists and is reused, not rebuilt:
     the **same observable surface** `AgentTerminal` does, so the
     manager/sidebar/picker stay tool-agnostic.
   - Features: turn loop; thinking + token meter; tool rows with nerdfont icons
-    (Bash highlighted + one-line crop); permission gating via the bundled stdio
+    (Bash plain monospace + one-line crop); permission gating via the bundled stdio
     MCP `assets/mcp/zymPermission.mjs` (`--permission-prompt-tool`, atomic
     file IPC) → native allow/deny card; **interrupt** (control_request, on
     `ctrl-c`); **subagents** (captured per-`Agent`-tool transcript, inline

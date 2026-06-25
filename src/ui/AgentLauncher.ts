@@ -102,12 +102,15 @@ addStyles(/* css */`
     border: 1px solid var(--border-color);
     border-radius: var(--popover-radius);
     background-color: var(--view-bg-color);
+    /* Native (libadwaita) focus ring: invisible at rest, fading + scaling in when the
+       prompt takes focus (.prompt-focused). Follows the card's border-radius. */
+    outline: 0 solid transparent;
+    outline-offset: 3px;
+    transition: outline-color 200ms ease-in-out, outline-width 200ms ease-in-out, outline-offset 200ms ease-in-out;
   }
-  /* Accent focus ring around the whole card while the prompt editor has focus
-     (toggled via .prompt-focused below). GTK draws the outline following the card's
-     border-radius. */
+  /* Ring the whole card while the prompt editor has focus. */
   #AgentLauncher.prompt-focused {
-    outline: 2px solid var(--accent-color);
+    outline: 2px solid alpha(var(--accent-color), 0.6);
     outline-offset: -1px;
   }
   /* The prompt uses the large editor font size. */

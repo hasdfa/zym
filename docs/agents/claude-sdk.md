@@ -141,10 +141,16 @@ generic over `Agent`.
 `src/ui/AgentConversation.ts` (orchestrator) + `src/ui/conversation/*`
 (`format`, `StickyListPanel`, `cards`, `QuestionCard`, `SubagentView`,
 `MonitorView`) render a scrollable transcript of user/assistant/thinking/
-tool rows. Tool rows carry nerdfont icons; Bash is syntax-highlighted +
-cropped to one line until expanded. Richer turn surfaces:
+tool rows. Tool rows carry nerdfont icons; the Bash command is plain monospace,
+cropped to one line until expanded. A non-zero Bash exit is flagged by a
+trailing red dot — the terminal icon and the command's foreground are left
+untouched (other tools still swap to a red ✗ on a genuine failure). Richer
+turn surfaces:
 
-- Thinking spinner + token meter.
+- Thinking spinner + token meter (the footer "Thinking…" indicator, always shown
+  while the model reasons). The inline dim *thinking blocks* in the transcript are
+  opt-in via the `agent.showThinking` config flag (off by default); the footer
+  indicator is unaffected.
 - **Subagents:** per-`Agent`-tool transcript captured off the main thread;
   inline button + sticky "Subagents" panel + pushed `Adw.NavigationView`
   page.
@@ -198,8 +204,9 @@ done. Monitor **inner** state is still not reconstructed (drawn as a static row)
 
 Scope: the main thread restores fully — user turns, assistant text/thinking, tool
 calls + results, the tasks panel, and spawned subagents' inner transcripts. The
-footer's model + context gauge is seeded from the transcript's latest assistant
-`usage` (`readContextSeed`), so a resumed agent shows its real context occupancy
+footer's context gauge (and the model shown in its breakdown popover) is seeded
+from the transcript's latest assistant `usage` (`readContextSeed`), so a resumed
+agent shows its real context occupancy
 before the first turn; cost and the exact context-window size aren't in the
 transcript, so they settle on the first live `result`. Empty thinking blocks
 (transcript stores signatures, not text) don't render.

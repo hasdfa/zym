@@ -41,7 +41,6 @@ import { ActionsBar } from './conversation/ActionsBar.ts';
 import { ModelContext } from './conversation/ModelContext.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { NERDFONT } from './nerdfont.ts';
-import { highlightToMarkup } from '../syntax/highlightToMarkup.ts';
 import { SdkSession, type PermissionRequest, type QuestionRequest, type TaskProgress } from '../agents/claude-sdk/SdkSession.ts';
 import type { Transport, TransportOptions } from '../agents/claude-sdk/transport.ts';
 import { readTranscript, readContextSeed } from '../agents/claude-sdk/transcript.ts';
@@ -75,13 +74,22 @@ addStyles(/* css */`
     margin: 0 12px;
   }
 
-  /* The input + its status strip, as a bordered rounded card with its own bg.
+  /* The input + its status strip, as a borderless rounded card with its own bg.
      No top margin — the card sits flush under the transcript (no gap above). */
   #AgentConversation .conversation-input-card {
     margin: 0 calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing)) calc(2 * var(--t-spacing));
-    border: 1px solid var(--border-color);
     border-radius: var(--card-radius);
     background: var(--card-bg-color);
+    /* Native (libadwaita) focus ring: invisible at rest, fading + scaling in when the
+       prompt takes focus (.prompt-focused). Follows the card's border-radius. */
+    outline: 0 solid transparent;
+    outline-offset: 3px;
+    transition: outline-color 200ms ease-in-out, outline-width 200ms ease-in-out, outline-offset 200ms ease-in-out;
+  }
+  /* Ring the whole card while the prompt editor (not the footer dropdown) holds focus. */
+  #AgentConversation .conversation-input-card.prompt-focused {
+    outline: 2px solid alpha(var(--accent-color), 0.6);
+    outline-offset: -1px;
   }
 
   /* Let the card's background show through the editor (no separate editor bg). */
@@ -95,7 +103,6 @@ addStyles(/* css */`
 
   #AgentConversation .conversation-footer {
     padding: 6px 12px;
-    border-top: 1px solid var(--border-color); /* divider between the input and the status strip */
   }
 
   /* The footer metadata (model name · context tokens) reads as muted secondary text. */
@@ -116,6 +123,8 @@ addStyles(/* css */`
   #AgentConversation .conversation-row { padding: 6px 0; }
   /* Tool-use header text (tool rows / subagent / monitor / answered question). */
   #AgentConversation .conversation-tool-header { opacity: 0.85; }
+  /* Trailing dot marking a non-zero Bash exit (the icon + command colour stay put). */
+  #AgentConversation .bash-error-dot { padding-left: 8px; }
   #AgentConversation .conversation-system { opacity: 0.6; font-style: italic; }
   /* The resume boundary divider: centered, muted, italic. */
   #AgentConversation .conversation-resume { opacity: var(--dim-opacity); font-style: italic; }
@@ -451,6 +460,13 @@ export class AgentConversation implements Agent {
     inputCard.setOverflow(Gtk.Overflow.HIDDEN);
     inputCard.append(this.promptContainer);
     inputCard.append(this.footer);
+
+    // Ring the card while the prompt holds focus; the controller sits on the prompt
+    // container so the footer dropdown is excluded.
+    const promptFocus = new Gtk.EventControllerFocus();
+    promptFocus.on('enter', () => inputCard.addCssClass('prompt-focused'));
+    promptFocus.on('leave', () => inputCard.removeCssClass('prompt-focused'));
+    this.subs.addController(this.promptContainer, promptFocus);
 
     // Subagents push pages onto this.root (the NavigationView, assigned next); the
     // push/pop arrows defer that lookup until a click.
@@ -881,6 +897,7 @@ export class AgentConversation implements Agent {
         this.transcript.scrollToBottom();
       }),
       this.session.onAssistantThinking(({ delta }) => {
+        if (zym.config.get('agent.showThinking') !== true) return; // thinking blocks are opt-in
         if (!this.thinkingView) {
           this.thinkingRaw = '';
           this.thinkingView = this.addMarkdownBlock('thinking');
@@ -1176,22 +1193,17 @@ export class AgentConversation implements Agent {
     this.transcript.scrollToBottom();
   }
 
-  // Bash (shared ToolRow): no icon — the command (monospace) is the header that
-  // toggles the detail (its output). Collapsed shows the first line; expanded shows
-  // the full command + output. A failure expands the row and adds a ✗ to the status.
+  // Bash (shared ToolRow): the command (monospace) is the header toggling the detail
+  // (its output); collapsed shows the first line. A non-zero exit only reveals a trailing
+  // red dot — the icon and command colour stay put (a miss is often normal).
   private addBashRow(id: string, input: unknown): void {
     const command = (input as { command?: unknown })?.command;
     const cmd = typeof command === 'string' ? command : summarizeInput(input);
     const firstLine = cmd.split('\n', 1)[0];
     const multiline = cmd.includes('\n');
 
-    // bash syntax highlighting when the grammar is available, else plain mono.
-    const monoWrap = (inner: string) => `<span face="${escapeMarkup(fonts.monospaceFamily)}">${inner}</span>`;
-    const highlight = (text: string): string => {
-      let inner: string | null = null;
-      try { inner = highlightToMarkup(text, 'bash'); } catch { /* no grammar */ }
-      return monoWrap(inner ?? escapeMarkup(text));
-    };
+    // The command renders as plain monospace (no syntax highlighting).
+    const monoWrap = (text: string) => `<span face="${escapeMarkup(fonts.monospaceFamily)}">${escapeMarkup(text)}</span>`;
 
     const label = new Gtk.Label({ xalign: 0, hexpand: true });
     label.addCssClass('conversation-tool-header');
@@ -1202,11 +1214,19 @@ export class AgentConversation implements Agent {
       const text = full ? cmd : firstLine;
       label.setWrap(full);
       label.setEllipsize(full ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END);
-      setMarkupSafe(label, highlight(text), text);
+      setMarkupSafe(label, monoWrap(text), text);
     };
     render(false);
 
-    const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header: label, onToggle: render });
+    // A trailing red dot (shown on a non-zero exit) at the far end of the row.
+    const errorDot = new Gtk.Label({ valign: Gtk.Align.CENTER, visible: false });
+    errorDot.addCssClass('bash-error-dot');
+    setMarkupSafe(errorDot, iconSpan(NERDFONT.STATUS.DOT, theme.ui.status.error), '●');
+    const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, hexpand: true });
+    header.append(label);
+    header.append(errorDot);
+
+    const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render });
     this.transcript.appendToolEntry(toolRow.root);
 
     let progress: InstanceType<typeof Gtk.Label> | null = null;
@@ -1221,9 +1241,9 @@ export class AgentConversation implements Agent {
           out.addCssClass('conversation-result');
           toolRow.content.append(out);
         }
-        // A non-zero exit is often normal control flow (grep/test miss), so mark it
-        // (✗ + error tint) but DON'T auto-expand — the user opens the output if wanted.
-        if (isError) toolRow.setStatus('error', NERDFONT.STATUS.CROSS);
+        // A non-zero exit is often normal (grep/test miss): just show the dot, don't
+        // auto-expand (the user opens the output if wanted).
+        if (isError) errorDot.setVisible(true);
       },
       // Background-bash progress (run_in_background); shown in the detail body.
       onProgress: (p) => {

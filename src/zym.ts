@@ -158,6 +158,13 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
       'When launching an agent with a prompt, auto-generate its session name from that prompt ' +
       'via a one-shot `claude -p --model sonnet` call. An empty `/rename` triggers the same naming on demand.',
   },
+  'agent.showThinking': {
+    type: 'boolean',
+    default: false,
+    description:
+      "Show the agent's dim 'thinking' (reasoning) blocks inline in the conversation transcript. " +
+      'Off by default; the footer "Thinking…" status indicator is unaffected either way.',
+  },
   'git.remotes.upstream': {
     type: 'string',
     default: 'upstream',
