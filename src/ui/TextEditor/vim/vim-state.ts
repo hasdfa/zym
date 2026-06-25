@@ -48,6 +48,28 @@ interface InputOptions {
  * Point), so providers receive a loosely-typed options bag. */
 type InputProvider = (options: any) => void
 
+/**
+ * Bridge from the preset-occurrence command (`g o`) to the host's search engine,
+ * so occurrence arms on the *search matches*. The host (TextEditor) provides the
+ * active pattern and a way to seed the search (without moving the cursor) from the
+ * cursor word / a selection. Absent on a headless buffer — `g o` then falls back
+ * to its in-vim cursor-word pattern. See docs/text-editor/occurrence-search.md.
+ */
+export interface OccurrenceSearchProvider {
+  /** DWIM arm from the cursor: if the cursor word is itself a hit of the active
+   *  search, arm that search; otherwise (re-)seed the search from the cursor word.
+   *  Null when there's no word and no active search. Never moves the cursor. */
+  armFromCursor(): RegExp | null
+  /** Arm from literal text (a visual selection); seeds the search. No cursor move. */
+  armFromText(text: string): RegExp | null
+  /** The current (live) search pattern, or null — the occurrence operation reads this
+   *  so it always acts on what's highlighted, even if the search changed after arming. */
+  getActivePattern(): RegExp | null
+  /** Repaint the search highlights. The armed/amber style is derived from the
+   *  occurrence state (see `setArmedProvider`), so this just re-renders. */
+  refresh(): void
+}
+
 /** Generic emitter/event-subscription callback (payload shape varies per event). */
 type EventCallback = (value?: any) => void
 
@@ -119,6 +141,7 @@ export default class VimState {
   __inputHandler?: InputHandler | null
   __inputGrabListener?: ((key: Key) => boolean) | null
   __leapInput?: InputProvider
+  __occurrenceSearchProvider?: OccurrenceSearchProvider
   __macros?: Record<string, Key[]>
 
   // Proxy propperties and methods
@@ -276,7 +299,11 @@ export default class VimState {
   // Search highlights are owned by the host editor's SearchController (the vmp
   // highlight-search manager is not ported), so reset-normal-mode signals the
   // host to clear them rather than touching globalState.
-  onDidRequestClearSearchHighlight (fn: EventCallback): DisposableType { return this.subscribe(this.emitter.on('did-request-clear-search-highlight', fn)) } // prettier-ignore
+  // Lifetime-scoped (like onDidDestroy), NOT this.subscribe — the host wires its
+  // `search.clear()` listener once at editor setup; routing it through the
+  // per-operation `subscribe` would drop it after the first operation (so `ctrl-l`
+  // / Esc `:noh` would silently stop clearing once you'd run any operator).
+  onDidRequestClearSearchHighlight (fn: EventCallback): DisposableType { return this.emitter.on('did-request-clear-search-highlight', fn) } // prettier-ignore
   emitDidRequestClearSearchHighlight (): void { this.emitter.emit('did-request-clear-search-highlight') } // prettier-ignore
 
   // Events
@@ -452,8 +479,8 @@ export default class VimState {
         this.clearSelections()
       } else if (this.hasPersistentSelections() && this.getConfig('clearPersistentSelectionOnResetNormalMode')) {
         this.clearPersistentSelections()
-      } else if (this.__occurrenceManager && this.occurrenceManager.hasPatterns()) {
-        this.occurrenceManager.resetPatterns()
+      } else if (this.__occurrenceManager && (this.occurrenceManager.hasPatterns() || this.occurrenceManager.isArmed())) {
+        this.disarmOccurrence()
       }
       if (this.getConfig('clearHighlightSearchOnResetNormalMode')) {
         this.emitDidRequestClearSearchHighlight()
@@ -711,6 +738,51 @@ export default class VimState {
   /** Wire the leap input provider — the host's Leap, in practice. */
   setLeapInput (provider: InputProvider): void {
     this.__leapInput = provider
+  }
+
+  /** Wire the occurrence↔search bridge — the host's SearchController, in practice. */
+  setOccurrenceSearchProvider (provider: OccurrenceSearchProvider): void {
+    this.__occurrenceSearchProvider = provider
+  }
+
+  /** Arm occurrence from the cursor (DWIM: active-search-if-on-hit, else cursor
+   *  word). Returns its regex, or null when none / no host. Never moves the cursor. */
+  armSearchFromCursor (): RegExp | null {
+    return this.__occurrenceSearchProvider?.armFromCursor() ?? null
+  }
+
+  /** Arm occurrence from literal text — a visual selection (no cursor move). */
+  armSearchFromText (text: string): RegExp | null {
+    return this.__occurrenceSearchProvider?.armFromText(text) ?? null
+  }
+
+  /** Whether occurrence is armed — the single source of truth the search render
+   *  derives its armed (purple) vs amber style from. */
+  isOccurrenceArmed (): boolean {
+    return this.__occurrenceManager?.isArmed() ?? false
+  }
+
+  /** The live search pattern, for the occurrence operation (null when none / no host). */
+  getActiveSearchPattern (): RegExp | null {
+    return this.__occurrenceSearchProvider?.getActivePattern() ?? null
+  }
+
+  /** Repaint the search highlights to reflect the current armed state. */
+  refreshSearchHighlight (): void {
+    this.__occurrenceSearchProvider?.refresh()
+  }
+
+  /** Disarm occurrence and repaint (flips the highlights back to the amber search). */
+  disarmOccurrence (): void {
+    if (this.__occurrenceManager) this.occurrenceManager.disarm()
+    this.refreshSearchHighlight()
+  }
+
+  /** `ctrl-l` / `:noh`: disarm occurrence and drop the search highlights outright
+   *  (the query persists so `n`/`N` re-find). */
+  clearSearchHighlight (): void {
+    if (this.__occurrenceManager) this.occurrenceManager.disarm()
+    this.emitDidRequestClearSearchHighlight()
   }
 
   // Macros (q/@). Recorded keystrokes are stored per register letter; replay

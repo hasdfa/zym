@@ -62,6 +62,12 @@ export class SearchController {
   // Wrap the (escaped) query in word boundaries — set by the vim `*`/`#`
   // word search, cleared by any bar-driven query.
   private wholeWord = false;
+  // Occurrence "armed" rendering: when this returns true, paint every match in the
+  // single `occurrence` (purple) style with no current-match emphasis, so the search
+  // highlight doubles as the armed-occurrence highlight. DERIVED from the occurrence
+  // state (the vim layer owns it) so the two can never desync — there is no local
+  // armed flag to drift.
+  private isArmedProvider?: () => boolean;
 
   // Notified with the active search regex whenever a search runs, so the host can
   // publish it to the vim layer (globalState.lastSearchPattern) for `gn`/`gN`.
@@ -75,6 +81,12 @@ export class SearchController {
   /** Register a listener for the active search pattern (the vim `gn` bridge). */
   setPatternListener(fn: (regex: RegExp) => void): void {
     this.onPattern = fn;
+  }
+
+  /** Register the source of truth for armed (purple) rendering — the vim occurrence
+   *  state. Highlights are repainted purple iff this returns true. */
+  setArmedProvider(fn: () => boolean): void {
+    this.isArmedProvider = fn;
   }
 
   /** Begin a search session: remember the cursor and the direction. */
@@ -153,6 +165,46 @@ export class SearchController {
   /** The currently-seated match (what `/`/`?` would land on), or null. */
   get currentMatch(): Range | null {
     return this.index >= 0 ? (this.matches[this.index] ?? null) : null;
+  }
+
+  /** The compiled regex of the active search (or null when none is active) — the
+   *  occurrence bridge reads this so `g o` can arm on the current search matches. */
+  get activePattern(): RegExp | null {
+    this.syncSlashRegister();
+    return this.buildRegex();
+  }
+
+  /** Whether match highlights are currently painted. `g o` arms the search only
+   *  when it's visible (you can see the amber); a `:noh`/`ctrl-l` clear empties this
+   *  so `g o` falls back to the cursor word even though the query persists for n/N. */
+  get hasVisibleMatches(): boolean {
+    return this.matches.length > 0;
+  }
+
+  /** Set the query (optionally word-bounded) and re-highlight WITHOUT moving the
+   *  cursor — used to arm occurrence (`g o`) from the cursor word / a selection.
+   *  Returns the compiled regex (or null). */
+  setQueryStatic(query: string, { wholeWord = false } = {}): RegExp | null {
+    this.query = query;
+    this.wholeWord = wholeWord;
+    this.options.useRegex = false;
+    if (query) {
+      slashRegister.query = query;
+      slashRegister.wholeWord = wholeWord;
+    }
+    this.scanMatches();
+    this.index = -1;
+    this.highlight();
+    return this.buildRegex();
+  }
+
+  /** Re-scan the current query and repaint the match highlights WITHOUT moving the
+   *  cursor — used when disarming occurrence so the navigation search highlights
+   *  come back instead of leaving the buffer blank. No-op when no query is set. */
+  rehighlight(): void {
+    this.scanMatches();
+    if (this.index >= this.matches.length) this.index = -1;
+    this.highlight();
   }
 
   /** Drop matches + highlights (e.g. `:noh` or a fresh, empty query). */
@@ -287,12 +339,16 @@ export class SearchController {
     return 0; // wrap to first
   }
 
-  /** Paint all matches (`highlight`) with the current one strong. */
+  /** Paint all matches: amber (`highlight`) with the current one strong, or — when
+   *  occurrence is armed — a single uniform purple (`occurrence`, no current). The
+   *  armed style is derived from `isArmedProvider`, never a local flag. */
   private highlight(): void {
+    const armed = this.isArmedProvider?.() ?? false;
     const layer = this.decorations.layer(LAYER);
     layer.clear();
     for (let i = 0; i < this.matches.length; i++) {
-      layer.decorate(this.matches[i], i === this.index ? 'highlight-strong' : 'highlight');
+      const style = armed ? 'occurrence' : i === this.index ? 'highlight-strong' : 'highlight';
+      layer.decorate(this.matches[i], style);
     }
   }
 

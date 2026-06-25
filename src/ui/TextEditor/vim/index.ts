@@ -410,22 +410,16 @@ const JUMP_BINDINGS: Record<string, string> = {
   'g ,': 'GoToNewerChange',
 };
 
-// Occurrence (vim-mode-plus): `g o` toggles preset occurrence markers from the
-// cursor word (any later operator restricts itself to them); `g O` the subword
-// variant; `g .` re-adds the last occurrence pattern. The `o`/`O` *operator
-// modifiers* (`c o p` = change occurrences in the paragraph) are bound in
-// operator-pending mode as commands, below.
+// Occurrence: `g o` toggles occurrence arming — it operates on the SEARCH matches
+// (arm from the active search, else seed the search from the cursor word / selection
+// without moving the cursor). Any later operator restricts itself to the armed
+// matches (`g o` then `d a p`). `g .` re-arms the last occurrence pattern. Disarm
+// with `g o` again or Escape. There is no `o`/`O` operator-modifier (`c o p`) —
+// `g o` replaces it (and adds regex). See docs/text-editor/occurrence-search.md.
 const OCCURRENCE_BINDINGS: Record<string, string> = {
   'g o': 'TogglePresetOccurrence',
-  'g O': 'TogglePresetSubwordOccurrence',
+  'alt-/': 'TogglePresetOccurrence', // fast single-chord toggle (arm/disarm)
   'g .': 'AddPresetOccurrenceFromLastOccurrencePattern',
-};
-
-// `o`/`O` while an operator is pending set an occurrence modifier on it rather
-// than running an operation class — they go through `setOperatorModifier`.
-const OPERATOR_MODIFIER_COMMANDS: Record<string, string> = {
-  o: 'vim-mode-plus:operator-modifier-occurrence',
-  O: 'vim-mode-plus:operator-modifier-subword-occurrence',
 };
 
 // Persistent multi-cursor: add a cursor on the row below/above (Sublime/VS Code
@@ -439,6 +433,13 @@ const MULTI_CURSOR_COMMANDS: Record<string, string> = {
 };
 const MULTI_CURSOR_CLEAR: Record<string, string> = {
   escape: 'vim-mode-plus:clear-multiple-cursors',
+};
+
+// `ctrl-l` (the classic vim `:noh` remap) clears the search highlights and disarms
+// occurrence. The query is kept so `n`/`N` re-find. Plain command, wired in
+// `attachVim`. See docs/text-editor/occurrence-search.md.
+const SEARCH_CLEAR_COMMANDS: Record<string, string> = {
+  'ctrl-l': 'vim-mode-plus:clear-search-highlight',
 };
 
 // Alt-navigation, ported from the user's nvim keymap (`<A-j/k>` = 5j/5k,
@@ -568,6 +569,8 @@ function registerKeymapsOnce(): void {
       // ctrl-alt-↑/↓ add a cursor; escape collapses multi-cursor back to one.
       ...MULTI_CURSOR_COMMANDS,
       ...MULTI_CURSOR_CLEAR,
+      // ctrl-l clears the search highlights + disarms occurrence (vim `:noh`).
+      ...SEARCH_CLEAR_COMMANDS,
       // alt-j/k step 5 lines; alt-d/u scroll the view 12 lines (ported from nvim).
       ...ALT_NAV_COMMANDS,
       // gf opens the file under the cursor; gw Google-searches the word under it.
@@ -593,12 +596,10 @@ function registerKeymapsOnce(): void {
       // gw Google-searches the current selection.
       ...toKeymap(WEB_SEARCH_BINDINGS),
     },
-    // Operator targets in operator-pending mode: text objects, `d/foo` search,
-    // and the `o`/`O` occurrence modifiers (`c o p`, `d O w`).
+    // Operator targets in operator-pending mode: text objects and `d/foo` search.
     '#TextEditor.operator-pending-mode': {
       ...toKeymap(TEXT_OBJECT_BINDINGS),
       ...toKeymap(SEARCH_MOTION_BINDINGS),
-      ...OPERATOR_MODIFIER_COMMANDS,
     },
     // Escape returns to normal mode from insert, operator-pending, and visual.
     '#TextEditor:not(.normal-mode)': {
@@ -669,13 +670,10 @@ export function attachVim(editor: EditorModel): VimState {
     'vim-mode-plus:set-register-name': () => {
       vimState.register.setName();
     },
-    // `o`/`O` occurrence modifiers: set the pending operator to operate on
-    // occurrences of the cursor word (base) / cursor subword.
-    'vim-mode-plus:operator-modifier-occurrence': () => {
-      vimState.setOperatorModifier({ occurrence: true, occurrenceType: 'base' });
-    },
-    'vim-mode-plus:operator-modifier-subword-occurrence': () => {
-      vimState.setOperatorModifier({ occurrence: true, occurrenceType: 'subword' });
+    // `ctrl-l` — vim `:noh`: disarm occurrence and drop the search highlights (the
+    // query persists so `n`/`N` re-find).
+    'vim-mode-plus:clear-search-highlight': () => {
+      vimState.clearSearchHighlight();
     },
     // Persistent multi-cursor add/clear (direct EditorModel ops, then repaint).
     'vim-mode-plus:add-cursor-below': () => {

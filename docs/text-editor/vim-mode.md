@@ -23,15 +23,24 @@ default (no flag).
 - System clipboard integration; register prefix (`"`).
 - `/` `?` `n` `N` search via the `SearchBar` (incremental highlight, case/regex,
   replace).
-- **Occurrence** — operator-modifier `o`/`O` (`c o p`, `d o p`, `g U o w`;
-  subword via `O`) and preset occurrence `g o`/`g O`/`g .` (persistent
-  highlighted markers any later operator restricts itself to), via a real
-  `OccurrenceManager` over `MarkerLayer` + a `TextDecorations` highlight layer
-  (`occurrence.test.ts`).
+- **Occurrence** — unified with search: `g o` (or the fast `alt-/`) *arms*
+  occurrence on the search matches by recoloring the search highlight a distinct
+  **purple** (dropping the current-match emphasis); any later operator restricts
+  itself to the armed matches (`g o` then `d a p`). A *visible* search wins;
+  otherwise arming (re-)seeds the search from the cursor word / selection without
+  moving the cursor. Arming creates **no marks** — they're materialised lazily only
+  when an operator runs, so `g o` is cheap on large buffers. `ctrl-l` (vim `:noh`)
+  drops the highlights — the re-target gesture, since `ctrl-l` then `g o` arms the
+  cursor word again. Persistent; disarm with `g o`/`alt-/` again (→ amber search) or
+  `Escape`. `g .` re-arms the last pattern. The old `o`/`O` operator-modifier
+  (`c o p`) is removed. Built on
+  `OccurrenceManager` (lazy-armed pattern → `MarkerLayer` on demand) + the host's
+  `SearchController` over a `VimState` bridge (`occurrence.test.ts`). See
+  [occurrence-search.md](occurrence-search.md).
 - **Visual-blockwise (`ctrl-v`) and multiple cursors** — emulated on
   `MarkerLayer` mark pairs surfaced through the array-shaped
   `getCursors()`/`getSelections()`. Entry points: blockwise `ctrl-v`
-  (I/A/c/d/yank/paste), occurrence `c o p`, and persistent `ctrl-alt-↑/↓`
+  (I/A/c/d/yank/paste), armed occurrence `g o`, and persistent `ctrl-alt-↑/↓`
   (add cursor above/below; `escape` collapses). Extra-caret rendering
   (reverse-video block tags in normal/visual; host-drawn beam carets in insert);
   multi-cursor operations undo as one step; insert is incrementally replicated

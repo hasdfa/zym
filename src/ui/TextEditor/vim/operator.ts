@@ -140,20 +140,28 @@ class Operator extends Base {
   }
 
   initialize (): void {
-    this.subscribeResetOccurrencePatternIfNeeded()
-
-    // When preset-occurrence was exists, operate on occurrence-wise
-    if (this.acceptPresetOccurrence && this.occurrenceManager.hasMarkers()) {
+    // When preset-occurrence markers exist OR occurrence is armed (lazy), operate
+    // occurrence-wise. Detected BEFORE subscribeReset so the armed case (no markers
+    // yet) correctly registers the post-operation cleanup of its transient marks.
+    if (this.acceptPresetOccurrence && (this.occurrenceManager.hasMarkers() || this.occurrenceManager.isArmed())) {
       this.occurrence = true
     }
 
+    this.subscribeResetOccurrencePatternIfNeeded()
+
     // [FIXME] ORDER-MATTER
-    // To pick cursor-word to find occurrence base pattern.
-    // This has to be done BEFORE converting persistent-selection into real-selection.
-    // Since when persistent-selection is actually selected, it change cursor position.
-    if (this.occurrence && !this.occurrenceManager.hasMarkers()) {
-      const regex = this.patternForOccurrence || this.getPatternForOccurrenceType(this.occurrenceType)
-      this.occurrenceManager.addPattern(regex)
+    // Resolve the occurrence pattern now (at the ORIGINAL cursor) but DEFER the scan
+    // to selectTarget, where it can be scoped to the target range (so `c i i` only
+    // scans the indentation block, not the whole buffer). Resolution must happen
+    // BEFORE persistent-selection conversion moves the cursor.
+    if (this.occurrence && !this.occurrenceManager.hasMarkers() && !this.patternForOccurrence) {
+      // When armed, use the LIVE search pattern (so the operation always matches
+      // what's highlighted, even if the search changed since arming); fall back to
+      // the armed snapshot (headless) or the cursor word.
+      const armed = this.occurrenceManager.isArmed()
+        ? this.vimState.getActiveSearchPattern() || this.occurrenceManager.armedPattern
+        : null
+      this.patternForOccurrence = armed || this.getPatternForOccurrenceType(this.occurrenceType) || null
     }
 
     // This change cursor position.
@@ -403,18 +411,24 @@ class Operator extends Base {
     // so checkpoint comes AFTER @emitWillSelectTarget()
     this.mutationManager.setCheckpoint('will-select')
 
-    // NOTE: When repeated, set occurrence-marker from pattern stored as state.
-    if (this.repeated && this.occurrence && !this.occurrenceManager.hasMarkers()) {
-      this.occurrenceManager.addPattern(this.patternForOccurrence, {occurrenceType: this.occurrenceType})
-    }
-
     this.target.execute()
 
     this.mutationManager.setCheckpoint('did-select')
     if (this.occurrence) {
       if (!this.patternForOccurrence) {
-        // Preserve occurrencePattern for . repeat.
+        // Preserve occurrencePattern for . repeat (eager-preset path, where it
+        // wasn't resolved in initialize).
         this.patternForOccurrence = this.occurrenceManager.buildPattern()
+      }
+
+      // Materialise marks lazily AND scoped to the just-selected target range(s):
+      // only scan/mark within the operator's target, never the whole buffer.
+      if (!this.occurrenceManager.hasMarkers() && this.patternForOccurrence) {
+        this.occurrenceManager.materializeWithin(
+          this.patternForOccurrence,
+          this.editor.getSelectedBufferRanges(),
+          this.occurrenceType,
+        )
       }
 
       this.occurrenceWise = this.wise || 'characterwise'
@@ -547,6 +561,10 @@ class TogglePersistentSelection extends CreatePersistentSelection {
 
 // Preset Occurrence
 // =========================
+// `g o` — toggle occurrence arming. Occurrence operates on the SEARCH matches:
+// arm from the active search pattern, else seed the search from the selection /
+// cursor word (without moving the cursor) and arm on that. Press again to disarm.
+// See docs/text-editor/occurrence-search.md.
 class TogglePresetOccurrence extends Operator {
   target: any = 'Empty'
   flashTarget = false
@@ -555,30 +573,38 @@ class TogglePresetOccurrence extends Operator {
   occurrenceType = 'base'
 
   execute (): void {
-    const marker = this.occurrenceManager.getMarkerAtPoint(this.getCursorBufferPosition())
-    if (marker) {
-      this.occurrenceManager.destroyMarkers([marker])
-    } else {
-      const isNarrowed = this.vimState.isNarrowed()
-
-      let regex
-      if (this.mode === 'visual' && !isNarrowed) {
-        this.occurrenceType = 'base'
-        regex = new RegExp(this._.escapeRegExp(this.editor.getSelectedText()), 'g')
-      } else {
-        regex = this.getPatternForOccurrenceType(this.occurrenceType)
-      }
-
-      this.occurrenceManager.addPattern(regex, {occurrenceType: this.occurrenceType})
-      this.occurrenceManager.saveLastPattern(this.occurrenceType)
-
-      if (!isNarrowed) this.activateMode('normal')
+    // Toggle off: disarm and flip the highlights back to the amber search view.
+    if (this.occurrenceManager.isArmed() || this.occurrenceManager.hasMarkers()) {
+      this.vimState.disarmOccurrence()
+      this.activateMode('normal')
+      return
     }
-  }
-}
 
-class TogglePresetSubwordOccurrence extends TogglePresetOccurrence {
-  occurrenceType = 'subword'
+    const isNarrowed = this.vimState.isNarrowed()
+    const fromSelection = this.mode === 'visual' && !isNarrowed
+
+    // A visible search wins; otherwise (re-)seed the search from the selection /
+    // cursor word. Falls back to the in-vim cursor-word pattern when there's no
+    // host (headless buffers).
+    let regex: RegExp | null | undefined = fromSelection
+      ? this.vimState.armSearchFromText(this.editor.getSelectedText())
+      : this.vimState.armSearchFromCursor()
+    if (!regex) {
+      regex = fromSelection
+        ? new RegExp(this._.escapeRegExp(this.editor.getSelectedText()), 'g')
+        : this.getPatternForOccurrenceType(this.occurrenceType)
+    }
+    if (!regex) return
+
+    // Lazy: arm the pattern (no scan/marks) and repaint the search purple (the armed
+    // style is derived from the occurrence state). Marks are materialised only when
+    // an operator actually runs.
+    this.occurrenceManager.arm(regex)
+    this.vimState.refreshSearchHighlight()
+    this.occurrenceManager.saveLastPattern(this.occurrenceType)
+
+    if (!isNarrowed) this.activateMode('normal')
+  }
 }
 
 // Want to rename RestoreOccurrenceMarker
@@ -1109,7 +1135,6 @@ const __operations = {
   CreatePersistentSelection,
   TogglePersistentSelection,
   TogglePresetOccurrence,
-  TogglePresetSubwordOccurrence,
   AddPresetOccurrenceFromLastOccurrencePattern,
   Delete,
   DeleteRight,

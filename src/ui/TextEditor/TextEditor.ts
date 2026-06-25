@@ -753,6 +753,24 @@ export class TextEditor implements DocumentHost {
       (this.vimState as unknown as VimGlobalStateBridge).globalState?.set('lastSearchPattern', regex),
     );
 
+    // Occurrence↔search bridge: `g o` arms occurrence on the search matches —
+    // either the active search, or one seeded here from the cursor word / selection
+    // without moving the cursor. See docs/text-editor/occurrence-search.md.
+    this.vimState.setOccurrenceSearchProvider({
+      armFromCursor: () => this.armSearchFromCursor(),
+      armFromText: (text) => {
+        if (!text) return null;
+        const regex = this.search.setQueryStatic(text, { wholeWord: false });
+        this.searchBar.reflectQuery(text);
+        return regex;
+      },
+      getActivePattern: () => this.search.activePattern,
+      refresh: () => this.search.rehighlight(),
+    });
+    // The search renders purple iff occurrence is armed — single source of truth, so
+    // the highlight and the operator behaviour can never disagree.
+    this.search.setArmedProvider(() => this.vimState.isOccurrenceArmed());
+
     // `:noh`-style clear: reset-normal-mode (Esc) drops the search highlights when
     // `clearHighlightSearchOnResetNormalMode` is on. The query is kept, so `n`/`N`
     // re-highlight on demand.
@@ -765,9 +783,9 @@ export class TextEditor implements DocumentHost {
     });
   }
 
-  /** vim `*`/`#`: search for the keyword under (or next on the line after) the
-   *  cursor. No-op when the line has no word at/after the cursor. */
-  private searchWordUnderCursor(reverse: boolean, wholeWord: boolean): void {
+  /** The word under (or next on the line after) the cursor, or null when none —
+   *  shared by `*`/`#` and `g o`'s cursor-word arming. */
+  private wordAtOrAfterCursor(): string | null {
     const pos = this.editorModel.getCursorBufferPosition();
     const line = this.editorModel.lineTextForBufferRow(pos.row);
     const wordRe = /\w+/g;
@@ -775,14 +793,34 @@ export class TextEditor implements DocumentHost {
     while ((match = wordRe.exec(line))) {
       // match.index/length are UTF-16; columns are codepoints — compare in codepoints.
       const wordEndColumn = [...line.slice(0, match.index + match[0].length)].length;
-      if (wordEndColumn > pos.column) {
-        this.search.searchWord(match[0], reverse, wholeWord);
-        // Mirror the searched word into the search bar so its value tracks the
-        // active search, like vim setting the `/` register on `*`/`#`.
-        this.searchBar.reflectQuery(match[0]);
-        return;
-      }
+      if (wordEndColumn > pos.column) return match[0];
     }
+    return null;
+  }
+
+  /** vim `*`/`#`: search for the keyword under (or next on the line after) the
+   *  cursor. No-op when the line has no word at/after the cursor. */
+  private searchWordUnderCursor(reverse: boolean, wholeWord: boolean): void {
+    const word = this.wordAtOrAfterCursor();
+    if (!word) return;
+    this.search.searchWord(word, reverse, wholeWord);
+    // Mirror the searched word into the search bar so its value tracks the active
+    // search, like vim setting the `/` register on `*`/`#`.
+    this.searchBar.reflectQuery(word);
+  }
+
+  /** `g o` arm from the cursor: a *visible* search wins (you can see the amber, so
+   *  arming it is predictable); otherwise (re-)seed the search from the cursor word
+   *  without moving the cursor. To re-target a new word after a search, clear it
+   *  first with `ctrl-l`. Returns the chosen regex, or null when there's no word and
+   *  no visible search. */
+  private armSearchFromCursor(): RegExp | null {
+    if (this.search.hasVisibleMatches) return this.search.activePattern;
+    const word = this.wordAtOrAfterCursor();
+    if (!word) return null;
+    const regex = this.search.setQueryStatic(word, { wholeWord: true });
+    this.searchBar.reflectQuery(word);
+    return regex;
   }
 
   // --- LSP integration -------------------------------------------------------

@@ -13,6 +13,8 @@ Most important tasks:
 
 - agent UI
 - styling/theming
+  - finish removing custom tokens
+  - implement kyntell theme
 - git (for reviewing agent work): 
   - [~] Improve diff viewer interface
   - git:discard-all (only per-file discard exists today).
@@ -189,7 +191,9 @@ Custom modal editing ported from Atom's vim-mode-plus over an `EditorModel` shim
 the default (replaced `GtkSource.VimIMContext`). Motions/operators/text-objects,
 visual + blockwise + multi-cursor, occurrence, surround, search via the
 `SearchBar`. The `:` ex-command line is won't-do. See
-[text-editor/vim-mode.md](text-editor/vim-mode.md).
+[text-editor/vim-mode.md](text-editor/vim-mode.md). Occurrence is unified with
+search (`g o` arms operators on the search matches) —
+[text-editor/occurrence-search.md](text-editor/occurrence-search.md).
 
 ### Autocompletion
 

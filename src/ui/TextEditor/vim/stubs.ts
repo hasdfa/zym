@@ -171,6 +171,10 @@ export class OccurrenceManager {
   private readonly markerLayer: MarkerLayer;
   private readonly decorations: TextDecorations;
   private patterns: RegExp[] = [];
+  // Lazily-armed occurrence: the pattern an operator should materialise marks from
+  // when it actually runs. Set by `g o` *without* scanning/creating marks (which is
+  // slow on large buffers); the search highlight stands in for the visual until then.
+  private _armedPattern: RegExp | null = null;
 
   constructor(vimState: VimState) {
     this.vimState = vimState;
@@ -189,9 +193,13 @@ export class OccurrenceManager {
     this.markerLayer.onDidUpdate(() => this.renderMarkers());
   }
 
-  private markBufferRangeByPattern(regex: RegExp, occurrenceType?: string): void {
+  // `scanRanges` (an operator's target) scopes the scan so we don't walk/mark the
+  // whole buffer; omitted ⇒ whole buffer (preset/subword).
+  private markBufferRangeByPattern(regex: RegExp, occurrenceType?: string, scanRanges?: Range[]): void {
     const { editor } = this.vimState;
-    let occurrenceRanges: Range[] = collectRangeByScan(editor, regex);
+    let occurrenceRanges: Range[] = scanRanges
+      ? scanRanges.flatMap((scanRange) => collectRangeByScan(editor, regex, { scanRange }))
+      : collectRangeByScan(editor, regex);
 
     if (occurrenceType === 'subword') {
       const subwordRegex = editor.getLastCursor().subwordRegExp();
@@ -210,7 +218,7 @@ export class OccurrenceManager {
   private renderMarkers(): void {
     const layer = this.decorations.layer('vim-occurrence');
     layer.clear();
-    for (const marker of this.getMarkers()) layer.decorate(marker.getBufferRange(), 'highlight');
+    for (const marker of this.getMarkers()) layer.decorate(marker.getBufferRange(), 'occurrence');
   }
 
   // Callback gets `{pattern, occurrenceType}`; `pattern` is undefined on reset.
@@ -240,8 +248,40 @@ export class OccurrenceManager {
   }
 
   saveLastPattern(occurrenceType?: string): void {
-    this.vimState.globalState.set('lastOccurrencePattern', this.buildPattern());
+    // When armed lazily there are no `patterns` to union — save the armed pattern.
+    this.vimState.globalState.set('lastOccurrencePattern', this._armedPattern ?? this.buildPattern());
     this.vimState.globalState.set('lastOccurrenceType', occurrenceType ?? null);
+  }
+
+  // --- Lazy arming -----------------------------------------------------------
+  /** Arm occurrence on `pattern` without scanning — marks are materialised later,
+   *  only when an operator runs (see `Operator.initialize`). */
+  arm(pattern: RegExp): void {
+    this._armedPattern = pattern;
+  }
+
+  get armedPattern(): RegExp | null {
+    return this._armedPattern;
+  }
+
+  isArmed(): boolean {
+    return this._armedPattern !== null;
+  }
+
+  /** Fully disarm: drop the armed pattern and clear any materialised marks. */
+  disarm(): void {
+    this._armedPattern = null;
+    this.resetPatterns();
+  }
+
+  /** Materialise marks for `regex`, scanning only within `scanRanges` (the operator's
+   *  target) rather than the whole buffer — so e.g. `c i i` only scans the
+   *  indentation block. Records the pattern so `.` repeat / `buildPattern` keep
+   *  working. The marks are transient (cleared after the operation). */
+  materializeWithin(regex: RegExp, scanRanges: Range[], occurrenceType?: string): void {
+    this.patterns.push(regex);
+    this.markBufferRangeByPattern(regex, occurrenceType, scanRanges);
+    this.renderMarkers();
   }
 
   // Union of every added pattern, as a single global regex. Cached onto the

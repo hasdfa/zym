@@ -146,6 +146,8 @@ export interface ThemeUi {
   search: {
     match: string;
     matchCurrent: string;
+    /** Armed-occurrence tint — visually distinct from the navigation match colour. */
+    occurrence: string;
   };
   /**
    * Diff line/word background tints (`#rrggbbaa`, compose over syntax colors). The
@@ -332,7 +334,7 @@ export const DEFAULT_THEME: Theme = {
     shadow: 'rgba(0, 0, 0, 0.3)',
     surface: { popover: '#1e1e1e', selected: 'rgba(127, 127, 127, 0.25)' },
     status: { success: '#2ec27e', warning: '#e5a50a', error: '#e01b24', info: '#3584e4', hint: '#33d17a' },
-    search: { match: '#e5a50a26', matchCurrent: '#e5a50a59' },
+    search: { match: '#e5a50a26', matchCurrent: '#e5a50a59', occurrence: '#a371f73d' },
     diff: { ...diffTones('#2ec27e', '#e01b24', 'dark'), filler: '#88888820', fold: '#8888882e' },
     flash: '#f5c21188',
     pr: { open: '#3fb950', merged: '#a371f7', closed: '#f85149' },
@@ -434,6 +436,7 @@ export function adaptTheme(file: ThemeFromFile): Theme {
     search: {
       match: f.search?.match ?? D.search.match,
       matchCurrent: f.search?.matchCurrent ?? f.search?.match ?? D.search.matchCurrent,
+      occurrence: f.search?.occurrence ?? D.search.occurrence,
     },
     diff,
     flash: f.flash ?? D.flash,

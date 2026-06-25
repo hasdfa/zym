@@ -55,28 +55,97 @@ test('the occurrence is bounded to its target — only `foo` inside the operated
   assert.equal(editor.getText(), ' a \n\nfoo b foo\n'); // second paragraph untouched
 });
 
-test('preset occurrence: `g o` marks the cursor word everywhere, toggles off on a marked word', () => {
+test('preset occurrence: `g o` arms lazily (no marks until an operator runs), `g o` again disarms', () => {
   const { vimState, run, at } = setup(TEXT);
   at(0, 0);
-  run('TogglePresetOccurrence');
+  run('TogglePresetOccurrence'); // arm on the cursor word (no host → in-vim word pattern)
   const om = vimState.occurrenceManager;
-  assert.equal(om.hasMarkers(), true);
-  assert.equal(om.getMarkerBufferRanges().length, 3); // three `foo`s
+  assert.equal(om.isArmed(), true);
+  assert.equal(om.hasMarkers(), false); // lazy: no marks created on arm
 
-  // getMarkerAtPoint finds the marker covering a `foo` and nothing on `bar`.
-  assert.ok(om.getMarkerAtPoint(new Point(0, 1))); // inside the first foo
-  assert.equal(om.getMarkerAtPoint(new Point(0, 5)), undefined); // on `bar`
-
-  at(0, 0);
-  run('TogglePresetOccurrence'); // toggle the marker under the cursor off
-  assert.equal(om.getMarkerBufferRanges().length, 2);
+  run('TogglePresetOccurrence'); // toggle off
+  assert.equal(om.isArmed(), false);
+  assert.equal(om.hasMarkers(), false);
 });
 
-test('preset occurrence drives a later operator: `g o` then `d a p` deletes the marked words in the paragraph', () => {
-  const { editor, run, at } = setup(TEXT);
+test('preset occurrence arms on the pattern the search bridge returns (the occurrence↔search bridge)', () => {
+  const { vimState, run, at } = setup(TEXT);
+  let refreshes = 0;
+  // Stand in for the host SearchController: arming resolves to the `foo` search.
+  vimState.setOccurrenceSearchProvider({
+    armFromCursor: () => /foo/g,
+    armFromText: () => null,
+    getActivePattern: () => /foo/g,
+    refresh: () => {
+      refreshes++;
+    },
+  });
+  at(0, 6); // on `bar` — the search pattern (foo) drives occurrence, not the cursor word
+  run('TogglePresetOccurrence');
+  const om = vimState.occurrenceManager;
+  assert.equal(om.isArmed(), true);
+  assert.equal(om.armedPattern?.source, 'foo');
+  assert.equal(refreshes, 1); // the search highlight was repainted (now armed) once
+  assert.equal(om.hasMarkers(), false); // still lazy
+});
+
+test('the search render derives from the occurrence armed state (no separate flag to desync)', () => {
+  const { vimState, run, at } = setup(TEXT);
+  const armedSeen: boolean[] = [];
+  vimState.setOccurrenceSearchProvider({
+    armFromCursor: () => /foo/g,
+    armFromText: () => null,
+    getActivePattern: () => /foo/g,
+    // A real SearchController reads isOccurrenceArmed() at render time; sample it here.
+    refresh: () => armedSeen.push(vimState.isOccurrenceArmed()),
+  });
   at(0, 0);
-  run('TogglePresetOccurrence'); // preset markers on every `foo`
+  run('TogglePresetOccurrence'); // arm → render sees armed=true
+  run('TogglePresetOccurrence'); // disarm → render sees armed=false
+  assert.equal(vimState.occurrenceManager.isArmed(), false);
+  assert.deepEqual(armedSeen, [true, false]);
+});
+
+test('an armed occurrence materialises marks lazily when an operator runs: `g o` then `d a p`', () => {
+  const { editor, vimState, run, at } = setup(TEXT);
+  at(0, 0);
+  run('TogglePresetOccurrence'); // arm on `foo` (no marks yet)
+  assert.equal(vimState.occurrenceManager.hasMarkers(), false); // lazy until an operator needs them
   run('Delete');
-  run('AParagraph'); // operator picks up the preset occurrence automatically
+  run('AParagraph'); // operator materialises occurrence marks, then deletes them
   assert.equal(editor.getText(), ' bar \nbaz  qux\n');
+});
+
+test('armed occurrence is scoped to the operator target: `g o` then `d i p` only touches the first paragraph', () => {
+  // Two paragraphs; the scoped scan must not mark/affect the second.
+  const { editor, run, at } = setup('foo a foo\n\nfoo b foo\n');
+  at(0, 0);
+  run('TogglePresetOccurrence'); // arm on `foo`
+  run('Delete');
+  run('InnerParagraph'); // materialise scoped to the first paragraph, then delete
+  assert.equal(editor.getText(), ' a \n\nfoo b foo\n'); // second paragraph untouched
+});
+
+test('`ctrl-l` (clearSearchHighlight) disarms occurrence AND clears the search highlight — even after an operation', () => {
+  const { vimState, run, at } = setup(TEXT);
+  let cleared = 0;
+  // The host wires this once at editor setup; it must survive operations.
+  vimState.onDidRequestClearSearchHighlight(() => {
+    cleared += 1;
+  });
+  vimState.setOccurrenceSearchProvider({
+    armFromCursor: () => /foo/g,
+    armFromText: () => null,
+    getActivePattern: () => /foo/g,
+    refresh: () => {},
+  });
+  at(0, 0);
+  run('TogglePresetOccurrence'); // arm — this runs (and resets) the operation stack
+  run('TogglePresetOccurrence'); // disarm — another operation, exercising the reset
+  run('TogglePresetOccurrence'); // arm again
+  assert.equal(vimState.occurrenceManager.isArmed(), true);
+
+  vimState.clearSearchHighlight(); // ctrl-l
+  assert.equal(vimState.occurrenceManager.isArmed(), false); // disarmed
+  assert.equal(cleared, 1); // and the `:noh` listener still fired despite prior operations
 });

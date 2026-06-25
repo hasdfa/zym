@@ -46,6 +46,7 @@ export type LineStyle =
 export type HighlightStyle =
   | 'highlight' // search: every match
   | 'highlight-strong' // search: the current match
+  | 'occurrence' // vim: an armed occurrence match (operator target)
   | 'word-add' // diff: the changed chars within an added line
   | 'word-del' // diff: the changed chars within a removed line
   | 'flash'; // vim: a brief flash over an operated/yanked range
@@ -58,6 +59,7 @@ export type DecorationStyle = LineStyle | HighlightStyle;
 const STYLE_BACKGROUND: Record<DecorationStyle, string> = {
   highlight: theme.ui.search.match,
   'highlight-strong': theme.ui.search.matchCurrent,
+  occurrence: theme.ui.search.occurrence,
   added: theme.ui.diff.added,
   removed: theme.ui.diff.removed,
   filler: theme.ui.diff.filler, // dimmed neutral pad for an aligned-but-empty row
