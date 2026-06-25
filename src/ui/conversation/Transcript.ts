@@ -61,13 +61,17 @@ export class Transcript {
   readonly root: InstanceType<typeof Gtk.ScrolledWindow>;
   // The vertical column of entries.
   private readonly box: InstanceType<typeof Gtk.Box>;
-  // While true, stay pinned to the bottom as the height changes; a user scroll up
-  // past BOTTOM_GAP releases it, scrolling back to the bottom re-arms it.
+  // Follow new content to the bottom; released when the user scrolls up, re-armed within
+  // REARM_GAP of the bottom (see setupAutoScroll).
   private stickToBottom = true;
-  // How close to the bottom (px) still counts as "following" — the small gap window
-  // that keeps autoscroll engaged through streaming, and absorbs the lag between
-  // content growing and the pin catching up so fast output never self-releases.
-  private static readonly BOTTOM_GAP = 32;
+  // Set while we pin, so the `value-changed` our pin emits isn't read as a user scroll.
+  private pinning = false;
+  // Previous value + upper, to tell a user scroll up (value fell, height held) from our
+  // own pin and from a clamp on shrinking content.
+  private lastValue = 0;
+  private lastUpper = 0;
+  // Distance from the bottom (px) that still counts as "at the bottom" for re-arming.
+  private static readonly REARM_GAP = 16;
   // The open collapsed file-tool row (Read/Write/Edit/…), while a CONSECUTIVE run of
   // the SAME tool is appended to it. Any other entry clears it (see appendEntry).
   private fileGroup: { tool: string; files: InstanceType<typeof Gtk.Box> } | null = null;
@@ -190,34 +194,44 @@ export class Transcript {
     clearChildren(this.box);
   }
 
-  /** Scroll to the bottom on the next frame, but ONLY while following (the user
-   *  hasn't scrolled up). `force` re-arms following first. Deferred to a tick because
-   *  a freshly-appended widget isn't measured yet — `upper` is stale until the next
-   *  layout pass (microtasks never run under the GLib loop — see memory
-   *  `queuemicrotask-dead-under-glib-loop`). The steady pinning during streaming is
-   *  done by setupAutoScroll's `changed` handler; this just covers the first frame. */
+  /** Follow new content to the bottom while in stick mode. `force` re-arms and pins now
+   *  (e.g. on show); otherwise the `changed` handler pins when the height changes. */
   scrollToBottom(force = false): void {
-    if (force) this.stickToBottom = true;
-    if (!this.stickToBottom) return;
-    this.root.addTickCallback(() => {
-      const adj = this.root.getVadjustment();
-      adj.setValue(adj.getUpper() - adj.getPageSize());
-      return false; // GLib SOURCE_REMOVE — run once
-    });
+    if (force) { this.stickToBottom = true; this.pinToBottom(); }
   }
 
-  // Keep the bottom pinned as the height changes (streaming output; a resume whose
-  // height settles over several layout passes), until the user scrolls up past
-  // BOTTOM_GAP. The KEY is pinning on the adjustment's `changed` (height) signal —
-  // fired AFTER layout, when `upper` is correct — rather than at append time (when the
-  // freshly-appended widget isn't measured yet). `value-changed` tracks whether we're
-  // still at the bottom: a programmatic pin lands exactly there (stays armed); a user
-  // scroll up releases it; scrolling back re-arms it.
+  // Jump to the bottom, flagged `pinning` so its value-change isn't read as a user
+  // scroll. Called from `changed` (during layout, `upper` final) so it lands correctly.
+  private pinToBottom(): void {
+    const adj = this.root.getVadjustment();
+    this.pinning = true;
+    adj.setValue(adj.getUpper() - adj.getPageSize());
+    this.pinning = false;
+  }
+
+  // Pin on the adjustment's `changed` (height) signal, NOT a per-frame tick loop: that
+  // fought GTK's own scroll handling (kinetic / scrollbar) and made scrolling up janky.
+  // `changed` fires only on a content-height change (never from a user scroll), so the
+  // two never contend; `value-changed` tracks the user — a scroll up (value fell, height
+  // held) releases stick mode, returning within REARM_GAP re-arms it. It runs before the
+  // layout that emits `changed`, so a streaming-while-scrolling frame releases first.
   private setupAutoScroll(): void {
     const adj = this.root.getVadjustment();
-    adj.on('changed', () => { if (this.stickToBottom) adj.setValue(adj.getUpper() - adj.getPageSize()); });
+    this.lastValue = adj.getValue();
+    this.lastUpper = adj.getUpper();
+    adj.on('changed', () => { if (this.stickToBottom) this.pinToBottom(); });
     adj.on('value-changed', () => {
-      this.stickToBottom = adj.getUpper() - adj.getPageSize() - adj.getValue() <= Transcript.BOTTOM_GAP;
+      const value = adj.getValue();
+      const upper = adj.getUpper();
+      if (!this.pinning) {
+        if (value < this.lastValue - 0.5 && upper >= this.lastUpper - 0.5) {
+          this.stickToBottom = false; // user scrolled up — yield immediately
+        } else if (upper - adj.getPageSize() - value <= Transcript.REARM_GAP) {
+          this.stickToBottom = true; // back within the re-arm window
+        }
+      }
+      this.lastValue = value;
+      this.lastUpper = upper;
     });
   }
 }

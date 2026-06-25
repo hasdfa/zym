@@ -1,7 +1,7 @@
 /*
- * ModelContext — the conversation footer's model + context-window segment: the
- * model name (left) paired with a "123k" token count and circular fill gauge
- * (right) that opens a detailed token/cost breakdown popover.
+ * ModelContext — the conversation footer's context-window segment: a "123k" token
+ * count and circular fill gauge that opens a detailed token/cost breakdown popover.
+ * (The model name isn't shown in the footer; it still appears in the popover.)
  *
  * It owns all of the model / cost / usage state and the composed widgets
  * (ContextRing + ContextPopover), so AgentConversation just forwards session
@@ -15,7 +15,6 @@ import type { ContextUsage } from '../../agents/claude-sdk/SdkSession.ts';
 export class ModelContext {
   readonly widget: InstanceType<typeof Gtk.Box>;
 
-  private readonly modelLabel: InstanceType<typeof Gtk.Label>;
   private readonly tokensLabel: InstanceType<typeof Gtk.Label>;
   private readonly button: InstanceType<typeof Gtk.MenuButton>;
   private readonly ring = new ContextRing();
@@ -28,9 +27,6 @@ export class ModelContext {
   private usage: ContextUsage | null = null;
 
   constructor() {
-    this.modelLabel = new Gtk.Label({ xalign: 0, hexpand: true });
-    this.modelLabel.addCssClass('conversation-footer-label');
-
     // The gauge: token count + circular fill, in a MenuButton opening the popover.
     this.tokensLabel = new Gtk.Label({ xalign: 1 });
     this.tokensLabel.addCssClass('conversation-footer-label');
@@ -42,8 +38,7 @@ export class ModelContext {
     this.button.setChild(gauge);
     this.button.setPopover(this.popover.widget);
 
-    this.widget = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 14, hexpand: true });
-    this.widget.append(this.modelLabel); // left, hexpand pushes the gauge to the right edge
+    this.widget = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 14 });
     this.widget.append(this.button);
     this.render();
   }
@@ -54,8 +49,6 @@ export class ModelContext {
   setUsage(usage: ContextUsage): void { this.tokens = usage.tokens; this.usage = usage; this.render(); }
 
   private render(): void {
-    this.modelLabel.setText(this.model ? this.model.replace(/^claude-/, '') : '');
-
     if (this.tokens != null) {
       const fraction = this.tokens / this.window;
       this.tokensLabel.setText(`${(this.tokens / 1000).toFixed(0)}k`);
