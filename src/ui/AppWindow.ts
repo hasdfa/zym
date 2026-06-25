@@ -1505,12 +1505,12 @@ export class AppWindow {
       onOpenFile: (path) => this.openFile(path),
       git,
     });
-    // The file tree is the only tab created up front. Source Control (GitPanel) is a
-    // sibling tab created lazily on first reveal (ensureGitPanel / `git-panel:focus`),
-    // so a workbench doesn't construct a git-subscribing panel it may never open. A
-    // dock panel collapses out of the workbench when its last tab closes (the
-    // reveal/focus path re-attaches it); the closure captures this workbench's own
-    // `leftPanel`.
+    // The file tree is the only tab in this right-side dock. Source Control (GitPanel)
+    // is created lazily on first reveal (ensureGitPanel / `git-panel:focus`) and opens
+    // as a center tab — not here — so a workbench doesn't construct a git-subscribing
+    // panel it may never open. The dock collapses out of the workbench when its last
+    // tab closes (the reveal/focus path re-attaches it); the closure captures this
+    // workbench's own `leftPanel`.
     const leftPanel = new Panel({ onEmpty: () => this.detachDock(leftPanel) });
     const filesTab = leftPanel.add(fileTree.root, { title: `${fileIconGlyph('', true)}  Files` });
     filesTab.select();
@@ -1711,10 +1711,10 @@ export class AppWindow {
       'pane:focus-up': { didDispatch: () => this.navPane('up'), description: 'Focus the pane above' },
       'pane:focus-down': { didDispatch: () => this.navPane('down'), description: 'Focus the pane below' },
       'pane:focus-next': { didDispatch: () => this.focusNextPane(), description: 'Cycle to the next pane' },
-      // Reveal+focus a specific left-dock tab (re-adding it if the dock had been
-      // collapsed away by closing its last tab).
-      'file-tree:focus': { didDispatch: () => this.revealLeftTab('files'), description: 'Focus the file tree' },
-      'git-panel:focus': { didDispatch: () => this.revealLeftTab('git'), description: 'Focus Source Control' },
+      // Reveal+focus the file tree (re-adding it if the right dock had been collapsed
+      // away by closing its last tab); Source Control opens as a center tab.
+      'file-tree:focus': { didDispatch: () => this.revealFileTree(), description: 'Focus the file tree' },
+      'git-panel:focus': { didDispatch: () => this.revealGitPanel(), description: 'Focus Source Control' },
       'workbench-list:focus': { didDispatch: () => this.sidebar.list.focus(), description: 'Focus the workbench sidebar' },
       // Cycle the active workbench through [user, …agents] (the workbench-list order).
       'workbench:previous': { didDispatch: () => this.cycleWorkbench(-1), description: 'Switch to the previous workbench' },
@@ -1905,32 +1905,41 @@ export class AppWindow {
     if (panel === this.workbench.leftPanel) this.workbench.setRight(null);
   }
 
-  // Reveal a left-dock tab, re-attaching the left panel and re-adding the tab if
-  // they were collapsed away by closing the dock's last tab, then focus it. The
-  // panel is re-attached (rooted) *before* any re-add: adding to a detached,
-  // unrooted Adw.TabView yields a blank page.
-  private revealLeftTab(which: 'files' | 'git') {
+  // Reveal+focus the file tree in the right-side dock, re-attaching the dock panel
+  // and re-adding the tab if they were collapsed away by closing the dock's last
+  // tab. The panel is re-attached (rooted) *before* any re-add: adding to a
+  // detached, unrooted Adw.TabView yields a blank page.
+  private revealFileTree() {
     if (this.workbench.leftPanel.root.getParent() === null)
       this.workbench.setRight({ root: this.workbench.leftPanel.root });
-    const present = this.workbench.leftPanel.getChildren();
-    if (which === 'files') {
-      if (!present.includes(this.workbench.fileTree.root)) {
-        if (this.workbench.fileTree.root.getParent()) this.workbench.fileTree.root.unparent(); // drop any closed page
-        this.workbench.filesTab = this.workbench.leftPanel.add(this.workbench.fileTree.root, {
-          title: `${fileIconGlyph('', true)}  Files`,
-        });
-      }
-      this.workbench.filesTab.select();
-      this.workbench.fileTree.focus();
-    } else {
-      const gitPanel = this.ensureGitPanel(this.workbench);
-      if (!present.includes(gitPanel.root)) {
-        if (gitPanel.root.getParent()) gitPanel.root.unparent();
-        this.workbench.gitTab = this.workbench.leftPanel.add(gitPanel.root, { title: `${Icons.git}  Git` });
-      }
-      this.workbench.gitTab?.select();
-      gitPanel.focus();
+    if (!this.workbench.leftPanel.getChildren().includes(this.workbench.fileTree.root)) {
+      if (this.workbench.fileTree.root.getParent()) this.workbench.fileTree.root.unparent(); // drop any closed page
+      this.workbench.filesTab = this.workbench.leftPanel.add(this.workbench.fileTree.root, {
+        title: `${fileIconGlyph('', true)}  Files`,
+      });
     }
+    this.workbench.filesTab.select();
+    this.workbench.fileTree.focus();
+  }
+
+  // Open (or reveal) Source Control as a tab in the active center panel — a normal
+  // tab, no longer docked on the right. Reveals the existing tab when it is still
+  // hosted in a panel; otherwise (re)adds it, unparenting any closed page first (the
+  // zombie rule). The GitPanel is lazily built once per workbench (ensureGitPanel)
+  // and reused across close/reopen.
+  private revealGitPanel() {
+    const gitPanel = this.ensureGitPanel(this.workbench);
+    if (this.workbench.gitTab && Panel.containing(gitPanel.root)) {
+      this.workbench.gitTab.select();
+      gitPanel.focus();
+      return;
+    }
+    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed page
+    this.workbench.gitTab = this.workbench.center.add(gitPanel.root, {
+      title: `${Icons.git}  Git`,
+      requireTabBar: true,
+    });
+    gitPanel.focus();
   }
 
   // Lazily create this workbench's Source Control panel on first reveal — it isn't
@@ -1943,6 +1952,9 @@ export class AppWindow {
       git: workbench.git,
       onOpenFile: (path) => this.openFile(path),
       onCommit: () => this.startCommit(),
+      // Build the embedded live diff against THIS workbench's repo (l/enter/o reveals the
+      // selected change in it); the panel owns its lifecycle.
+      buildDiffView: () => this.buildCurrentChangesDiff(workbench),
     });
     workbench.gitPanel = gitPanel;
     return gitPanel;
@@ -2196,18 +2208,17 @@ export class AppWindow {
     this.openFile(path).restoreCursor(cursor);
   }
 
-  // Focus whichever left-dock tab is currently active (file tree or Source
-  // Control); reveal Files if the dock had been collapsed away.
+  // Focus the file tree in the right-side dock; reveal it if the dock had been
+  // collapsed away. (Source Control is no longer a dock tab — it opens in the
+  // center via revealGitPanel.)
   private focusSidePanel() {
     if (this.workbench.leftPanel.root.getParent() === null || this.workbench.leftPanel.tabCount === 0) {
-      this.revealLeftTab('files');
+      this.revealFileTree();
       return;
     }
     const child = this.workbench.leftPanel.activeChild;
     if (child && this.restoreTabFocus(child)) return;
-    if (this.workbench.gitPanel && this.workbench.leftPanel.activeChild === this.workbench.gitPanel.root)
-      this.workbench.gitPanel.focus();
-    else this.workbench.fileTree.focus();
+    this.workbench.fileTree.focus();
   }
 
   // Window-level file/edit operations, surfaced in the command palette and (for
@@ -2328,6 +2339,21 @@ export class AppWindow {
         didDispatch: () => this.activeContinuousDiff()?.revertHunkAtCursor(),
         description: 'Revert the hunk under the cursor (continuous diff)',
         when: () => this.activeContinuousDiff()?.live === true, // revert restores to the index → live-diff only
+      },
+      'git:hunk-stage-next': {
+        didDispatch: () => this.activeContinuousDiff()?.stageHunkAndAdvance(),
+        description: 'Stage the hunk under the cursor, then move to the next (continuous diff)',
+        when: () => this.activeContinuousDiff()?.live === true, // staging is live-diff only
+      },
+      'diff:next-hunk': {
+        didDispatch: () => this.activeContinuousDiff()?.nextHunk(),
+        description: 'Move to the next changed hunk (continuous diff)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:prev-hunk': {
+        didDispatch: () => this.activeContinuousDiff()?.prevHunk(),
+        description: 'Move to the previous changed hunk (continuous diff)',
+        when: () => this.activeContinuousDiff() !== null,
       },
       'diff:review-comment': {
         didDispatch: () => this.activeContinuousDiff()?.startComment(),
@@ -2460,25 +2486,19 @@ export class AppWindow {
     widget.grabFocus();
   }
 
-  /** Show every changed file (working tree vs HEAD) as ONE continuous diff in a tab — the live,
-   *  editable staging surface (multibuffer; docs/text-editor/multibuffer.md). */
-  private async openLiveDiff(): Promise<void> {
-    const cwd = this.workbench.cwd;
+  /** Build a live, editable working-tree DiffView for `workbench`'s changes: NEW side = each
+   *  changed file's current text (an open document's live text incl. unsaved edits, else from
+   *  disk; a deleted file → empty) backed by a live Document, OLD side = the HEAD blob. Null
+   *  outside a repo or when there are no changes. Shared by the `git:diff-current-changes` center
+   *  tab and the GitPanel's embedded diff (which calls it through GitPanelOptions.buildDiffView). */
+  private async buildCurrentChangesDiff(workbench: Workbench<'user' | Agent>): Promise<DiffView | null> {
+    const cwd = workbench.cwd;
     const root = repoRoot(cwd);
-    if (!root) {
-      this.toast('Not in a git repository');
-      return;
-    }
-    const paths = [...this.workbench.git.getFileStatuses().keys()].sort();
-    if (paths.length === 0) {
-      this.toast('No changes against HEAD');
-      return;
-    }
+    if (!root) return null;
+    const paths = [...workbench.git.getFileStatuses().keys()].sort();
+    if (paths.length === 0) return null;
     const showHead = (rel: string): Promise<string> =>
       new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
-    // Editable diff: NEW side = the file's current text (an open document's live text, incl.
-    // unsaved edits, else from disk) backed by a live Document (edit in place + save + live
-    // re-diff), OLD side = the HEAD blob. A deleted file → empty new.
     const files = await Promise.all(
       paths.map(async (path) => {
         const oldText = await showHead(Path.relative(root, path));
@@ -2494,19 +2514,29 @@ export class AppWindow {
         return { path, oldText, newText };
       }),
     );
-    const view = new DiffView({
+    return new DiffView({
       files,
       cwd,
       editable: true,
       live: true, // the staging surface: live worktree+index → staging markers + `space h s`/`space h u`
       documents: this.documents,
-      git: this.workbench.git, // enables the staged/unstaged gutter marker + `space h s`/`space h u`
+      git: workbench.git, // enables the staged/unstaged gutter marker + `space h s`/`space h u`
       onActivate: ({ path, row }) => this.openFile(path).restoreCursor([row, 0]),
       // The view formats the comment/review; the host just delivers the string. `reviewToAgent`
       // sends to the current agent (or opens the picker to choose/start one when none runs), so a
       // review always reaches an agent — even from the user workbench.
       onSend: (message) => this.reviewToAgent(message),
     });
+  }
+
+  /** Show every changed file (working tree vs HEAD) as ONE continuous diff in a tab — the live,
+   *  editable staging surface (multibuffer; docs/text-editor/multibuffer.md). */
+  private async openLiveDiff(): Promise<void> {
+    const view = await this.buildCurrentChangesDiff(this.workbench);
+    if (!view) {
+      this.toast(repoRoot(this.workbench.cwd) ? 'No changes against HEAD' : 'Not in a git repository');
+      return;
+    }
     const title = () => {
       const mod = view.isModified() ? `${Icons.modified} ` : '';
       const review = view.reviewCount > 0 ? `  ${Icons.comment} ${view.reviewCount}` : '';
@@ -2917,8 +2947,8 @@ export class AppWindow {
   // currently occupies the bottom dock counts as a zone (so `ctrl-w j` reaches it).
   private focusZones(): { root: Widget; focus: () => void }[] {
     const zones: { root: Widget; focus: () => void }[] = [
-      // The file tree and Source Control are tabs in one panel (one zone); entering
-      // it focuses whichever tab is active.
+      // The file tree lives in the right-side dock (one zone); entering it focuses
+      // the tree (Source Control is a center tab now, not a dock tab).
       { root: this.workbench.leftPanel.root, focus: () => this.focusSidePanel() },
       // The agent list is its own full-height sidebar (left of everything); its
       // geometry makes it the leftmost zone for directional pane navigation.
@@ -3160,8 +3190,15 @@ export class AppWindow {
     return this.projectSearchViews.get(widget) ?? DiffView.forRoot(widget) ?? null;
   }
 
-  /** The diff multibuffer hosted by the active child, if any (for the expand-context commands). */
+  /** The diff multibuffer the diff commands act on. Prefer the DiffView containing keyboard focus
+   *  (found by walking up from the focused widget) — that covers an *embedded* diff like the
+   *  GitPanel's, which isn't itself a center tab, so `activeChildWidget` (tab content) would resolve
+   *  to its host panel and miss it. Falls back to the active center tab's content. */
   private activeContinuousDiff(): DiffView | null {
+    for (let w: Widget | null = this.window.getFocus(); w; w = w.getParent()) {
+      const diff = DiffView.forRoot(w);
+      if (diff) return diff;
+    }
     const widget = this.activeChildWidget();
     return widget ? DiffView.forRoot(widget) : null;
   }

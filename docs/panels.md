@@ -4,8 +4,9 @@ The workbench is a dock layout (`Workbench`, `src/ui/Workbench.ts`) around a
 splittable center (`PanelGroup`, `src/ui/PanelGroup.ts`). The shared building
 block is `Panel` (`src/ui/Panel.ts`): a tab host (Adw.TabBar + Adw.TabView)
 with a friendly empty-state placeholder. Every tab group in the app — the
-center editor groups **and** the docks (Files/Source-Control side dock, the
-bottom Notifications/Diagnostics/Keybindings docks) — is a `Panel`.
+center editor groups **and** the docks (the Files side dock, the bottom
+Notifications/Diagnostics/Keybindings docks) — is a `Panel`. (Source Control
+opens as a center tab, not a dock — see docs/git/index.md.)
 
 - **`Panel`** — one tab strip. `add(widget, { title?, requireTabBar? })` is
   the *only* way content enters a panel. With no tabs it shows the
@@ -21,9 +22,9 @@ bottom Notifications/Diagnostics/Keybindings docks) — is a `Panel`.
 - **`Workbench`** — fixed dock slots (left/right/top/bottom, nested
   Gtk.Paned) around the center. One Workbench per "person" (the user, each
   agent); switching person swaps which Workbench the window shows (see
-  docs/agents.md). The Files/Source-Control dock lives in the **right** slot —
-  note the misleading `leftPanel` field / `revealLeftTab` names, which dock via
-  `setRight`.
+  docs/agents.md). The Files tree dock lives in the **right** slot — note the
+  misleading `leftPanel` field / `revealFileTree` names, which dock via
+  `setRight`. (Source Control is a center tab, not a dock — `revealGitPanel`.)
 
 ## Dock visibility (toggleable docks)
 
@@ -39,7 +40,7 @@ widget.
 - The content setters (`setLeft/Right/Top/Bottom`) **force the side visible**
   when given non-null content — putting something in a dock means you want to
   see it — so the content pickers (bottom dock
-  notifications/diagnostics/keymap, side-dock `revealLeftTab`) need no separate
+  notifications/diagnostics/keymap, side-dock `revealFileTree`) need no separate
   "show" call. The bottom-dock content toggles
   (`toggleNotificationLog`/`toggleDiagnosticsPanel`/`toggleKeymapPanel`) only
   *close* when their panel is the currently-**shown** content; if it's selected
@@ -50,11 +51,11 @@ widget.
   back to the center when hiding out from under it). Left/top carry no built-in
   content yet, so toggling them is a no-op + toast until a plugin contributes a
   panel there.
-- **Default state**: the user workbench's right dock (Files/Source-Control) is
+- **Default state**: the user workbench's right dock (Files) is
   *assigned but hidden* at startup — the `Workbench` constructor calls `setRight`
-  then `setDockVisible('right', false)`, so the dock toggle / `file-tree:` /
-  `git-panel:` focus have content to reveal, but it stays out of the way until
-  asked for. A restored session re-applies the user's last visibility (below).
+  then `setDockVisible('right', false)`, so the dock toggle / `file-tree:focus`
+  have content to reveal, but it stays out of the way until asked for. A restored
+  session re-applies the user's last visibility (below).
 - **Session-persisted**: `SessionDocks.visible` (per-side flags) is
   saved/restored with the rest of the dock state; a toggle schedules an
   autosave. Sessions with no `visible` entry restore all sides shown.
@@ -119,12 +120,13 @@ not-yet-finalized page). The rule: **never `add()` into an unrooted tab view.**
   intercepts the tab close to *hide the dock* and veto the page close, so the
   view never tears down; re-toggling (e.g. `space l l` for Diagnostics,
   `space n` for Notifications) re-shows the same widget with no rebuild.
-- **Side dock (right Files/Source-Control)** — keeps **per-tab close**.
-  Closing the last tab collapses the dock (`leftPanel`'s `onEmpty` →
-  `detachDock` → `setRight(null)`). The reveal/focus path (`revealLeftTab`)
-  **re-attaches (roots) the panel via `setRight` before re-adding the tab**
-  (unparenting any closed page first), so the `add()` always targets a rooted
-  view.
+- **Side dock (right Files)** — keeps **per-tab close**. Closing the last tab
+  collapses the dock (`leftPanel`'s `onEmpty` → `detachDock` → `setRight(null)`).
+  The reveal/focus path (`revealFileTree`) **re-attaches (roots) the panel via
+  `setRight` before re-adding the tab** (unparenting any closed page first), so the
+  `add()` always targets a rooted view. (Source Control opens as a center tab
+  instead — `revealGitPanel` follows the same unparent-then-add rule against the
+  always-rooted center.)
 - **Agents** — each agent's terminal is pinned into its own Workbench's center
   (`PanelGroup.pinChild`); the agent tab-close is vetoed and switching person
   just swaps the shown Workbench, so the process keeps running.
