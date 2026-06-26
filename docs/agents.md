@@ -326,8 +326,7 @@ Built in `src/agentSessions.ts`, `AgentTerminal`, `AppWindow`:
   }` option → prepends `--resume <id>` / `--continue` (+ `--fork-session`) to
   the claude argv. Commands: `agent:resume` (`space a r`, resume the current
   *exited* agent in place), `agent:resume-conversation` (`space a R`, a picker
-  of past sessions excluding any currently live — label + relative time),
-  `agent:continue` (`space a c`, latest conversation in this folder), and
+  of past sessions excluding any currently live — label + relative time), and
   `agent:branch` (`space a b` / list `b`, fork the current agent via
   `--fork-session`).
 - **Persist across editor restarts** — `AgentTerminal.serialize()` records

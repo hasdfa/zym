@@ -2726,11 +2726,9 @@ export class AppWindow {
         description: 'Open the agent picker (agents, conversations, new)',
       },
       // Resume a stopped agent in place (current agent, if exited). Resuming a
-      // past *conversation* as a fresh agent is agent:resume-conversation (a
-      // picker); agent:continue picks up the latest conversation in this folder.
+      // past *conversation* as a fresh agent is agent:resume-conversation (a picker).
       'agent:resume': { didDispatch: () => this.resumeCurrentAgent(), description: 'Resume the stopped agent', when: () => this.currentAgent()?.exited === true },
       'agent:resume-conversation': { didDispatch: () => this.resumeAgentPicker(), description: 'Resume a past conversation…' },
-      'agent:continue': { didDispatch: () => this.openAgent({ resume: { continue: true } }), description: 'Continue the latest conversation' },
       // Branch the current agent into a new agent/workbench: a fresh session
       // forked off its conversation (`--resume <id> --fork-session`), so the
       // original agent is left running and untouched.

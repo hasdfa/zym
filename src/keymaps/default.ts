@@ -45,7 +45,6 @@ const SPACE_COMMANDS: Record<string, string> = {
   'space a n .': 'agent:new-this-worktree', // launch in the current worktree
   'space a r': 'agent:rename', // rename the current agent
   'space a R': 'agent:resume-conversation', // resume a past conversation (picker)
-  'space a c': 'agent:continue', // continue the latest conversation in this folder
   'space a b': 'agent:branch', // branch the current agent into a new forked agent
   'space a x': 'agent:action-run-default', // run the agent's default action (set_actions)
   'space a X': 'agent:action-picker', // pick one of the agent's actions to run
