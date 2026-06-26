@@ -282,7 +282,7 @@ export class QuestionCard {
       : 'No answer selected';
     const header = toolHeaderLabel();
     setMarkupSafe(header, escapeMarkup(summary), summary);
-    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header });
+    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header, subs: this.disposables });
     row.content.append(this.answeredDetails());
     this.root.append(row.root);
   }

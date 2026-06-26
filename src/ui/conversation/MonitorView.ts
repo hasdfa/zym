@@ -6,6 +6,7 @@
  */
 import { Gtk, Adw } from '../../gi.ts';
 import * as Fs from 'node:fs';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
 import { addStyles } from '../../styles.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
@@ -31,6 +32,11 @@ export class MonitorView {
   private readonly ids = new Set<string>();
   private readonly session: Pick<SdkSession, 'getMonitor' | 'onMonitorUpdate' | 'stopTask'>;
   private readonly nav: PageNav;
+  // View-lifetime bag (spawn ToolRows + open pages); disposed by AgentConversation.dispose().
+  private readonly subs = new CompositeDisposable();
+  // The running-panel button handlers, re-created on every `render()`; cleared per render
+  // so they don't accumulate as monitors start/finish. node-gtk roots each closure (rule 2).
+  private readonly renderSubs = new CompositeDisposable();
 
   constructor(session: Pick<SdkSession, 'getMonitor' | 'onMonitorUpdate' | 'stopTask'>, nav: PageNav) {
     this.session = session;
@@ -44,7 +50,7 @@ export class MonitorView {
     this.ids.add(id);
     const header = toolHeaderLabel();
     setMarkupSafe(header, `<b>Monitor</b>${description ? `  ${escapeMarkup(description)}` : ''}`, `Monitor ${description}`);
-    const toolRow = new ToolRow({ icon: NERDFONT.TOOL.MONITOR, header, onActivate: () => this.pushPage(id) });
+    const toolRow = new ToolRow({ icon: NERDFONT.TOOL.MONITOR, header, onActivate: () => this.pushPage(id), subs: this.subs });
     this.render();
     return toolRow.root;
   }
@@ -61,11 +67,12 @@ export class MonitorView {
     button.addCssClass('flat');
     button.addCssClass('sticky-list-panel-link');
     button.setChild(label);
-    button.on('clicked', () => this.pushPage(id));
+    this.renderSubs.connect(button, 'clicked', () => this.pushPage(id));
     return button;
   }
 
   private render(): void {
+    this.renderSubs.clear(); // sever the previous render's panel button handlers
     const rows: Widget[] = [];
     for (const id of this.ids) {
       const m = this.session.getMonitor(id);
@@ -78,7 +85,7 @@ export class MonitorView {
       setMarkupSafe(cancelLabel, iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error), '✗');
       cancel.setChild(cancelLabel);
       cancel.setTooltipText('Cancel monitor');
-      cancel.on('clicked', () => { if (m.taskId) this.session.stopTask(m.taskId); });
+      this.renderSubs.connect(cancel, 'clicked', () => { if (m.taskId) this.session.stopTask(m.taskId); });
       row.append(open);
       row.append(cancel);
       rows.push(row);
@@ -107,13 +114,17 @@ export class MonitorView {
       box.append(body);
     };
     render();
-    const sub = this.session.onMonitorUpdate(({ id: uid }) => { if (uid === id) render(); });
+    // Page-scoped bag: severed when the page is popped ('hidden'), or with the view if it
+    // is torn down while the page is still open. Holds the update sub + the back/hidden
+    // handlers, whose closures node-gtk would otherwise root past the page's life.
+    const pageSubs = this.subs.nest();
+    pageSubs.use(this.session.onMonitorUpdate(({ id: uid }) => { if (uid === id) render(); }));
 
     const m = this.session.getMonitor(id);
     const title = m ? `Monitor — ${m.status}` : 'Monitor';
     const back = new Gtk.Button({ label: '‹ Back', halign: Gtk.Align.START });
     back.addCssClass('flat');
-    back.on('clicked', () => this.nav.pop());
+    pageSubs.connect(back, 'clicked', () => this.nav.pop());
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     header.addCssClass('conversation-page-header');
     header.append(back);
@@ -124,7 +135,13 @@ export class MonitorView {
     page.append(scroller);
 
     const navPage = Adw.NavigationPage.new(page, title);
-    navPage.on('hidden', () => sub.dispose());
+    pageSubs.connect(navPage, 'hidden', () => pageSubs.dispose()); // stop refreshing + sever once popped
     this.nav.push(navPage);
+  }
+
+  /** Sever the panel + page handlers so a closed conversation stops pinning this view. */
+  dispose(): void {
+    this.renderSubs.dispose();
+    this.subs.dispose();
   }
 }

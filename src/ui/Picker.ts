@@ -11,9 +11,10 @@
  */
 import { Gtk } from '../gi.ts';
 import { zym } from '../zym.ts';
+import { CompositeDisposable } from '../util/eventKit.ts';
 import { addStyles } from '../styles.ts';
 import { iconLabel } from './icons.ts';
-import { fuzzyMatch } from './fuzzyMatch.ts';
+import { prepare, fuzzyMatchPrepared, type Prepared } from './fuzzyMatch.ts';
 import { frecency } from '../util/Frecency.ts';
 import { enableReadline } from './readline.ts';
 import { openFloatingCard, type CardAnchor } from './FloatingCard.ts';
@@ -171,6 +172,12 @@ export interface PickerItem {
    * to the picker; the caller casts it back to its own type.
    */
   data?: unknown;
+  /**
+   * Internal: lazily-filled, query-independent fuzzy-match precompute (lower-cased
+   * text + bonus table), memoised on the item by `rank` so it's computed once and
+   * reused while the item stays in the pool. Set by the picker, not by callers.
+   */
+  prepared?: Prepared;
 }
 
 /**
@@ -322,6 +329,11 @@ export interface PickerHandle {
   /** Replace the candidate list (e.g. once an async scan completes). Clears the
    *  loading state. */
   setItems(items: Array<string | PickerItem>): void;
+  /** Append to the candidate list, preserving the identity of existing items (so
+   *  their prepared match-cache survives). Used by the streaming directory walk
+   *  to add newly-found files without re-mapping the whole pool. Clears loading
+   *  and re-ranks; `appendItems([])` still clears loading (walk-complete signal). */
+  appendItems(items: Array<string | PickerItem>): void;
   /** Toggle the loading state (spinner + "Loading…" row) explicitly. */
   setLoading(loading: boolean): void;
   /** Show an error message in place of the matches (e.g. an async load failed),
@@ -451,6 +463,10 @@ export function openPicker(options: PickerOptions): PickerHandle {
   let commandsSub: { dispose(): void } | null = null;
   // Pending side-preview refresh (debounced as the selection moves); cleared on close.
   let previewTimer: NodeJS.Timeout | null = null;
+  // The entry/list-box signal handlers wired below close over the whole openPicker scope
+  // (items, results, options→onSelect/fetch, …). node-gtk roots each connected closure, so
+  // every palette/picker open would leak its whole graph; disposed in `onClose`. See rule 2.
+  const subs = new CompositeDisposable();
 
   // The floating card shell — mounts an opaque card at the overlay's top-centre,
   // remembers/restores focus, and dismisses on focus-loss. The Picker fills it with
@@ -462,6 +478,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     dim: true,
     fade: true,
     onClose: () => {
+      subs.dispose(); // sever the entry/list-box signal handlers (rule 2)
       commandsSub?.dispose();
       readlineSub.dispose();
       promptSpinner?.stop();
@@ -732,16 +749,16 @@ export function openPicker(options: PickerOptions): PickerHandle {
     // locally, filter the current pool instantly on each keystroke (the immediate
     // `changed` signal); a server-filtered picker skips that and just waits for
     // the fetch.
-    if (options.localFilter !== false) entry.on('changed', rebuild);
-    entry.on('search-changed', runFetch);
+    if (options.localFilter !== false) subs.connect(entry, 'changed', rebuild);
+    subs.connect(entry, 'search-changed', runFetch);
   } else {
-    entry.on('search-changed', rebuild);
+    subs.connect(entry, 'search-changed', rebuild);
   }
-  entry.on('activate', () => choose(null));
-  listBox.on('row-activated', (row) => choose(row));
+  subs.connect(entry, 'activate', () => choose(null));
+  subs.connect(listBox, 'row-activated', (row) => choose(row));
   // Drive the side preview off selection changes (keyboard move and click both go
   // through `selectRow`, so this single hook covers them).
-  if (options.preview) listBox.on('row-selected', refreshPreview);
+  if (options.preview) subs.connect(listBox, 'row-selected', refreshPreview);
 
   // Drive list navigation through the command/keymap system: register the
   // picker's `core:*` commands on the panel (named `.Picker`, so the keymap from
@@ -771,6 +788,15 @@ export function openPicker(options: PickerOptions): PickerHandle {
       applySearchDelay(); // dataset size may have crossed the auto threshold
       if (!card.isClosed()) rebuild();
     },
+    appendItems(next: Array<string | PickerItem>) {
+      // Push in place so existing items keep their identity (and their entry in
+      // the prepared match-cache); only the new items are mapped/normalized.
+      for (const item of next) items.push(normalizeItem(item));
+      setError(null); // content arrived — clear any prior failure
+      setLoading(false); // even an empty append signals "walk complete, stop spinning"
+      applySearchDelay(); // dataset size may have crossed the auto threshold
+      if (!card.isClosed()) rebuild();
+    },
     setLoading(loading: boolean) {
       setLoading(loading);
       if (!card.isClosed()) rebuild(); // refresh the placeholder row's text
@@ -788,6 +814,13 @@ export interface RankedItem {
   positions: number[];
 }
 
+// Run the typo-tolerant fallback (`maxTypos: 1`) only when at most this many
+// items matched the query exactly. Gating on a total miss (0) is what makes the
+// fallback cheap: with ≥1 exact match the costly `approxMatch` pass over every
+// non-matching item is skipped, and typo hits (carrying TYPO_PENALTY) would sink
+// below the MAX_RESULTS cut anyway.
+const TYPO_FALLBACK_MAX_EXACT = 0;
+
 export function rank(
   query: string,
   items: PickerItem[],
@@ -799,14 +832,42 @@ export function rank(
     if (weight) ranked.sort((a, b) => weight(b.item) - weight(a.item));
     return ranked;
   }
+  // Smartcase + needle case derived once per call rather than per item: an
+  // uppercase letter in the query opts into a case-sensitive match.
+  const caseSensitive = /[A-Z]/.test(query);
+  const needle = caseSensitive ? query : query.toLowerCase();
+
+  // Per-item, query-independent precompute (lower-cased text + bonus table),
+  // memoised on the item itself: computed once and reused for as long as the item
+  // stays in the pool, then dropped with the item when the pool is replaced (a
+  // fresh `normalizeItem`/`fileItem` object) or the picker closes. No separate
+  // cache structure or lifecycle to manage.
+  const prep = (item: PickerItem): Prepared => (item.prepared ??= prepare(item.text));
+
   const scored: Array<RankedItem & { score: number }> = [];
+  // Items that failed the exact pass; only re-scored with a typo allowance when
+  // nothing matched exactly (see the gate below).
+  const misses: PickerItem[] = [];
   for (const item of items) {
-    const match = fuzzyMatch(query, item.text, { boostFrom: item.boostFrom, maxTypos: 1 });
+    const match = fuzzyMatchPrepared(needle, prep(item), caseSensitive, item.boostFrom, 0);
     if (match) {
       const score = match.score + (weight ? weight(item) : 0);
       scored.push({ item, positions: match.positions, score });
+    } else {
+      misses.push(item);
     }
   }
+
+  if (scored.length <= TYPO_FALLBACK_MAX_EXACT) {
+    for (const item of misses) {
+      const match = fuzzyMatchPrepared(needle, prep(item), caseSensitive, item.boostFrom, 1);
+      if (match) {
+        const score = match.score + (weight ? weight(item) : 0);
+        scored.push({ item, positions: match.positions, score });
+      }
+    }
+  }
+
   scored.sort((a, b) => b.score - a.score);
   return scored;
 }

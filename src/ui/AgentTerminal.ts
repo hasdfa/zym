@@ -120,7 +120,7 @@ export class AgentTerminal extends Terminal implements Agent {
     // Stop terminal-less action processes when the widget is destroyed (a full
     // close), so a closed agent leaves nothing running. Backgrounding a tab only
     // detaches the widget (no destroy), so the processes keep running — desired.
-    this.terminal.on('destroy', () => this.actionProcesses.stopAll());
+    this.disposables.connect(this.terminal, 'destroy', () => this.actionProcesses.stopAll());
     this.root.addCssClass('AgentTerminal');
     this.applyThemeColors();
 
@@ -129,7 +129,7 @@ export class AgentTerminal extends Terminal implements Agent {
     // notice instead. A second child-exited handler avoids touching `this` in the
     // super() call.
     zym.agents.add(this);
-    this.terminal.on('child-exited', () => this.onChildExited());
+    this.disposables.connect(this.terminal, 'child-exited', () => this.onChildExited());
     this.driver?.watch(this.agentHost());
   }
 

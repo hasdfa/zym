@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fuzzyMatch } from './fuzzyMatch.ts';
+import { fuzzyMatch, fuzzyMatchPrepared, prepare } from './fuzzyMatch.ts';
 
 test('empty query matches everything with a neutral score', () => {
   assert.deepEqual(fuzzyMatch('', 'anything'), { score: 0, positions: [] });
@@ -112,4 +112,56 @@ test('smartcase applies under typo tolerance too', () => {
   // TextEditor; the lowercase-only "text" target should not match.
   assert.ok(fuzzyMatch('Twxt', 'TextEditor', { maxTypos: 1 }));
   assert.equal(fuzzyMatch('Twxt', 'the_next_thing', { maxTypos: 1 }), null);
+});
+
+// `fuzzyMatch` is now a thin wrapper over `fuzzyMatchPrepared`; the picker calls
+// the prepared form directly with a cached `Prepared`. The two must agree
+// exactly across cases that exercise every bonus class and both smartcase modes.
+test('fuzzyMatchPrepared(prepare(text)) matches fuzzyMatch across a corpus', () => {
+  const texts = [
+    'Picker.ts',
+    'src/ui/Picker.ts',
+    'TextEditor',
+    'agent:continue',
+    'f_o_foo',
+    'apple_pie',
+    'README', // m === n case when queried with itself
+  ];
+  const queries = ['pic', 'Pic', 'PIC', 'src', 'TE', 'cont', 'foo', 'README', 'zz'];
+  for (const text of texts) {
+    const prepared = prepare(text);
+    for (const query of queries) {
+      for (const smartcase of [true, false]) {
+        for (const maxTypos of [0, 1]) {
+          const direct = fuzzyMatch(query, text, { smartcase, maxTypos, boostFrom: 4 });
+          // Mirror the wrapper's case derivation to drive the prepared form.
+          const caseSensitive = smartcase && /[A-Z]/.test(query);
+          const needle = caseSensitive ? query : query.toLowerCase();
+          const viaPrepared =
+            query.length === 0
+              ? { score: 0, positions: [] }
+              : fuzzyMatchPrepared(needle, prepared, caseSensitive, 4, maxTypos);
+          assert.deepEqual(viaPrepared, direct, `query="${query}" text="${text}" sc=${smartcase} typos=${maxTypos}`);
+        }
+      }
+    }
+  }
+});
+
+test('reused DP buffers stay correct across long→short→long matches', () => {
+  // The module-level scratch grows for a long haystack, then a short match must
+  // not read stale cells, then a long match must still be correct. Compare each
+  // against a fresh-`prepare` baseline (same call, isolated).
+  const cases: Array<[string, string]> = [
+    ['cont', 'a-very-long-path/to/some/deeply/nested/file-name.controller.ts'],
+    ['ab', 'axb'],
+    ['ec', 'a-very-long-path/to/some/deeply/nested/EditorController.tsx'],
+  ];
+  const baselines = cases.map(([q, t]) => fuzzyMatch(q, t));
+  // Run them interleaved through the shared buffers.
+  for (let round = 0; round < 3; round++) {
+    cases.forEach(([q, t], i) => {
+      assert.deepEqual(fuzzyMatch(q, t), baselines[i], `round ${round} case ${i}`);
+    });
+  }
 });

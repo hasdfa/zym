@@ -250,6 +250,18 @@ agent; turns are `{type:'user',...}` lines on stdin.
 - **Interrupt = control_request `{subtype:'interrupt'}`** on stdin →
   `control_response` success (flip to idle now) → `result`
   `error_during_execution` (suppress as intentional, see `interrupting`).
+- **`error_during_execution` *without* an interrupt = a genuine crash** — claude
+  hit a fatal error mid-turn (transient API/stream failure on a long session is
+  the common one) and the `-p` process exits. The `result.result` field is empty
+  in this case, so the cause only appears on **claude's stderr** — which the
+  transport now captures into a bounded `stderrTail` ring buffer (`SdkSession`).
+  The error row carries that tail as its `detail`; the trailing `exit` event
+  carries the code (the row shows `(code N)` when non-zero) and the tail; an
+  abnormal (non-zero) exit is always `console.warn`'d (`logExit`) so the cause
+  survives in the app log without `ZYM_SDK_DEBUG`. The agent stays listed as
+  `exited` and is restartable/resumable (`agent:restart` / `agent:resume`).
+  Writing a turn to a child that just died raises EPIPE on stdin — the transport
+  absorbs it (a stdin `'error'` handler) so it can't crash zym.
 - **Cancel a background task / shell monitor = control_request
   `{subtype:'stop_task', task_id}`** (the CLI's `stopTask`; verified live)
   → `task_updated{patch.status:'killed'}` + `task_notification{status:

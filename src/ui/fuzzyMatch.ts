@@ -29,6 +29,22 @@ export interface FuzzyMatch {
   positions: number[];
 }
 
+/**
+ * A candidate's query-independent precompute, shared across every keystroke.
+ * `lowerText`/`bonus` depend only on the text, so a picker prepares each item
+ * once (see Picker's `preparedCache`) instead of recomputing per keystroke.
+ * `bonus` is derived from the original-case text (camelCase humps), so a single
+ * `Prepared` serves both smartcase-sensitive and -insensitive matching.
+ */
+export interface Prepared {
+  /** Original text — the haystack for a case-sensitive (smartcase) match. */
+  text: string;
+  /** Lower-cased text — the haystack for a case-insensitive match. */
+  lowerText: string;
+  /** Per-position match bonus (`precomputeBonus`); query- and case-independent. */
+  bonus: Float64Array;
+}
+
 export interface FuzzyOptions {
   /** Char offset in `text` from which matches score higher (e.g. a filename). */
   boostFrom?: number;
@@ -56,41 +72,78 @@ const MATCH_DOT = 0.6; // match right after a dot
 const BOOST_PRIMARY = 0.4; // added to matches at/after `boostFrom`
 const TYPO_PENALTY = -1.0; // per unmatched query char in the typo fallback
 
+// Reused DP scratch for `fzyMatch`, grown on demand to the current `m*n` and
+// indexed `[i*n + j]` (stride = the current haystack length). Matching is
+// strictly sequential and single-threaded, so two module-level buffers replace
+// the per-call allocation of `2*m` Float64Arrays — the forward pass writes every
+// cell of the current `m*n` window before the backtrace reads it, and cells
+// beyond it are never touched.
+let scratchD = new Float64Array(0);
+let scratchM = new Float64Array(0);
+function ensureScratch(size: number): void {
+  if (scratchD.length < size) {
+    scratchD = new Float64Array(size);
+    scratchM = new Float64Array(size);
+  }
+}
+
 /**
  * Score `text` against `query` as a fuzzy (subsequence) match, recording which
  * characters matched. Returns `null` when `query` cannot be matched (not a
  * subsequence, even allowing `maxTypos` skipped query chars). An empty query
  * matches everything with a neutral score.
+ *
+ * A standalone convenience that computes the query's case + the text's
+ * `Prepared` on the fly. Hot callers (the picker) instead precompute `Prepared`
+ * once per item and call `fuzzyMatchPrepared` directly.
  */
 export function fuzzyMatch(query: string, text: string, options: FuzzyOptions = {}): FuzzyMatch | null {
   if (query.length === 0) return { score: 0, positions: [] };
-  const boostFrom = options.boostFrom ?? Number.POSITIVE_INFINITY;
-  const maxTypos = options.maxTypos ?? 0;
   // Smartcase (on by default): an uppercase letter in the query opts into a
   // case-sensitive match; an all-lowercase query stays case-insensitive.
   const caseSensitive = (options.smartcase ?? true) && /[A-Z]/.test(query);
-
-  const exact = fzyMatch(query, text, boostFrom, caseSensitive);
-  if (exact) return exact;
-  if (maxTypos <= 0) return null;
-  return approxMatch(query, text, boostFrom, maxTypos, caseSensitive);
+  const needle = caseSensitive ? query : query.toLowerCase();
+  return fuzzyMatchPrepared(needle, prepare(text), caseSensitive, options.boostFrom, options.maxTypos);
 }
 
-/** Stock fzy: requires `query` to be a strict subsequence of `text`. */
-function fzyMatch(
-  query: string,
-  text: string,
-  boostFrom: number,
+/** Build the query-independent `Prepared` for a candidate's text (cache it). */
+export function prepare(text: string): Prepared {
+  return { text, lowerText: text.toLowerCase(), bonus: precomputeBonus(text) };
+}
+
+/**
+ * Core matcher over a precomputed `Prepared`. `needle` must already be in the
+ * caller's chosen case (lower-cased iff `!caseSensitive`); `caseSensitive`
+ * selects the prepared haystack (`text` vs `lowerText`). This is the hot path a
+ * picker calls per item with a per-call-constant `needle`/`caseSensitive`.
+ */
+export function fuzzyMatchPrepared(
+  needle: string,
+  prepared: Prepared,
   caseSensitive: boolean,
+  boostFrom: number = Number.POSITIVE_INFINITY,
+  maxTypos: number = 0,
 ): FuzzyMatch | null {
-  const m = query.length;
-  const n = text.length;
+  if (needle.length === 0) return { score: 0, positions: [] };
+  const exact = fzyMatch(needle, prepared, caseSensitive, boostFrom);
+  if (exact) return exact;
+  if (maxTypos <= 0) return null;
+  return approxMatch(needle, prepared, caseSensitive, boostFrom, maxTypos);
+}
+
+/** Stock fzy: requires `needle` to be a strict subsequence of the haystack. */
+function fzyMatch(
+  needle: string,
+  prepared: Prepared,
+  caseSensitive: boolean,
+  boostFrom: number,
+): FuzzyMatch | null {
+  const haystack = caseSensitive ? prepared.text : prepared.lowerText;
+  const m = needle.length;
+  const n = haystack.length;
   if (m > n) return null;
 
-  const needle = caseSensitive ? query : query.toLowerCase();
-  const haystack = caseSensitive ? text : text.toLowerCase();
-
-  // Cheap reject + exact-length shortcut before allocating the DP matrices.
+  // Cheap reject + exact-length shortcut before touching the DP matrices.
   for (let i = 0, j = 0; i < m; i++) {
     while (j < n && haystack[j] !== needle[i]) j++;
     if (j === n) return null;
@@ -100,25 +153,21 @@ function fzyMatch(
     return { score: SCORE_MAX, positions: Array.from({ length: m }, (_, i) => i) };
   }
 
-  const bonus = precomputeBonus(text);
+  const bonus = prepared.bonus;
   const boostAt = (j: number) => (j >= boostFrom ? BOOST_PRIMARY : 0);
 
-  // D[i][j]: best score ending with needle[i] matched at haystack[j].
-  // M[i][j]: best score for needle[0..i] within haystack[0..j] (the running max).
-  const D: Float64Array[] = [];
-  const M: Float64Array[] = [];
-  for (let i = 0; i < m; i++) {
-    D.push(new Float64Array(n));
-    M.push(new Float64Array(n));
-  }
+  // D[i*n + j]: best score ending with needle[i] matched at haystack[j].
+  // M[i*n + j]: best score for needle[0..i] within haystack[0..j] (running max).
+  // Flat, reused buffers (stride = n); see `ensureScratch`.
+  ensureScratch(m * n);
+  const D = scratchD;
+  const M = scratchM;
 
   for (let i = 0; i < m; i++) {
     let prevScore = SCORE_MIN;
     const gap = i === m - 1 ? GAP_TRAILING : GAP_INNER;
-    const Di = D[i];
-    const Mi = M[i];
-    const Dp = i > 0 ? D[i - 1] : null;
-    const Mp = i > 0 ? M[i - 1] : null;
+    const iBase = i * n;
+    const pBase = iBase - n; // (i - 1) * n; only read when i > 0
 
     for (let j = 0; j < n; j++) {
       if (needle[i] === haystack[j]) {
@@ -127,18 +176,18 @@ function fzyMatch(
           score = j * GAP_LEADING + bonus[j];
         } else if (j > 0) {
           score = Math.max(
-            Mp![j - 1] + bonus[j], // start a fresh match here
-            Dp![j - 1] + MATCH_CONSECUTIVE, // extend a consecutive run
+            M[pBase + j - 1] + bonus[j], // start a fresh match here
+            D[pBase + j - 1] + MATCH_CONSECUTIVE, // extend a consecutive run
           );
         }
         if (score !== SCORE_MIN) score += boostAt(j);
-        Di[j] = score;
+        D[iBase + j] = score;
         prevScore = Math.max(score, prevScore + gap);
-        Mi[j] = prevScore;
+        M[iBase + j] = prevScore;
       } else {
-        Di[j] = SCORE_MIN;
+        D[iBase + j] = SCORE_MIN;
         prevScore = prevScore + gap;
-        Mi[j] = prevScore;
+        M[iBase + j] = prevScore;
       }
     }
   }
@@ -150,13 +199,15 @@ function fzyMatch(
   let matchRequired = false;
   let j = n - 1;
   for (let i = m - 1; i >= 0; i--) {
+    const iBase = i * n;
+    const pBase = iBase - n;
     for (; j >= 0; j--) {
       if (
-        D[i][j] !== SCORE_MIN &&
-        (matchRequired || D[i][j] === M[i][j])
+        D[iBase + j] !== SCORE_MIN &&
+        (matchRequired || D[iBase + j] === M[iBase + j])
       ) {
         matchRequired =
-          i > 0 && j > 0 && M[i][j] === D[i - 1][j - 1] + MATCH_CONSECUTIVE + boostAt(j);
+          i > 0 && j > 0 && M[iBase + j] === D[pBase + j - 1] + MATCH_CONSECUTIVE + boostAt(j);
         positions[i] = j;
         j--;
         break;
@@ -164,7 +215,7 @@ function fzyMatch(
     }
   }
 
-  return { score: M[m - 1][n - 1], positions };
+  return { score: M[(m - 1) * n + (n - 1)], positions };
 }
 
 /**
@@ -173,23 +224,23 @@ function fzyMatch(
  * subsequence and penalising each drop so exact matches always rank above it.
  */
 function approxMatch(
-  query: string,
-  text: string,
+  needle: string,
+  prepared: Prepared,
+  caseSensitive: boolean,
   boostFrom: number,
   maxTypos: number,
-  caseSensitive: boolean,
 ): FuzzyMatch | null {
   let best: FuzzyMatch | null = null;
-  for (let k = 0; k < query.length; k++) {
-    const reduced = query.slice(0, k) + query.slice(k + 1);
+  for (let k = 0; k < needle.length; k++) {
+    const reduced = needle.slice(0, k) + needle.slice(k + 1);
     if (reduced.length === 0) continue;
-    // Dropping a query char never changes the smartcase decision the caller
-    // already made, so carry `caseSensitive` through rather than re-deriving it.
+    // `needle` is already in the chosen case, so a sliced needle stays consistent
+    // with the prepared haystack — carry `caseSensitive` through unchanged.
     const match =
       maxTypos > 1
-        ? fzyMatch(reduced, text, boostFrom, caseSensitive) ??
-          approxMatch(reduced, text, boostFrom, maxTypos - 1, caseSensitive)
-        : fzyMatch(reduced, text, boostFrom, caseSensitive);
+        ? fzyMatch(reduced, prepared, caseSensitive, boostFrom) ??
+          approxMatch(reduced, prepared, caseSensitive, boostFrom, maxTypos - 1)
+        : fzyMatch(reduced, prepared, caseSensitive, boostFrom);
     if (match && (!best || match.score > best.score)) best = match;
   }
   if (!best) return null;

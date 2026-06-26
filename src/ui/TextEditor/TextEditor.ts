@@ -905,6 +905,8 @@ export class TextEditor implements DocumentHost {
     this.blockDecorationController.dispose(); // drops map/changed/vadjustment handlers + tick callbacks
     this.indentGuides?.dispose(); // drops adjustment/view/buffer handlers + the config observer
     this.indentGuides = null;
+    this.editorModel.dispose(); // sever the buffer cursor/insert/delete/changed handlers (each pins this editor)
+    this.inlinePeek?.dispose(); // sever the peek's overlay/adjustment handlers + drop its gap tag
     this.document.removeHost(this);
     this.document.removeView(this.buffer);
     if (this.releaseDocument) this.releaseDocument();

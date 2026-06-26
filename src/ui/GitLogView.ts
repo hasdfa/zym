@@ -202,7 +202,7 @@ export class GitLogView {
     this.search = new Gtk.SearchEntry({ placeholderText: 'file:path author:name search…' });
     this.search.addCssClass('GitLogSearch');
     this.search.addCssClass('has-text-input'); // release the `space` leader so it types
-    this.search.on('search-changed', () => this.applyFilter());
+    this.subs.connect(this.search, 'search-changed', () => this.applyFilter());
 
     this.searchBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     this.searchBox.addCssClass('gitlog-search-box');
@@ -212,7 +212,7 @@ export class GitLogView {
     this.listBox = new Gtk.ListBox();
     this.listBox.addCssClass('GitLogList');
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
-    this.listBox.on('row-activated', (row: any) => this.activate(row.getIndex()));
+    this.subs.connect(this.listBox, 'row-activated', (row: any) => this.activate(row.getIndex()));
 
     this.scrolled = new Gtk.ScrolledWindow();
     this.scrolled.setChild(this.listBox);

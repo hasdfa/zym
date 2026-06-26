@@ -21,6 +21,7 @@
  * builds each tool's header and fills `content`.
  */
 import { Gtk, Pango } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';
 import { setMarkupSafe } from '../proseMarkup.ts';
@@ -81,6 +82,11 @@ export interface ToolRowOptions {
   /** Notified on every expand/collapse (toggle rows only) — e.g. Bash re-renders
    *  its command (first line vs. full) to match the new state. */
   onToggle?: (expanded: boolean) => void;
+  /** The owner's disposable bag. The row routes its header-button `clicked` handler
+   *  through it and registers itself for disposal, so the node-gtk-rooted closure is
+   *  severed when the owner (conversation / monitor / subagent view) is torn down.
+   *  Without it the row's handler pins the row's subtree after the conversation closes. */
+  subs?: CompositeDisposable;
 }
 
 export class ToolRow {
@@ -96,8 +102,12 @@ export class ToolRow {
   private iconGlyph = '';
   private iconColor?: string;
   private status: ToolRowStatus = null;
+  // Severs the header-button `clicked` handler (node-gtk roots it) on dispose. Disposed by
+  // the owner via `opts.subs` when given; otherwise the caller must call `dispose()`.
+  private readonly subs = new CompositeDisposable();
 
   constructor(opts: ToolRowOptions) {
+    opts.subs?.use(this); // owner tears this row (and its handler) down on close
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
     this.root.addCssClass('ToolRow');
     // The transcript wraps this in a .transcript-entry-tool box (Transcript.appendToolEntry);
@@ -137,17 +147,23 @@ export class ToolRow {
       // Activate row (file tools): the click opens the file; details stay inline.
       this.revealer = null;
       this.toggle.append(this.content);
-      button.on('clicked', opts.onActivate);
+      this.subs.connect(button, 'clicked', opts.onActivate);
     } else {
       // Toggle row: the details live in a slide-down reveal the click flips.
       this.revealer = new Gtk.Revealer();
       this.revealer.setTransitionType(Gtk.RevealerTransitionType.SLIDE_DOWN);
       this.revealer.setChild(this.content);
       this.toggle.append(this.revealer);
-      button.on('clicked', () => this.setExpanded(!this.expanded));
+      this.subs.connect(button, 'clicked', () => this.setExpanded(!this.expanded));
       if (opts.expanded) this.setExpanded(true);
     }
     this.root.append(this.toggle);
+  }
+
+  /** Sever the header-button `clicked` handler (node-gtk roots its closure). Idempotent;
+   *  invoked by the owner's bag when constructed with `opts.subs`. */
+  dispose(): void {
+    this.subs.dispose();
   }
 
   get expanded(): boolean { return this.revealer?.getRevealChild() ?? false; }

@@ -13,7 +13,7 @@ import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { zym } from '../zym.ts';
-import type { Disposable } from '../util/eventKit.ts';
+import { CompositeDisposable, type Disposable } from '../util/eventKit.ts';
 import type { GitRepo, FileGitStatus } from '../git.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 
@@ -185,6 +185,10 @@ export class FileTree {
   private trackedFiles = new Set<string>(); // absolute paths tracked by git
   private trackedDirs = new Set<string>();  // their ancestor directories
   private readonly configDisposables: Disposable[] = [];
+  // The list-factory (setup/bind/unbind) + list `activate` handlers capture `this`; node-gtk
+  // roots each, so they pin the whole FileTree after a workbench/agent closes. `dispose()`
+  // severs them. See rule 2.
+  private readonly subs = new CompositeDisposable();
 
   constructor(options: FileTreeOptions) {
     this.onOpenFile = options.onOpenFile;
@@ -210,7 +214,7 @@ export class FileTree {
     );
 
     const factory = new Gtk.SignalListItemFactory();
-    factory.on('setup', (listItem: any) => {
+    this.subs.connect(factory, 'setup', (listItem: any) => {
       const expander = new Gtk.TreeExpander();
       const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
       const icon = new Gtk.Label({ xalign: 0 });
@@ -224,7 +228,7 @@ export class FileTree {
       expander.setChild(box);
       listItem.setChild(expander);
     });
-    factory.on('bind', (listItem: any) => {
+    this.subs.connect(factory, 'bind', (listItem: any) => {
       const row = listItem.getItem();
       const expander = listItem.getChild();
       expander.setListRow(row);
@@ -242,12 +246,12 @@ export class FileTree {
       this.boundItems.add(listItem);
       this.applyStatus(listItem);
     });
-    factory.on('unbind', (listItem: any) => {
+    this.subs.connect(factory, 'unbind', (listItem: any) => {
       this.boundItems.delete(listItem);
     });
 
     const list = new Gtk.ListView({ model: selection, factory });
-    list.on('activate', (position: number) => {
+    this.subs.connect(list, 'activate', (position: number) => {
       const row = tree.getRow(position);
       if (row) this.activateRow(row);
     });
@@ -315,10 +319,11 @@ export class FileTree {
     if (git) this.gitUnsubscribe = git.onChange(() => this.refreshStatuses());
   }
 
-  /** Release the git subscription and config observers. */
+  /** Release the git subscription, config observers, and list-factory/activate handlers. */
   dispose() {
     this.gitUnsubscribe?.();
     for (const d of this.configDisposables) d.dispose();
+    this.subs.dispose();
   }
 
   // --- Session integration -------------------------------------------------

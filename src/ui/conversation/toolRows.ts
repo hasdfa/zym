@@ -25,6 +25,7 @@ import { truncateLines, summarizeInput, progressLine } from './format.ts';
 import { ToolRow, toolHeaderLabel } from './ToolRow.ts';
 import { Transcript } from './Transcript.ts';
 import { NERDFONT } from '../nerdfont.ts';
+import type { CompositeDisposable } from '../../util/eventKit.ts';
 import type { TaskProgress } from '../../agents/claude-sdk/SdkSession.ts';
 
 // Tools whose first input path counts as a "changed file" (mirrors the claude-tui
@@ -36,6 +37,10 @@ export interface ToolRowContext {
   cwd: string;
   /** Open a file a file-tool acts on (makes its row clickable + collapsible). */
   onOpenFile?: (path: string) => void;
+  /** The owner's disposable bag — each built `ToolRow` registers with it so its
+   *  node-gtk-rooted header-button handler is severed when the owner is torn down
+   *  (the conversation / a subagent page). See `ToolRowOptions.subs`. */
+  subs?: CompositeDisposable;
 }
 
 /** A built tool entry: the caller wires its result + (optional) live progress. */
@@ -54,7 +59,7 @@ export interface ToolEntry {
  *  grouped row per consecutive run (when `onOpenFile` is set); everything else is a
  *  generic toggle row. */
 export function appendToolRow(transcript: Transcript, name: string, input: unknown, ctx: ToolRowContext): ToolEntry {
-  if (name === 'Bash') return appendBashRow(transcript, input);
+  if (name === 'Bash') return appendBashRow(transcript, input, ctx.subs);
 
   // Read/Write/Edit/… collapse into one row per consecutive run of the same tool —
   // the Transcript builds it; we only wire the (failure-only) result back here.
@@ -76,6 +81,7 @@ export function appendToolRow(transcript: Transcript, name: string, input: unkno
     icon,
     header,
     onActivate: opensFile ? () => ctx.onOpenFile!(filePath!) : undefined,
+    subs: ctx.subs,
   });
 
   // TodoWrite carries its checklist in the input — render it now, not on result.
@@ -107,7 +113,7 @@ export function appendToolRow(transcript: Transcript, name: string, input: unkno
 // Bash (shared ToolRow): the command (monospace) is the header toggling the detail
 // (its output); collapsed shows the first line. A non-zero exit only reveals a trailing
 // red dot — the icon and command colour stay put (a miss is often normal).
-function appendBashRow(transcript: Transcript, input: unknown): ToolEntry {
+function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeDisposable): ToolEntry {
   const command = (input as { command?: unknown })?.command;
   const cmd = typeof command === 'string' ? command : summarizeInput(input);
   const firstLine = cmd.split('\n', 1)[0];
@@ -137,7 +143,7 @@ function appendBashRow(transcript: Transcript, input: unknown): ToolEntry {
   header.append(label);
   header.append(errorDot);
 
-  const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render });
+  const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render, subs });
   transcript.appendToolEntry(toolRow.root);
 
   let progress: InstanceType<typeof Gtk.Label> | null = null;

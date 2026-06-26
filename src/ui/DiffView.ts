@@ -178,6 +178,11 @@ export class DiffView {
   private readonly indexText = new Map<string, string>();
   private dmb: DiffMultiBuffer;
   private gitUnsub?: () => void;
+  // The HEAD commit the base (old) side was diffed against. A repo change that MOVES it (commit,
+  // amend, reset, checkout) re-bases the diff — see onGitChange.
+  private lastHead: string | null = null;
+  // Bumped on each HEAD-move re-base so a superseded async blob fetch drops its stale result.
+  private rebaseGen = 0;
   private reDiffTimer: NodeJS.Timeout | null = null;
   private suppressReDiff = false;
   private lastLineCount = 0; // view buffer line count, to detect line-count-changing edits
@@ -242,7 +247,9 @@ export class DiffView {
 
     this.applyDecorations(dmb);
 
-    // ONE gutter renderer drawing both old + new columns (one PangoLayout/line, for perf).
+    // ONE gutter renderer drawing both old + new columns (one PangoLayout/line, for perf). The
+    // number columns are hidden by default (`editor.diffLineNumbers`); a live diff keeps its
+    // staged/unstaged marker regardless.
     this.lineNumbers = new CombinedDiffLineNumberGutter(
       this.editor.sourceView,
       lineLabels(dmb.oldNums),
@@ -252,6 +259,12 @@ export class DiffView {
       headerRows(dmb),
       this.live ? dmb.stagedState : null, // staging markers only on a live diff
       this.live,
+      zym.config.get('editor.diffLineNumbers') === true,
+    );
+    // Live-toggle the number columns without reopening the diff (observe fires immediately, a
+    // no-op re-set of the value already passed above).
+    this.disposables.add(
+      zym.config.observe('editor.diffLineNumbers', (v) => this.lineNumbers?.setShowLineNumbers(v === true)),
     );
 
     this.installOverlays(dmb);
@@ -288,8 +301,9 @@ export class DiffView {
     // so the gutter marker can show staged vs unstaged, and refresh it when the index moves out from
     // under us (someone stages elsewhere).
     if (this.live && this.repo) {
+      this.lastHead = this.gitRepo?.getHead() ?? null;
       this.fetchIndexText(this.files.map((f) => f.path), () => this.refreshMarkers());
-      this.gitUnsub = this.gitRepo?.onChange(() => this.fetchIndexText(this.files.map((f) => f.path), () => this.refreshMarkers()));
+      this.gitUnsub = this.gitRepo?.onChange(() => this.onGitChange());
     }
   }
 
@@ -506,6 +520,67 @@ export class DiffView {
       wr = newOf(viewRow + d) ?? newOf(viewRow - d);
     }
     return { path: anchors[fi].path, worktreeRow: wr != null ? wr - 1 : 0 };
+  }
+
+  /** React to a repo change on the live staging surface. A HEAD MOVE (commit / amend / reset /
+   *  checkout) re-bases the diff: the base (old) side is re-fetched from the new HEAD, so a file now
+   *  identical to the worktree produces no hunks and `buildDiffMultiBuffer` drops it — committing
+   *  every change empties the view. A mere index move (staging / unstaging) leaves the worktree↔HEAD
+   *  geometry untouched, so it only repaints the staged/unstaged markers (no re-flow, no caret jump
+   *  — see refreshMarkers). The index blobs are refreshed either way (they moved on both). */
+  private onGitChange(): void {
+    if (this.disposed) return;
+    const head = this.gitRepo?.getHead() ?? null;
+    const headMoved = head !== this.lastHead;
+    this.lastHead = head;
+    const paths = this.files.map((f) => f.path);
+    this.fetchIndexText(paths, () => {
+      if (this.disposed) return;
+      if (headMoved) this.rebaseToHead(paths);
+      else this.refreshMarkers();
+    });
+  }
+
+  /** Re-fetch each file's HEAD blob (the base side) after a HEAD move, swap it into the read-only
+   *  old-side buffers, and re-diff. Files whose base now equals the worktree fall out of the diff
+   *  (no hunks), so a fully-committed tree empties the view. */
+  private rebaseToHead(paths: string[]): void {
+    if (this.disposed || !this.repo) return;
+    const gen = ++this.rebaseGen;
+    this.fetchHeadText(paths, (byPath) => {
+      if (this.disposed || gen !== this.rebaseGen) return; // a newer re-base superseded this fetch
+      // A bulk old-side replace would otherwise echo through reverse-sync into the view; suspend it
+      // and re-flow once via reDiff (which reads the updated source buffers).
+      this.projectionView.suspend();
+      try {
+        for (const file of this.files) {
+          const head = byPath.get(file.path) ?? '';
+          if (head === file.oldText) continue;
+          file.oldText = head;
+          this.sources.get(oldKey(file.path))?.buffer.setText(head, -1);
+        }
+      } finally {
+        this.projectionView.resume();
+      }
+      this.reDiff();
+    });
+  }
+
+  /** Read each path's HEAD blob (`git show HEAD:rel`) and hand the path→text map to `cb`. A path
+   *  absent from HEAD (a newly added file) reads as empty (its whole content is added vs HEAD). */
+  private fetchHeadText(paths: string[], cb: (byPath: Map<string, string>) => void): void {
+    if (!this.repo || this.disposed) return;
+    const byPath = new Map<string, string>();
+    let pending = paths.length;
+    if (pending === 0) return void cb(byPath);
+    for (const path of paths) {
+      const rel = Path.relative(this.repo, path);
+      git(this.repo, ['show', `HEAD:${rel}`], (ok, out) => {
+        if (this.disposed) return;
+        byPath.set(path, ok ? out : '');
+        if (--pending === 0) cb(byPath);
+      });
+    }
   }
 
   /** Read each path's staged (index) blob (`git show :rel`) into `indexText`, then run `cb`. A file

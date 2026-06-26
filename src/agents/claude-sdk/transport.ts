@@ -37,6 +37,9 @@ export interface Transport {
   start(): void;
   send(message: unknown): void;
   onEvent(handler: (event: StreamEvent) => void): Disposable;
+  /** Raw stderr chunks — claude prints crashes/diagnostics here (the only place
+   *  the cause of an `error_during_execution` exit usually appears). */
+  onStderr(handler: (chunk: string) => void): Disposable;
   onExit(handler: (code: number | null) => void): Disposable;
   dispose(): void;
 }
@@ -81,6 +84,11 @@ export class ClaudeStreamTransport implements Transport {
     // keep Node from treating it as an uncaught exception. 'exit' still fires.
     proc.on('error', (err) => { this.startError = err as Error; });
     proc.on('exit', (code) => this.emitExit(code));
+
+    // Writing a turn to a child that just died mid-crash raises EPIPE on stdin; an
+    // unhandled stream 'error' would become an uncaught exception that takes zym
+    // down with it. Absorb it — `writable`/the 'exit' event are the real signals.
+    proc.stdin.on('error', () => { /* pipe closed; surfaced via 'exit' */ });
 
     proc.stdout.setEncoding('utf8');
     proc.stdout.on('data', (chunk: string) => this.onStdout(chunk));

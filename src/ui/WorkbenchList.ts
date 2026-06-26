@@ -139,7 +139,7 @@ export class WorkbenchList {
     this.listBox = new Gtk.ListBox();
     this.listBox.addCssClass('navigation-sidebar')
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
-    this.listBox.on('row-activated', (row: any) => {
+    this.subs.connect(this.listBox, 'row-activated', (row: any) => {
       const handle = this.handleForRow(row);
       if (handle && !handle.removing) this.activate(handle.entry);
     });

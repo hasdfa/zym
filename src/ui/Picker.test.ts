@@ -243,3 +243,36 @@ test('match rows carry no event controllers (select-on-hover removed, no leak)',
   assert.equal(controllerCount(listBox.getRowAtIndex(0)), 0, 'reused row has no event controller');
   picker.close();
 });
+
+test('rank gates the typo fallback on a total exact miss', () => {
+  // "abcd" is an exact subsequence of "abcd.ts"; "abd" only matches after a
+  // one-char typo (drop the "c"). With an exact match present the typo-only
+  // candidate is dropped...
+  const withExact = rank('abcd', [item('abcd.ts'), item('abd')]).map((r) => r.item.value);
+  assert.deepEqual(withExact, ['abcd.ts']);
+
+  // ...but with nothing matching exactly, the typo fallback surfaces it.
+  const noExact = rank('abcd', [item('abd'), item('xyz')]).map((r) => r.item.value);
+  assert.deepEqual(noExact, ['abd']);
+});
+
+test('appendItems grows the pool, preserving existing rows, and clears loading', () => {
+  const host = new Gtk.Overlay();
+  const picker = openPicker({ host, items: ['a'], onSelect: () => {}, loading: true });
+  picker.appendItems(['b', 'c']);
+  assert.deepEqual(
+    rows(host).map((r) => r.text),
+    ['a', 'b', 'c'],
+  );
+  picker.close();
+});
+
+test('appendItems([]) on a loading picker resolves to the empty state', () => {
+  const host = new Gtk.Overlay();
+  const picker = openPicker({ host, items: [], onSelect: () => {}, loading: true });
+  assert.deepEqual(rows(host), [{ name: 'PickerEmpty', text: 'Loading…' }]);
+  // The walk found nothing; an empty append must still stop the spinner.
+  picker.appendItems([]);
+  assert.deepEqual(rows(host), [{ name: 'PickerEmpty', text: 'No entries' }]);
+  picker.close();
+});
