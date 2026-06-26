@@ -36,8 +36,8 @@ addStyles(`
     margin: 10px 0;
     border-radius: 10px;
   }
-  #MarkdownRenderPoc .bubble.is-user { background: var(--t-ui-surface-selected); }
-  #MarkdownRenderPoc .bubble.is-assistant { background: var(--t-ui-surface-popover); }
+  #MarkdownRenderPoc .bubble.is-user { background: color-mix(in srgb, var(--card-bg-color), var(--accent-color) 50%); }
+  #MarkdownRenderPoc .bubble.is-assistant { background: var(--card-bg-color); }
 `);
 
 const here = Path.dirname(fileURLToPath(import.meta.url));

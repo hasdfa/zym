@@ -26,8 +26,10 @@ addStyles(/* css */`
     padding: calc(2 * var(--t-spacing));
     border-radius: 10px;
   }
+  /* --user-bubble-bg is defined on the .AgentConversation ancestor (the pending bubble
+     shares it); Message only ever renders inside a conversation, so it resolves. */
   .Message.is-user .message-bubble {
-    background: color-mix(in srgb, var(--card-bg-color), var(--accent-color) 50%);
+    background: var(--user-bubble-bg);
   }
   .Message.is-assistant .message-bubble {
     // background: var(--card-bg-color);

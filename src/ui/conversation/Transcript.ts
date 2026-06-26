@@ -39,10 +39,11 @@ addStyles(/* css */`
     padding: 0 calc(2 * var(--t-spacing)) 0 calc(6 * var(--t-spacing));
    }
 
-  /* Collapsed file-tool rows (Read/Write/Edit): a non-clickable tool-name label and
-     each file path are all flat buttons, so they share the default button padding +
-     metrics and line up. The head reads as a muted title; paths read as links (the
-     .link class supplies the accent color). */
+  /* Consecutive-run groups (collapsed file-tool rows like Read/Write/Edit, and runs
+     of subagent spawns): a leading icon + a non-clickable head label, with each item
+     stacked to its right. The head + items are all flat buttons, so they share the
+     default button padding + metrics and line up. The head reads as a muted title;
+     file paths additionally read as links (.transcript-file-path). */
   .Transcript .transcript-file-icon { padding-right: 8px; }
   .Transcript .transcript-file-head { opacity: 0.85; }
   .Transcript .transcript-file-path {
@@ -72,9 +73,11 @@ export class Transcript {
   private lastUpper = 0;
   // Distance from the bottom (px) that still counts as "at the bottom" for re-arming.
   private static readonly REARM_GAP = 16;
-  // The open collapsed file-tool row (Read/Write/Edit/…), while a CONSECUTIVE run of
-  // the SAME tool is appended to it. Any other entry clears it (see appendEntry).
-  private fileGroup: { tool: string; files: InstanceType<typeof Gtk.Box> } | null = null;
+  // The open consecutive-run group (collapsed file-tool rows like Read/Write/Edit, or
+  // a run of subagent spawns): one leading icon + head, with each call stacked as an
+  // item to its right. Keyed so a run of the same `key` extends; any other entry
+  // clears it (see appendEntry). `items` is the box new items append into.
+  private group: { key: string; items: InstanceType<typeof Gtk.Box> } | null = null;
 
   constructor(opts: TranscriptOptions = {}) {
     this.box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
@@ -100,7 +103,7 @@ export class Transcript {
    *  owner of inter-entry spacing. Used directly only for MESSAGE entries; every
    *  non-message entry goes through appendToolEntry. */
   appendEntry(widget: Widget): void {
-    this.fileGroup = null; // any other entry breaks a consecutive file-tool run
+    this.group = null; // any other entry breaks a consecutive grouped run
     widget.addCssClass('transcript-entry');
     this.box.append(widget);
   }
@@ -130,39 +133,8 @@ export class Transcript {
     const absPath = toolFilePath(name, input) ?? '';
     const display = view.detail || absPath;
 
-    if (!this.fileGroup || this.fileGroup.tool !== name) {
-      const container = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-      container.addCssClass('transcript-file-row');
-
-      const icon = new Gtk.Label({ valign: Gtk.Align.START });
-      icon.addCssClass('transcript-file-icon');
-      setMarkupSafe(icon, iconSpan(view.icon), view.icon);
-      container.append(icon);
-
-      // The tool name as a non-clickable flat button, so it carries the EXACT same
-      // padding/metrics as the file-path buttons beside it — they line up.
-      const head = new Gtk.Button({ valign: Gtk.Align.START });
-      head.addCssClass('flat');
-      head.addCssClass('transcript-file-head');
-      head.setCanTarget(false); // a label, not a control — no hover, no click
-      head.setFocusable(false);
-      const headLabel = new Gtk.Label({ xalign: 0 });
-      setMarkupSafe(headLabel, `<b>${escapeMarkup(view.title || name)}</b>`, view.title || name);
-      head.setChild(headLabel);
-      container.append(head);
-
-      // Center the icon against the head ROW (not the whole stack): a vertical size
-      // group ties the icon's height to the head button's, so its glyph centers on
-      // that first row even as more paths stack below (same trick as ToolRow).
-      const sizing = new Gtk.SizeGroup({ mode: Gtk.SizeGroupMode.VERTICAL });
-      sizing.addWidget(icon);
-      sizing.addWidget(head);
-
-      const files = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true });
-      container.append(files);
-      this.appendToolEntry(container); // wraps + clears fileGroup → assign it right after
-      this.fileGroup = { tool: name, files };
-    }
+    // Group by tool name (Read/Edit/…), with the tool's icon + name as the head.
+    const items = this.ensureGroup(name, view.icon, view.title || name);
 
     const button = new Gtk.Button({ halign: Gtk.Align.START });
     button.addCssClass('flat');
@@ -171,7 +143,7 @@ export class Transcript {
     button.setChild(new Gtk.Label({ xalign: 0, label: display }));
     button.setTooltipText(absPath);
     button.on('clicked', () => opts.onOpenFile(absPath));
-    this.fileGroup.files.append(button);
+    items.append(button);
     this.scrollToBottom();
 
     // A successful file op is boilerplate (suppressed); surface only a FAILURE — tint
@@ -184,6 +156,56 @@ export class Transcript {
     };
   }
 
+  /** Append `item` into a consecutive-run group keyed by `key` — a leading `icon` +
+   *  bold `head`, with each item stacked to its right (the same layout file tools
+   *  use). Used to collapse a run of subagent (`Agent`) spawns into one entry, like
+   *  Read does. A run of the same `key` extends; any other entry starts a fresh one. */
+  appendGroupItem(key: string, icon: string, head: string, item: Widget): void {
+    this.ensureGroup(key, icon, head).append(item);
+    this.scrollToBottom();
+  }
+
+  // Build (or reuse) the consecutive-run group for `key`: a leading icon + a
+  // non-clickable bold head, with a vertical `items` box stacked to its right. A run
+  // of the same key reuses the open group; otherwise a fresh container is appended.
+  // Returns the `items` box new entries append into.
+  private ensureGroup(key: string, icon: string, head: string): InstanceType<typeof Gtk.Box> {
+    if (this.group && this.group.key === key) return this.group.items;
+
+    const container = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    container.addCssClass('transcript-file-row');
+
+    const iconLabel = new Gtk.Label({ valign: Gtk.Align.START });
+    iconLabel.addCssClass('transcript-file-icon');
+    setMarkupSafe(iconLabel, iconSpan(icon), icon);
+    container.append(iconLabel);
+
+    // The head as a non-clickable flat button, so it carries the EXACT same
+    // padding/metrics as the item buttons beside it — they line up.
+    const headButton = new Gtk.Button({ valign: Gtk.Align.START });
+    headButton.addCssClass('flat');
+    headButton.addCssClass('transcript-file-head');
+    headButton.setCanTarget(false); // a label, not a control — no hover, no click
+    headButton.setFocusable(false);
+    const headLabel = new Gtk.Label({ xalign: 0 });
+    setMarkupSafe(headLabel, `<b>${escapeMarkup(head)}</b>`, head);
+    headButton.setChild(headLabel);
+    container.append(headButton);
+
+    // Center the icon against the head ROW (not the whole stack): a vertical size
+    // group ties the icon's height to the head button's, so its glyph centers on
+    // that first row even as more items stack below (same trick as ToolRow).
+    const sizing = new Gtk.SizeGroup({ mode: Gtk.SizeGroupMode.VERTICAL });
+    sizing.addWidget(iconLabel);
+    sizing.addWidget(headButton);
+
+    const items = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true });
+    container.append(items);
+    this.appendToolEntry(container); // wraps + clears the group → assign it right after
+    this.group = { key, items };
+    return items;
+  }
+
   /** Remove a previously-appended entry (e.g. an answered permission card). */
   removeEntry(widget: Widget): void {
     this.box.remove(widget);
@@ -191,6 +213,7 @@ export class Transcript {
 
   /** Drop every entry. */
   clear(): void {
+    this.group = null; // the open run's box is about to be removed — don't reuse it
     clearChildren(this.box);
   }
 

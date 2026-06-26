@@ -297,6 +297,12 @@ export function installStyles(): void {
 // content area (the agent input card, the diff comment box) — softer than a
 // floating popover.
 //
+// `--selection-bg` / `--selection-bg-focus` are the shared row-like selection
+// highlight, defined once so every list selection (git panels, the git log, the
+// location list) and the focused option in a Question card read identically:
+// the unfocused row gets a neutral translucent wash of its own foreground, the
+// focused (`:focus-within`) row an accent tint.
+//
 // The base spacing unit (margins / gaps between content chrome) is the theme's
 // `spacing` token, emitted as `--t-spacing` on `.AppWindow` below.
 //
@@ -310,6 +316,8 @@ styles.addStatic(`
     --popover-radius: 15px;
     --popover-radius-small: 6px;
     --card-radius: 12px;
+    --selection-bg: alpha(currentColor, 0.15);
+    --selection-bg-focus: alpha(var(--accent-bg-color), 0.15);
   }
 `);
 

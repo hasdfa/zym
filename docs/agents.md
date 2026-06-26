@@ -50,11 +50,14 @@ What already exists and is reused, not rebuilt:
   sidebar** (`src/ui/AgentSidebar.ts`) — a full-height column *outside* the header
   bar, between the WorkbenchList and the content, themed with the libadwaita
   `secondarySidebar` colors. Like WorkbenchList it carries its **own** `Adw` header
-  (an `Adw.ToolbarView` top bar showing the agent name), so the header lines up with
-  the agent column for free — no width-sync against the window header (whose padding
-  never aligned). It's **uncloseable**: it's a `Gtk.Stack` page, not a tab. Every open
-  agent's widget is a stack page kept alive across switches; `activateWorkbench` flips
-  the visible one (`AgentSidebar.show`) and attaches the column to its split
+  (an `Adw.ToolbarView` top bar showing the agent name on the left and the **active
+  agent's edited-files button** packed at the trailing edge — pencil + count, click →
+  `openAgentChanges`; it tracks the shown agent's `onDidChangeFiles` and hides when it
+  has no edits). So the header lines up with the agent column for free — no width-sync
+  against the window header (whose padding never aligned). It's **uncloseable**: it's a
+  `Gtk.Stack` page, not a tab. Every open agent's widget is a stack page kept alive
+  across switches; `activateWorkbench` flips the visible one (`AgentSidebar.show(agent)`,
+  which also repoints the edited-files button) and attaches the column to its split
   (`agentPaned`, at `AGENT_SIDEBAR_WIDTH`, resizable) — or detaches it for the user
   workbench, which has no agent. The workbench center stays free as the work/review
   area. `showSideDock` is still false for agents, so Files/Source-Control isn't docked
@@ -99,15 +102,22 @@ What already exists and is reused, not rebuilt:
     (Bash plain monospace + one-line crop); permission gating via the bundled stdio
     MCP `assets/mcp/zymPermission.mjs` (`--permission-prompt-tool`, atomic
     file IPC) → native allow/deny card; **interrupt** (control_request, on
-    `ctrl-c`); **subagents** (captured per-`Agent`-tool transcript, inline
-    button + sticky panel + pushed `Adw.NavigationView` page, kept out of the
-    main thread); **shell monitors** (sticky panel + inspect page + cancel via
+    `ctrl-c`) and **close** (`ctrl-d ctrl-d`, anywhere);
+    **subagents** (captured per-`Agent`-tool transcript; a run of
+    consecutive spawns collapses into one grouped inline entry — like Read does —
+    each a clickable item, plus a sticky panel + pushed `Adw.NavigationView` page
+    that renders the subagent's tools through the *same* shared row builder as the
+    main transcript, kept out of the main thread); **shell monitors** (sticky panel
+    + inspect page + cancel via
     `stop_task`); **AskUserQuestion** as an `Adw.ViewSwitcher` card (j/k/h/l +
     notes; answered over the only working channel, the permission deny-message);
     **message queueing** while busy (right-aligned "Pending" bubble); unknown
     events surfaced as raw-JSON rows.
   - UI is split under `src/ui/conversation/`: `format.ts` (pure helpers,
-    tested), `StickyListPanel.ts` (Tasks/Subagents/Monitors), `cards.ts`
+    tested), `Transcript.ts` (the scrollable entries column + consecutive-run
+    grouping, shared by the main view and each subagent page), `toolRows.ts` (the
+    shared tool-use row builder — Bash / file-tool group / generic toggle — used by
+    both), `StickyListPanel.ts` (Tasks/Subagents/Monitors), `cards.ts`
     (permission), `QuestionCard.ts`, `SubagentView.ts`, `MonitorView.ts`.
   - **Deferred:** conversation resume + session serialize for sdk
     (`serialize()` returns null → not persisted across editor restart);
@@ -129,8 +139,9 @@ What already exists and is reused, not rebuilt:
 - **`src/ui/WorkbenchList.ts`** — the contents of the WorkbenchSidebar column.
   Each entry is associated with a particular **workbench**: the first ("default",
   selected-by-default) row is the **user** (person glyph + name, as a pseudo-agent
-  — `onActivateUser`), the rest are the running agents (status indicator + title
-  + changed-files badge). **Never empty** (the user row is always present → no
+  — `onActivateUser`), the rest are the running agents (status indicator + title;
+  the per-agent edited-files badge moved to the AgentSidebar header, reflecting the
+  *active* agent). **Never empty** (the user row is always present → no
   empty state). The header bar + scrollable list are assembled in an
   `Adw.ToolbarView` (its `root`): the project-title `Adw.HeaderBar` (themed to
   match the window header bar) is a **top bar** over the list as **content**, so

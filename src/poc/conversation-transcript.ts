@@ -3,7 +3,8 @@
  * POC: drive the REAL AgentConversation with scripted, fake stream events so the
  * whole transcript (bubbles, streaming text/thinking, tool rows, Bash, a Task
  * subagent, a Monitor, a permission prompt embedded in a tool row, a question
- * card, the context gauge, errors) can be iterated on WITHOUT spawning `claude`.
+ * card, the actions bar, the context gauge, errors) can be iterated on WITHOUT
+ * spawning `claude`.
  *
  * Fidelity comes from reusing production code end-to-end: a fake `Transport`
  * (injected via AgentConversation's `createTransport` seam) feeds raw stream-json
@@ -12,10 +13,10 @@
  * here — only the event SOURCE is faked. So whatever we change in the conversation
  * UI shows up here verbatim.
  *
- * Permission + question cards ride SdkSession's file-watch channel (not the event
- * stream), so they're exercised by writing the request file the MCP permission
- * server would write — into the per-session runtime dir, discovered just after the
- * session is constructed.
+ * Permission + question cards and the actions bar ride SdkSession's file-watch
+ * channels (not the event stream), so they're exercised by writing the same files
+ * the MCP permission / `set_actions` bridge tools would write — into the per-session
+ * runtime dir, discovered just after the session is constructed.
  *
  * After the scripted scene finishes you can keep typing: a submitted prompt gets a
  * short canned streamed reply, so the input / submit / interrupt / scroll-follow
@@ -306,65 +307,60 @@ class FakeTransport implements Transport {
     wait(200);
     feed(ev.result(0.21, 200000));
 
-    // Question cards (AskUserQuestion), the final interactive beat — three shapes:
-    // a single question, a multi-question set (the switcher), and a multi-select one.
+    // Actions bar (set_actions): the agent registers a few runnable actions, which
+    // surface as buttons just above the prompt. The first is the default (the accent
+    // "suggested" button); the terminal-less one shows a stop control while it runs.
+    wait(500);
+    stream("I've registered a few actions you can run — they show up in the bar above the prompt.\n");
+    at(() => writeActions([
+      { label: 'Run tests', command: 'pnpm test' },                        // default → accent button (terminal)
+      { label: 'Start dev server', command: 'sleep 5', terminal: false },  // background → a stop control while it runs
+      { label: 'Open the app', command: 'pnpm start' },                    // another terminal action
+    ]));
+
+    // Question card (AskUserQuestion), the final interactive beat — a SINGLE request
+    // carrying several questions, so the one card demos every option through its
+    // view-switcher: a single-select with descriptions, a multi-select (space toggles,
+    // enter confirms), and one inviting a per-option note (press `n`). h/l moves
+    // between the questions.
     wait(900);
     at(() => writePermissionRequest({
-      id: 'q-1', tool_name: 'AskUserQuestion',
-      input: { questions: [{
-        question: 'Which refinement should I take next?',
-        header: 'Next step',
-        multiSelect: false,
-        options: [
-          { label: 'Stop button', description: 'A visible interrupt control in the spinner row.' },
-          { label: 'Jump to latest', description: 'A floating scroll-to-bottom pill.' },
-          { label: 'Collapsible thinking', description: 'Fold long reasoning behind a toggle.' },
-        ],
-      }] },
-    }));
-
-    // Multiple questions in one request → the inline view-switcher (h/l between them).
-    wait(1100);
-    at(() => writePermissionRequest({
-      id: 'q-2', tool_name: 'AskUserQuestion',
+      id: 'q-all', tool_name: 'AskUserQuestion',
       input: { questions: [
+        // 1) single-select; options carry descriptions (radio).
         {
-          question: 'Where should the Stop button live?',
-          header: 'Placement',
+          question: 'Which refinement should I take next?',
+          header: 'Next step',
           multiSelect: false,
           options: [
-            { label: 'In the spinner row', description: 'Next to the live “Thinking…” label.' },
-            { label: 'In the footer', description: 'Beside the permission-mode dropdown.' },
+            { label: 'Stop button', description: 'A visible interrupt control in the spinner row.' },
+            { label: 'Jump to latest', description: 'A floating scroll-to-bottom pill.' },
+            { label: 'Collapsible thinking', description: 'Fold long reasoning behind a toggle.' },
           ],
         },
+        // 2) multi-select (checkboxes); space toggles, enter confirms the set.
         {
-          question: 'What should it look like?',
-          header: 'Style',
+          question: 'Which polish items should I batch together?',
+          header: 'Batch',
+          multiSelect: true,
+          options: [
+            { label: 'Stop button', description: 'Visible interrupt control.' },
+            { label: 'Jump to latest', description: 'Scroll-to-bottom pill.' },
+            { label: 'Collapsible thinking', description: 'Fold long reasoning.' },
+            { label: 'Per-turn timing', description: 'Hover-revealed duration + tokens.' },
+          ],
+        },
+        // 3) single-select that invites a note — press `n` to reveal the note entry.
+        {
+          question: 'Anything to flag before I start?',
+          header: 'Notes',
           multiSelect: false,
           options: [
-            { label: 'Icon only', description: 'A compact square ⏹ button.' },
-            { label: 'Icon + label', description: '“Stop” with an icon.' },
-            { label: 'Destructive', description: 'Red destructive-action styling.' },
+            { label: 'Looks good', description: 'Proceed as planned.' },
+            { label: 'Has concerns', description: 'Press n to attach a note with the details.' },
           ],
         },
       ] },
-    }));
-
-    // A multi-select question (space toggles, enter confirms the set).
-    wait(1100);
-    at(() => writePermissionRequest({
-      id: 'q-3', tool_name: 'AskUserQuestion',
-      input: { questions: [{
-        question: 'Which polish items should I batch together?',
-        header: 'Batch',
-        multiSelect: true,
-        options: [
-          { label: 'Stop button', description: 'Visible interrupt control.' },
-          { label: 'Jump to latest', description: 'Scroll-to-bottom pill.' },
-          { label: 'Collapsible thinking', description: 'Fold long reasoning.' },
-          { label: 'Per-turn timing', description: 'Hover-revealed duration + tokens.' },
-        ],
-      }] },
     }));
 
     at(() => { this.scenarioDone = true; console.log('[POC] scripted scene done — type a prompt to get a canned reply.'); });
@@ -388,6 +384,18 @@ function writePermissionRequest(req: unknown): void {
   } catch (e) { console.warn('[POC] permission write failed:', (e as Error).message); }
 }
 
+// The `set_actions` bridge tool writes the registered actions (a JSON array)
+// atomically to actions.json; SdkSession watches it and emits an `actions` event,
+// which the AgentConversation renders into the ActionsBar above the prompt.
+function writeActions(actions: unknown): void {
+  if (!sessionDir) { console.warn('[POC] no session dir — skipping set_actions demo'); return; }
+  const file = Path.join(sessionDir, 'actions.json');
+  try {
+    Fs.writeFileSync(`${file}.tmp`, JSON.stringify(actions));
+    Fs.renameSync(`${file}.tmp`, file); // atomic → the Gio WATCH_MOVES monitor fires
+  } catch (e) { console.warn('[POC] actions write failed:', (e as Error).message); }
+}
+
 // --- boot (mirrors the other POCs' scaffolding) ---------------------------------
 const loop = GLib.MainLoop.new(null, false);
 const app = new Adw.Application({ applicationId: 'com.github.romgrk.zym.poc.conversation', flags: Gio.ApplicationFlags.NON_UNIQUE });
@@ -408,6 +416,9 @@ app.on('activate', () => {
       prompt: 'Give me a tour of the conversation transcript so I can iterate on its styling.',
       createTransport: () => fake,
       onOpenFile: (path) => console.log('[POC] open file:', path),
+      // Terminal actions have no terminal here — just log. Background actions
+      // (terminal: false) still spawn for real so the stop control is exercised.
+      onRunInTerminal: (action) => console.log('[POC] run in terminal:', action.label, '→', action.command),
     });
     // The just-created session's runtime dir (the new entry under SDK_ROOT).
     const after = listSessionDirs();

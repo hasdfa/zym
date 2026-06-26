@@ -19,7 +19,7 @@ import { theme } from '../../theme/theme.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
-import { ToolRow } from './ToolRow.ts';
+import { ToolRow, toolHeaderLabel } from './ToolRow.ts';
 import type { AgentQuestion, QuestionRequest } from '../../agents/claude-sdk/SdkSession.ts';
 
 type Answer = { header: string; labels: string[]; notes?: string };
@@ -35,7 +35,7 @@ addStyles(/* css */`
   .Question .question-prompt { margin-bottom: calc(2 * var(--t-spacing)); font-size: var(--t-font-ui-size-large); }
   .Question .question-switcher button { padding-top: 2px; padding-bottom: 2px; min-height: 0; }
   .Question .question-hint { opacity: 0.5; font-size: var(--t-font-ui-size-small); }
-  .Question .is-focused { background: var(--t-ui-surface-selected); }
+  .Question .is-focused { background: var(--selection-bg-focus); }
   .Question .question-note { padding-left: calc(4 * var(--t-spacing)); }
 `);
 
@@ -280,8 +280,7 @@ export class QuestionCard {
     const summary = picked.length > 0
       ? picked.map((a) => `${a.header}: ${a.labels.join(', ')}${a.notes ? ` (${a.notes})` : ''}`).join('   ·   ')
       : 'No answer selected';
-    const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('conversation-tool-header');
+    const header = toolHeaderLabel();
     setMarkupSafe(header, escapeMarkup(summary), summary);
     const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header });
     row.content.append(this.answeredDetails());

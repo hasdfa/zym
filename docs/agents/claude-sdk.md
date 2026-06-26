@@ -12,35 +12,31 @@ is only about the `claude-sdk` kind.
 
 ## Why headless
 
-Each `claude-tui` agent is a full Ink/React TUI process whose render loop
-repaints ANSI on every token; Vte then re-parses + rasterises that on
-zym's GTK main thread. The cost shows up *in the `claude` process* (htop)
-**and** on zym's loop, and Vte (CPU rasteriser, shared loop) is worse at
-it than a GPU terminal like kitty. GTK pins all widget work to one thread,
-so the cost can't be threaded away — only removed. Headless removes it:
-`claude -p` emits compact JSON deltas (no ANSI, no repaint, no Vte parse),
-which we render incrementally into native widgets.
+Each `claude-tui` agent is a full Ink/React TUI whose render loop repaints
+ANSI every token; Vte re-parses + rasterises that on zym's GTK main thread.
+The cost lands *in the `claude` process* (htop) **and** on zym's loop — and
+Vte (CPU rasteriser, shared loop) is worse at it than a GPU terminal. GTK
+pins widget work to one thread, so the cost can't be threaded away, only
+removed. Headless removes it: `claude -p` emits compact JSON deltas (no ANSI,
+no repaint, no Vte parse) we render incrementally into native widgets.
 
 ## Decision: drive the CLI directly, SDK types only
 
-`@anthropic-ai/claude-agent-sdk` is a thin wrapper over exactly this
-`claude -p` protocol — but it `child_process.spawn`s from the calling
-process, assumes a vanilla Node loop, and manages its own CLI binary.
-zym is opinionated against all three (fork-from-big-parent discipline;
-node-gtk GLib loop; must run the **user's** installed `claude` with their
-auth/config). So:
+`@anthropic-ai/claude-agent-sdk` wraps exactly this `claude -p` protocol —
+but it `child_process.spawn`s from the calling process, assumes a vanilla
+Node loop, and manages its own CLI binary. zym rejects all three (fork-from-
+big-parent discipline; node-gtk GLib loop; must run the **user's** `claude`
+with their auth/config). So:
 
-- **Transport:** spawn `claude` directly ourselves, exactly like
-  `LspClient` (a long-lived streaming child over stdio is the proven
-  node-gtk pattern — the one-shot `process/runner.ts` broker does **not**
-  fit; that's for short git/gh commands). Newline-delimited JSON, not LSP
-  Content-Length framing.
-- **Types:** depend on `@anthropic-ai/claude-agent-sdk` for its exported
-  message **types only** (a type-only import, erased at runtime by the type
-  stripper — no runtime coupling, no spawn). Until that dep is vendored and
-  the export names verified, `protocol.ts` carries hand-written types
-  grounded in the **observed** wire output (see below); swap them for the
-  SDK's once aligned.
+- **Transport:** spawn `claude` directly, like `LspClient` (a long-lived
+  streaming child over stdio is the proven node-gtk pattern; the one-shot
+  `process/runner.ts` broker is for short git/gh commands, not this).
+  Newline-delimited JSON, not LSP Content-Length framing.
+- **Types:** depend on `@anthropic-ai/claude-agent-sdk` for its message
+  **types only** (type-only import, erased at runtime — no spawn, no runtime
+  coupling). Until that dep is vendored and the export names verified,
+  `protocol.ts` carries hand-written types from the **observed** wire output
+  (below); swap once aligned.
 - **Migration-friendly:** the UI consumes `SDKMessage`-shaped events either
   way, so if zym ever leaves node-gtk we can swap our transport for the
   SDK's `query()` runtime in one localized change.
@@ -108,108 +104,109 @@ or `zymBridge` MCP. (`claude-tui` keeps the hook path.)
 
 ### Permissions — `--permission-prompt-tool`
 
-The TUI's in-terminal permission prompt becomes a structured request
-rendered natively. We wire `--permission-prompt-tool` from the start (not
-an MVP shortcut like `acceptEdits`): claude calls a designated MCP tool to
-ask for permission; we expose that tool from a small stdio MCP server
-(`assets/mcp/zymPermission.mjs`, sibling to `zymBridge.mjs`), the call
-surfaces to `SdkSession` as a permission request (status → `waiting`), the
-native card collects allow/deny, and the decision is returned as the tool
-result. This exercises the `waiting` path for real, and is exactly how the
-Agent SDK's `canUseTool` works internally.
+The TUI's in-terminal prompt becomes a native structured request. We wire
+`--permission-prompt-tool` from the start (not an `acceptEdits` shortcut):
+claude calls a designated MCP tool to ask permission; we expose it from a
+small stdio MCP server (`assets/mcp/zymPermission.mjs`, sibling to
+`zymBridge.mjs`), the call surfaces to `SdkSession` as a request (status →
+`waiting`), the native card collects allow/deny, and the decision returns as
+the tool result — exactly how the Agent SDK's `canUseTool` works internally.
 
 ## Selecting the implementation
 
-An agent config carries a `kind` so a profile chooses its implementation:
-`'claude-tui'` (default, = `AgentTerminal`) vs `'claude-sdk'`.
-`agent.command` stays back-compatible → a synthetic `claude-tui` profile.
-A single `AppWindow.openAgent(options)` serves both kinds: it resolves an
-`AgentConfig` (from `src/agents/configs.ts`, picked by the
-`agent.implementation` flag or an explicit `options.kind`) and that
-config's `create()` factory builds the host. Both kinds register in
-`zym.agents` and get their own workbench (own center + Files/Git + docks).
-The sidebar/picker read the shared observable surface, so they don't branch
-on kind. Stop/close/restart route correctly per kind.
+An agent config carries a `kind`: `'claude-tui'` (default, = `AgentTerminal`)
+vs `'claude-sdk'`; `agent.command` stays back-compatible → a synthetic
+`claude-tui` profile. One `AppWindow.openAgent(options)` serves both: it
+resolves an `AgentConfig` (`src/agents/configs.ts`, by the
+`agent.implementation` flag or explicit `options.kind`) whose `create()`
+builds the host. Both register in `zym.agents` with their own workbench
+(center + Files/Git + docks); the sidebar/picker read the shared observable
+surface, so they don't branch on kind, and stop/close/restart route per kind.
 
-A shared `Agent` interface (`src/agents/types.ts`) is implemented by both
-`AgentTerminal` and `AgentConversation`; `AgentManager`, `WorkbenchList`,
-`AgentPicker`, `agentStatusIcon`, and the AppWindow owner machinery are
-generic over `Agent`.
+A shared `Agent` interface (`src/agents/types.ts`) is implemented by both hosts;
+`AgentManager`, `WorkbenchList`, `AgentPicker`, `agentStatusIcon`, and the
+AppWindow owner machinery are generic over `Agent`.
 
 ## Native transcript UI
 
 `src/ui/AgentConversation.ts` (orchestrator) + `src/ui/conversation/*`
-(`format`, `StickyListPanel`, `cards`, `QuestionCard`, `SubagentView`,
-`MonitorView`) render a scrollable transcript of user/assistant/thinking/
-tool rows. Tool rows carry nerdfont icons; the Bash command is plain monospace,
-cropped to one line until expanded. A non-zero Bash exit is flagged by a
-trailing red dot — the terminal icon and the command's foreground are left
-untouched (other tools still swap to a red ✗ on a genuine failure). Richer
-turn surfaces:
+(`Transcript`, `toolRows`, `format`, `StickyListPanel`, `cards`, `QuestionCard`,
+`SubagentView`, `MonitorView`) render a scrollable transcript of
+user/assistant/thinking/tool rows. **Tool-use entries are built in one place —
+`toolRows.ts:appendToolRow` (Bash row, collapsed file-tool group, or generic toggle
+row)** — so the main transcript and each subagent page render identically;
+`AgentConversation` feeds result/progress from live events, a subagent page (holding
+the full captured call+result) wires the result once. Tool rows carry nerdfont icons;
+the header (toggle button) is one ellipsized line, full text behind the toggle
+(`ToolRow.toolHeaderLabel`); the Bash command is plain monospace, cropped to one line
+until expanded. A non-zero Bash exit shows a trailing red dot, leaving the icon +
+command untouched (other tools swap to a red ✗ on a genuine failure). Richer turn
+surfaces:
 
 - Thinking spinner + token meter (the footer "Thinking…" indicator, always shown
   while the model reasons). The inline dim *thinking blocks* in the transcript are
   opt-in via the `agent.showThinking` config flag (off by default); the footer
   indicator is unaffected.
-- **Subagents:** per-`Agent`-tool transcript captured off the main thread;
-  inline button + sticky "Subagents" panel + pushed `Adw.NavigationView`
-  page.
+- **Subagents:** per-`Agent`-tool transcript captured off the main thread. A run
+  of consecutive spawns **collapses into one inline entry** (a single subagent icon
+  + an "Agent" head + each spawn stacked as a clickable item) — the same
+  consecutive-run grouping Read uses (`Transcript.appendGroupItem` /
+  `SUBAGENT_GROUP`). Plus a sticky "Subagents" panel (running entries lead with the
+  shared `agentStatusIcon` glyph) + a pushed `Adw.NavigationView` page whose tool
+  rows go through the shared `appendToolRow`.
 - **Shell monitors:** sticky panel + inspect page + cancel.
 - **AskUserQuestion:** an `Adw.ViewSwitcher` card (j/k/h/l + notes).
 - **Message queueing** while busy: right-aligned "Pending" bubble.
-- **Interrupt** on `ctrl-c`.
+- **Interrupt** on `ctrl-c`; **close** on `ctrl-d ctrl-d` (anywhere — re-declared on
+  the prompt editor so vim's `ctrl-d` scroll doesn't preempt the chord).
 - Unknown event types surface as raw-JSON rows, never dropped.
 
 ## Resume
 
-A headless session resumes like the terminal agent: `SdkSession.start()` adds
-the shared `resumeFlags` (`--resume <id>` / `--continue` / `--fork-session`,
-`src/agents/resume.ts`) so `claude -p` reloads its context. **`--resume` restores
-the model's context but does NOT replay history as stream events** (verified
-against claude-code 2.1.x — a resumed `-p` run emits only `init` + the new turn).
+`SdkSession.start()` adds the shared `resumeFlags` (`--resume <id>` /
+`--continue` / `--fork-session`, `src/agents/resume.ts`) so `claude -p` reloads
+its context. **`--resume` restores context but does NOT replay history as events**
+(verified, claude-code 2.1.x — a resumed `-p` run emits only `init` + the new turn).
 So the *visible transcript* is rebuilt separately: `transcript.ts` reads claude's
-own on-disk JSONL (the same file `agentSessions.ts` reads for labels) into
-`ReplayEntry[]`, and `SdkSession.replay` re-emits them as the domain events a live
-turn produces, so `AgentConversation.wireSession`'s row handlers redraw the
-conversation. Replay runs in the constructor (before the workbench subscribes to
-changed-files, so historical edits seed rather than flood-open), guarded by a
-`replaying` flag that draws Agent/Monitor/Question as static rows.
+on-disk JSONL (the file `agentSessions.ts` reads for labels) into `ReplayEntry[]`,
+and `SdkSession.replay` re-emits them as the domain events a live turn produces, so
+`AgentConversation.wireSession`'s handlers redraw it. Replay runs in the constructor
+(before the workbench subscribes to changed-files, so historical edits seed rather
+than flood-open), guarded by a `replaying` flag that draws Agent/Monitor/Question
+as static rows.
 
-**Lazy reconnect:** a resume with no launch prompt rebuilds the transcript but does
-NOT spawn `claude -p --resume` until the user's first turn (`ensureConnected`, off
-`deferredStart`) — so restoring N agents on launch doesn't fire N claude processes
-up front. `serialize()` falls back to the resume id when the deferred process hasn't
-reported its own init session id yet, so a never-resumed agent still round-trips its
-id. A resume that carries a prompt (e.g. the worktree re-announce) starts eagerly.
+**Lazy reconnect:** a resume with no launch prompt rebuilds the transcript but
+doesn't spawn `claude -p --resume` until the first turn (`ensureConnected`, off
+`deferredStart`) — so restoring N agents doesn't fire N processes up front.
+`serialize()` falls back to the resume id when the deferred process hasn't reported
+its init session id yet, so a never-resumed agent still round-trips its id. A resume
+carrying a prompt (e.g. the worktree re-announce) starts eagerly.
 
-A resumed transcript ends with a permanent divider marking the boundary between
-restored history and the live continuation. While not yet reconnected the agent
-reports the `disconnected` status (a dim hollow dot, not live green — see
-`agentStatusIcon`) and the divider reads `── session disconnected · send a message
-to resume ──`; `ensureConnected` rewrites it to `── session resumed ──` (and clears
-the disconnected status) on the first turn — the divider row itself stays.
+A resumed transcript ends with a permanent divider between restored history and the
+live continuation. Until reconnected the agent reports `disconnected` (a dim hollow
+dot, not live green — `agentStatusIcon`) and the divider reads `── session
+disconnected · send a message to resume ──`; the first turn rewrites it to
+`── session resumed ──` and clears the status (the row stays).
 
 `AgentConversation.serialize()` returns `{kind:'agent', agentKind:'claude-sdk',
 …, sessionId}`; `TabState.agentKind` tells `restoreAgent` which host to relaunch.
-A resume no longer forces `claude-tui` (`openAgent`); in-place resume of a headless
-agent is a restart (its session is wired into views built at construction).
+Resume no longer forces `claude-tui`; in-place resume of a headless agent is a restart
+(its session is wired into views built at construction).
 
-**Subagent restore:** Claude stores each subagent's conversation as
-`<sid>/subagents/agent-<n>.jsonl` + a `.meta.json` ({agentType, description,
-toolUseId}). `readSubagents` rebuilds each into a `SubagentInfo` keyed by its
-spawning `Agent` tool id and attaches it to that tool's `ReplayEntry`; `replay`
-seeds it into the session before the row is drawn, so the restored `Agent` tool
-spawns the real subagent button + drill-down page (not a static row) and is marked
-done. Monitor **inner** state is still not reconstructed (drawn as a static row).
+**Subagent restore:** Claude stores each subagent as `<sid>/subagents/agent-<n>.jsonl`
++ a `.meta.json` ({agentType, description, toolUseId}). `readSubagents` rebuilds each
+into a `SubagentInfo` keyed by its spawning `Agent` tool id and attaches it to that
+tool's `ReplayEntry`; `replay` seeds it before the row is drawn, so the restored
+`Agent` tool spawns the real button + drill-down page (not a static row), marked done.
+Monitor **inner** state is still not reconstructed (static row).
 
 Scope: the main thread restores fully — user turns, assistant text/thinking, tool
-calls + results, the tasks panel, and spawned subagents' inner transcripts. The
-footer's context gauge (and the model shown in its breakdown popover) is seeded
-from the transcript's latest assistant `usage` (`readContextSeed`), so a resumed
-agent shows its real context occupancy
-before the first turn; cost and the exact context-window size aren't in the
-transcript, so they settle on the first live `result`. Empty thinking blocks
-(transcript stores signatures, not text) don't render.
+calls + results, the tasks panel, and subagents' inner transcripts. The footer's
+context gauge (and the model in its breakdown popover) is seeded from the transcript's
+latest assistant `usage` (`readContextSeed`), so a resumed agent shows real context
+occupancy before the first turn; cost and the exact context-window size aren't in the
+transcript, so they settle on the first live `result`. Empty thinking blocks (transcript
+stores signatures, not text) don't render.
 
 ## Remaining / planned
 
@@ -275,38 +272,32 @@ agent; turns are `{type:'user',...}` lines on stdin.
   permission **`deny` message** (lands as the tool_result, flagged
   `is_error:true` — unavoidable; claude reads it fine).
 - **`/rename` is a TUI-local command — headless `claude -p` lacks it.**
-  Verified: a `/rename foo` turn returns the synthetic
-  `"/rename isn't available in this environment."` and `/rename` is absent
-  from `init.slash_commands`. So `AgentConversation.submit()` intercepts it
-  **client-side** (`handleLocalCommand` → `parseLocalCommand`), exactly as
-  the interactive TUI does, and never forwards it as a turn. It sets the
-  agent's session name (`_sessionName`, distinct from the pinned
-  `agent:rename` `_displayName` which still wins) and **persists like the
-  TUI**: `agentSessions.writeCustomTitle` appends the same
-  `{"type":"custom-title","customTitle","sessionId"}` line the TUI writes to
-  `~/.claude/projects/<encoded-launch-cwd>/<id>.jsonl` (O_APPEND, atomic per
-  line). On resume, `readSessionName` re-reads it (custom title, else
-  `ai-title`) to seed the title — headless has no live OSC title channel.
-  `/rename` is also injected into the slash-completion list (the CLI's
-  `init` won't offer it). Cross-kind, the resume picker label already reads
-  the same `custom-title`.
+  Verified: a `/rename foo` turn returns the synthetic `"/rename isn't available
+  in this environment."` and `/rename` is absent from `init.slash_commands`. So
+  `AgentConversation.submit()` intercepts it **client-side** (`handleLocalCommand`
+  → `parseLocalCommand`), like the TUI, never forwarding it. It sets the session
+  name (`_sessionName`, distinct from the pinned `agent:rename` `_displayName`,
+  which still wins) and **persists like the TUI**: `agentSessions.writeCustomTitle`
+  appends the same `{"type":"custom-title","customTitle","sessionId"}` line to
+  `~/.claude/projects/<encoded-launch-cwd>/<id>.jsonl` (O_APPEND, atomic per line).
+  On resume, `readSessionName` re-reads it (custom title, else `ai-title`) — headless
+  has no live OSC title channel. `/rename` is also injected into slash-completion (the
+  CLI's `init` won't offer it); cross-kind, the resume picker label reads the same
+  `custom-title`.
 - **Auto-name = a one-shot `claude -p --model sonnet`** (`src/agents/oneshot.ts`
-  + `autoName.ts`), separate from the persistent streaming session. Bare
-  `/rename` (no arg) regenerates a name on demand; launching with
-  `agent.autoName` set names a fresh agent. Both name from the **user's own
-  prompt** (`launchPrompt`'s `userPrompt`, with zym's worktree/editor
-  instructions stripped — else the title would describe our scaffolding),
-  falling back to the first genuine user turn. Non-blocking (runs alongside the
-  first turn): while the one-shot runs the title shows a transient `…`
-  placeholder (`_transientName`, in-app display only — never persisted), which
-  on success is dropped for the generated `name` (applied exactly like a typed
-  `/rename`, persisted to the transcript — the title change is the confirmation,
-  silent otherwise) and on failure is dropped to revert to the previous name (the
-  kind default `'claude (sdk)'` if it had none) plus a warning toast. The one-shot
-  parses a `--output-format json` envelope (`parseOneShotEnvelope`) and the
-  name out of fenced/prose JSON (`parseAgentName`, lenient). Injectable via
-  `AgentConversationOptions.oneShot` for tests; the model/argv are hardcoded
-  today behind a config-shaped seam (`ClaudeOneShotConfig`).
+  + `autoName.ts`), separate from the streaming session. Bare `/rename` regenerates
+  on demand; launching with `agent.autoName` names a fresh agent. Both name from the
+  **user's own prompt** (`launchPrompt`'s `userPrompt`, with zym's worktree/editor
+  instructions stripped — else the title describes our scaffolding), falling back to
+  the first genuine user turn. Non-blocking (runs alongside the first turn): the title
+  shows a transient `…` placeholder (`_transientName`, in-app only, never persisted)
+  → on success the generated `name` (applied like a typed `/rename`, persisted; the
+  title change is the only confirmation) → on failure reverts to the previous name
+  (kind default `'claude (sdk)'`) plus a warning toast. The one-shot parses a
+  `--output-format json` envelope (`parseOneShotEnvelope`) and the name out of
+  fenced/prose JSON (`parseAgentName`, lenient). Injectable via
+  `AgentConversationOptions.oneShot` for tests; model/argv hardcoded behind a
+  config-shaped seam (`ClaudeOneShotConfig`).
 - **Unknown event types** (`dispatch`→false, e.g. an inbound
   `control_request`) are surfaced as a raw-JSON row, never dropped.
 - **Debug log** is opt-in via `ZYM_SDK_DEBUG` (off in tests).

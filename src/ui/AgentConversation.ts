@@ -18,24 +18,23 @@
 import { Gtk, Adw, Pango } from '../gi.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
-import { fonts } from '../fonts.ts';
 import { zym } from '../zym.ts';
 import { worktreeInfo, type WorktreeInfo } from '../git.ts';
 import { TextEditor, createInput } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
 import { MarkdownView } from './markdown/MarkdownView.ts';
-import { toolBodyMarkup, toolFilePath, describeTool } from './toolDisplay.ts';
 import { escapeMarkup, setMarkupSafe } from './proseMarkup.ts';
 import { iconSpan, iconLabel } from './icons.ts';
 import { clipboard } from './TextEditor/vim/clipboard.ts';
-import { truncateLines, summarizeInput, formatCount, progressLine, parseLocalCommand } from './conversation/format.ts';
+import { formatCount, parseLocalCommand } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { Transcript } from './conversation/Transcript.ts';
 import { Message, type MessageKind } from './conversation/Message.ts';
 import { permissionCard, permissionButtons } from './conversation/cards.ts';
 import { QuestionCard } from './conversation/QuestionCard.ts';
 import { ToolRow } from './conversation/ToolRow.ts';
-import { SubagentView } from './conversation/SubagentView.ts';
+import { appendToolRow, EDIT_TOOLS } from './conversation/toolRows.ts';
+import { SubagentView, SUBAGENT_GROUP } from './conversation/SubagentView.ts';
 import { MonitorView } from './conversation/MonitorView.ts';
 import { ActionsBar } from './conversation/ActionsBar.ts';
 import { ModelContext } from './conversation/ModelContext.ts';
@@ -53,14 +52,14 @@ import type { AgentAction } from '../agents/actions.ts';
 import { ActionProcesses } from '../agents/ActionProcesses.ts';
 import type { TabState } from '../SessionManager.ts';
 
-// Tools whose first input path counts as a "changed file" (mirrors the claude-tui
-// PostToolUse Edit|Write|MultiEdit|NotebookEdit hook).
-
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-
 // Colors come from the theme as CSS variables (--t-ui-*); the monospace bits read
 // the font store's --t-font-monospace-family. See docs/styling.md + theming.md.
 addStyles(/* css */`
+  /* The user's own message-bubble surface, shared within the conversation by the live
+     transcript bubble (Message.is-user) and the queued "pending" bubble below — scoped
+     here, on their common ancestor, rather than as a global token. */
+  .AgentConversation { --user-bubble-bg: color-mix(in srgb, var(--card-bg-color), var(--accent-color) 50%); }
+
   /* The conversation reads as the "secondary sidebar" it's docked into (left dock +
      its header section share these libadwaita --secondary-sidebar-* colors). */
   .AgentConversation .conversation-surface {
@@ -68,9 +67,10 @@ addStyles(/* css */`
     background: var(--secondary-sidebar-bg-color);
   }
 
-  /* A message queued while the agent is busy — a right-aligned bubble above the prompt. */
+  /* A message queued while the agent is busy — a right-aligned bubble above the prompt;
+     it's the user's own queued turn, so it shares the user message-bubble surface. */
   .AgentConversation .conversation-pending {
-    background: var(--t-ui-surface-selected);
+    background: var(--user-bubble-bg);
     border-radius: 10px;
     padding: 6px 10px;
     margin: 0 12px;
@@ -473,7 +473,7 @@ export class AgentConversation implements Agent {
     // Subagents push pages onto this.root (the NavigationView, assigned next); the
     // push/pop arrows defer that lookup until a click.
     const nav = { push: (page: InstanceType<typeof Adw.NavigationPage>) => this.root.push(page), pop: () => this.root.pop() };
-    this.subagentView = new SubagentView(this.session, nav, this.cwd);
+    this.subagentView = new SubagentView(this.session, nav, this.cwd, this.onOpenFile);
     this.monitorView = new MonitorView(this.session, nav);
 
     // A button bar for the agent's registered actions, just above the input card;
@@ -917,14 +917,13 @@ export class AgentConversation implements Agent {
         if (this.replaying) {
           if (name === 'Agent' && this.session.getSubagent(id)) {
             this.endTurn();
-            this.transcript.appendToolEntry(this.subagentView.spawn(id, input));
-            this.transcript.scrollToBottom();
+            this.transcript.appendGroupItem(SUBAGENT_GROUP.key, SUBAGENT_GROUP.icon, SUBAGENT_GROUP.head, this.subagentView.spawn(id, input));
             return;
           }
           this.recordChangedFile(name, input); this.endTurn(); this.addToolRow(id, name, input); return;
         }
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
-        if (name === 'Agent') { this.endTurn(); this.transcript.appendToolEntry(this.subagentView.spawn(id, input)); this.transcript.scrollToBottom(); return; }
+        if (name === 'Agent') { this.endTurn(); this.transcript.appendGroupItem(SUBAGENT_GROUP.key, SUBAGENT_GROUP.icon, SUBAGENT_GROUP.head, this.subagentView.spawn(id, input)); return; }
         if (name === 'Monitor') {
           const mi = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
           const desc = typeof mi.description === 'string' ? mi.description : typeof mi.command === 'string' ? mi.command : 'monitor';
@@ -1137,155 +1136,13 @@ export class AgentConversation implements Agent {
     this.transcript.scrollToBottom();
   }
 
-  // A tool-use row (shared ToolRow): a status slot (red ✗ only on failure) + the
-  // formatted tool over a collapsible detail section (result + TodoWrite checklist).
-  // File tools open their file on click instead of toggling; Bash gets a bespoke row.
+  // A tool-use row: built by the shared `appendToolRow` (Bash command row, collapsed
+  // file-tool group, or generic toggle row) so the main transcript and each subagent
+  // page render tools identically. We only key the returned handle by tool_use_id so
+  // the matching result / progress event can update it.
   private addToolRow(id: string, name: string, input: unknown): void {
-    if (name === 'Bash') { this.addBashRow(id, input); return; }
-    // Read/Write/Edit/… collapse into one row per consecutive run of the same tool —
-    // the Transcript builds it; we only wire the (failure-only) result back here.
-    if (this.onOpenFile && toolFilePath(name, input)) {
-      const onResult = this.transcript.appendFileTool(name, input, { cwd: this.cwd, onOpenFile: this.onOpenFile });
-      if (id) this.toolRows.set(id, { name, input, onResult });
-      return;
-    }
-
-    const filePath = toolFilePath(name, input);
-    const opensFile = !!(filePath && this.onOpenFile);
-
-    // The icon goes in the row's leading slot; the header is just title + detail.
-    // File tools open their file on click (no toggle); the rest toggle their detail.
-    const { icon } = describeTool(name, input, this.cwd);
-    const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('conversation-tool-header');
-    header.setWrapMode(Pango.WrapMode.WORD_CHAR); // break very long unbroken names instead of forcing the row wide
-    setMarkupSafe(header, toolBodyMarkup(name, input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${name} ${summarizeInput(input)}`);
-
-    const toolRow = new ToolRow({
-      icon,
-      header,
-      onActivate: opensFile ? () => this.onOpenFile!(filePath!) : undefined,
-    });
-
-    // TodoWrite carries its checklist in the input — render it now, not on result.
-    const todos = (input as { todos?: unknown })?.todos;
-    if (name === 'TodoWrite' && Array.isArray(todos)) toolRow.content.append(renderTodos(todos));
-
-    this.transcript.appendToolEntry(toolRow.root);
-    if (id) {
-      // Background-task rows (run_in_background) get a live progress line.
-      let progress: InstanceType<typeof Gtk.Label> | null = null;
-      this.toolRows.set(id, {
-        row: toolRow,
-        name,
-        input,
-        onResult: (isError, text) => this.fillToolResult(toolRow, name, isError, text),
-        onProgress: (p) => {
-          if (!progress) {
-            progress = new Gtk.Label({ xalign: 0, wrap: true });
-            progress.addCssClass('conversation-system');
-            toolRow.content.append(progress);
-          }
-          progress.setText(progressLine(p));
-          toolRow.setExpanded(true); // surface live progress as it streams in
-          this.transcript.scrollToBottom();
-        },
-      });
-    }
-    this.transcript.scrollToBottom();
-  }
-
-  // Bash (shared ToolRow): the command (monospace) is the header toggling the detail
-  // (its output); collapsed shows the first line. A non-zero exit only reveals a trailing
-  // red dot — the icon and command colour stay put (a miss is often normal).
-  private addBashRow(id: string, input: unknown): void {
-    const command = (input as { command?: unknown })?.command;
-    const cmd = typeof command === 'string' ? command : summarizeInput(input);
-    const firstLine = cmd.split('\n', 1)[0];
-    const multiline = cmd.includes('\n');
-
-    // The command renders as plain monospace (no syntax highlighting).
-    const monoWrap = (text: string) => `<span face="${escapeMarkup(fonts.monospaceFamily)}">${escapeMarkup(text)}</span>`;
-
-    const label = new Gtk.Label({ xalign: 0, hexpand: true });
-    label.addCssClass('conversation-tool-header');
-    // Collapsed: the command is cropped to its first line; the full (multiline)
-    // command shows only once expanded.
-    const render = (expanded: boolean) => {
-      const full = expanded || !multiline;
-      const text = full ? cmd : firstLine;
-      label.setWrap(full);
-      label.setEllipsize(full ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END);
-      setMarkupSafe(label, monoWrap(text), text);
-    };
-    render(false);
-
-    // A trailing red dot (shown on a non-zero exit) at the far end of the row.
-    const errorDot = new Gtk.Label({ valign: Gtk.Align.CENTER, visible: false });
-    errorDot.addCssClass('bash-error-dot');
-    setMarkupSafe(errorDot, iconSpan(NERDFONT.STATUS.DOT, theme.ui.status.error), '●');
-    const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, hexpand: true });
-    header.append(label);
-    header.append(errorDot);
-
-    const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render });
-    this.transcript.appendToolEntry(toolRow.root);
-
-    let progress: InstanceType<typeof Gtk.Label> | null = null;
-    if (id) this.toolRows.set(id, {
-      row: toolRow,
-      name: 'Bash',
-      input,
-      onResult: (isError, text) => {
-        const trimmed = text.trim();
-        if (trimmed) {
-          const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 40, 4000) });
-          out.addCssClass('conversation-result');
-          toolRow.content.append(out);
-        }
-        // A non-zero exit is often normal (grep/test miss): just show the dot, don't
-        // auto-expand (the user opens the output if wanted).
-        if (isError) errorDot.setVisible(true);
-      },
-      // Background-bash progress (run_in_background); shown in the detail body.
-      onProgress: (p) => {
-        if (!progress) {
-          progress = new Gtk.Label({ xalign: 0, wrap: true });
-          progress.addCssClass('conversation-system');
-          toolRow.content.append(progress);
-        }
-        progress.setText(progressLine(p));
-        toolRow.setExpanded(true);
-        this.transcript.scrollToBottom();
-      },
-    });
-    this.transcript.scrollToBottom();
-  }
-
-  // Fill a non-Bash tool row's result: a red ✗ on failure (which also expands the
-  // row), then a markdown card for Task (the subagent's report) or a truncated text
-  // preview otherwise, into the row's collapsible detail section.
-  private fillToolResult(toolRow: ToolRow, name: string, isError: boolean, text: string): void {
-    if (isError) {
-      toolRow.setStatus('error', NERDFONT.STATUS.CROSS); // ✗ + error-tinted icon/header
-      toolRow.setExpanded(true); // surface the failure without a click
-    }
-    // File tools (Read/Write/Edit/…): the file is opened on the side via the
-    // clickable row, and the result is just a boilerplate "created/updated" notice —
-    // don't dump it into the conversation (only a failure still shows its error text).
-    if ((name === 'Read' || EDIT_TOOLS.has(name)) && !isError) return;
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    if (name === 'Task' || name === 'Agent') {
-      const view = new MarkdownView();
-      view.root.addCssClass('conversation-task-result');
-      toolRow.content.append(view.root);
-      view.setMarkdown(trimmed);
-    } else {
-      const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 8, 800) });
-      label.addCssClass('conversation-result');
-      toolRow.content.append(label);
-    }
+    const entry = appendToolRow(this.transcript, name, input, { cwd: this.cwd, onOpenFile: this.onOpenFile });
+    if (id) this.toolRows.set(id, { row: entry.row, name, input, onResult: entry.onResult, onProgress: entry.onProgress });
   }
 
   private updateToolResult(id: string, isError: boolean, text: string): void {
@@ -1346,7 +1203,6 @@ export class AgentConversation implements Agent {
 
 }
 
-/** Remove every child of a box (GTK4 has no clear()). */
 /** A key-stable JSON serialization (object keys sorted at every level) so two inputs
  *  with the same content but different key order compare equal — used to match a
  *  permission request to its tool row (the two inputs come from different channels). */
@@ -1365,21 +1221,4 @@ function push(list: Array<() => void>, cb: () => void): () => void {
     const i = list.indexOf(cb);
     if (i !== -1) list.splice(i, 1);
   };
-}
-
-// A TodoWrite checklist: one glyph-prefixed row per todo (completed struck through).
-function renderTodos(todos: unknown[]): InstanceType<typeof Gtk.Box> {
-  const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
-  for (const raw of todos) {
-    const todo = (raw && typeof raw === 'object' ? raw : {}) as { content?: unknown; status?: unknown };
-    const content = typeof todo.content === 'string' ? todo.content : '';
-    const status = todo.status;
-    const glyph = status === 'completed' ? NERDFONT.TASK.DONE : status === 'in_progress' ? NERDFONT.TASK.ACTIVE : NERDFONT.TASK.OPEN;
-    const color = status === 'completed' ? theme.ui.status.success : status === 'in_progress' ? theme.ui.status.warning : undefined;
-    const body = status === 'completed' ? `<s>${escapeMarkup(content)}</s>` : escapeMarkup(content);
-    const label = new Gtk.Label({ xalign: 0, wrap: true });
-    setMarkupSafe(label, `${iconSpan(glyph, color)}  ${body}`, content);
-    box.append(label);
-  }
-  return box;
 }

@@ -20,7 +20,7 @@
  * The widget owns only the layout, the toggle, and the fade — the conversation
  * builds each tool's header and fills `content`.
  */
-import { Gtk } from '../../gi.ts';
+import { Gtk, Pango } from '../../gi.ts';
 import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';
 import { setMarkupSafe } from '../proseMarkup.ts';
@@ -37,7 +37,7 @@ addStyles(`
     background: transparent;
     transition: background 150ms ease;
   }
-  .ToolRow .tool-row-toggle.is-expanded { background: var(--t-ui-surface-popover); }
+  .ToolRow .tool-row-toggle.is-expanded { background: alpha(currentColor, 0.1); }
   /* The header button: a standard Adwaita flat button (its own hover tint), just
      left-aligned with no min size and rounded to match the toggle. */
   .ToolRow .tool-row-button {
@@ -45,6 +45,19 @@ addStyles(`
   }
   .ToolRow .tool-row-detail { padding: 0 8px 6px 8px; }
 `);
+
+/** A tool row's header label: the title/detail shown on the header button. Kept to a
+ *  single ellipsized line so a long title (or detail) never wraps to multiple lines or
+ *  pushes the row past the transcript's max width — the full content lives behind the
+ *  toggle (the expandable detail) or in the file the row opens. The caller fills it via
+ *  `setMarkupSafe`. */
+export function toolHeaderLabel(): InstanceType<typeof Gtk.Label> {
+  const label = new Gtk.Label({ xalign: 0, hexpand: true });
+  label.addCssClass('conversation-tool-header');
+  label.setEllipsize(Pango.EllipsizeMode.END);
+  label.setSingleLineMode(true); // also collapses any embedded newline to one line
+  return label;
+}
 
 /** A tool row's status: warning / error tint the icon + header (via the Adwaita
  *  `.warning` / `.error` style classes), or `null` for the neutral default. */

@@ -5,20 +5,22 @@
  * panel, and a pushed NavigationView page showing the full transcript.
  */
 import { Gtk, Adw } from '../../gi.ts';
-import { theme } from '../../theme/theme.ts';
-import { fonts } from '../../fonts.ts';
 import { Message } from './Message.ts';
-import { toolMarkup } from '../toolDisplay.ts';
 import { escapeMarkup, setMarkupSafe } from '../proseMarkup.ts';
-import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
-import { summarizeInput, truncateLines } from './format.ts';
+import { agentStatusMarkup } from '../agentStatusIcon.ts';
 import { StickyListPanel } from './StickyListPanel.ts';
-import { ToolRow } from './ToolRow.ts';
 import { Transcript } from './Transcript.ts';
+import { appendToolRow } from './toolRows.ts';
+import type { AgentStatus } from '../../agents/types.ts';
 import type { SdkSession } from '../../agents/claude-sdk/SdkSession.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
+
+/** The transcript group key + icon + head a run of subagent spawns collapses under,
+ *  mirroring how Read groups (see Transcript.appendGroupItem). Exported so the
+ *  conversation host appends spawns into the same group. */
+export const SUBAGENT_GROUP = { key: 'Agent', icon: NERDFONT.TOOL.SUBAGENT, head: 'Agent' } as const;
 
 /** Navigation surface the subagent page is pushed onto (the conversation's view). */
 export interface PageNav {
@@ -34,29 +36,37 @@ export class SubagentView {
   private readonly session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>;
   private readonly nav: PageNav;
   private readonly cwd: string;
+  private readonly onOpenFile?: (path: string) => void;
 
-  constructor(session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>, nav: PageNav, cwd: string) {
+  constructor(session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>, nav: PageNav, cwd: string, onOpenFile?: (path: string) => void) {
     this.session = session;
     this.nav = nav;
     this.cwd = cwd;
+    this.onOpenFile = onOpenFile;
   }
 
-  /** The `Agent` spawn → an inline ToolRow (returned, to append to the transcript;
-   *  shares the icon/alignment of tool rows) plus an entry in the running panel.
-   *  Clicking the row opens the subagent's transcript page. */
+  /** The `Agent` spawn → a clickable inline item (returned, to append into the
+   *  transcript's subagent group via SUBAGENT_GROUP — a run of spawns collapses into
+   *  one entry, like Read) plus an entry in the running panel. Clicking the item
+   *  opens the subagent's transcript page. */
   spawn(id: string, input: unknown): Widget {
     const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
     const type = typeof i.subagent_type === 'string' ? i.subagent_type : 'agent';
     const desc = typeof i.description === 'string' ? i.description : '';
-    const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('conversation-tool-header');
-    setMarkupSafe(header, `<b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
-    const toolRow = new ToolRow({ icon: NERDFONT.TOOL.SUBAGENT, header, onActivate: () => this.pushPage(id) });
+    // A flat item "<type>  <description>" stacked under the group's single subagent
+    // icon (no per-item glyph — the group head carries it, like file-path rows).
+    const label = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
+    label.addCssClass('conversation-tool-header');
+    setMarkupSafe(label, `<b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
+    const item = new Gtk.Button({ halign: Gtk.Align.START });
+    item.addCssClass('flat'); // a flat button → shares the grouped head/item padding so it lines up
+    item.setChild(label);
+    item.on('clicked', () => this.pushPage(id));
     // Show it in the running panel right away (driven by the spawn, not the later
     // task_started, so it's robust); hidden again on completion.
     this.running.set(id, { agentType: type, description: desc, status: 'running' });
     this.render();
-    return toolRow.root;
+    return item;
   }
 
   /** Mark a subagent finished (hides it from the running panel). */
@@ -66,10 +76,12 @@ export class SubagentView {
     this.render();
   }
 
-  // A flat link-button "<icon> <type>  <description>" that opens the subagent page.
-  private linkButton(id: string, glyph: string, type: string, desc: string, color?: string): InstanceType<typeof Gtk.Button> {
+  // A flat link-button "<status> <type>  <description>" that opens the subagent page.
+  // The leading glyph is the shared agent status indicator (agentStatusIcon), so a
+  // subagent reads the same as a top-level agent — `working` shows the ellipsis glyph.
+  private linkButton(id: string, status: AgentStatus, type: string, desc: string): InstanceType<typeof Gtk.Button> {
     const label = new Gtk.Label({ xalign: 0, wrap: true });
-    setMarkupSafe(label, `${iconSpan(glyph, color)}  <b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
+    setMarkupSafe(label, `${agentStatusMarkup(status)}  <b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
     const button = new Gtk.Button({ halign: Gtk.Align.START });
     button.addCssClass('flat');
     button.addCssClass('sticky-list-panel-link');
@@ -82,7 +94,7 @@ export class SubagentView {
     const rows: Widget[] = [];
     for (const [id, s] of this.running) {
       if (s.status !== 'running') continue;
-      rows.push(this.linkButton(id, NERDFONT.STATUS.SYNC, s.agentType, s.description, theme.ui.status.warning));
+      rows.push(this.linkButton(id, 'working', s.agentType, s.description));
     }
     this.panel.render(rows);
   }
@@ -109,20 +121,11 @@ export class SubagentView {
           transcript.appendEntry(message.root);
           message.setMarkdown(m.text);
         } else {
-          // The tool call + its result form ONE entry (the result stays tucked under
-          // the call), mirroring a ToolRow + its detail in the main transcript.
-          const entry = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 2 });
-          const label = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
-          label.addCssClass('conversation-tool-header');
-          setMarkupSafe(label, toolMarkup(m.name, m.input, { cwd: this.cwd, monoFamily: fonts.monospaceFamily }), `${m.name} ${summarizeInput(m.input)}`);
-          entry.append(label);
-          if (m.result && m.result.text.trim()) {
-            const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(m.result.text.trim(), 12, 1200) });
-            out.addCssClass('conversation-result');
-            out.setMarginStart(22);
-            entry.append(out);
-          }
-          transcript.appendToolEntry(entry); // a tool entry (not a message)
+          // The SAME shared builder the main transcript uses (Bash row, collapsed
+          // file-tool group, generic toggle row), so a subagent's tools render
+          // identically. We hold the full call+result, so wire the result at once.
+          const entry = appendToolRow(transcript, m.name, m.input, { cwd: this.cwd, onOpenFile: this.onOpenFile });
+          if (m.result) entry.onResult(m.result.isError, m.result.text);
         }
       }
     };

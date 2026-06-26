@@ -16,8 +16,14 @@
  */
 import { Adw, Gtk } from '../gi.ts';
 import { addStyles } from '../styles.ts';
+import { CompositeDisposable } from '../util/eventKit.ts';
+import { ICON_FONT_FAMILY } from '../fonts.ts';
+import { NERDFONT } from './nerdfont.ts';
+import type { Agent } from '../agents/types.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
+
+const CHANGED_GLYPH = NERDFONT.ACTION.EDIT; // edited-files badge
 
 addStyles(/* css */`
   .AgentSidebar, .AgentSidebar .agent-sidebar-header {
@@ -29,20 +35,52 @@ addStyles(/* css */`
      uses the theme border, matching the window header bar beside it. */
   .AgentSidebar { border-right: 1px solid var(--secondary-sidebar-border-color); }
   .AgentSidebar .agent-sidebar-header { border-bottom: 1px solid var(--border-color); }
+
+  /* The edited-files button at the header's trailing edge (pencil + count) — a flat,
+     muted control that opens the active agent's changed files; hidden until it edits
+     one. Muted via opacity (the secondary-sidebar fg), brightened on hover. */
+  .AgentSidebar .agent-sidebar-files {
+    min-width: 0;
+    min-height: 0;
+    padding: 0 4px;
+  }
+  .AgentSidebar .agent-sidebar-files label {
+    opacity: 0.6;
+    font-size: var(--t-font-ui-size-small);
+  }
+  .AgentSidebar .agent-sidebar-files:hover label { opacity: 1; }
 `);
+
+export interface AgentSidebarOptions {
+  /** Open the active agent's edited files (the header's edited-files button). */
+  onOpenChanges?: (agent: Agent) => void;
+}
 
 export class AgentSidebar {
   /** The full-height column (header + agent stack) — the start child of AppWindow's
    *  agent-sidebar split. */
   readonly root: InstanceType<typeof Adw.ToolbarView>;
 
+  private readonly options: AgentSidebarOptions;
   // Every open agent's widget, one per stack page; the visible one is the active
   // workbench's agent. Children are never reparented — switching flips visibility.
   private readonly stack: InstanceType<typeof Gtk.Stack>;
   // The header title (the active agent's name).
   private readonly title: InstanceType<typeof Adw.WindowTitle>;
+  // The edited-files button + its count label (right side of the header), reflecting
+  // the active agent. Hidden when it has no edits (or no agent is shown).
+  private readonly files: InstanceType<typeof Gtk.Button>;
+  private readonly filesLabel: InstanceType<typeof Gtk.Label>;
+  // The agent the header currently reflects, and the unsubscribe for its file-change
+  // notifications — swapped whenever a different agent is shown.
+  private activeAgent: Agent | null = null;
+  private filesUnsub: (() => void) | null = null;
+  // Owns the header signal connections so they're released on dispose (node-gtk pins a
+  // `.on` handler's captured `this` behind a Global handle otherwise — see eventKit).
+  private readonly subs = new CompositeDisposable();
 
-  constructor() {
+  constructor(options: AgentSidebarOptions = {}) {
+    this.options = options;
     this.stack = new Gtk.Stack();
     this.stack.setHexpand(true);
     this.stack.setVexpand(true);
@@ -57,6 +95,18 @@ export class AgentSidebar {
     this.title = new Adw.WindowTitle({ title: '' });
     header.packStart(this.title);
 
+    // The edited-files badge, packed at the trailing edge; opens the active agent's
+    // changes on click. (Moved here from the per-row badge in WorkbenchList.)
+    this.filesLabel = new Gtk.Label({ useMarkup: true });
+    this.files = new Gtk.Button();
+    this.files.setChild(this.filesLabel);
+    this.files.addCssClass('flat');
+    this.files.addCssClass('agent-sidebar-files');
+    this.files.setCanFocus(false);
+    this.files.setVisible(false);
+    this.subs.connect(this.files, 'clicked', () => { if (this.activeAgent) this.options.onOpenChanges?.(this.activeAgent); });
+    header.packEnd(this.files);
+
     this.root = new Adw.ToolbarView();
     this.root.addCssClass('AgentSidebar');
     this.root.addTopBar(header);
@@ -70,17 +120,57 @@ export class AgentSidebar {
 
   /** Drop an agent's widget when it is closed (unparent it from the stack). */
   removeAgent(widget: Widget): void {
+    if (this.activeAgent?.root === widget) this.setActiveAgent(null); // it was the shown one
     if (widget.getParent() === this.stack) this.stack.remove(widget);
   }
 
-  /** Show `widget` as the active agent and set the header title. */
-  show(widget: Widget, title: string): void {
-    if (widget.getParent() === this.stack) this.stack.setVisibleChild(widget);
-    this.title.setTitle(title);
+  /** Show `agent` as the active one: flip the visible stack child, set the header
+   *  title, and point the edited-files button at it. */
+  show(agent: Agent): void {
+    if (agent.root.getParent() === this.stack) this.stack.setVisibleChild(agent.root);
+    this.title.setTitle(agent.title);
+    this.setActiveAgent(agent);
+  }
+
+  /** No agent is shown (the user workbench) — drop the edited-files tracking. */
+  clearActive(): void {
+    this.setActiveAgent(null);
   }
 
   /** Update the header title (the active agent was renamed). */
   setTitle(title: string): void {
     this.title.setTitle(title);
+  }
+
+  // Point the header (edited-files button) at `agent`, swapping the file-change
+  // subscription so the count stays live; null clears it (and hides the button).
+  private setActiveAgent(agent: Agent | null): void {
+    if (agent !== this.activeAgent) {
+      this.filesUnsub?.();
+      this.filesUnsub = agent ? agent.onDidChangeFiles(() => this.updateFiles()) : null;
+      this.activeAgent = agent;
+    }
+    this.updateFiles();
+  }
+
+  // Reflect the active agent's edited-files count onto the badge: a pencil glyph +
+  // count (with a tooltip listing names), or hidden when there are none / no agent.
+  private updateFiles(): void {
+    const changed = this.activeAgent?.changedFiles ?? [];
+    if (changed.length === 0) {
+      this.files.setVisible(false);
+      return;
+    }
+    this.files.setVisible(true);
+    this.filesLabel.setMarkup(`<span font_family="${ICON_FONT_FAMILY}">${CHANGED_GLYPH}</span> ${changed.length}`);
+    const names = changed.map((path) => path.split('/').pop() ?? path);
+    this.files.setTooltipText(`Edited ${changed.length} file${changed.length === 1 ? '' : 's'} — click to open:\n${names.join('\n')}`);
+  }
+
+  /** Release the header signal connections + the active agent's file-change sub. */
+  dispose(): void {
+    this.subs.dispose();
+    this.filesUnsub?.();
+    this.filesUnsub = null;
   }
 }

@@ -7,16 +7,24 @@
 import { Gtk, Adw } from '../../gi.ts';
 import * as Fs from 'node:fs';
 import { theme } from '../../theme/theme.ts';
+import { addStyles } from '../../styles.ts';
 import { escapeMarkup, setMarkupSafe, clearChildren } from '../proseMarkup.ts';
 import { iconSpan } from '../icons.ts';
 import { NERDFONT } from '../nerdfont.ts';
 import { truncateLines } from './format.ts';
 import { StickyListPanel } from './StickyListPanel.ts';
-import { ToolRow } from './ToolRow.ts';
+import { ToolRow, toolHeaderLabel } from './ToolRow.ts';
 import type { SdkSession } from '../../agents/claude-sdk/SdkSession.ts';
 import type { PageNav } from './SubagentView.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
+
+addStyles(`
+  /* The inspect page renders a raw box (no Transcript), so it carries no gutter of
+     its own — inset its content by the same 2×spacing the transcript entries use so
+     the status + output don't sit flush against the page edges. */
+  .monitor-page-body { padding: calc(2 * var(--t-spacing)); }
+`);
 
 export class MonitorView {
   readonly panel = new StickyListPanel('Monitors', 'is-below');
@@ -34,8 +42,7 @@ export class MonitorView {
    *  Clicking the row opens the monitor's output page. */
   spawn(id: string, description: string): Widget {
     this.ids.add(id);
-    const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
-    header.addCssClass('conversation-tool-header');
+    const header = toolHeaderLabel();
     setMarkupSafe(header, `<b>Monitor</b>${description ? `  ${escapeMarkup(description)}` : ''}`, `Monitor ${description}`);
     const toolRow = new ToolRow({ icon: NERDFONT.TOOL.MONITOR, header, onActivate: () => this.pushPage(id) });
     this.render();
@@ -82,6 +89,7 @@ export class MonitorView {
   // Inspect page: status + captured output (read from the monitor's output file).
   private pushPage(id: string): void {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
+    box.addCssClass('monitor-page-body');
     const scroller = new Gtk.ScrolledWindow({ vexpand: true });
     scroller.setChild(box);
 

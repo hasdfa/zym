@@ -46,10 +46,10 @@ const ICON_SIZE = '85%';
 addStyles(`
   .LocationList .locationlist-location { color: var(--t-ui-text-muted); }
   .LocationList .locationlist-empty { color: var(--t-ui-text-muted); padding: 12px; }
-  /* Selected row: theme selection color while the list is active (focused), a
-     muted (faded) version of it otherwise. */
-  .LocationList list row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
-  .LocationList:focus-within list row:selected { background-color: var(--t-ui-surface-selected); }
+  /* Selected row: the shared row selection highlight — accent tint while the list is
+     active (focused), a neutral wash otherwise. */
+  .LocationList list row:selected { background-color: var(--selection-bg); }
+  .LocationList:focus-within list row:selected { background-color: var(--selection-bg-focus); }
 `);
 
 export class LocationList {

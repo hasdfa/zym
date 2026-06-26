@@ -124,9 +124,10 @@ addStyles(`
     background-color: alpha(var(--t-ui-status-success), 0.12);
     border-color: alpha(var(--t-ui-status-success), 0.4);
   }
-  /* Selected row: full selection color while focused, a muted version otherwise. */
-  .GitLogList row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
-  .GitLogView:focus-within .GitLogList row:selected { background-color: var(--t-ui-surface-selected); }
+  /* Selected row: the shared row selection highlight — accent tint while focused, a
+     neutral wash otherwise. */
+  .GitLogList row:selected { background-color: var(--selection-bg); }
+  .GitLogView:focus-within .GitLogList row:selected { background-color: var(--selection-bg-focus); }
   /* Right pane: the embedded diff (or a placeholder while nothing is selected). */
   .GitLogView .gitlog-diff-placeholder { color: var(--t-ui-text-muted); padding: 12px; }
 `);

@@ -30,7 +30,6 @@ import { NERDFONT } from './nerdfont.ts';
 import type { Agent } from '../agents/types.ts';
 
 const USER_GLYPH = NERDFONT.SOCIAL.USER; // the default/user entry
-const CHANGED_GLYPH = NERDFONT.ACTION.EDIT; // changed-files badge
 // Project name shown in the sidebar header: the last path component of the cwd.
 export const PROJECT_NAME = Path.basename(process.cwd());
 // Add/remove animation duration: each row rides in/out inside a Gtk.Revealer that
@@ -51,25 +50,6 @@ addStyles(/* css */`
   .Workbenchrow--label {
     font-weight: bold;
   }
-  
-  /* Per-row edited-files count — a flat, muted button (click opens the files). */
-  .WorkbenchRow .workbenchrow-files {
-    min-width: 0;
-    min-height: 0;
-    padding: 0 2px;
-    margin: 0;
-    background: none;
-    box-shadow: none;
-  }
-  /* The edited-files count: the editor foreground dimmed via opacity rather than
-     the theme's muted gray, which sat too dark to read on the sidebar. Hover
-     brightens the files button fully. */
-  .WorkbenchRow .workbenchrow-files label {
-    color: var(--t-ui-editor-foreground);
-    opacity: 0.55;
-    font-size: var(--t-font-ui-size-small);
-  }
-  .WorkbenchRow .workbenchrow-files:hover label { opacity: 1; }
 `);
 
 export interface WorkbenchListOptions {
@@ -385,21 +365,9 @@ export class WorkbenchList {
     label.setText(agent.title);
     unsubs.push(agent.onTitleChange(() => label.setText(agent.title)));
 
-    // Changed-files badge (pencil + count) — a flat button that opens the edited
-    // files; hidden until the agent edits one. Sits at the row's trailing edge.
-    const filesLabel = new Gtk.Label({ useMarkup: true });
-    const files = new Gtk.Button();
-    files.setChild(filesLabel);
-    files.addCssClass('flat');
-    files.addCssClass('workbenchrow-files');
-    files.setCanFocus(false);
-    files.on('clicked', () => this.options.onOpenChanges?.(agent));
-    const updateFiles = () => this.applyFiles(files, filesLabel, agent);
-    updateFiles();
-    unsubs.push(agent.onDidChangeFiles(updateFiles));
-
-    // Single-line row: [status dot | name | files badge].
-    return this.rowContent(dot, label, files);
+    // Single-line row: [status dot | name]. The edited-files badge now lives on the
+    // agent-sidebar header (AgentSidebar), reflecting the active agent, not per-row.
+    return this.rowContent(dot, label);
   }
 
   // The live rows (everything not mid-removal) — the source of truth for navigation
@@ -489,24 +457,6 @@ export class WorkbenchList {
       ? live.find((h) => h.entry.kind === 'agent' && h.entry.agent === this.selected)
       : live[0]; // the user row
     if (handle) this.listBox.selectRow(handle.row);
-  }
-
-  // The changed-files badge: a pencil glyph + count, or hidden when none. The
-  // glyph is rendered in the icon font via a markup span; the tooltip lists names.
-  private applyFiles(
-    button: InstanceType<typeof Gtk.Button>,
-    label: InstanceType<typeof Gtk.Label>,
-    agent: Agent,
-  ): void {
-    const changed = agent.changedFiles;
-    if (changed.length === 0) {
-      button.setVisible(false);
-      return;
-    }
-    button.setVisible(true);
-    label.setMarkup(`<span font_family="${ICON_FONT_FAMILY}">${CHANGED_GLYPH}</span> ${changed.length}`);
-    const names = changed.map((path) => path.split('/').pop() ?? path);
-    button.setTooltipText(`Edited ${changed.length} file${changed.length === 1 ? '' : 's'} — click to open:\n${names.join('\n')}`);
   }
 
   dispose(): void {

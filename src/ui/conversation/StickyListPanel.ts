@@ -12,7 +12,7 @@ type Widget = InstanceType<typeof Gtk.Widget>;
 addStyles(`
   .StickyListPanel {
     padding: 8px calc(4 * var(--t-spacing));
-    background: var(--t-ui-surface-popover);
+    background: var(--secondary-sidebar-bg-color);
     border-bottom: 1px solid var(--t-ui-border);
   }
   .StickyListPanel .sticky-list-panel-header { font-weight: bold; opacity: 0.6; margin-bottom: 4px; }

@@ -364,7 +364,9 @@ export class AppWindow {
     // resizable width; it starts detached (start child null) — the user workbench shows
     // no agent — and AppWindow attaches/detaches it on workbench switch. Window resize
     // grows the content, not the agent column.
-    this.agentSidebar = new AgentSidebar();
+    this.agentSidebar = new AgentSidebar({
+      onOpenChanges: (agent) => this.openAgentChanges(agent), // the header's edited-files button
+    });
     this.agentPaned = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
     this.agentPaned.addCssClass('AppWindow--paned'); // hide the handle; the sidebar's own border is the divider
     this.agentPaned.setEndChild(this.toastOverlay);
@@ -579,6 +581,7 @@ export class AppWindow {
     this.configWatcher.dispose();
     this.keymapWatcher.dispose();
     this.sidebar.dispose();
+    this.agentSidebar.dispose();
     // Every workbench (the user's + each agent's) owns its dock/center Panels + content
     // and a refcounted pooled git repo — dispose them as units (a shared root is only
     // freed when its last workbench releases it).
@@ -1636,7 +1639,8 @@ export class AppWindow {
   // (`agentSidebarHidden`). Attaching/detaching the Paned start child — rather than
   // toggling visibility — keeps the column free of a stray handle when absent.
   private showAgentSidebar(agent: Agent | null): void {
-    if (agent) this.agentSidebar.show(agent.root, agent.title); // keep the stack on the active agent
+    if (agent) this.agentSidebar.show(agent); // keep the stack on the active agent (+ its edited-files badge)
+    else this.agentSidebar.clearActive(); // user workbench — no agent to track
     const show = agent !== null && !this.agentSidebarHidden;
     if (show && !this.agentPaned.getStartChild()) {
       this.agentPaned.setStartChild(this.agentSidebar.root);

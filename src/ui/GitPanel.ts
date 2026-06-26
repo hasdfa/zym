@@ -131,13 +131,13 @@ addStyles(/* css */`
   .GitPanel .git-status { padding: 6px 8px; }
   .GitPanel .git-status label { color: var(--t-ui-editor-foreground); }
   .GitPanel .git-status .git-status-hint { color: var(--t-ui-text-muted); }
-  /* The cursor (selected row) is highlighted with the theme selection color, and
-     only while the panel is focused — an unfocused panel shows no highlight. */
-  .GitPanel row:selected { 
-    background-color: alpha(var(--window-fg-color), 0.1);
+  /* The cursor (selected row) uses the shared row selection highlight: a neutral
+     wash when unfocused, an accent tint while the panel is focused. */
+  .GitPanel row:selected {
+    background-color: var(--selection-bg);
   }
   .GitPanelList:focus-within row:selected {
-    background-color: var(--t-ui-surface-selected);
+    background-color: var(--selection-bg-focus);
   }
 `);
 
