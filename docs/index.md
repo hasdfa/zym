@@ -126,7 +126,8 @@ See [system-integration.md](system-integration.md).
 ## Git
 
 Fully async, with consumers restricted to the two core module `git.ts`/`github.ts` 
-boundary.  A slow background poll + `HEAD` watch feeds a cached, reactive `GitRepo`.
+boundary.  Event-driven file watches (`HEAD`/`index` + tracked-file content, throttled)
+over a slow backstop poll feed a cached, reactive `GitRepo`.
 Anything that interacts with git must use the core modules.
 See [git/index.md](git/index.md).
 

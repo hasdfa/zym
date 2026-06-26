@@ -209,6 +209,50 @@ test('a coordinated mutation sets busy synchronously, clears + notifies + applie
   }
 });
 
+test('a tracked-file edit refreshes via the content watch (no manual refresh)', async () => {
+  const d = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-git-watch-'));
+  try {
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: d, encoding: 'utf8' });
+    g('init', '-b', 'main');
+    g('config', 'user.email', 't@e.x');
+    g('config', 'user.name', 'T');
+    g('config', 'commit.gpgsign', 'false');
+    Fs.writeFileSync(Path.join(d, 'a.txt'), '1\n2\n3\n');
+    g('add', '-A');
+    g('commit', '-m', 'init');
+
+    const r = openGitRepo(d);
+    await settled(r);
+
+    // Subscribing starts the watches; the on-disk edit below must drive `onChange`
+    // on its own — we never call `refresh()`. Resolve when the new line is reflected,
+    // with a safety timeout so a missed event fails the assertion rather than hangs.
+    const fired = new Promise<void>((resolve) => {
+      const un = r.onChange(() => {
+        if (r.getStatus()?.added === 1) {
+          un();
+          resolve();
+        }
+      });
+      setTimeout(() => {
+        un();
+        resolve();
+      }, 8000).unref?.();
+    });
+
+    // Give chokidar a beat to establish its inotify watch, then edit the tracked file
+    // externally (no staging, no HEAD/index move — the case only the content watch sees).
+    await new Promise<void>((res) => setTimeout(res, 300).unref?.());
+    Fs.appendFileSync(Path.join(d, 'a.txt'), '4\n');
+
+    await fired;
+    assert.deepEqual(r.getStatus(), { added: 1, removed: 0 }, 'content watch picked up the tracked-file edit');
+    r.dispose();
+  } finally {
+    Fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('outside a repo: null/empty, never throws', () => {
   const plain = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'zym-nogit-'));
   try {

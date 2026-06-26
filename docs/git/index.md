@@ -138,8 +138,8 @@ synchronous getters**:
 
 ```
                  ┌─ git status --porcelain=v2 --branch -z --untracked-files=all ─┐
- 1.5s poll  ──►  ├─ git diff --numstat -z HEAD ─────────────────────────────────┤
- (+ HEAD watch)  └─ git ls-files -z  (only when the index/HEAD moved) ───────────┘
+ 60s heartbeat ─►├─ git diff --numstat -z HEAD ─────────────────────────────────┤
+ + file watches  └─ git ls-files -z  (only when the index/HEAD moved) ───────────┘
                                    │  git(cwd, args, cb) — async, never blocks
                                    ▼  parse (pure fns, unit-tested)
                          this.state = { branch, commit, upstream, status, ahead,
@@ -155,18 +155,28 @@ synchronous getters**:
   shows a blank branch indicator for a frame, then the poll's `notify()`
   fills it in (subscribers register on the same tick as the acquire,
   before status returns).
-- **Change detection**: a **chokidar** watch on `<git-dir>/HEAD`
-  (`startHeadWatch`, attached once the async warm-up resolves the git dir;
-  chokidar handles the atomic rename git does to `HEAD`) for instant
-  branch-switch/commit reaction, plus the 1.5 s poll for working-tree
-  edits and staging. On a HEAD event the signature is reset and
-  `pollOnce()` runs. `signature()` is computed from the porcelain output —
-  branch, HEAD commit, upstream ref, ahead/behind, conflicts, **per-file
-  staged/unstaged/untracked state**, and ± totals — so it moves on edits,
-  staging (including external `git add`), branch/upstream changes, and any
-  HEAD move (commit/reset/external push). The upstream tracking ref (porcelain
-  v2's `# branch.upstream`, e.g. `origin/main`) is parsed into the state and
-  exposed by **`getUpstream()`** for the panel's `git status` preamble.
+- **Change detection**: two **chokidar** watches plus a slow backstop poll.
+  One watches `<git-dir>/HEAD` + `index` (`startWatch`, attached once the async
+  warm-up resolves the git dir; chokidar handles git's atomic renames) for instant
+  branch-switch / commit / staging / reset / merge reaction — on such an event the
+  signature is reset and `pollOnce()` runs. The other (`syncContentWatch`) watches
+  the **working-tree directories that hold tracked files** — non-recursively
+  (`depth: 0`), with `.git` ignored — so an external tool or agent editing a tracked
+  file (or dropping a new file beside one) refreshes live, the case `HEAD`/`index`
+  can't see. Watching tracked-file dirs only keeps it off gitignored trees
+  (`node_modules`, build output) for free, and the dir set is re-derived after each
+  refresh as the tracked set moves (add/rm/commit/checkout). Its events are
+  **throttled** (leading + trailing, `CONTENT_THROTTLE_MS`) so a burst — a build, a
+  multi-file agent edit — collapses to one `git status`; past `MAX_WATCHED_DIRS`
+  directories the content watch is dropped in favour of the heartbeat. A **60 s
+  heartbeat** poll remains as a pure backstop for anything every watch missed.
+  `signature()` is computed from the porcelain output — branch, HEAD commit, upstream
+  ref, ahead/behind, conflicts, **per-file staged/unstaged/untracked state**, and ±
+  totals — so it moves on edits, staging (including external `git add`),
+  branch/upstream changes, and any HEAD move (commit/reset/external push). The
+  upstream tracking ref (porcelain v2's `# branch.upstream`, e.g. `origin/main`) is
+  parsed into the state and exposed by **`getUpstream()`** for the panel's `git
+  status` preamble.
 - `getStatus()` totals count tracked `--numstat` adds/dels **plus**
   untracked files as insertions (the branch indicator's `+` relies on
   this). `countNewLines` caps each untracked file at 10 MiB and treats

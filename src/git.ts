@@ -16,14 +16,22 @@
  * is warmed up asynchronously at construction (empty until the first status
  * lands), so construction never blocks the UI thread.
  *
- * Refreshes are mostly event-driven: a chokidar watch on the git dir's `HEAD` +
- * `index` catches branch switches, commits, staging, resets, and merges the
- * instant they land, and the editor calls `refresh()` directly after the edits
- * and mutations it drives (text edits, hunk staging, agent file writes). The one
- * thing those miss is an *external* tool editing a tracked file without staging it
- * (no `index`/`HEAD` move, no editor event); a slow 60s heartbeat poll backstops
- * that case, so it self-corrects within a minute even with nothing else watching
- * the working tree's content. At ~1 git status/min the heartbeat is negligible.
+ * Refreshes are event-driven, fed by two chokidar watches:
+ *   - the git dir's `HEAD` + `index` — branch switches, commits, staging, resets,
+ *     and merges, the instant they land;
+ *   - the working-tree directories that hold tracked files — an *external* tool or
+ *     agent editing a tracked file (or dropping a new file beside one), the case
+ *     `HEAD`/`index` can't see and the one this layer used to miss.
+ * Watching only the directories that hold tracked files, non-recursively, keeps the
+ * watch off gitignored trees (`node_modules`, build output) for free — nothing
+ * tracked lives there. The editor also calls `refresh()` directly after the edits and
+ * mutations it drives (text edits, hunk staging, agent file writes). Working-tree
+ * events are throttled (leading + trailing) so a burst — a build, a multi-file agent
+ * edit, a checkout touching many files — collapses to one `git status` per window.
+ *
+ * A slow 60s heartbeat poll remains as a pure backstop for anything every watch
+ * missed (e.g. a working tree large enough to trip the watch cap). At ~1 git
+ * status/min when idle it is negligible.
  */
 import * as Path from 'node:path';
 import * as Fs from 'node:fs';
@@ -47,10 +55,32 @@ export { Result } from './core/Result.ts';
  */
 export type GitOpResult = Result<void>;
 
-// Slow heartbeat backstop for changes no watch/`refresh()` catches — an external
-// tool editing a tracked file without staging it. Long enough to be negligible
-// (~1 git status/min), short enough that such edits self-correct within a minute.
+// Slow heartbeat backstop for anything every watch missed (e.g. a working tree
+// large enough to trip the content-watch cap below). Long enough to be negligible
+// (~1 git status/min) now that the content watch catches working-tree edits live.
 const HEARTBEAT_INTERVAL_MS = 60_000;
+
+// Coalesce a burst of working-tree file events (a build, a multi-file agent edit, a
+// checkout) into at most one `git status` per window. Leading-edge so the first
+// change still refreshes within a frame; trailing-edge so the settled state lands
+// once the burst ends.
+const CONTENT_THROTTLE_MS = 300;
+
+// Safety cap on the number of working-tree directories watched for content changes.
+// Past it we drop the content watch and lean on the heartbeat — a tree with this
+// many directories is better served by the poll than by tens of thousands of inotify
+// handles. (Watching tracked-file dirs only already excludes gitignored trees, so
+// this bites only genuinely huge checkouts.)
+const MAX_WATCHED_DIRS = 10_000;
+
+// `depth: 0` keeps each watched directory non-recursive: we add every directory that
+// holds a tracked file explicitly, so recursion would only re-cover — and pay inotify
+// for — the gitignored subtrees we deliberately leave out. The `.git` dir is ignored
+// so git's own writes never masquerade as working-tree edits (its `HEAD`/`index` are
+// covered by the other watch). The regex matches a `.git` path segment, not
+// `.gitignore` / `.github`.
+const GIT_DIR_RE = /(^|[\\/])\.git([\\/]|$)/;
+const CONTENT_WATCH_OPTS = { ignoreInitial: true, depth: 0, ignored: GIT_DIR_RE };
 
 /** Working-tree line delta vs HEAD (tracked changes, `git diff --numstat HEAD`). */
 export interface GitStatus {
@@ -249,7 +279,11 @@ class CliGitRepo implements GitRepo {
   private lastSignature = '';
 
   private readonly listeners = new Set<() => void>();
-  private watcher: FSWatcher | null = null;
+  private watcher: FSWatcher | null = null; // HEAD + index (branch/commit/staging)
+  private contentWatcher: FSWatcher | null = null; // dirs holding tracked files (working-tree edits)
+  private readonly watchedDirs = new Set<string>(); // dirs currently in `contentWatcher`
+  private contentThrottle: NodeJS.Timeout | null = null; // trailing-edge throttle timer for content events
+  private lastContentPoll = 0; // ms timestamp of the last content-driven poll (leading-edge throttle)
   private pollId: NodeJS.Timeout | null = null; // 60s heartbeat backstop
   private watching = false;
   private reading = false; // a refresh's git calls are in flight — don't overlap
@@ -362,6 +396,13 @@ class CliGitRepo implements GitRepo {
     this.listeners.clear();
     void this.watcher?.close();
     this.watcher = null;
+    void this.contentWatcher?.close();
+    this.contentWatcher = null;
+    this.watchedDirs.clear();
+    if (this.contentThrottle) {
+      clearTimeout(this.contentThrottle);
+      this.contentThrottle = null;
+    }
     if (this.pollId) {
       clearInterval(this.pollId);
       this.pollId = null;
@@ -393,10 +434,12 @@ class CliGitRepo implements GitRepo {
   private ensureWatching(): void {
     if (this.watching || !this.root) return;
     this.watching = true;
-    this.startWatch(); // no-op until the async warm-up resolves the git dir
+    this.startWatch(); // HEAD/index — no-op until the async warm-up resolves the git dir
+    this.syncContentWatch(); // working tree — no-op until the first poll lists tracked files
 
-    // Slow heartbeat: backstops external working-tree edits the HEAD/index watch
-    // and `refresh()` don't see. `requestPoll` coalesces with in-flight reads, and
+    // Slow heartbeat: a pure backstop now the content watch catches working-tree
+    // edits live (it still covers a tree large enough to trip the watch cap, or a
+    // transient watch error). `requestPoll` coalesces with in-flight reads, and
     // `pollOnce` no-ops when the signature hasn't moved, so an idle tick is one
     // `git status`/`diff` and no repaint.
     this.pollId = setInterval(() => this.requestPoll(), HEARTBEAT_INTERVAL_MS);
@@ -422,6 +465,79 @@ class CliGitRepo implements GitRepo {
       this.requestPoll();
     });
     this.watcher.on('error', () => {}); // transient FS error — recovered by the next refresh()
+  }
+
+  // Keep the working-tree content watch covering exactly the directories that hold
+  // tracked files. Watching those dirs (non-recursively, see `CONTENT_WATCH_OPTS`)
+  // catches an external/agent edit to any tracked file — the case HEAD/index can't
+  // see — plus a new file appearing beside one, while excluding gitignored trees
+  // (node_modules, build output) since nothing tracked lives there. Re-derived after
+  // each refresh as the tracked set moves (add/rm/commit/checkout); a no-op when the
+  // dir set is unchanged. Gated on `watching`, so a repo nobody subscribed to stays
+  // dormant (matching the HEAD/index watch).
+  private syncContentWatch(): void {
+    if (this.disposed || !this.watching || !this.root) return;
+
+    const desired = new Set<string>();
+    for (const abs of this.state.tracked) desired.add(Path.dirname(abs));
+
+    // Too many directories to watch cheaply — drop the watch and lean on the
+    // heartbeat rather than hold tens of thousands of inotify handles.
+    if (desired.size > MAX_WATCHED_DIRS) {
+      if (this.contentWatcher) {
+        void this.contentWatcher.close();
+        this.contentWatcher = null;
+        this.watchedDirs.clear();
+      }
+      return;
+    }
+
+    if (!this.contentWatcher) {
+      if (desired.size === 0) return; // nothing tracked yet — set up on a later refresh
+      this.contentWatcher = chokidarWatch([...desired], CONTENT_WATCH_OPTS);
+      this.contentWatcher.on('all', () => this.scheduleContentPoll());
+      this.contentWatcher.on('error', () => {}); // transient FS error — heartbeat/next event recovers
+      for (const d of desired) this.watchedDirs.add(d);
+      return;
+    }
+
+    // Incrementally add/unwatch only the dirs that actually moved (the common case
+    // — a content edit — leaves the set unchanged, so both lists are empty).
+    const toAdd: string[] = [];
+    for (const d of desired) if (!this.watchedDirs.has(d)) toAdd.push(d);
+    const toRemove: string[] = [];
+    for (const d of this.watchedDirs) if (!desired.has(d)) toRemove.push(d);
+    if (toAdd.length) {
+      this.contentWatcher.add(toAdd);
+      for (const d of toAdd) this.watchedDirs.add(d);
+    }
+    if (toRemove.length) {
+      this.contentWatcher.unwatch(toRemove);
+      for (const d of toRemove) this.watchedDirs.delete(d);
+    }
+  }
+
+  /** Throttle working-tree content events into refreshes: poll on the leading edge so
+   *  the first change shows within a frame, suppress for `CONTENT_THROTTLE_MS`, then
+   *  fire a single trailing poll if more events landed in the window so the settled
+   *  state is never missed. (HEAD/index events stay un-throttled — rare, and a branch
+   *  switch should feel instant.) */
+  private scheduleContentPoll(): void {
+    if (this.disposed) return;
+    const now = Date.now();
+    const sinceLast = now - this.lastContentPoll;
+    if (sinceLast >= CONTENT_THROTTLE_MS) {
+      this.lastContentPoll = now;
+      this.requestPoll();
+      return;
+    }
+    if (this.contentThrottle) return; // a trailing poll is already queued for this window
+    this.contentThrottle = setTimeout(() => {
+      this.contentThrottle = null;
+      this.lastContentPoll = Date.now();
+      this.requestPoll();
+    }, CONTENT_THROTTLE_MS - sinceLast);
+    this.contentThrottle.unref?.();
   }
 
   /** Request a refresh, coalescing with any in-flight one. With no periodic timer,
@@ -464,6 +580,7 @@ class CliGitRepo implements GitRepo {
       const tracked = lsFiles.isOk() ? parseLsFiles(lsFiles.unwrap()) : [...this.state.tracked];
       this.state = this.buildState(parsed, numstat, tracked, untrackedAdded, lsFiles.isErr());
       this.lastSignature = sig;
+      this.syncContentWatch(); // the tracked set may have moved — keep the content watch aligned
       this.notify();
     } finally {
       this.reading = false;
