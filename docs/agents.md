@@ -151,10 +151,10 @@ What already exists and is reused, not rebuilt:
   model, permission mode, **effort** (`--effort`; the `default` choice omits the
   flag), and the worktree choice. Each kind's `AgentLaunchOptions`
   (`agents/configs.ts` + `claudeOptions.ts`) supplies the option lists and the
-  `buildCommand` argv builder, so changing the kind re-populates them. Enter
+  `buildCommand` argv builder, so changing the kind re-populates them. `enter`
   launches; the last-used options + an unsent draft persist to the next open.
-  ctrl-tab / ctrl-shift-tab cycle focus forward / backward through the card's
-  controls in tab order (the Tab the prompt editor swallows), driven by GTK's
+  `ctrl-tab` / `ctrl-shift-tab` cycle focus forward / backward through the card's
+  controls in tab order (the `tab` the prompt editor swallows), driven by GTK's
   own `childFocus` traversal so it follows the layout; bound in the window's
   capture-phase keymap so they're swallowed before Adw.TabView's built-in
   ctrl-tab cycles a background panel group's tab.
@@ -264,6 +264,11 @@ typed **`/rename`** client-side (headless claude lacks it) — see
 config-shaped seam) runs a prompt to completion via the process runner and
 returns text; `src/agents/autoName.ts` wraps it to turn a task prompt into
 `{ name, description }` (pure, lenient `buildNamePrompt`/`parseAgentName`).
+Claude Code persists each `claude -p` run as an ordinary session, so the
+one-shot reads the `session_id` from the result envelope and deletes that
+transcript on completion (`oneshot.ts:discardSessionTranscript`, via
+`agentSessions.ts:transcriptDir`) — otherwise these throwaway naming queries
+would pollute the resume picker below.
 Triggers (`claude-sdk`): on launch when `agent.autoName` is set, and on an empty
 `/rename` on demand. Both name from the **user's own prompt**, never zym's
 scaffolding: `launchPrompt` returns `{ agentPrompt, userPrompt }` — `agentPrompt`
