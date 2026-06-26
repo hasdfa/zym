@@ -2020,12 +2020,11 @@ export class AppWindow {
   // and reused across close/reopen.
   private revealGitPanel() {
     const gitPanel = this.ensureGitPanel(this.workbench);
-    if (this.workbench.gitTab && Panel.containing(gitPanel.root)) {
-      this.workbench.gitTab.select();
+    if (this.workbench.center.reveal(gitPanel.root)) {
       gitPanel.focus();
       return;
     }
-    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed page
+    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed/orphaned page
     this.workbench.gitTab = this.workbench.center.add(gitPanel.root, {
       title: `${Icons.git}  Git`,
       requireTabBar: true,

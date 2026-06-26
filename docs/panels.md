@@ -112,6 +112,15 @@ Governing rules, implemented in `Panel` + `PanelGroup`:
   without it. Focus/active logic relies on that class to identify direct panel
   children. `Panel.containing(child)` resolves a child back to its panel (a
   `WeakMap`).
+- **Page moves keep `Panel.containing` honest.** The `WeakMap` and
+  `.is-panel-child` marking are maintained on the TabView's `page-attached` /
+  `page-detached` signals, not just in `add()`, so an Adw tab **drag-and-drop
+  transfer** between panels (which fires detach-then-attach) re-binds the child to
+  its new panel. `page-detached` only clears the mapping if this panel is still the
+  recorded owner — a transfer's attach on the destination wins regardless of signal
+  order. (Without this, a dragged tab kept the source panel's stale mapping; a
+  reused widget's reveal logic then re-`add()`ed it into a second page, orphaning
+  it — see the reveal rule below.)
 
 ## Tab bar
 
@@ -141,6 +150,16 @@ not-yet-finalized page). The rule: **never `add()` into an unrooted tab view.**
   `add()` always targets a rooted view. (Source Control opens as a center tab
   instead — `revealGitPanel` follows the same unparent-then-add rule against the
   always-rooted center.)
+- **Reusing a center widget → reveal via the live tree, never a stored handle.**
+  The `GitPanel` (and any reused center tab) is created once and re-shown across
+  close/reopen. `revealGitPanel` asks `PanelGroup.reveal(root)` — which walks the
+  **current** leaves and selects the page if found — instead of trusting a saved
+  `PanelChild` handle or `Panel.containing`. Those can point at a panel that a tab
+  drag moved it out of, or that a layout rebuild (`restoreLayout` discards the old
+  tree without closing its pages) detached: selecting such a page shows nothing and
+  `unparent()`-ing a *live* page child corrupts it into a zombie that vanishes from
+  the tree. A `false` from `reveal` means it is genuinely not shown, so the caller
+  drops any leftover (closed / orphaned) parent and `add()`s it fresh.
 - **Agents** — each agent's widget is a `Gtk.Stack` page in the window-level
   `AgentSidebar`, not a tab — so it's inherently uncloseable (no tab, no close
   button). Switching person flips the visible page and swaps the shown Workbench, so

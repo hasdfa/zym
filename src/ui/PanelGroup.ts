@@ -145,6 +145,21 @@ export class PanelGroup {
     return this.openPanel.add(child, options);
   }
 
+  /** Select the tab hosting `child` and make its leaf active, if `child` is open in any leaf of
+   *  the CURRENT tree; returns whether it was found. Authoritative for "is this widget already
+   *  shown here" — it walks the live tree, so a reused widget stranded in a panel that a layout
+   *  rebuild discarded (still mapped by `Panel.containing`, but detached) is correctly reported as
+   *  absent, and the host re-adds it instead of selecting an invisible page. */
+  reveal(child: Widget): boolean {
+    for (const leaf of this.leaves()) {
+      if (leaf.panel.reveal(child)) {
+        this.setActive(leaf);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * Pin `child` into the root leaf as the agent panel: a single tab in a leaf that
    * can't be split, takes no other tabs, and is never collapsed. Must be called on a

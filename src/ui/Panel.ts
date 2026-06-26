@@ -175,8 +175,20 @@ export class Panel {
       this.options.onActiveChanged?.(this.activeChild);
       this.updateFocusOutline(); // the focused child changed with the tab
     });
+    // A page entering this view — by `add()` OR by an Adw tab drag-and-drop transfer
+    // from another panel — (re-)binds the child to this panel. Without this, a dragged
+    // tab keeps the source panel's stale `childPanels` mapping (page-detached cleared it),
+    // so `Panel.containing` lies and a reused widget's reveal logic re-`add()`s it into a
+    // second page — corrupting it into a zombie. Idempotent with `add()`'s own marking.
+    this.disposables.connect(this.view, 'page-attached', (page: any) => {
+      const child = page.getChild();
+      child.addCssClass('is-panel-child');
+      Panel.childPanels.set(child, this);
+    });
     this.disposables.connect(this.view, 'page-detached', (page: any) => {
-      Panel.childPanels.delete(page.getChild());
+      // A transfer-out fires detach here then attach on the destination, which re-binds the
+      // map; only clear if this panel is still the recorded owner (don't stomp the new one).
+      if (Panel.childPanels.get(page.getChild()) === this) Panel.childPanels.delete(page.getChild());
       this.forcedBarChildren.delete(page.getChild());
       this.options.onClosed?.(page.getChild());
       this.updateEmptyState();
@@ -339,6 +351,20 @@ export class Panel {
       select: () => this.view.setSelectedPage(page),
       close: () => this.view.closePage(page),
     };
+  }
+
+  /** Select the tab hosting `child` if it lives in this panel; returns whether it was found.
+   *  Resolves the page from the live view (not a stored handle), so it stays correct after a
+   *  tab is dragged between panels. */
+  reveal(child: Widget): boolean {
+    for (let i = 0; i < this.view.getNPages(); i++) {
+      const page = this.view.getNthPage(i);
+      if (page.getChild() === child) {
+        this.view.setSelectedPage(page);
+        return true;
+      }
+    }
+    return false;
   }
 
   get activeChild(): Widget | null {
