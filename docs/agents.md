@@ -313,13 +313,25 @@ Built in `src/agentSessions.ts`, `AgentTerminal`, `AppWindow`:
   id, mtime → last activity, first `type:"user"` line → label. Newest first.
   Only the head of each transcript is read (cheap). All format-parsing is
   isolated here, as the JSONL format is Claude Code's internal one (subject to
-  change).
+  change). Across a repo, `listResumableSessions(roots)` (the picker passes
+  `AppWindow.agentSessionRoots()`, **main worktree first**) unions every root's
+  dir **plus** every `~/.claude/projects/*` dir whose encoded name is that main
+  root or a `<encodedMain>-…` child/sibling. That recovers conversations whose
+  worktree has since been **removed**: the transcript outlives the worktree, but
+  the path is no longer a live root to pass. The `-`-separator guard stops
+  `…/zym` from also matching `…/zymfoo`.
+- **Resume into a vanished cwd** — `resolveResumeCwd(session, mainRoot)` decides
+  where to spawn `--resume`: the cwd Claude recorded if it still exists, else it
+  **relocates** the transcript under `mainRoot`'s project dir and resumes there
+  (claude resolves `--resume <id>` relative to cwd, so the file must sit under the
+  spawn dir). So a removed-worktree conversation resumes in the main repo. The
+  dynamic-worktree re-announce is skipped on a relocated resume (that worktree is
+  gone too).
 - **Resume** — `AgentTerminal` takes a `resume: { sessionId? | continue?; fork?
   }` option → prepends `--resume <id>` / `--continue` (+ `--fork-session`) to
   the claude argv. Commands: `agent:resume` (`space a r`, resume the current
   *exited* agent in place), `agent:resume-conversation` (`space a R`, a picker
-  of past sessions excluding any currently live — label + relative time),
-  `agent:continue` (`space a c`, latest conversation in this folder), and
+  of past sessions excluding any currently live — label + relative time), and
   `agent:branch` (`space a b` / list `b`, fork the current agent via
   `--fork-session`).
 - **Persist across editor restarts** — `AgentTerminal.serialize()` records

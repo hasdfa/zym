@@ -83,6 +83,7 @@ class FakeTransport implements Transport {
   private replies = 0;
 
   onEvent(cb: (e: StreamEvent) => void): Disposable { this.handler = cb; return new Disposable(() => { this.handler = null; }); }
+  onStderr(_cb: (chunk: string) => void): Disposable { return new Disposable(() => {}); }
   onExit(_cb: (code: number | null) => void): Disposable { return new Disposable(() => {}); }
   feed(event: StreamEvent): void { this.handler?.(event); }
   dispose(): void { this.handler = null; }

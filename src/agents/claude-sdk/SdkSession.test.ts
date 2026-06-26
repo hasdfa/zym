@@ -12,13 +12,16 @@ class FakeTransport implements Transport {
   writable = true;
   readonly sent: unknown[] = [];
   private eventHandler: ((e: StreamEvent) => void) | null = null;
+  private stderrHandler: ((chunk: string) => void) | null = null;
   private exitHandler: ((code: number | null) => void) | null = null;
   start(): void {}
   send(message: unknown): void { this.sent.push(message); }
   onEvent(h: (e: StreamEvent) => void): Disposable { this.eventHandler = h; return new Disposable(() => { this.eventHandler = null; }); }
+  onStderr(h: (chunk: string) => void): Disposable { this.stderrHandler = h; return new Disposable(() => { this.stderrHandler = null; }); }
   onExit(h: (code: number | null) => void): Disposable { this.exitHandler = h; return new Disposable(() => { this.exitHandler = null; }); }
   dispose(): void { this.writable = false; }
   emit(event: StreamEvent): void { this.eventHandler?.(event); }
+  emitStderr(chunk: string): void { this.stderrHandler?.(chunk); }
   emitExit(code: number | null): void { this.exitHandler?.(code); }
 }
 
@@ -168,6 +171,33 @@ test('interrupt sends a control_request and the resulting error is treated as an
   session.dispose();
 });
 
+test('a non-interrupt error_during_execution surfaces the stderr tail as the error detail', () => {
+  // The crash the user actually hits: a turn ends in error_during_execution with no
+  // interrupt in flight. claude leaves `result` empty, so the cause must come from
+  // the stderr it printed just before bailing.
+  const { session, fake } = makeSession();
+  const errors: Array<{ message: string; detail?: string }> = [];
+  const exits: Array<{ code: number | null; stderr: string }> = [];
+  session.onError((e) => errors.push(e));
+  session.onExit((e) => exits.push(e));
+  session.start();
+
+  session.prompt('do the thing');
+  fake.emitStderr('node:internal/process: warning\nError: socket hang up\n  at TLSSocket\n');
+  fake.emit({ type: 'result', subtype: 'error_during_execution', is_error: true } as StreamEvent);
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].message, 'Agent error (error_during_execution)');
+  assert.match(errors[0].detail ?? '', /socket hang up/);
+
+  // The trailing process exit carries the code + the same stderr tail.
+  fake.emitExit(1);
+  assert.equal(exits.length, 1);
+  assert.equal(exits[0].code, 1);
+  assert.match(exits[0].stderr, /socket hang up/);
+  session.dispose();
+});
+
 test('interrupt is a no-op when nothing is running', () => {
   const { session, fake } = makeSession();
   session.start();
@@ -280,7 +310,7 @@ test('subagent events are captured into a transcript, kept out of the main threa
 test('process exit flips to exited and fires onExit', () => {
   const { session, fake } = makeSession();
   let exitCode: number | null | undefined;
-  session.onExit((code) => { exitCode = code; });
+  session.onExit(({ code }) => { exitCode = code; });
   session.start();
   fake.emitExit(3);
   assert.equal(session.status, 'exited');
