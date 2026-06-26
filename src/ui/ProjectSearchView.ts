@@ -157,11 +157,11 @@ export class ProjectSearchView {
     // immediately, below. Typing then re-searches on a debounce; toggling a flag is a deliberate
     // action, so it searches at once.
     if (options.initialQuery) this.entry.setText(options.initialQuery);
-    this.entry.on('changed', () => this.scheduleSearch());
-    this.includeEntry.on('changed', () => this.scheduleSearch());
-    this.excludeEntry.on('changed', () => this.scheduleSearch());
+    this.subs.connect(this.entry, 'changed', () => this.scheduleSearch());
+    this.subs.connect(this.includeEntry, 'changed', () => this.scheduleSearch());
+    this.subs.connect(this.excludeEntry, 'changed', () => this.scheduleSearch());
     for (const t of [this.caseToggle, this.wordToggle, this.regexToggle, this.ignoredToggle]) {
-      t.on('toggled', () => this.runSearch());
+      this.subs.connect(t, 'toggled', () => this.runSearch());
     }
     if (options.initialQuery) this.runSearch();
   }

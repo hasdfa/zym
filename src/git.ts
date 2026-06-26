@@ -751,6 +751,22 @@ function runGit(cwd: string, args: string[]): Promise<Result<string>> {
   });
 }
 
+/**
+ * List the project files under `cwd` for the file picker: tracked plus
+ * untracked-but-not-ignored, honouring `.gitignore` (`--exclude-standard`).
+ * Paths are relative to `cwd` and scoped to its subtree (git treats the cwd as
+ * an implicit pathspec), matching the picker's relative-path convention.
+ *
+ * Returns `null` when `cwd` is not inside a git repository, or git fails — the
+ * caller falls back to a manual directory walk. An empty repo returns `[]` (a
+ * success, not a fallback).
+ */
+export async function listProjectFiles(cwd: string): Promise<string[] | null> {
+  if (cli.repoRoot(cwd) === null) return null; // not a repo → caller walks instead
+  const out = await runGit(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+  return out.isOk() ? parseLsFiles(out.unwrap()) : null;
+}
+
 // `--untracked-files=all` lists individual untracked files (matching the old
 // RECURSE_UNTRACKED_DIRS behaviour) so FileTree marks each one.
 const STATUS_ARGS = ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'];

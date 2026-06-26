@@ -33,7 +33,7 @@ import { defaultAction, type AgentAction } from '../agents/actions.ts';
 import { openActionRunner } from './ActionPicker.ts';
 import { AgentConversation } from './AgentConversation.ts';
 import { AGENT_CONFIGS, resolveAgentKind, type AgentKind } from '../agents/configs.ts';
-import { listResumableSessions, recordSessionWorktree, relativeTime, type AgentSession } from '../agentSessions.ts';
+import { listResumableSessions, recordSessionWorktree, relativeTime, resolveResumeCwd, type AgentSession } from '../agentSessions.ts';
 import { PROJECT_NAME } from './WorkbenchList.ts';
 import { Sidebar } from './Sidebar.ts';
 import { AgentSidebar } from './AgentSidebar.ts';
@@ -63,6 +63,7 @@ import { openThemePicker } from './ThemePicker.ts';
 import { saveConfig } from '../config/load.ts';
 import { WhichKey } from './WhichKey.ts';
 import { openAgentPicker } from './AgentPicker.ts';
+import { openWorkbenchPicker } from './WorkbenchPicker.ts';
 import { openAgentLauncher, launchPrompt, type LauncherMode } from './AgentLauncher.ts';
 import {
   openBranchPicker,
@@ -1078,10 +1079,21 @@ export class AppWindow {
   // The project roots to look for resumable conversations in: the window cwd plus
   // every git worktree of its repo, so a conversation launched in a worktree (its
   // transcript lives under that worktree's project dir) is found too. Deduped.
+  // The roots the resume picker scans: every worktree of this repo, **main worktree
+  // first** — listResumableSessions treats roots[0] as the prefix anchor for also
+  // recovering transcripts from worktrees that have since been removed. process.cwd()
+  // is kept in case it isn't itself a worktree root (e.g. a subdir / non-repo run).
   private agentSessionRoots(): string[] {
-    const roots = new Set<string>([process.cwd()]);
-    for (const wt of listWorktrees(process.cwd())) roots.add(wt.path);
-    return [...roots];
+    const roots = listWorktrees(process.cwd()).map((wt) => wt.path);
+    if (roots.length === 0) roots.push(process.cwd());
+    if (!roots.includes(process.cwd())) roots.push(process.cwd());
+    return roots;
+  }
+
+  /** This repo's main worktree — where a resume falls back to when the session's
+   *  own (worktree) cwd is gone. */
+  private repoRoot(): string {
+    return this.agentSessionRoots()[0] ?? process.cwd();
   }
 
   // `openAgent` options to resume `session`, restoring its branch/worktree/cwd:
@@ -1091,10 +1103,16 @@ export class AppWindow {
   // worktree via the bridge so the editor re-roots — and to do nothing else, so a
   // resume just restores the view without kicking off work.
   private resumeOptions(session: AgentSession): { cwd?: string; resume: AgentResume; prompt?: string; title: string } {
+    // Spawn where Claude recorded the session; if that worktree is gone, the
+    // transcript is relocated under the main repo and we resume there instead.
+    const cwd = resolveResumeCwd(session, this.repoRoot());
+    const relocated = cwd !== session.cwd;
+    // The dynamic-worktree re-announce only makes sense when we're still in the
+    // original tree — a relocated resume's worktree is gone too, so skip it.
     const moved =
-      session.effectiveCwd && session.effectiveCwd !== session.cwd ? session.effectiveCwd : null;
+      !relocated && session.effectiveCwd && session.effectiveCwd !== session.cwd ? session.effectiveCwd : null;
     return {
-      cwd: session.cwd ?? undefined,
+      cwd,
       resume: { sessionId: session.id },
       prompt: moved
         ? `Call the set_worktree tool with the path ${moved} now, and do nothing else — ` +
@@ -1425,6 +1443,10 @@ export class AppWindow {
     this.terminals.delete(agent.root);
     this.conversations.get(agent.root)?.dispose(); // headless agent: kill child + IPC watchers
     this.conversations.delete(agent.root);
+    // Drop the last-focused pointer if it named this agent — otherwise currentAgent()
+    // would resolve a retired, disposed agent and agent:restart / agent:resume would
+    // act on a ghost. With it cleared, the commands' `when` guards correctly disable.
+    if (this.lastAgent === agent) this.lastAgent = null;
     zym.agents.remove(agent);
   }
 
@@ -1795,6 +1817,18 @@ export class AppWindow {
       // Cycle the active workbench through [user, …agents] (the workbench-list order).
       'workbench:previous': { didDispatch: () => this.cycleWorkbench(-1), description: 'Switch to the previous workbench' },
       'workbench:next': { didDispatch: () => this.cycleWorkbench(1), description: 'Switch to the next workbench' },
+      // Fuzzy-pick a workbench to switch to (the user / each agent) — same set the
+      // cycle steps through; selecting one activates it.
+      'workbench:picker': {
+        didDispatch: () => openWorkbenchPicker(this.overlay, {
+          workbenches: (['user', ...zym.agents.getAgents()] as Array<'user' | Agent>).flatMap((owner) => {
+            const wb = this.workbenches.get(owner);
+            return wb ? [{ owner: wb.owner, cwd: wb.cwd, active: wb === this.workbench }] : [];
+          }),
+          onActivate: (owner) => this.activateOwner(owner),
+        }),
+        description: 'Switch to a workbench (the user or an agent)',
+      },
       // Show/hide each dock side without discarding the panels it holds.
       'dock:toggle-left': { didDispatch: () => this.toggleDockSide('left'), description: 'Toggle the left dock' },
       'dock:toggle-right': { didDispatch: () => this.toggleDockSide('right'), description: 'Toggle the right dock (Files / Source Control)' },
@@ -1950,6 +1984,9 @@ export class AppWindow {
     const manager = new PluginManagerPanel();
     const child = this.workbench.center.add(manager.root, { title: 'Plugin Manager', requireTabBar: true });
     this.pluginManagerTab = { root: manager.root, child };
+    // Sever the panel's command reg + per-row switch handlers when its tab closes
+    // (disposeChild fires this), else the whole panel leaks per open/close (rule 2).
+    this.tabCloseHandlers.set(manager.root, () => { manager.dispose(); this.pluginManagerTab = null; });
     manager.root.grabFocus();
   }
 
@@ -2007,12 +2044,11 @@ export class AppWindow {
   // and reused across close/reopen.
   private revealGitPanel() {
     const gitPanel = this.ensureGitPanel(this.workbench);
-    if (this.workbench.gitTab && Panel.containing(gitPanel.root)) {
-      this.workbench.gitTab.select();
+    if (this.workbench.center.reveal(gitPanel.root)) {
       gitPanel.focus();
       return;
     }
-    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed page
+    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed/orphaned page
     this.workbench.gitTab = this.workbench.center.add(gitPanel.root, {
       title: `${Icons.git}  Git`,
       requireTabBar: true,
@@ -2692,11 +2728,9 @@ export class AppWindow {
         description: 'Open the agent picker (agents, conversations, new)',
       },
       // Resume a stopped agent in place (current agent, if exited). Resuming a
-      // past *conversation* as a fresh agent is agent:resume-conversation (a
-      // picker); agent:continue picks up the latest conversation in this folder.
+      // past *conversation* as a fresh agent is agent:resume-conversation (a picker).
       'agent:resume': { didDispatch: () => this.resumeCurrentAgent(), description: 'Resume the stopped agent', when: () => this.currentAgent()?.exited === true },
       'agent:resume-conversation': { didDispatch: () => this.resumeAgentPicker(), description: 'Resume a past conversation…' },
-      'agent:continue': { didDispatch: () => this.openAgent({ resume: { continue: true } }), description: 'Continue the latest conversation' },
       // Branch the current agent into a new agent/workbench: a fresh session
       // forked off its conversation (`--resume <id> --fork-session`), so the
       // original agent is left running and untouched.

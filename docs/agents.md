@@ -44,6 +44,10 @@ What already exists and is reused, not rebuilt:
   `activateOwner(owner)` resolves a person → their `Workbench`;
   `cycleWorkbench(±1)` (bound to `super-,` / `super-.`) steps the active
   workbench through `[user, …agents]` (the workbench-list order), wrapping.
+  `workbench:picker` (`space a w`, `src/ui/WorkbenchPicker.ts`) fuzzy-jumps to
+  any of that same set in one go — a quick-switcher over the picker UI (parallel
+  to `agent:picker`, but it lists the **user** workbench too and marks the
+  current one), `onSelect` → `activateOwner`.
   Detached workbenches stay alive, so a terminal's scrollback / open editors
   survive a switch. An agent's widget (`AgentTerminal`/`AgentConversation`) does
   **not** live in its workbench at all: it's shown in a window-level **secondary
@@ -150,10 +154,10 @@ What already exists and is reused, not rebuilt:
   once set) and auto-sizes to fit its value, so there's no separate caption row.
   Each kind's `AgentLaunchOptions`
   (`agents/configs.ts` + `claudeOptions.ts`) supplies the option lists and the
-  `buildCommand` argv builder, so changing the kind re-populates them. Enter
+  `buildCommand` argv builder, so changing the kind re-populates them. `enter`
   launches; the last-used options + an unsent draft persist to the next open.
-  ctrl-tab / ctrl-shift-tab cycle focus forward / backward through the card's
-  controls in tab order (the Tab the prompt editor swallows), driven by GTK's
+  `ctrl-tab` / `ctrl-shift-tab` cycle focus forward / backward through the card's
+  controls in tab order (the `tab` the prompt editor swallows), driven by GTK's
   own `childFocus` traversal so it follows the layout; bound in the window's
   capture-phase keymap so they're swallowed before Adw.TabView's built-in
   ctrl-tab cycles a background panel group's tab.
@@ -263,6 +267,11 @@ typed **`/rename`** client-side (headless claude lacks it) — see
 config-shaped seam) runs a prompt to completion via the process runner and
 returns text; `src/agents/autoName.ts` wraps it to turn a task prompt into
 `{ name, description }` (pure, lenient `buildNamePrompt`/`parseAgentName`).
+Claude Code persists each `claude -p` run as an ordinary session, so the
+one-shot reads the `session_id` from the result envelope and deletes that
+transcript on completion (`oneshot.ts:discardSessionTranscript`, via
+`agentSessions.ts:transcriptDir`) — otherwise these throwaway naming queries
+would pollute the resume picker below.
 Triggers (`claude-sdk`): on launch when `agent.autoName` is set, and on an empty
 `/rename` on demand. Both name from the **user's own prompt**, never zym's
 scaffolding: `launchPrompt` returns `{ agentPrompt, userPrompt }` — `agentPrompt`
@@ -307,13 +316,25 @@ Built in `src/agentSessions.ts`, `AgentTerminal`, `AppWindow`:
   id, mtime → last activity, first `type:"user"` line → label. Newest first.
   Only the head of each transcript is read (cheap). All format-parsing is
   isolated here, as the JSONL format is Claude Code's internal one (subject to
-  change).
+  change). Across a repo, `listResumableSessions(roots)` (the picker passes
+  `AppWindow.agentSessionRoots()`, **main worktree first**) unions every root's
+  dir **plus** every `~/.claude/projects/*` dir whose encoded name is that main
+  root or a `<encodedMain>-…` child/sibling. That recovers conversations whose
+  worktree has since been **removed**: the transcript outlives the worktree, but
+  the path is no longer a live root to pass. The `-`-separator guard stops
+  `…/zym` from also matching `…/zymfoo`.
+- **Resume into a vanished cwd** — `resolveResumeCwd(session, mainRoot)` decides
+  where to spawn `--resume`: the cwd Claude recorded if it still exists, else it
+  **relocates** the transcript under `mainRoot`'s project dir and resumes there
+  (claude resolves `--resume <id>` relative to cwd, so the file must sit under the
+  spawn dir). So a removed-worktree conversation resumes in the main repo. The
+  dynamic-worktree re-announce is skipped on a relocated resume (that worktree is
+  gone too).
 - **Resume** — `AgentTerminal` takes a `resume: { sessionId? | continue?; fork?
   }` option → prepends `--resume <id>` / `--continue` (+ `--fork-session`) to
   the claude argv. Commands: `agent:resume` (`space a r`, resume the current
   *exited* agent in place), `agent:resume-conversation` (`space a R`, a picker
-  of past sessions excluding any currently live — label + relative time),
-  `agent:continue` (`space a c`, latest conversation in this folder), and
+  of past sessions excluding any currently live — label + relative time), and
   `agent:branch` (`space a b` / list `b`, fork the current agent via
   `--fork-session`).
 - **Persist across editor restarts** — `AgentTerminal.serialize()` records

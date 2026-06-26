@@ -15,6 +15,7 @@ import { Adw, Gtk } from '../gi.ts';
 import { plugins, disabledPluginIds } from '../plugin/index.ts';
 import { saveConfig } from '../config/load.ts';
 import { zym } from '../zym.ts';
+import { CompositeDisposable } from '../util/eventKit.ts';
 import type { PluginInfo } from '../plugin/PluginRegistry.ts';
 
 function esc(text: string): string {
@@ -31,6 +32,12 @@ export class PluginManagerPanel {
   readonly root: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly content: InstanceType<typeof Gtk.Box>;
   private rows: PluginRow[] = [];
+  // Panel-lifetime teardown (the command registration); disposed by `dispose()`, which
+  // AppWindow runs via `tabCloseHandlers` when the tab closes.
+  private readonly subs = new CompositeDisposable();
+  // The per-row switch handlers, re-created on every `refresh()`; cleared per refresh so
+  // they don't accumulate (node-gtk roots each `notify::active` closure — rule 2).
+  private readonly rowSubs = this.subs.nest();
 
   constructor() {
     this.content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 24 });
@@ -52,17 +59,24 @@ export class PluginManagerPanel {
     this.root.setHexpand(true);
     this.root.setVexpand(true);
 
-    zym.commands.add(this.root, {
+    this.subs.add(zym.commands.add(this.root, {
       'plugin-manager:focus-next':      { didDispatch: () => this.moveFocus(1),            description: 'Focus next plugin row' },
       'plugin-manager:focus-prev':      { didDispatch: () => this.moveFocus(-1),           description: 'Focus previous plugin row' },
       'plugin-manager:toggle-expander': { didDispatch: () => this.toggleFocusedExpander(), description: 'Expand or collapse the focused plugin' },
       'plugin-manager:toggle-switch':   { didDispatch: () => this.toggleFocusedSwitch(),   description: 'Enable or disable the focused plugin' },
-    });
+    }));
 
     this.refresh();
   }
 
+  /** Sever the command registration + per-row switch handlers. Idempotent (rule 1);
+   *  invoked by AppWindow's `tabCloseHandlers` when the tab closes. */
+  dispose(): void {
+    this.subs.dispose();
+  }
+
   refresh(): void {
+    this.rowSubs.clear(); // sever the previous build's per-row switch handlers
     this.rows = [];
     let child = this.content.getFirstChild();
     while (child) {
@@ -117,7 +131,7 @@ export class PluginManagerPanel {
     sw.setValign(Gtk.Align.CENTER);
     sw.setFocusable(false);
     sw.setActive(!info.disabled);
-    sw.on('notify::active', () => void this.toggle(info.id, sw.getActive()));
+    this.rowSubs.connect(sw, 'notify::active', () => void this.toggle(info.id, sw.getActive()));
     expander.addSuffix(sw);
 
     // Revealed content: formatted package.json in a selectable monospace label.

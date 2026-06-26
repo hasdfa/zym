@@ -60,8 +60,9 @@ See [panels.md](panels.md).
 ## Lifecycle & disposal
 
 Teardown is load-bearing: widgets detach (not destroy) on close and node-gtk pins
-GObjects/handlers, so subscriptions to long-lived objects must be cut by hand in
-an idempotent `dispose()` (`destroy` never fires on tab-close).
+GObjects/handlers, so every GObject signal/controller — even on the owner's own
+buffer/view — must be cut by hand in an idempotent `dispose()` (`destroy` never
+fires on tab-close), else it leaks.
 
 **The rule, no exceptions: the instant you acquire a resource, register its
 teardown in the same statement through the owner's `CompositeDisposable`.** A
