@@ -141,7 +141,7 @@ test('only a true materialize (Screen.rebuild / reload) drops the anchor — the
   // rebuild() goes through materialize() → buffer.setText, which destroys marks (they collapse to
   // the start). This is the ONE path (initial build, explicit rebuild, Document file-reload) where
   // a band must be re-placed from a fresh projection; every incremental edit/splice above does not.
-  (mbv as any).projectionView.rebuild();
+  (mbv as any).screen.rebuild();
   assert.notEqual(anchor.textOf(), 'one', 'the pre-materialize mark no longer tracks its content — re-project here');
   mbv.dispose();
 });

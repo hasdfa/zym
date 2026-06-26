@@ -31,35 +31,35 @@ function setup(oldText: string, newText: string) {
     [`new:${path}`, doc.modelBuffer],
     [`old:${path}`, oldBuf],
   ]);
-  const pv = new Screen(dmb.items, sources);
-  return { path, doc, oldBuf, pv };
+  const screen = new Screen(dmb.items, sources);
+  return { path, doc, oldBuf, screen };
 }
 
 test('editing a context/added row writes through to the live new-side Document', () => {
-  const { path, doc, pv } = setup('a\nb\nc\n', 'a\nX\nc\n');
+  const { path, doc, screen } = setup('a\nb\nc\n', 'a\nX\nc\n');
   // view rows: 0 header, 1 a(ctx), 2 b(removed), 3 X(added), 4 c(ctx), 5 ""(ctx)
-  const aRow = pv.view.screenRowForDocument(`new:${path}`, 0)!; // the `a` context line (new row 0)
-  insertAtRow(pv.buffer, aRow, 'Z');
+  const aRow = screen.view.screenRowForDocument(`new:${path}`, 0)!; // the `a` context line (new row 0)
+  insertAtRow(screen.buffer, aRow, 'Z');
   assert.equal(doc.getText(), 'Za\nX\nc\n', 'edit wrote through to the live Document model');
-  assert.equal((textOf(pv.buffer) as string).split('\n')[aRow], 'Za', 'and shows in the diff view');
+  assert.equal((textOf(screen.buffer) as string).split('\n')[aRow], 'Za', 'and shows in the diff view');
 });
 
 test('editing a removed (phantom old-side) row is rejected — the base blob is read-only', () => {
-  const { path, doc, oldBuf, pv } = setup('a\nb\nc\n', 'a\nX\nc\n');
-  const bRow = pv.view.screenRowForDocument(`old:${path}`, 1)!; // removed `b` (old row 1)
-  insertAtRow(pv.buffer, bRow, 'Q');
+  const { path, doc, oldBuf, screen } = setup('a\nb\nc\n', 'a\nX\nc\n');
+  const bRow = screen.view.screenRowForDocument(`old:${path}`, 1)!; // removed `b` (old row 1)
+  insertAtRow(screen.buffer, bRow, 'Q');
   assert.equal(textOf(oldBuf), 'a\nb\nc\n', 'base blob unchanged');
   assert.equal(doc.getText(), 'a\nX\nc\n', 'new-side Document unchanged');
 });
 
 test('the Screen coordinates undo of a diff edit', () => {
-  const { path, doc, pv } = setup('a\nb\nc\n', 'a\nX\nc\n');
-  const xRow = pv.view.screenRowForDocument(`new:${path}`, 1)!; // the added `X` (new row 1)
-  pv.beginUserAction();
-  insertAtRow(pv.buffer, xRow, 'YY');
-  pv.endUserAction();
+  const { path, doc, screen } = setup('a\nb\nc\n', 'a\nX\nc\n');
+  const xRow = screen.view.screenRowForDocument(`new:${path}`, 1)!; // the added `X` (new row 1)
+  screen.beginUserAction();
+  insertAtRow(screen.buffer, xRow, 'YY');
+  screen.endUserAction();
   assert.equal(doc.getText(), 'a\nYYX\nc\n', 'edit applied to the new side');
-  assert.equal(pv.canUndo(), true);
-  pv.undo();
+  assert.equal(screen.canUndo(), true);
+  screen.undo();
   assert.equal(doc.getText(), 'a\nX\nc\n', 'undo reverted the new-side Document');
 });

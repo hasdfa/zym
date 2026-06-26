@@ -138,7 +138,7 @@ export class DiffView {
   private readonly files: DiffFile[];
   private readonly cwd?: string;
   private readonly sources = new Map<string, SourceEntry>();
-  private readonly projectionView: Screen;
+  private readonly screen: Screen;
   private lineNumbers: CombinedDiffLineNumberGutter | null = null;
   // Header + `⋯` gap widgets (BlockDecoration bands). Reconciled (not torn down) on each re-diff:
   // a re-flow moves them and changes their text (gap counts, leading-gap subtitle), but reusing the
@@ -196,7 +196,7 @@ export class DiffView {
   private disposed = false;
 
   private get projection(): CoordinatesMap {
-    return this.projectionView.view;
+    return this.screen.view;
   }
 
   constructor(options: DiffViewOptions) {
@@ -222,13 +222,13 @@ export class DiffView {
 
     const sourceBuffers = new Map([...this.sources].map(([key, e]) => [key, e.buffer] as const));
     const syntaxMap = new Map([...this.sources].map(([key, e]) => [key, e.syntax] as const));
-    this.projectionView = new Screen(dmb.items, sourceBuffers);
+    this.screen = new Screen(dmb.items, sourceBuffers);
 
     // One editor, natively backed by the multi-source projection (no buffer-mode shim): the
     // `MultiBufferDocument` supplies the view buffer, the per-excerpt syntax painter, and undo
     // (coordinating the touched sources). The editor disposes it on teardown.
     const painter = new ExcerptSyntaxProjection(() => this.projection, syntaxMap);
-    this.editor = new TextEditor({ source: new MultiBufferDocument(this.projectionView, painter) });
+    this.editor = new TextEditor({ source: new MultiBufferDocument(this.screen, painter) });
     if (!this.editable) this.editor.model.setReadOnly(true);
     this.bands = this.editor.blockDecorations();
     this.root = this.editor.root;
@@ -242,7 +242,7 @@ export class DiffView {
       this.editor.model.setEditableCheck((s, e) => this.projection.isScreenRangeEditable(s, e));
       // A row-count reverse-sync (undo / external) can't be re-flowed by window arithmetic on a
       // diff (new-side + phantom segments interleave), so re-derive the diff from scratch instead.
-      this.projectionView.setResyncHandler(() => this.reDiff());
+      this.screen.setResyncHandler(() => this.reDiff());
     }
 
     this.applyDecorations(dmb);
@@ -277,10 +277,10 @@ export class DiffView {
       // the caret relative to the gaps, so re-diff IMMEDIATELY — debouncing it leaves the caret
       // briefly stranded next to a gap widget before the deferred reflow corrects it. A within-line
       // edit doesn't move gaps, so it stays debounced (the common per-keystroke case).
-      this.lastLineCount = this.projectionView.buffer.getLineCount();
+      this.lastLineCount = this.screen.buffer.getLineCount();
       this.editor.model.onDidChangeText(() => {
         if (this.suppressReDiff) return; // our own retarget edits
-        const n = this.projectionView.buffer.getLineCount();
+        const n = this.screen.buffer.getLineCount();
         const lineCountChanged = n !== this.lastLineCount;
         this.lastLineCount = n;
         // A line-count change reflows the diff; re-diff on a MICROTASK (after the full edit
@@ -551,7 +551,7 @@ export class DiffView {
       if (this.disposed || gen !== this.rebaseGen) return; // a newer re-base superseded this fetch
       // A bulk old-side replace would otherwise echo through reverse-sync into the view; suspend it
       // and re-flow once via reDiff (which reads the updated source buffers).
-      this.projectionView.suspend();
+      this.screen.suspend();
       try {
         for (const file of this.files) {
           const head = byPath.get(file.path) ?? '';
@@ -560,7 +560,7 @@ export class DiffView {
           this.sources.get(oldKey(file.path))?.buffer.setText(head, -1);
         }
       } finally {
-        this.projectionView.resume();
+        this.screen.resume();
       }
       this.reDiff();
     });
@@ -753,7 +753,7 @@ export class DiffView {
     this.dmb = dmb;
     this.suppressReDiff = true; // retarget's view edits must not re-trigger a re-diff
     try {
-      this.projectionView.retarget(dmb.items);
+      this.screen.retarget(dmb.items);
     } finally {
       this.suppressReDiff = false;
     }
@@ -767,13 +767,13 @@ export class DiffView {
       const pos = this.projection.documentToScreen(anchor.documentKey, anchor.row, anchor.column);
       if (pos) this.editor.model.setCursorBufferPosition(pos);
     }
-    this.lastLineCount = this.projectionView.buffer.getLineCount(); // reflow changed it
+    this.lastLineCount = this.screen.buffer.getLineCount(); // reflow changed it
   }
 
   /** Added/removed line backgrounds from the per-row diff kinds (header/blank/gap/context get
    *  none). The view buffer's last line is unterminated, so decorations span its content. */
   private applyDecorations(dmb: DiffMultiBuffer): void {
-    const buffer = this.projectionView.buffer;
+    const buffer = this.screen.buffer;
     const lines = dmb.rowKinds.map((kind, row) => ({
       kind: kind === 'added' || kind === 'removed' ? kind : 'context',
       text: this.lineText(buffer, row),
@@ -1058,7 +1058,7 @@ export class DiffView {
     if (!hit) return null;
 
     // Diff body: each selected row as a unified-diff line (+/-/space by kind).
-    const buffer = this.projectionView.buffer;
+    const buffer = this.screen.buffer;
     const body = rows.map((r) => {
       const prefix = kinds[r] === 'added' ? '+' : kinds[r] === 'removed' ? '-' : ' ';
       return prefix + this.lineText(buffer, r);

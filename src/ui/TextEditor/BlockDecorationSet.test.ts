@@ -110,7 +110,7 @@ test('reproject() re-places anchors after a re-materialize drops the marks', () 
   assert.equal(handle.line(), 3);
   // Force a materialize (rebuild) — marks collapse to row 0. The editor's onDidMaterialize fires
   // reproject(), which re-seats the anchor onto b.ts row 0 (still view row 3).
-  (mbv as any).projectionView.rebuild();
+  (mbv as any).screen.rebuild();
   assert.equal(handle.line(), 3, 're-projected back to b.ts header after materialize');
   mbv.dispose();
 });

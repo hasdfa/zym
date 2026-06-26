@@ -127,23 +127,23 @@ test('a Screen-backed multibuffer (the SearchResultsView path) materializes + pa
     { header: 'a.ts', segments: [seg('/a.ts', 1, 2)] },
     { header: 'b.ts', segments: [seg('/b.ts', 0, 1)] },
   ];
-  const pv = new Screen(excerptsToItems(excerpts), new Map([['/a.ts', aBuf], ['/b.ts', bBuf]]));
-  const buffer = pv.buffer;
+  const screen = new Screen(excerptsToItems(excerpts), new Map([['/a.ts', aBuf], ['/b.ts', bBuf]]));
+  const buffer = screen.buffer;
   assert.equal(
     buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true),
     'a.ts\nconst aaa = 1;\nfunction fa() {}\n\nb.ts\nconst bbb = 2;\nlet ccc = 3;',
     'the PV materialized the stitched text',
   );
-  const view = new GtkSource.View({ buffer: pv.buffer });
-  const syntax = new SyntaxController(view, pv.buffer, {
+  const view = new GtkSource.View({ buffer: screen.buffer });
+  const syntax = new SyntaxController(view, screen.buffer, {
     folding: false,
-    projection: new ExcerptSyntaxProjection(() => pv.view, new Map([['/a.ts', aSyn], ['/b.ts', bSyn]])),
+    projection: new ExcerptSyntaxProjection(() => screen.view, new Map([['/a.ts', aSyn], ['/b.ts', bSyn]])),
   });
   syntax.paint();
   assert.ok(tokenHasTag(buffer, 1, 'const', 'ts:keyword'), 'a.ts excerpt painted from its own parse');
   assert.ok(tokenHasTag(buffer, 5, 'const', 'ts:keyword'), 'b.ts excerpt painted at its translated rows');
-  assert.deepEqual(pv.view.documentRowAtScreenRow(2), { documentKey: '/a.ts', documentRow: 2 }, 'navigation resolves');
-  pv.dispose();
+  assert.deepEqual(screen.view.documentRowAtScreenRow(2), { documentKey: '/a.ts', documentRow: 2 }, 'navigation resolves');
+  screen.dispose();
   aSyn.dispose();
   bSyn.dispose();
 });
@@ -173,20 +173,20 @@ test('the diff multibuffer highlights both the new (context/added) and old (remo
   const dmb = buildDiffMultiBuffer([{ path: '/x.ts', oldText, newText }]);
   const newSyn = source(newText, '/x.ts');
   const oldSyn = source(oldText, '/x.ts');
-  const pv = new Screen(
+  const screen = new Screen(
     dmb.items,
     new Map([['new:/x.ts', newSyn.sourceBuffer], ['old:/x.ts', oldSyn.sourceBuffer]]),
   );
-  const view = new GtkSource.View({ buffer: pv.buffer });
-  const syntax = new SyntaxController(view, pv.buffer, {
+  const view = new GtkSource.View({ buffer: screen.buffer });
+  const syntax = new SyntaxController(view, screen.buffer, {
     folding: false,
-    projection: new ExcerptSyntaxProjection(() => pv.view, new Map([['new:/x.ts', newSyn], ['old:/x.ts', oldSyn]])),
+    projection: new ExcerptSyntaxProjection(() => screen.view, new Map([['new:/x.ts', newSyn], ['old:/x.ts', oldSyn]])),
   });
   syntax.paint();
   // rows: 0 x.ts 1 const a(ctx,new) 2 const removed(removed,old) 3 const added(added,new) 4 const c(ctx,new)
-  assert.ok(tokenHasTag(pv.buffer, 1, 'const', 'ts:keyword'), 'new-side context line highlighted');
-  assert.ok(tokenHasTag(pv.buffer, 2, 'const', 'ts:keyword'), 'old-side removed line highlighted');
-  assert.ok(tokenHasTag(pv.buffer, 3, 'const', 'ts:keyword'), 'new-side added line highlighted');
+  assert.ok(tokenHasTag(screen.buffer, 1, 'const', 'ts:keyword'), 'new-side context line highlighted');
+  assert.ok(tokenHasTag(screen.buffer, 2, 'const', 'ts:keyword'), 'old-side removed line highlighted');
+  assert.ok(tokenHasTag(screen.buffer, 3, 'const', 'ts:keyword'), 'new-side added line highlighted');
   newSyn.dispose();
   oldSyn.dispose();
 });

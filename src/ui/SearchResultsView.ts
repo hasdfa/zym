@@ -72,7 +72,7 @@ export class SearchResultsView {
   readonly root: InstanceType<typeof Gtk.Widget>;
   readonly editor: TextEditor;
   private readonly sources = new Map<string, SourceEntry>();
-  private readonly projectionView: Screen;
+  private readonly screen: Screen;
   private readonly onActivate?: (location: { path: string; row: number }) => void;
   private readonly editable: boolean;
   private readonly registry?: DocumentRegistry;
@@ -93,7 +93,7 @@ export class SearchResultsView {
   /** The LIVE coordinate map (re-segmentation swaps the underlying projection, so always read
    *  it through the Screen rather than caching it). */
   private get projection(): CoordinatesMap {
-    return this.projectionView.view;
+    return this.screen.view;
   }
 
   constructor(options: SearchResultsOptions) {
@@ -113,14 +113,14 @@ export class SearchResultsView {
     const sourceBuffers = new Map([...this.sources].map(([key, entry]) => [key, entry.buffer] as const));
     // Headers + gaps are widget bands (not buffer rows), so the item list carries only real source
     // segments. A collapsed excerpt contributes just its first row (see `currentItems`).
-    this.projectionView = new Screen(this.currentItems(), sourceBuffers);
+    this.screen = new Screen(this.currentItems(), sourceBuffers);
     const syntaxMap = new Map([...this.sources].map(([key, entry]) => [key, entry.syntax] as const));
-    const painter = new ExcerptSyntaxProjection(() => this.projectionView.view, syntaxMap);
+    const painter = new ExcerptSyntaxProjection(() => this.screen.view, syntaxMap);
 
     // One editor, natively backed by the multi-source projection (the `MultiBufferDocument` supplies
     // the view buffer, the per-excerpt painter, and undo coordinating the touched sources). The
     // editor owns + disposes it.
-    this.editor = new TextEditor({ source: new MultiBufferDocument(this.projectionView, painter) });
+    this.editor = new TextEditor({ source: new MultiBufferDocument(this.screen, painter) });
     if (!this.editable) this.editor.model.setReadOnly(true);
     this.bands = this.editor.blockDecorations();
     // Scope the per-excerpt collapse keymap (`z a`/`z M`/`z R`) to this surface — more specific than
@@ -132,7 +132,7 @@ export class SearchResultsView {
       // Vim operators bypass the native editable tag, so gate them on the live map: only a
       // wholly-editable, single-source view range accepts an edit (block / spanning ranges
       // reject). The materialize layer already read-only-tags block rows for interactive input.
-      this.editor.model.setEditableCheck((s, e) => this.projectionView.view.isScreenRangeEditable(s, e));
+      this.editor.model.setEditableCheck((s, e) => this.screen.view.isScreenRangeEditable(s, e));
     }
     this.installNavigation();
     // Per-excerpt source line numbers: a left gutter that asks the live projection for the
@@ -141,7 +141,7 @@ export class SearchResultsView {
     for (const entry of this.sources.values()) maxLine = Math.max(maxLine, entry.lines.length);
     this.gutter = new SourceLineNumberGutter(
       this.editor.sourceView,
-      () => this.projectionView.view,
+      () => this.screen.view,
       maxLine,
       (line) => this.editor.inlineBlocks.placementAtLine(line),
     );
@@ -156,13 +156,13 @@ export class SearchResultsView {
       // again after a deferred reverse-sync remap settles (its 'changed' fires on a stale map).
       this.lastLineCount = this.editor.sourceView.getBuffer().getLineCount();
       this.editor.model.onDidChangeText(() => {
-        if (this.projectionView.isSyncPending()) return; // stale map — the reflow handler repaints
+        if (this.screen.isSyncPending()) return; // stale map — the reflow handler repaints
         const n = this.editor.sourceView.getBuffer().getLineCount();
         if (n === this.lastLineCount) return;
         this.lastLineCount = n;
         this.editor.repaintSyntax();
       });
-      this.projectionView.setReflowHandler(() => {
+      this.screen.setReflowHandler(() => {
         this.lastLineCount = this.editor.sourceView.getBuffer().getLineCount();
         this.editor.repaintSyntax();
       });
@@ -255,7 +255,7 @@ export class SearchResultsView {
     if (this.disposed) return;
     const caret = this.editor.model.getCursorBufferPosition();
     const anchor = this.projection.screenToDocument(caret.row, caret.column);
-    this.projectionView.retarget(this.currentItems());
+    this.screen.retarget(this.currentItems());
     this.editor.repaintSyntax();
     this.installBands();
     this.highlightMatches(this.excerptInputs);
@@ -299,7 +299,7 @@ export class SearchResultsView {
    *  (reverse-sync) would drop them — fine for a browse/edit surface. */
   private highlightMatches(excerpts: ExcerptInput[]): void {
     const layer = this.editor.decorations.layer('search');
-    const projection = this.projectionView.view;
+    const projection = this.screen.view;
     for (const excerpt of excerpts) {
       for (const m of excerpt.matches ?? []) {
         const start = projection.documentToScreen(excerpt.path, m.row, m.startCol);

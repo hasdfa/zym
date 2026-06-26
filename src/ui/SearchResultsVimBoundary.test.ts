@@ -131,7 +131,7 @@ test('REAL visual-c across two regions of one file does not corrupt the view/sou
 
 test('REAL o then u realigns the next excerpt header against a FRESH projection', async () => {
   const { a, b, registry, mbv, lines } = setupTwoFiles();
-  const projection = () => (mbv as any).projectionView.view;
+  const projection = () => (mbv as any).screen.view;
   // installBands anchors b.ts's header at this view row; before the edit it is row 3 ("one").
   assert.equal(projection().screenRowForDocument(b, 0), 3, 'b.ts header anchors at view row 3 initially');
 
@@ -143,7 +143,7 @@ test('REAL o then u realigns the next excerpt header against a FRESH projection'
   mbv.editor.model.undo(); // u — reverse-sync mirrors the delete; the remap is DEFERRED
   // The remap is queued (not yet run): band reconcile MUST be skipped now (the map is stale) and
   // deferred to the reflow — otherwise installBands re-anchors the header off the old map.
-  assert.equal((mbv as any).projectionView.isSyncPending(), true, 'remap pending right after undo — stale reconcile skipped');
+  assert.equal((mbv as any).screen.isSyncPending(), true, 'remap pending right after undo — stale reconcile skipped');
   assert.equal(registry.find(a)!.getText(), 'alpha\nbeta\ngamma\n', 'source restored by undo');
   assert.deepEqual(lines(), ['alpha', 'beta', 'gamma', 'one', 'two', 'three'], 'view realigned after undo');
   // Let the deferred remap settle, then the projection band-anchor must be back to row 3. (Before

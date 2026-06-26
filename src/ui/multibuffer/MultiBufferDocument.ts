@@ -23,16 +23,16 @@ export class MultiBufferDocument implements TextEditorSource {
   readonly isLoaded = true;
   readonly lspDocument = null;
   readonly syntaxProjection: SyntaxProjection;
-  private readonly pv: Screen;
+  private readonly screen: Screen;
 
-  constructor(pv: Screen, syntaxProjection: SyntaxProjection) {
-    this.pv = pv;
+  constructor(screen: Screen, syntaxProjection: SyntaxProjection) {
+    this.screen = screen;
     this.syntaxProjection = syntaxProjection;
   }
 
   // --- view + lifecycle (the single view IS the surface's pre-built PV) -------
   createView(): Screen {
-    return this.pv;
+    return this.screen;
   }
   removeView(): void {
     /* the PV is disposed in dispose(); a multibuffer has exactly one view */
@@ -40,13 +40,13 @@ export class MultiBufferDocument implements TextEditorSource {
 
   // --- block-decoration anchoring (delegate to the PV's coordinate map) -------
   screenRowForDocument(_screen: Screen, documentKey: string | undefined, row: number): number | null {
-    return this.pv.view.screenRowForDocument(documentKey ?? this.pv.view.soleDocumentKey ?? '', row);
+    return this.screen.view.screenRowForDocument(documentKey ?? this.screen.view.soleDocumentKey ?? '', row);
   }
   onDidMaterialize(cb: () => void): () => void {
-    return this.pv.onDidMaterialize(cb);
+    return this.screen.onDidMaterialize(cb);
   }
   dispose(): void {
-    this.pv.dispose();
+    this.screen.dispose();
   }
   getText(): string {
     return '';
@@ -80,30 +80,30 @@ export class MultiBufferDocument implements TextEditorSource {
 
   // --- undo (delegates to the PV, which spans the touched sources) ------------
   undo(): void {
-    this.pv.undo();
+    this.screen.undo();
   }
   redo(): void {
-    this.pv.redo();
+    this.screen.redo();
   }
   beginUserAction(): void {
-    this.pv.beginUserAction();
+    this.screen.beginUserAction();
   }
   endUserAction(): void {
-    this.pv.endUserAction();
+    this.screen.endUserAction();
   }
 
   // --- document (unfolded source) reads (folding is off for a multibuffer) ----
-  // The fold/translation surface lives on the `Screen` the surface built (`this.pv`); the editor
+  // The fold/translation surface lives on the `Screen` the surface built (`this.screen`); the editor
   // reaches it directly. A multibuffer keeps `buffer == screen` (folding off), so its "document"
   // line count / text is the stitched view buffer itself.
   documentLineText(row: number): string {
-    return this.pv.documentLineText(row);
+    return this.screen.documentLineText(row);
   }
   documentLineCount(): number {
-    return this.pv.buffer.getLineCount();
+    return this.screen.buffer.getLineCount();
   }
   documentTextInRange(start: Point, end: Point): string {
-    const buf = this.pv.buffer as any;
+    const buf = this.screen.buffer as any;
     const iter = (line: number, col: number): any => {
       const r = buf.getIterAtLineOffset(line, col);
       return Array.isArray(r) ? r[r.length - 1] : r;
