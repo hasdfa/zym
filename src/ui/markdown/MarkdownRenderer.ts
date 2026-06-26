@@ -40,7 +40,7 @@ import { CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
 import { escapeMarkup } from '../proseMarkup.ts';
-import { clipboard } from '../TextEditor/vim/clipboard.ts';
+import { clipboard, primaryClipboard } from '../TextEditor/vim/clipboard.ts';
 import { highlightToMarkup } from '../../syntax/highlightToMarkup.ts';
 import { buildBlocks, monoSizeAttr, type MdBlock, type LinkSpan } from './markdownModel.ts';
 import { addStyles } from '../../styles.ts';
@@ -146,7 +146,11 @@ export class MarkdownRenderer extends Gtk.Widget {
     this.dragStartY = 0;
 
     this.cForeground = rgba(theme.ui.editor.foreground);
-    this.cSelection = rgba(theme.ui.surface.selected);
+    // Selection: a translucent NEUTRAL wash (the view foreground), not a fixed gray,
+    // so it reads consistently over colored backgrounds (code blocks, the blockquote
+    // tint) and follows the theme (light fg on dark, dark fg on light).
+    this.cSelection = rgba(theme.ui.view.fg);
+    this.cSelection.alpha = 0.2;
     this.cBorder = rgba(theme.ui.border);
     this.cQuoteBar = rgba(theme.ui.text.muted);
     // Blockquote fill: the view foreground at low opacity, like a faint callout tint.
@@ -240,6 +244,7 @@ export class MarkdownRenderer extends Gtk.Widget {
     this.fills = [];
     this.rules = [];
     let y = TOP_PAD;
+    let lastBottom = 0; // bottom margin contributed by the final block, dropped from the total
 
     // Each blockquote is one visual box: a single continuous bar spanning all its
     // blocks (incl. the gaps between them), with code-block padding inside and
@@ -256,6 +261,7 @@ export class MarkdownRenderer extends Gtk.Widget {
       const block = this.blocks[i];
       const opening = block.quotes.filter((id) => groups.get(id)!.first === i); // outer→inner
       const closing = block.quotes.filter((id) => groups.get(id)!.last === i); // outer→inner
+      lastBottom = 0; // only the final block's own bottom margin survives to the total
 
       // Open every blockquote that starts at this block: outer margin, then top padding.
       for (const id of opening) {
@@ -292,7 +298,10 @@ export class MarkdownRenderer extends Gtk.Widget {
         y += h + pad * 2;
       }
 
-      if (closing.length === 0) y += block.marginBottom;
+      if (closing.length === 0) {
+        y += block.marginBottom;
+        lastBottom = block.marginBottom;
+      }
 
       // Close every blockquote ending here (inner→outer): bottom padding, finalize the
       // background height, draw the ONE continuous bar (inset to clear the rounded
@@ -304,10 +313,12 @@ export class MarkdownRenderer extends Gtk.Widget {
         quoteBg.get(id)!.h = boxH;
         this.rules.push({ x: barX.get(id)!, y: top + BLOCK_RADIUS, w: QUOTE_BAR_W, h: Math.max(1, boxH - 2 * BLOCK_RADIUS), color: this.cQuoteBar, radius: 0 });
         y += QUOTE_MARGIN_BOTTOM;
+        lastBottom = QUOTE_MARGIN_BOTTOM;
       }
     }
 
-    this.totalHeight = y + BOTTOM_PAD;
+    // Drop the final block's trailing bottom margin so the document ends flush.
+    this.totalHeight = y - lastBottom + BOTTOM_PAD;
   }
 
   private layoutTable(block: Extract<MdBlock, { kind: 'table' }>, x0: number, y0: number, width: number): number {
@@ -532,6 +543,7 @@ export class MarkdownRenderer extends Gtk.Widget {
       const href = this.linkAtXY(x, y);
       if (href) openUri(href);
     }
+    this.syncPrimary(); // a finished drag / double / triple click → update PRIMARY
   }
 
   private onMotion(x: number, y: number): void {
@@ -585,12 +597,15 @@ export class MarkdownRenderer extends Gtk.Widget {
     if (this.segs.length === 0) return;
     this.selAnchor = { seg: 0, byte: 0 };
     this.selHead = { seg: this.segs.length - 1, byte: byteLen(this.segs[this.segs.length - 1].plain) };
+    this.syncPrimary();
     this.queueDraw();
   }
 
-  private copySelection(): void {
+  // The plain text of the current selection (segments joined by newlines), or null
+  // when nothing is selected.
+  private selectedText(): string | null {
     const norm = this.normSelection();
-    if (!norm) return;
+    if (!norm) return null;
     const parts: string[] = [];
     for (let i = norm.lo.seg; i <= norm.hi.seg && i < this.segs.length; i++) {
       const s = this.segs[i];
@@ -599,7 +614,20 @@ export class MarkdownRenderer extends Gtk.Widget {
       const end = i === norm.hi.seg ? norm.hi.byte : total;
       parts.push(sliceBytes(s.plain, start, end));
     }
-    clipboard.write(parts.join('\n'));
+    return parts.join('\n');
+  }
+
+  private copySelection(): void {
+    const text = this.selectedText();
+    if (text !== null) clipboard.write(text);
+  }
+
+  // Mirror the selection to the PRIMARY clipboard (middle-click paste), as native
+  // text widgets do. Only writes when there IS a selection, so a plain click that
+  // clears the selection never clobbers an existing PRIMARY from elsewhere.
+  private syncPrimary(): void {
+    const text = this.selectedText();
+    if (text) primaryClipboard.write(text);
   }
 }
 
