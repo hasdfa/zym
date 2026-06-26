@@ -22,6 +22,7 @@ import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Gio } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import type { AgentDriver, AgentHost, AgentMode, AgentResume } from '../types.ts';
 import { resumeFlags } from '../resume.ts';
 import { parseActions } from '../actions.ts';
@@ -54,13 +55,14 @@ export class ClaudeSession implements AgentDriver {
   readonly command: string[];
   private readonly statusFile: string;
   private host: AgentHost | null = null;
-  private statusMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private filesMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private modeMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  // Watched lazily once a session name appears; the field guards against a double-install.
+  // The other IPC monitors need no field — they're owned solely by `subs` (see `monitor()`).
   private nameMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private cwdMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private wtcreateMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private actionsMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  // The IPC file-monitor watches + their `changed` handlers (node-gtk roots a connected monitor
+  // closure, which captures `this` → the agent host graph). `monitor()` routes each through
+  // `subs.connect` (the `.off()`) + `subs.defer` (the `.cancel()`), both fired by `subs.dispose()`.
+  // See rule 2.
+  private readonly subs = new CompositeDisposable();
   // Last values emitted, so a re-read that changed nothing stays silent (the
   // session file in particular is rewritten on every status tick).
   private files: string[] = [];
@@ -154,19 +156,13 @@ export class ClaudeSession implements AgentDriver {
   /** Start watching the IPC files; changes are reported through `host`. */
   watch(host: AgentHost): void {
     this.host = host;
-    this.statusMonitor = this.monitor(this.statusFile, Gio.FileMonitorFlags.WATCH_MOVES,
-      () => this.readStatus());
-    this.filesMonitor = this.monitor(`${this.statusFile}.files`, Gio.FileMonitorFlags.NONE,
-      () => this.readChangedFiles());
-    this.modeMonitor = this.monitor(`${this.statusFile}.mode`, Gio.FileMonitorFlags.WATCH_MOVES,
-      () => this.readMode());
+    this.monitor(this.statusFile, Gio.FileMonitorFlags.WATCH_MOVES, () => this.readStatus());
+    this.monitor(`${this.statusFile}.files`, Gio.FileMonitorFlags.NONE, () => this.readChangedFiles());
+    this.monitor(`${this.statusFile}.mode`, Gio.FileMonitorFlags.WATCH_MOVES, () => this.readMode());
     // The bridge tool and the Bash validator both write atomically (tmp+rename).
-    this.cwdMonitor = this.monitor(`${this.statusFile}.cwd`, Gio.FileMonitorFlags.WATCH_MOVES,
-      () => this.readCwd());
-    this.wtcreateMonitor = this.monitor(`${this.statusFile}.wtcreate`, Gio.FileMonitorFlags.WATCH_MOVES,
-      () => this.readWtCreate());
-    this.actionsMonitor = this.monitor(`${this.statusFile}.actions`, Gio.FileMonitorFlags.WATCH_MOVES,
-      () => this.readActions());
+    this.monitor(`${this.statusFile}.cwd`, Gio.FileMonitorFlags.WATCH_MOVES, () => this.readCwd());
+    this.monitor(`${this.statusFile}.wtcreate`, Gio.FileMonitorFlags.WATCH_MOVES, () => this.readWtCreate());
+    this.monitor(`${this.statusFile}.actions`, Gio.FileMonitorFlags.WATCH_MOVES, () => this.readActions());
   }
 
   /** The claude session id once a hook has reported it (null until then). */
@@ -184,20 +180,7 @@ export class ClaudeSession implements AgentDriver {
    *  left alone — Claude owns it). Call when the agent process exits. */
   dispose(): void {
     void this.sessionId; // cache the id before its file is removed (restart resumes it)
-    this.statusMonitor?.cancel();
-    this.statusMonitor = null;
-    this.filesMonitor?.cancel();
-    this.filesMonitor = null;
-    this.modeMonitor?.cancel();
-    this.modeMonitor = null;
-    this.nameMonitor?.cancel();
-    this.nameMonitor = null;
-    this.cwdMonitor?.cancel();
-    this.cwdMonitor = null;
-    this.wtcreateMonitor?.cancel();
-    this.wtcreateMonitor = null;
-    this.actionsMonitor?.cancel();
-    this.actionsMonitor = null;
+    this.subs.dispose(); // `.off()` + `.cancel()` every IPC file monitor
     this.host = null;
     try { Fs.rmSync(this.statusFile, { force: true }); } catch { /* best effort */ }
     try { Fs.rmSync(`${this.statusFile}.session`, { force: true }); } catch { /* best effort */ }
@@ -345,7 +328,8 @@ export class ClaudeSession implements AgentDriver {
   ): InstanceType<typeof Gio.FileMonitor> {
     const gfile = Gio.File.newForPath(path);
     const m = FileProto.monitorFile.call(gfile, flags, null);
-    m.on('changed', onChange);
+    this.subs.connect(m, 'changed', onChange);
+    this.subs.defer(() => m.cancel());
     return m;
   }
 }

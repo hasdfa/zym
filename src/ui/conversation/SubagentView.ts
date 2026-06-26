@@ -5,6 +5,7 @@
  * panel, and a pushed NavigationView page showing the full transcript.
  */
 import { Gtk, Adw } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
 import { Message } from './Message.ts';
@@ -34,6 +35,11 @@ export class SubagentView {
   private readonly session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>;
   private readonly nav: PageNav;
   private readonly cwd: string;
+  // View-lifetime bag (spawn ToolRows + open pages); disposed by AgentConversation.dispose().
+  private readonly subs = new CompositeDisposable();
+  // The running-panel link-button handlers, re-created on every `render()`; cleared per
+  // render so they don't accumulate as subagents start/finish (node-gtk roots each — rule 2).
+  private readonly renderSubs = new CompositeDisposable();
 
   constructor(session: Pick<SdkSession, 'getSubagent' | 'onSubagentUpdate'>, nav: PageNav, cwd: string) {
     this.session = session;
@@ -51,7 +57,7 @@ export class SubagentView {
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
     header.addCssClass('conversation-tool-header');
     setMarkupSafe(header, `<b>${escapeMarkup(type)}</b>${desc ? `  ${escapeMarkup(desc)}` : ''}`, `${type} ${desc}`);
-    const toolRow = new ToolRow({ icon: NERDFONT.TOOL.SUBAGENT, header, onActivate: () => this.pushPage(id) });
+    const toolRow = new ToolRow({ icon: NERDFONT.TOOL.SUBAGENT, header, onActivate: () => this.pushPage(id), subs: this.subs });
     // Show it in the running panel right away (driven by the spawn, not the later
     // task_started, so it's robust); hidden again on completion.
     this.running.set(id, { agentType: type, description: desc, status: 'running' });
@@ -74,11 +80,12 @@ export class SubagentView {
     button.addCssClass('flat');
     button.addCssClass('sticky-list-panel-link');
     button.setChild(label);
-    button.on('clicked', () => this.pushPage(id));
+    this.renderSubs.connect(button, 'clicked', () => this.pushPage(id));
     return button;
   }
 
   private render(): void {
+    this.renderSubs.clear(); // sever the previous render's panel link handlers
     const rows: Widget[] = [];
     for (const [id, s] of this.running) {
       if (s.status !== 'running') continue;
@@ -93,6 +100,11 @@ export class SubagentView {
     // entries box, the inter-entry spacing (its `.transcript-entry` class), and
     // stick-to-bottom; this code only builds the entries.
     const transcript = new Transcript();
+    // Page-scoped bag: severed when the page is popped ('hidden'), or with the view if torn
+    // down while still open. Owns the per-page transcript (its autoscroll vadjustment
+    // handlers), the update sub, and the back/hidden handlers — all node-gtk-rooted (rule 2).
+    const pageSubs = this.subs.nest();
+    pageSubs.use(transcript);
     const render = () => {
       transcript.clear();
       const info = this.session.getSubagent(id);
@@ -127,13 +139,13 @@ export class SubagentView {
       }
     };
     render();
-    const sub = this.session.onSubagentUpdate(({ id: uid }) => { if (uid === id) render(); });
+    pageSubs.use(this.session.onSubagentUpdate(({ id: uid }) => { if (uid === id) render(); }));
 
     const info = this.session.getSubagent(id);
     const title = info ? `${info.agentType}${info.status === 'running' ? ' (running)' : ''}` : 'Subagent';
     const back = new Gtk.Button({ label: '‹ Back', halign: Gtk.Align.START });
     back.addCssClass('flat');
-    back.on('clicked', () => this.nav.pop());
+    pageSubs.connect(back, 'clicked', () => this.nav.pop());
     const header = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     header.addCssClass('conversation-page-header');
     header.append(back);
@@ -144,7 +156,13 @@ export class SubagentView {
     page.append(transcript.root);
 
     const navPage = Adw.NavigationPage.new(page, title);
-    navPage.on('hidden', () => sub.dispose()); // stop refreshing once popped
+    pageSubs.connect(navPage, 'hidden', () => pageSubs.dispose()); // stop refreshing + sever once popped
     this.nav.push(navPage);
+  }
+
+  /** Sever the panel + page handlers so a closed conversation stops pinning this view. */
+  dispose(): void {
+    this.renderSubs.dispose();
+    this.subs.dispose();
   }
 }

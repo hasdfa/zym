@@ -283,7 +283,7 @@ export class QuestionCard {
     const header = new Gtk.Label({ xalign: 0, wrap: true, hexpand: true });
     header.addCssClass('conversation-tool-header');
     setMarkupSafe(header, escapeMarkup(summary), summary);
-    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header });
+    const row = new ToolRow({ icon: NERDFONT.STATUS.CHECK, iconColor: theme.ui.status.success, header, subs: this.disposables });
     row.content.append(this.answeredDetails());
     this.root.append(row.root);
   }

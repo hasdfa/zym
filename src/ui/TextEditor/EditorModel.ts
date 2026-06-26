@@ -22,7 +22,7 @@ import { unwrapIter, clamp, type TextIter } from './iter.ts';
 import { Selection } from './Selection.ts';
 import { Cursor } from './Cursor.ts';
 import { MarkerLayer } from './MarkerLayer.ts';
-import { Emitter, Disposable } from '../../util/eventKit.ts';
+import { Emitter, Disposable, CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
 import { Gtk, type SourceBuffer, type SourceView } from '../../gi.ts';
 
@@ -138,6 +138,12 @@ export class EditorModel {
 
   readonly view: SourceView;
   readonly buffer: SourceBuffer;
+  // The buffer signal handlers below (cursor/insert/delete/changed) each capture `this`;
+  // node-gtk roots a connected handler's closure behind a Global handle, so a single
+  // un-disconnected one pins the whole editor model (→ view + buffer + selections). The
+  // host widget's `dispose()` drains this bag to sever them. See docs/lifecycle-and-disposal.md.
+  private readonly subs = new CompositeDisposable();
+  private disposed = false;
   // Where undo grouping + undo/redo go. For a buffer-only editor it's the view buffer
   // (native undo); for a document-backed view it's the Document (the model owns undo,
   // view buffers have native undo off), set via `setUndoTarget`.
@@ -229,7 +235,7 @@ export class EditorModel {
     this.view.setOverwrite(false); // the block look comes from the tag, not overwrite
     // Keep the block caret on the insert mark even when it moves outside the vim
     // layer (e.g. a mouse click placing the cursor), not just after operations.
-    this.buffer.on('notify::cursor-position', () => this.onCursorMoved());
+    this.subs.connect(this.buffer, 'notify::cursor-position', () => this.onCursorMoved());
     this.installChangeTracking();
   }
 
@@ -250,13 +256,13 @@ export class EditorModel {
    * listener that edits the buffer re-enters cleanly.
    */
   private installChangeTracking(): void {
-    this.buffer.on('insert-text', (location: TextIter, text: string) =>
+    this.subs.connect(this.buffer, 'insert-text', (location: TextIter, text: string) =>
       this.pendingTextChanges.push(this.insertChange(location, text)),
     );
-    this.buffer.on('delete-range', (start: TextIter, end: TextIter) =>
+    this.subs.connect(this.buffer, 'delete-range', (start: TextIter, end: TextIter) =>
       this.pendingTextChanges.push(this.deleteChange(start, end)),
     );
-    this.buffer.on('changed', () => {
+    this.subs.connect(this.buffer, 'changed', () => {
       if (this.pendingTextChanges.length === 0) return;
       const changes = this.pendingTextChanges;
       this.pendingTextChanges = [];
@@ -332,6 +338,18 @@ export class EditorModel {
     if (this.destroyed) return;
     this.destroyed = true;
     this.emitter.emit('did-destroy');
+  }
+
+  /** Disconnect the buffer signal handlers so they stop pinning this editor.
+   *  Called from `TextEditor.dispose()`; idempotent (rule 1). The buffer/view are
+   *  detached not destroyed on tab close, so this is the only thing that releases
+   *  node-gtk's Global-handle roots on the handler closures. See `subs`. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.replicationSub?.dispose();
+    this.replicationSub = undefined;
+    this.subs.dispose();
   }
 
   onDidDestroy(callback: () => void): Disposable {

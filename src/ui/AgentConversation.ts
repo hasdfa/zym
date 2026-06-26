@@ -369,7 +369,7 @@ export class AgentConversation implements Agent {
     this.copyButton.setHalign(Gtk.Align.END);
     this.copyButton.setValign(Gtk.Align.START);
     this.copyButton.setVisible(false);
-    this.copyButton.on('clicked', () => {
+    this.subs.connect(this.copyButton, 'clicked', () => {
       if (!this.copyTargetView) return;
       clipboard.write(this.copyTargetView.getMarkdown());
       this.copyButton.setTooltipText('Copied');
@@ -435,7 +435,7 @@ export class AgentConversation implements Agent {
     this.modeDropdown = Gtk.DropDown.newFromStrings(PERMISSION_CYCLE);
     this.modeDropdown.addCssClass('flat');
     this.modeDropdown.addCssClass('conversation-mode');
-    this.modeDropdown.on('notify::selected', () => {
+    this.subs.connect(this.modeDropdown, 'notify::selected', () => {
       if (this.applyingMode) return;
       const mode = PERMISSION_CYCLE[this.modeDropdown.getSelected()];
       if (mode) this.session.setPermissionMode(mode);
@@ -473,16 +473,19 @@ export class AgentConversation implements Agent {
     // Subagents push pages onto this.root (the NavigationView, assigned next); the
     // push/pop arrows defer that lookup until a click.
     const nav = { push: (page: InstanceType<typeof Adw.NavigationPage>) => this.root.push(page), pop: () => this.root.pop() };
-    this.subagentView = new SubagentView(this.session, nav, this.cwd);
-    this.monitorView = new MonitorView(this.session, nav);
+    // Owned child views: registered on `subs` so a single `subs.dispose()` severs their
+    // handlers too (transcript is a field initializer, so it's added here, not at creation).
+    this.subs.add(this.transcript);
+    this.subagentView = this.subs.use(new SubagentView(this.session, nav, this.cwd));
+    this.monitorView = this.subs.use(new MonitorView(this.session, nav));
 
     // A button bar for the agent's registered actions, just above the input card;
     // hidden until the agent registers any (see ActionsBar).
-    this.actionsBar = new ActionsBar({
+    this.actionsBar = this.subs.use(new ActionsBar({
       isRunning: (id) => this.actionProcesses.isRunning(id),
       onRun: (action) => this.runAction(action),
       onStop: (id) => this.stopAction(id),
-    });
+    }));
 
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('conversation-surface');
@@ -718,7 +721,7 @@ export class AgentConversation implements Agent {
   dispose(): void {
     this.disposed = true; // an in-flight auto-rename must not touch a torn-down view
     this.actionProcesses.stopAll(); // terminate any terminal-less action processes
-    this.subs.dispose();
+    this.subs.dispose(); // also disposes transcript / subagentView / monitorView / actionsBar (registered via use())
     this.statusIcon.dispose();
     this.input.dispose();
     this.session.dispose();
@@ -1127,7 +1130,7 @@ export class AgentConversation implements Agent {
     header.setWrapMode(Pango.WrapMode.WORD_CHAR); // break very long unbroken names instead of forcing the row wide
     setMarkupSafe(header, `unhandled <tt>${escapeMarkup(type)}</tt> event`, `unhandled ${type} event`);
 
-    const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, header, status: 'warning' });
+    const toolRow = new ToolRow({ icon: NERDFONT.STATUS.WARNING, header, status: 'warning', subs: this.subs });
     const body = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
     body.addCssClass('conversation-unknown-body');
     body.setText(json);
@@ -1165,6 +1168,7 @@ export class AgentConversation implements Agent {
       icon,
       header,
       onActivate: opensFile ? () => this.onOpenFile!(filePath!) : undefined,
+      subs: this.subs,
     });
 
     // TodoWrite carries its checklist in the input — render it now, not on result.
@@ -1228,7 +1232,7 @@ export class AgentConversation implements Agent {
     header.append(label);
     header.append(errorDot);
 
-    const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render });
+    const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render, subs: this.subs });
     this.transcript.appendToolEntry(toolRow.root);
 
     let progress: InstanceType<typeof Gtk.Label> | null = null;
@@ -1301,7 +1305,7 @@ export class AgentConversation implements Agent {
     // so correlate by tool name + input (the most recent match wins).
     const entry = this.findPermissionRow(req);
     if (entry) {
-      const buttons = permissionButtons((allow) => {
+      const buttons = permissionButtons(this.subs, (allow) => {
         this.session.respondPermission(req.id, { allow });
         entry.row.content.remove(buttons); // answered — drop the buttons
       });
@@ -1312,7 +1316,7 @@ export class AgentConversation implements Agent {
     }
     // Fallback (no matching row — e.g. the request raced ahead of its tool-use row):
     // a standalone card in the transcript flow.
-    const card = permissionCard(req, (allow) => {
+    const card = permissionCard(this.subs, req, (allow) => {
       this.session.respondPermission(req.id, { allow });
       this.transcript.removeEntry(card); // answered — drop it from the transcript
     });

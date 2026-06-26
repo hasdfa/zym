@@ -25,6 +25,7 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { Adw, Gio, GtkSource, type SourceBuffer } from '../../gi.ts';
 import { zym } from '../../zym.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { Point } from '../../text/Point.ts';
 import type { LspDocument, DocumentEdit } from '../../lsp/LspManager.ts';
 import { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
@@ -127,23 +128,29 @@ export class Document implements TextEditorSource {
   private contentLoaded = false;
   private diskMtimeMs: number | null = null;
   private diskState: 'synced' | 'changed' | 'deleted' = 'synced';
-  private fileMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
   private deletionCheckTimer: NodeJS.Timeout | null = null;
+  // The model-buffer signal handlers + the file-monitor handler each capture `this`; node-gtk
+  // roots a connected handler's closure behind a Global handle, so a single un-disconnected one
+  // pins this Document (→ model buffer + LSP doc) forever. `dispose()` drains this bag.
+  private readonly subs = new CompositeDisposable();
+  // The file watch lives in its own re-armable scope: `watchFile` clears it (`.off()` + `.cancel()`
+  // the old monitor) and re-`connect`s, since the monitor is re-created when the path changes.
+  private readonly monitorScope = this.subs.nest();
 
   constructor() {
     this.model = new GtkSource.Buffer();
     this.model.setEnableUndo(true);
-    this.model.on('modified-changed', () => {
+    this.subs.connect(this.model, 'modified-changed', () => {
       for (const callback of this.modifiedHandlers) callback();
     });
     // A model change (a view's write-through, or undo/redo) → tell the LSP (document-level:
     // one didChange off the model). Each view's ProjectionView mirrors the change into its
     // own view buffer itself (reverse-sync), so there's no manual propagate here. Signals
     // fire pre-mutation, so the offset / deleted text describe the pre-edit state.
-    this.model.on('insert-text', (iter: TextIter, text: string) => {
+    this.subs.connect(this.model, 'insert-text', (iter: TextIter, text: string) => {
       this.lspDidChange([{ start: this.pointAt(iter.getOffset()), oldText: '', newText: text }]);
     });
-    this.model.on('delete-range', (start: TextIter, end: TextIter) => {
+    this.subs.connect(this.model, 'delete-range', (start: TextIter, end: TextIter) => {
       const so = start.getOffset();
       const oldText = this.model.getText(start, end, true);
       this.lspDidChange([{ start: this.pointAt(so), oldText, newText: '' }]);
@@ -454,8 +461,7 @@ export class Document implements TextEditorSource {
   /** Release shared resources (last view gone): cancel the monitor + close the LSP doc +
    *  free the shared tree-sitter parse. */
   dispose(): void {
-    this.fileMonitor?.cancel();
-    this.fileMonitor = null;
+    this.subs.dispose(); // sever the model-buffer handlers + the file watch (its nested scope)
     if (this.deletionCheckTimer) clearTimeout(this.deletionCheckTimer);
     this.deletionCheckTimer = null;
     for (const pv of this.pvs.values()) pv.dispose(); // detach any view still attached
@@ -582,9 +588,14 @@ export class Document implements TextEditorSource {
 
   // --- On-disk change detection ----------------------------------------------
 
+  /** Drop the current file watch (clearing `monitorScope` runs the deferred `.off()` + `.cancel()`,
+   *  which is what releases node-gtk's Global handle on the `changed` closure). */
+  private unwatchFile(): void {
+    this.monitorScope.clear();
+  }
+
   private watchFile(path: string): void {
-    this.fileMonitor?.cancel();
-    this.fileMonitor = null;
+    this.unwatchFile();
     try {
       const file = Gio.File.newForPath(path);
       const monitor = GioFileProto.monitorFile.call(
@@ -592,8 +603,8 @@ export class Document implements TextEditorSource {
         Gio.FileMonitorFlags.WATCH_MOVES,
         null,
       ) as InstanceType<typeof Gio.FileMonitor>;
-      monitor.on('changed', () => this.onDiskChanged());
-      this.fileMonitor = monitor;
+      this.monitorScope.connect(monitor, 'changed', () => this.onDiskChanged());
+      this.monitorScope.defer(() => monitor.cancel());
     } catch (error) {
       console.warn(`[editor] could not watch ${path}: ${(error as Error).message}`);
     }

@@ -10,6 +10,7 @@
  * running-state query.
  */
 import { Gtk, Adw } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';
 import { setMarkupSafe } from '../proseMarkup.ts';
@@ -39,6 +40,10 @@ export class ActionsBar {
   private readonly isRunning: (id: string) => boolean;
   private readonly onRun: (action: AgentAction) => void;
   private readonly onStop: (id: string) => void;
+  // The run/stop button `clicked` handlers, re-created on every rebuild; node-gtk roots
+  // each closure, so this bag is cleared per rebuild (and disposed on `dispose()`) to keep
+  // them from accumulating as the action set / running-state churns. See rule 2.
+  private readonly renderSubs = new CompositeDisposable();
 
   constructor(options: ActionsBarOptions) {
     this.isRunning = options.isRunning;
@@ -67,12 +72,13 @@ export class ActionsBar {
   }
 
   private rebuild(): void {
+    this.renderSubs.clear(); // sever the previous rebuild's button handlers
     this.wrap.removeAll();
     this.actions.forEach((action, index) => {
       const run = new Gtk.Button({ label: action.label });
       if (index === 0) run.addCssClass('suggested-action'); // the default action
       // Re-running terminates the previous process first (handled by the host).
-      run.on('clicked', () => this.onRun(action));
+      this.renderSubs.connect(run, 'clicked', () => this.onRun(action));
 
       if (action.terminal) {
         run.setTooltipText(action.command);
@@ -93,11 +99,16 @@ export class ActionsBar {
         setMarkupSafe(stopLabel, iconSpan(NERDFONT.STATUS.CROSS, undefined, true), '✗');
         stop.setChild(stopLabel);
         stop.setTooltipText(`Stop ${action.label}`);
-        stop.on('clicked', () => this.onStop(action.id));
+        this.renderSubs.connect(stop, 'clicked', () => this.onStop(action.id));
         group.append(stop);
       }
       this.wrap.append(group);
     });
     this.root.setVisible(this.actions.length > 0);
+  }
+
+  /** Sever the current button handlers so a closed conversation stops pinning them. */
+  dispose(): void {
+    this.renderSubs.dispose();
   }
 }
