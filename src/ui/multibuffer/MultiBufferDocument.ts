@@ -10,7 +10,6 @@
  * sources' undo as one transaction). The surface owns building/retargeting the PV; this object owns
  * disposing it (via the editor's teardown calling `dispose`).
  */
-import type { SourceBuffer } from '../../gi.ts';
 import type { Point } from '../../text/Point.ts';
 import type { Screen } from '../TextEditor/Screen.ts';
 import type { SyntaxProjection } from '../../syntax/SyntaxProjection.ts';
@@ -40,7 +39,7 @@ export class MultiBufferDocument implements TextEditorSource {
   }
 
   // --- block-decoration anchoring (delegate to the PV's coordinate map) -------
-  screenRowForDocument(_buffer: SourceBuffer, documentKey: string | undefined, row: number): number | null {
+  screenRowForDocument(_screen: Screen, documentKey: string | undefined, row: number): number | null {
     return this.pv.view.screenRowForDocument(documentKey ?? this.pv.view.soleDocumentKey ?? '', row);
   }
   onDidMaterialize(cb: () => void): () => void {
@@ -93,43 +92,13 @@ export class MultiBufferDocument implements TextEditorSource {
     this.pv.endUserAction();
   }
 
-  // --- folds + translation (delegate to the PV; folding is off, mostly inert) -
-  foldScreenRange(_buffer: SourceBuffer, viewStart: number, viewEnd: number, placeholder: string): any {
-    return this.pv.fold(viewStart, viewEnd, placeholder);
-  }
-  unfoldScreen(_buffer: SourceBuffer, fold: any): void {
-    this.pv.unfold(fold);
-  }
-  foldPlaceholderRange(_buffer: SourceBuffer, fold: any): [number, number] {
-    return this.pv.foldPlaceholderRange(fold);
-  }
-  foldDocumentText(_buffer: SourceBuffer, fold: any): string {
-    return this.pv.foldDocumentText(fold);
-  }
-  foldDocumentRowSpan(_buffer: SourceBuffer, fold: any): [number, number] {
-    return this.pv.foldDocumentRowSpan(fold);
-  }
-  isFoldAlive(fold: any): boolean {
-    return this.pv.isFoldAlive(fold);
-  }
-  documentPointFromScreen(_buffer: SourceBuffer, point: Point): Point {
-    return this.pv.documentPointFromScreen(point);
-  }
-  screenPointFromDocument(_buffer: SourceBuffer, point: Point): Point {
-    return this.pv.screenPointFromDocument(point);
-  }
-  documentLineForScreenLine(_buffer: SourceBuffer, viewLine: number): number {
-    return this.pv.documentLineForScreenLine(viewLine);
-  }
-  screenLineForDocumentLine(_buffer: SourceBuffer, modelLine: number): number {
-    return this.pv.screenLineForDocumentLine(modelLine);
-  }
+  // --- document (unfolded source) reads (folding is off for a multibuffer) ----
+  // The fold/translation surface lives on the `Screen` the surface built (`this.pv`); the editor
+  // reaches it directly. A multibuffer keeps `buffer == screen` (folding off), so its "document"
+  // line count / text is the stitched view buffer itself.
   documentLineText(row: number): string {
     return this.pv.documentLineText(row);
   }
-  // A multibuffer keeps `buffer == screen` (folding off), so its "document" line count / text is
-  // the stitched view buffer itself. Inert for the editor's buffer↔screen transform (which is
-  // gated off for multibuffer) — present to satisfy the FoldHost contract.
   documentLineCount(): number {
     return this.pv.buffer.getLineCount();
   }

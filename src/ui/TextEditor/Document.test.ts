@@ -8,20 +8,19 @@ import { Point } from '../../text/Point.ts';
 Gtk.init();
 
 const asIter = (res: any): any => (Array.isArray(res) ? res[res.length - 1] : res);
-const insertAt = (buf: any, off: number, text: string) => buf.insert(asIter(buf.getIterAtOffset(off)), text, -1);
-const deleteRange = (buf: any, a: number, b: number) =>
-  buf.delete(asIter(buf.getIterAtOffset(a)), asIter(buf.getIterAtOffset(b)));
-const textOf = (buf: any): string => buf.getText(buf.getStartIter(), buf.getEndIter(), true);
+// The test handles `a`/`b` are view `Screen`s; the helpers reach the backing GtkSource.Buffer.
+const insertAt = (s: any, off: number, text: string) => s.buffer.insert(asIter(s.buffer.getIterAtOffset(off)), text, -1);
+const deleteRange = (s: any, a: number, b: number) =>
+  s.buffer.delete(asIter(s.buffer.getIterAtOffset(a)), asIter(s.buffer.getIterAtOffset(b)));
+const textOf = (s: any): string => s.buffer.getText(s.buffer.getStartIter(), s.buffer.getEndIter(), true);
 
 function setup(text: string) {
   const doc = new Document();
   doc.setText(text);
-  const aScreen = doc.createView();
-  const bScreen = doc.createView();
-  const a = aScreen.buffer;
-  const b = bScreen.buffer;
+  const a = doc.createView();
+  const b = doc.createView();
   const synced = () => textOf(a) === doc.getText() && textOf(b) === doc.getText();
-  return { doc, a, b, aScreen, bScreen, synced };
+  return { doc, a, b, synced };
 }
 
 test('a new view is seeded with the current document text', () => {
@@ -68,8 +67,8 @@ test('setText re-syncs every view and clears modified', () => {
 });
 
 test('removed views stop receiving edits', () => {
-  const { doc, a, b, bScreen } = setup('hi\n');
-  doc.removeView(bScreen);
+  const { doc, a, b } = setup('hi\n');
+  doc.removeView(b);
   insertAt(a, 0, 'Q');
   assert.equal(doc.getText(), 'Qhi\n');
   assert.equal(textOf(a), 'Qhi\n');
@@ -106,22 +105,22 @@ const FOLD = [8, 14] as const; // collapse `\n  X,\n` (after `{`, up to `}`)
 
 test('foldScreenRange collapses the view and leaves the model + other views intact', () => {
   const { doc, a, b } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  a.fold(FOLD[0], FOLD[1], '[...]');
   assert.equal(textOf(a), "import {[...]} from './git.ts';\n", 'view A is collapsed to one line');
   assert.equal(doc.getText(), SAMPLE, 'model untouched');
   assert.equal(textOf(b), SAMPLE, 'other view untouched');
 });
 
 test('unfoldScreen restores the collapsed text exactly', () => {
-  const { doc, a } = setup(SAMPLE);
-  const fold = doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
-  doc.unfoldScreen(a, fold!);
+  const { a } = setup(SAMPLE);
+  const fold = a.fold(FOLD[0], FOLD[1], '[...]');
+  a.unfold(fold!);
   assert.equal(textOf(a), SAMPLE);
 });
 
 test('an edit before a fold maps to the right model offset', () => {
   const { doc, a, b } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  a.fold(FOLD[0], FOLD[1], '[...]');
   insertAt(a, 0, 'Q');
   assert.equal(doc.getText(), 'Q' + SAMPLE);
   assert.equal(textOf(a), "Qimport {[...]} from './git.ts';\n");
@@ -130,7 +129,7 @@ test('an edit before a fold maps to the right model offset', () => {
 
 test('an edit after a fold maps past the collapsed body', () => {
   const { doc, a } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  a.fold(FOLD[0], FOLD[1], '[...]');
   insertAt(a, textOf(a).length - 1, '!'); // just before the trailing newline
   assert.equal(textOf(a), "import {[...]} from './git.ts';!\n");
   assert.equal(doc.getText(), "import {\n  X,\n} from './git.ts';!\n");
@@ -138,42 +137,42 @@ test('an edit after a fold maps past the collapsed body', () => {
 
 test('a plain view edit propagates into a folded view, kept collapsed', () => {
   const { doc, a, b } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  a.fold(FOLD[0], FOLD[1], '[...]');
   insertAt(b, 0, 'Z');
   assert.equal(doc.getText(), 'Z' + SAMPLE);
   assert.equal(textOf(a), "Zimport {[...]} from './git.ts';\n");
 });
 
 test('documentPointFromScreen maps a caret after a fold to the file line', () => {
-  const { doc, a } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  const { a } = setup(SAMPLE);
+  a.fold(FOLD[0], FOLD[1], '[...]');
   // view line 0 = "import {[...]} from './git.ts';" — the `}` is at view column 13.
-  const p = doc.documentPointFromScreen(a, new Point(0, 13));
+  const p = a.documentPointFromScreen(new Point(0, 13));
   assert.equal(p.row, 2, 'maps onto the model footer line');
   assert.equal(p.column, 0, 'the `}` is column 0 on model line 2');
 });
 
 test('documentLineForScreenLine reflects the collapsed lines', () => {
-  const { doc, a } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  const { a } = setup(SAMPLE);
+  a.fold(FOLD[0], FOLD[1], '[...]');
   // view line 0 holds model line 0; view line 1 (after the fold) is model line 3 (the blank).
-  assert.equal(doc.documentLineForScreenLine(a, 0), 0);
-  assert.equal(doc.documentLineForScreenLine(a, 1), 3);
+  assert.equal(a.documentLineForScreenLine(0), 0);
+  assert.equal(a.documentLineForScreenLine(1), 3);
 });
 
 test('unfold after edits around the fold restores the live model text', () => {
   const { doc, a, b } = setup(SAMPLE);
-  const fold = doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  const fold = a.fold(FOLD[0], FOLD[1], '[...]');
   insertAt(b, 0, 'Z');                 // before the fold, via the other view
   insertAt(b, doc.getText().length - 1, '!'); // after the fold
-  doc.unfoldScreen(a, fold!);
+  a.unfold(fold!);
   assert.equal(textOf(a), doc.getText(), 'unfolded view equals the live model');
   assert.equal(doc.getText(), "Zimport {\n  X,\n} from './git.ts';!\n");
 });
 
 test('600 edits with a fold present never desync the model', () => {
   const { doc, a, b } = setup('the quick brown fox jumps over the lazy dog\n');
-  const fold = doc.foldScreenRange(a, 4, 16, '[...]'); // collapse "quick brown " in view A
+  const fold = a.fold(4, 16, '[...]'); // collapse "quick brown " in view A
   let ok = true;
   let why = '';
   for (let i = 0; i < 600 && ok; i++) {
@@ -190,57 +189,57 @@ test('600 edits with a fold present never desync the model', () => {
   }
   assert.ok(ok, why || 'B mirrored the model across 600 edits');
   // and the fold still round-trips
-  doc.unfoldScreen(a, fold!);
+  a.unfold(fold!);
   assert.equal(textOf(a), doc.getText(), 'A unfolds to the live model after the fuzz');
 });
 
 // --- Translation round-trips + nested folds ----------------------------------
 
 test('screenPointFromDocument inverts documentPointFromScreen across a fold (boundary guard)', () => {
-  const { doc, a } = setup(SAMPLE);
-  doc.foldScreenRange(a, FOLD[0], FOLD[1], '[...]');
+  const { a } = setup(SAMPLE);
+  a.fold(FOLD[0], FOLD[1], '[...]');
   const mp = new Point(3, 0); // a model line below the fold
-  const vp = doc.screenPointFromDocument(a, mp);
-  assert.deepEqual(doc.documentPointFromScreen(a, vp).toArray(), mp.toArray(), 'point round-trips');
-  assert.equal(doc.documentLineForScreenLine(a, doc.screenLineForDocumentLine(a, 3)), 3, 'line round-trips');
+  const vp = a.screenPointFromDocument(mp);
+  assert.deepEqual(a.documentPointFromScreen(vp).toArray(), mp.toArray(), 'point round-trips');
+  assert.equal(a.documentLineForScreenLine(a.screenLineForDocumentLine(3)), 3, 'line round-trips');
 });
 
 test('two folds compose: edits stay in sync and both unfold to the model', () => {
   const { doc, a, b } = setup('A {\n 1\n}\nB {\n 2\n}\n');
   const t = () => textOf(a);
-  const fA = doc.foldScreenRange(a, t().indexOf('A {') + 3, t().indexOf('}'), '[3]');
+  const fA = a.fold(t().indexOf('A {') + 3, t().indexOf('}'), '[3]');
   const bOpen = t().indexOf('B {') + 3;
-  const fB = doc.foldScreenRange(a, bOpen, t().indexOf('}', bOpen), '[3]');
+  const fB = a.fold(bOpen, t().indexOf('}', bOpen), '[3]');
   assert.equal(t(), 'A {[3]}\nB {[3]}\n');
   assert.equal(doc.getText(), 'A {\n 1\n}\nB {\n 2\n}\n', 'model intact');
   insertAt(b, 0, 'Z'); // edit before both folds via the plain view
   assert.equal(doc.getText(), 'ZA {\n 1\n}\nB {\n 2\n}\n');
   assert.equal(t(), 'ZA {[3]}\nB {[3]}\n', 'folds tracked the edit');
-  doc.unfoldScreen(a, fB!);
-  doc.unfoldScreen(a, fA!);
+  a.unfold(fB!);
+  a.unfold(fA!);
   assert.equal(t(), doc.getText());
 });
 
 test('folding a region that already contains a fold (nesting) keeps the model intact', () => {
   const { doc, a } = setup('out {\n in {\n  x\n }\n}\n');
   const t = () => textOf(a);
-  doc.foldScreenRange(a, t().indexOf('in {') + 4, t().indexOf('}'), '[3]'); // fold inner
+  a.fold(t().indexOf('in {') + 4, t().indexOf('}'), '[3]'); // fold inner
   assert.equal(t(), 'out {\n in {[3]}\n}\n');
   // now fold outer — its body contains the inner placeholder
-  const fOuter = doc.foldScreenRange(a, t().indexOf('out {') + 5, t().lastIndexOf('}'), '[5]');
+  const fOuter = a.fold(t().indexOf('out {') + 5, t().lastIndexOf('}'), '[5]');
   assert.equal(t(), 'out {[5]}\n', 'outer collapses, subsuming the inner fold');
   assert.equal(doc.getText(), 'out {\n in {\n  x\n }\n}\n', 'model never corrupted by nesting');
   insertAt(a, 0, 'Z'); // edit after nesting still translates correctly
   assert.equal(doc.getText(), 'Zout {\n in {\n  x\n }\n}\n');
-  doc.unfoldScreen(a, fOuter!);
+  a.unfold(fOuter!);
   assert.equal(t(), 'Zout {\n in {\n  x\n }\n}\n', 'unfolding the outer restores the full body');
 });
 
 test('an edit after a nested (subsumed) fold lands at the right model offset', () => {
   const { doc, a } = setup('out {\n in {\n  x\n }\n}\n');
   const t = () => textOf(a);
-  doc.foldScreenRange(a, t().indexOf('in {') + 4, t().indexOf('}'), '[3]');
-  doc.foldScreenRange(a, t().indexOf('out {') + 5, t().lastIndexOf('}'), '[5]');
+  a.fold(t().indexOf('in {') + 4, t().indexOf('}'), '[3]');
+  a.fold(t().indexOf('out {') + 5, t().lastIndexOf('}'), '[5]');
   // view is 'out {[5]}\n'; insert right after the `}` (before the trailing newline)
   insertAt(a, t().length - 1, '!');
   assert.equal(doc.getText(), 'out {\n in {\n  x\n }\n}!\n', 'edit maps past the FULL body, no double-count');

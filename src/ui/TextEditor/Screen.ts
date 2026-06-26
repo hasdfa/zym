@@ -435,7 +435,7 @@ export class Screen {
     });
   }
 
-  // --- screen ↔ document translation (the FoldHost surface SyntaxController consumes) --------
+  // --- screen ↔ document translation (the ScreenProjection surface SyntaxController consumes) -
   // Single-document only (the editor's fold host is per-file): the offset transform composes
   // the fold collapse and buffer offset == document offset. A non-single-document projection
   // returns identity (its painter uses the SyntaxProjection path, not this).

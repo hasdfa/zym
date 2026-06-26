@@ -98,7 +98,7 @@ export interface FunctionRange {
 /**
  * How EditorModel reaches the single-document fold projection — the real `buffer ↔ screen`
  * transform (see docs/text-editor/coordinates.md). For a single-file editor `document == buffer`,
- * so these `document`-named translators (shared with the LSP/gutter `FoldHost` surface) ARE the
+ * so these `document`-named translators (shared with the LSP/gutter `ScreenProjection` surface) ARE the
  * editor's `buffer` translators: `screen` is the collapsed view buffer, `buffer` the unfolded
  * source. Placeholder ranges are atomic to the cursor, editing one reveals it, and search runs
  * over the unfolded document. Only wired for single-document editors — a multibuffer keeps

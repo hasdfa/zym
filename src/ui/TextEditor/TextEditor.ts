@@ -1190,7 +1190,7 @@ export class TextEditor implements DocumentHost {
    *  primitive's marks across edits; the editor re-projects the set only on a re-materialize. */
   blockDecorations(): BlockDecorationSet {
     const set = new BlockDecorationSet(this.blockDecorationController, (anchor) =>
-      'viewRow' in anchor ? anchor.viewRow : this.document.screenRowForDocument(this.buffer, anchor.documentKey, anchor.row),
+      'viewRow' in anchor ? anchor.viewRow : this.document.screenRowForDocument(this.screen, anchor.documentKey, anchor.row),
     );
     this.decorationSets.push(set);
     this.decorationMaterializeSub ??= this.document.onDidMaterialize(() => {

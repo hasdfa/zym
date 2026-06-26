@@ -9,7 +9,6 @@
  *   - `MultiBufferDocument` — N sources stitched through one `Screen` (the search-results
  *     / continuous-diff surfaces). `isMultiSource` is true; the file/LSP bits are inert.
  */
-import type { SourceBuffer } from '../../gi.ts';
 import type { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import type { SyntaxProjection } from '../../syntax/SyntaxProjection.ts';
 import type { Point } from '../../text/Point.ts';
@@ -32,10 +31,10 @@ export interface TextEditorSource extends UndoTarget {
   readonly syntaxProjection: SyntaxProjection | null;
 
   // --- block-decoration anchoring (the declarative BlockDecorationSet) ------
-  /** The view row currently showing source `(documentKey, row)` in `buffer`'s view, or null when it
+  /** The view row currently showing source `(documentKey, row)` in `screen`, or null when it
    *  isn't shown (collapsed / off the projection). `documentKey` omitted → the sole source (single
    *  file). Projects a block decoration's source anchor onto its view line. */
-  screenRowForDocument(buffer: SourceBuffer, documentKey: string | undefined, row: number): number | null;
+  screenRowForDocument(screen: Screen, documentKey: string | undefined, row: number): number | null;
   /** Fired after a view buffer is re-materialized (`setText` — initial / rebuild / reload), the one
    *  event that drops block-decoration marks, so the editor can re-project anchored decorations.
    *  Returns an unsubscribe. */

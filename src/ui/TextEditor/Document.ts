@@ -81,11 +81,11 @@ export class Document implements TextEditorSource {
 
   // The headless authority: text + the single undo stack. Never attached to a view.
   private readonly model: SourceBuffer;
-  // Each open view onto this document, keyed by its view buffer. A Screen owns the
-  // view buffer + its sync (write-through view→model, reverse-sync model→view) + folds, over
-  // a single full-file editable segment of the model (the identity case). The Document is
-  // just the shared source.
-  private readonly pvs = new Map<SourceBuffer, Screen>();
+  // Each open view onto this document. A Screen owns the view buffer + its sync (write-through
+  // view→model, reverse-sync model→view) + folds, over a single full-file editable segment of
+  // the model (the identity case). The Document is just the shared source; it holds the Screens
+  // only to mirror model edits into every view — it never looks one up by buffer.
+  private readonly screens = new Set<Screen>();
   private syncing = false;
 
   // The shared tree-sitter parse for this document (model coords), created lazily on
@@ -192,12 +192,12 @@ export class Document implements TextEditorSource {
       // Drive the bulk replace explicitly: suspend each view's reverse-sync so the
       // whole-buffer delete+insert isn't mirrored edit-by-edit, replace the model, then
       // rebuild each view from the new model (which clears folds + re-materializes).
-      for (const pv of this.pvs.values()) pv.suspend();
+      for (const screen of this.screens) screen.suspend();
       this.model.setText(text, -1);
       const items = [this.fullFileItem()];
-      for (const pv of this.pvs.values()) {
-        pv.resume();
-        pv.rebuild(items);
+      for (const screen of this.screens) {
+        screen.resume();
+        screen.rebuild(items);
       }
     } finally {
       this.syncing = false;
@@ -243,17 +243,17 @@ export class Document implements TextEditorSource {
   createView(): Screen {
     const screen = new Screen([this.fullFileItem()], new Map([[SOURCE_KEY, this.model]]));
     screen.buffer.setHighlightSyntax(true); // the painter turns this off once it owns highlighting
-    this.pvs.set(screen.buffer, screen);
+    this.screens.add(screen);
     return screen;
   }
 
   removeView(screen: Screen): void {
     screen.dispose();
-    this.pvs.delete(screen.buffer);
+    this.screens.delete(screen);
   }
 
   get viewCount(): number {
-    return this.pvs.size;
+    return this.screens.size;
   }
 
   // --- Hosts (the active view's reactions) -----------------------------------
@@ -322,14 +322,11 @@ export class Document implements TextEditorSource {
   }
 
   // --- View sync + folds (delegated to each view's Screen) -----------
-  // Each view is a Screen over the model (one full-file editable segment — the
-  // identity case): it owns write-through (view→model), reverse-sync (model→view), and its
-  // folds. The Document forwards the FoldHost + translation surface SyntaxController /
-  // TextEditor use to the PV for the given view buffer (identity when the view has no folds).
-
-  private pvFor(buffer: SourceBuffer): Screen | null {
-    return this.pvs.get(buffer) ?? null;
-  }
+  // Each view is a Screen over the model (one full-file editable segment — the identity case):
+  // it owns write-through (view→model), reverse-sync (model→view), and its folds. The fold +
+  // document↔screen translation surface (`ScreenProjection`) lives on the Screen; consumers hold
+  // it directly (see TextEditor), so the Document no longer routes fold calls by view buffer. The
+  // Document keeps only the document-level (unfolded) text reads, identical across all views.
 
   /** One full-file editable segment over the model — the normal-editor projection. `endRow`
    *  tracks the model's current last line (a fresh item is built on each (re)materialize). */
@@ -344,50 +341,6 @@ export class Document implements TextEditorSource {
         kind: 'real',
       },
     };
-  }
-
-  /** Collapse a screen range to `placeholder`; returns the fold handle (opaque to callers). */
-  foldScreenRange(buffer: SourceBuffer, screenStart: number, screenEnd: number, placeholder: string): any {
-    return this.pvFor(buffer)?.fold(screenStart, screenEnd, placeholder) ?? null;
-  }
-
-  /** Expand a fold (restore its collapsed text). */
-  unfoldScreen(buffer: SourceBuffer, fold: any): void {
-    this.pvFor(buffer)?.unfold(fold);
-  }
-
-  /** The live [start, end) placeholder offsets of `fold` in its view buffer. */
-  foldPlaceholderRange(buffer: SourceBuffer, fold: any): [number, number] {
-    return this.pvFor(buffer)?.foldPlaceholderRange(fold) ?? [0, 0];
-  }
-
-  /** The document text a fold currently stands in for (for search-reveal matching). */
-  foldDocumentText(buffer: SourceBuffer, fold: any): string {
-    return this.pvFor(buffer)?.foldDocumentText(fold) ?? '';
-  }
-
-  /** The DOCUMENT row span `[startRow, endRow]` a fold covers — for the vim buffer-space fold
-   *  motions (j/k treat a closed fold as one line). */
-  foldDocumentRowSpan(buffer: SourceBuffer, fold: any): [number, number] {
-    return this.pvFor(buffer)?.foldDocumentRowSpan(fold) ?? [0, 0];
-  }
-
-  /** Whether a fold handle is still live (not subsumed by an enclosing fold). */
-  isFoldAlive(fold: any): boolean {
-    if (!fold) return false;
-    for (const pv of this.pvs.values()) if (pv.isFoldAlive(fold)) return true;
-    return false;
-  }
-
-  /** Translate a SCREEN caret position to DOCUMENT space (folds shift lines + columns) — for LSP. */
-  documentPointFromScreen(buffer: SourceBuffer, point: Point): Point {
-    return this.pvFor(buffer)?.documentPointFromScreen(point) ?? point;
-  }
-
-  /** Translate a DOCUMENT caret position to SCREEN space (a position inside a fold → its
-   *  placeholder). For rendering LSP results (diagnostics, inlay hints) on the collapsed view. */
-  screenPointFromDocument(buffer: SourceBuffer, point: Point): Point {
-    return this.pvFor(buffer)?.screenPointFromDocument(point) ?? point;
   }
 
   /** Text of DOCUMENT row `row` (no newline) — for LSP column-encoding of document ranges. */
@@ -409,20 +362,10 @@ export class Document implements TextEditorSource {
     return this.model.getText(a, b, true);
   }
 
-  /** Document line (0-based) shown at SCREEN line `screenLine` — for the line-number gutter. */
-  documentLineForScreenLine(buffer: SourceBuffer, screenLine: number): number {
-    return this.pvFor(buffer)?.documentLineForScreenLine(screenLine) ?? screenLine;
-  }
-
-  /** SCREEN line showing document line `documentLine` (its start) — for diagnostics/decorations. */
-  screenLineForDocumentLine(buffer: SourceBuffer, documentLine: number): number {
-    return this.pvFor(buffer)?.screenLineForDocumentLine(documentLine) ?? documentLine;
-  }
-
   // --- block-decoration anchoring (single document: the file is the sole document) -
   /** The screen row showing document `row` — `documentKey` is ignored (one document). Fold-aware. */
-  screenRowForDocument(buffer: SourceBuffer, _documentKey: string | undefined, row: number): number | null {
-    return this.screenLineForDocumentLine(buffer, row);
+  screenRowForDocument(screen: Screen, _documentKey: string | undefined, row: number): number | null {
+    return screen.screenLineForDocumentLine(row);
   }
   /** Fired when a view re-materializes (a file load/reload via `setText`), which drops marks. */
   private readonly materializeHandlers = new Set<() => void>();
@@ -461,8 +404,8 @@ export class Document implements TextEditorSource {
     this.subs.dispose(); // sever the model-buffer handlers + the file watch (its nested scope)
     if (this.deletionCheckTimer) clearTimeout(this.deletionCheckTimer);
     this.deletionCheckTimer = null;
-    for (const pv of this.pvs.values()) pv.dispose(); // detach any view still attached
-    this.pvs.clear();
+    for (const screen of this.screens) screen.dispose(); // detach any view still attached
+    this.screens.clear();
     this._syntax?.dispose(); // frees the tree + injection parsers; detaches model signals
     this._syntax = null;
     // Only close an LSP doc we actually opened — a lazily-assigned, never-shown document
