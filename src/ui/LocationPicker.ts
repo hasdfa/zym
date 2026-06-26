@@ -103,7 +103,6 @@ function createSourcePreview(): {
   show: (location: PickerLocation | null) => void;
 } {
   const root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
-  root.setName('PickerPreview');
   root.addCssClass('PickerPreview');
 
   const editor = new TextEditor({ buffer: { readOnly: true, initialText: '', folding: false } });

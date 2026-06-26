@@ -47,7 +47,6 @@ export class PluginManagerPanel {
     viewport.setChild(clamp);
 
     this.root = new Gtk.ScrolledWindow();
-    this.root.setName('PluginManagerPanel');
     this.root.addCssClass('PluginManagerPanel');
     this.root.setChild(viewport);
     this.root.setHexpand(true);

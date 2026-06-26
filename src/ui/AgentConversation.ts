@@ -496,7 +496,6 @@ export class AgentConversation implements Agent {
 
     // A NavigationView so a subagent's transcript can push its own page.
     this.root = new Adw.NavigationView();
-    this.root.setName('AgentConversation');
     this.root.addCssClass('AgentConversation');
     this.root.add(Adw.NavigationPage.new(mainBox, 'Conversation'));
 

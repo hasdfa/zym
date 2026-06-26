@@ -29,7 +29,6 @@ export class StickyListPanel {
   /** `title` heads the panel; extra `cssClasses` layer onto the base styling. */
   constructor(title: string, ...cssClasses: string[]) {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('StickyListPanel');
     this.root.addCssClass('StickyListPanel');
     for (const c of cssClasses) this.root.addCssClass(c);
     this.root.setVisible(false);

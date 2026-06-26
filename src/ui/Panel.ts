@@ -24,23 +24,23 @@ import { welcomePanel } from './WelcomePanel.ts';
 // installed unconditionally here rather than with the theme chrome (which only
 // applies when the theme defines its own background).
 addStyles(/* css */`
-  #Panel tabbar { border-bottom: 1px solid var(--border-color); }
-  #Panel tabbar > revealer > box { padding: 0; }
-  #Panel tabbar tabbox { 
+  .Panel tabbar { border-bottom: 1px solid var(--border-color); }
+  .Panel tabbar > revealer > box { padding: 0; }
+  .Panel tabbar tabbox { 
     padding: 0;
     background-color: var(--window-bg-color);
   }
-  #Panel tab {
+  .Panel tab {
     border-radius: 0;
   }
-  #Panel tab:selected {
+  .Panel tab:selected {
     background-color: alpha(white, 0.05);
   }
-  #Panel tab .tab-title {
+  .Panel tab .tab-title {
     max-height: 10px;
     transform: scale(1);
   }
-  #Panel tabboxchild {
+  .Panel tabboxchild {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
     border-bottom-left-radius: 0;
@@ -152,7 +152,6 @@ export class Panel {
     this.stack.addNamed(content, 'content');
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('Panel'); // selector identity for command/keymap + CSS (.Panel)
     this.root.addCssClass('Panel');
     // A panel accepts keyboard focus on its top-level widget, so it can take focus
     // (and steal the active state) even with no focusable content — e.g. an empty
@@ -204,7 +203,6 @@ export class Panel {
   // covers the whole area).
   private buildEmptyState(): Widget {
     const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    outer.setName('PanelEmptyState'); // CSS identity (.PanelEmptyState) — paints the fill
     outer.addCssClass('PanelEmptyState');
     outer.setHexpand(true);
     outer.setVexpand(true);

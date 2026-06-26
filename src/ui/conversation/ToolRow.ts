@@ -86,7 +86,6 @@ export class ToolRow {
 
   constructor(opts: ToolRowOptions) {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.root.setName('ToolRow');
     this.root.addCssClass('ToolRow');
     // The transcript wraps this in a .transcript-entry-tool box (Transcript.appendToolEntry);
     // the row itself carries no entry class.

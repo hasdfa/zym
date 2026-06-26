@@ -83,13 +83,11 @@ function iconWidget(parts: RowParts): InstanceType<typeof Gtk.Label> | null {
 function withIconColumn(parts: RowParts, content: InstanceType<typeof Gtk.Widget>): InstanceType<typeof Gtk.Widget> {
   const icon = iconWidget(parts);
   if (!icon) {
-    content.setName('PickerRow');
     content.addCssClass('PickerRow');
     if (parts.dim) content.setOpacity(0.4);
     return content;
   }
   const row = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
-  row.setName('PickerRow');
   row.addCssClass('PickerRow');
   row.append(icon);
   row.append(content);

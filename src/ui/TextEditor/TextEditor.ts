@@ -611,7 +611,6 @@ export class TextEditor implements DocumentHost {
     // The inner view is the `.TextEditor` selector subject (it holds focus + the
     // mode CSS classes — see EditorModel); the wrapping area gets its own name so
     // the two don't both answer to `.TextEditor`.
-    this.root.setName('TextEditorArea');
     this.root.addCssClass('TextEditorArea');
 
     this.installFoldCommands();

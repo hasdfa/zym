@@ -90,7 +90,7 @@ addStyles(`
     border-bottom: 1px solid var(--border-color);
   }
   .GitLogView .gitlog-empty { color: var(--t-ui-text-muted); padding: 12px; }
-  #GitLogList row {
+  .GitLogList row {
     padding: calc(2 * var(--t-spacing));
     border-bottom: 1px solid var(--border-color);
   }
@@ -125,8 +125,8 @@ addStyles(`
     border-color: alpha(var(--t-ui-status-success), 0.4);
   }
   /* Selected row: full selection color while focused, a muted version otherwise. */
-  #GitLogList row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
-  .GitLogView:focus-within #GitLogList row:selected { background-color: var(--t-ui-surface-selected); }
+  .GitLogList row:selected { background-color: alpha(var(--t-ui-surface-selected), 0.4); }
+  .GitLogView:focus-within .GitLogList row:selected { background-color: var(--t-ui-surface-selected); }
   /* Right pane: the embedded diff (or a placeholder while nothing is selected). */
   .GitLogView .gitlog-diff-placeholder { color: var(--t-ui-text-muted); padding: 12px; }
 `);
@@ -199,7 +199,6 @@ export class GitLogView {
     // --- Search field (between header and body): live `file:`/`author:`/word filter,
     // wrapped in a padded, bottom-bordered box that sets it off from the list.
     this.search = new Gtk.SearchEntry({ placeholderText: 'file:path author:name search…' });
-    this.search.setName('GitLogSearch'); // selector identity for the entry's own keymap
     this.search.addCssClass('GitLogSearch');
     this.search.addCssClass('has-text-input'); // release the `space` leader so it types
     this.search.on('search-changed', () => this.applyFilter());
@@ -210,7 +209,6 @@ export class GitLogView {
 
     // --- Body: a plain list of commits.
     this.listBox = new Gtk.ListBox();
-    this.listBox.setName('GitLogList'); // selector identity for the list-only keymap + CSS
     this.listBox.addCssClass('GitLogList');
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
     this.listBox.on('row-activated', (row: any) => this.activate(row.getIndex()));
@@ -241,7 +239,6 @@ export class GitLogView {
     // --- One tab, split: list | diff. The list keeps its width on window resize; the
     // diff absorbs the extra space. Neither child collapses to nothing.
     this.root = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.root.setName('GitLogView'); // CSS identity (the list keymap targets .GitLogList)
     this.root.addCssClass('GitLogView');
     this.root.setStartChild(listColumn);
     this.root.setEndChild(this.diffPane);

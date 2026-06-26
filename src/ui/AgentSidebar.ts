@@ -58,7 +58,6 @@ export class AgentSidebar {
     header.packStart(this.title);
 
     this.root = new Adw.ToolbarView();
-    this.root.setName('AgentSidebar'); // selector identity (.AgentSidebar)
     this.root.addCssClass('AgentSidebar');
     this.root.addTopBar(header);
     this.root.setContent(this.stack);

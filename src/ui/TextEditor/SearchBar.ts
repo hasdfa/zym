@@ -60,13 +60,13 @@ addStyles(`
     box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
     padding: 4px;
   }
-  #SearchBar entry { min-height: 0; }
+  .SearchBar entry { min-height: 0; }
   /* The search/replace inputs match the editor's monospace font. */
-  #SearchBar entry > text { font: var(--t-font-monospace); }
+  .SearchBar entry > text { font: var(--t-font-monospace); }
   .SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
   /* Bad regex: tint the entry text. */
-  #SearchBar entry.invalid > text { color: var(--t-ui-status-error); }
-  #SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
+  .SearchBar entry.invalid > text { color: var(--t-ui-status-error); }
+  .SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
   /* Linked search+replace inputs: square the touching corners and merge the
      shared border so the two entries read as one control. */
   .SearchBar .input-group > entry:first-child {
@@ -151,7 +151,6 @@ export class SearchBar {
 
     // One horizontal row: the input group, then the count and option toggles.
     this.panel = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    this.panel.setName('SearchBar');
     this.panel.addCssClass('SearchBar');
     this.panel.setHalign(Gtk.Align.END);
     this.panel.setValign(Gtk.Align.START);

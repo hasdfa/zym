@@ -65,7 +65,6 @@ export class WhichKey {
   private show(pending: PendingBinding[]): void {
     this.hide();
     const grid = new Gtk.Grid({ columnSpacing: 24, rowSpacing: 2 });
-    grid.setName('WhichKey');
     grid.addCssClass('WhichKey');
     grid.setHalign(Gtk.Align.CENTER);
     grid.setValign(Gtk.Align.END);

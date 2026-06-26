@@ -72,7 +72,6 @@ export function welcomePanel(): Widget {
   box.setValign(Gtk.Align.CENTER);
 
   const cat = ImageIcons.CAT_SLEEPING(CAT_ICON_SIZE);
-  cat.setName('PanelEmptyCat'); // CSS identity (.PanelEmptyCat) — recolored like a symbolic icon
   cat.addCssClass('PanelEmptyCat');
   cat.setMarginBottom(20);
   box.append(cat);
@@ -81,7 +80,6 @@ export function welcomePanel(): Widget {
   // right-aligned in column 0, the action left-aligned in column 1, so a clean
   // gutter runs down the middle.
   const grid = new Gtk.Grid();
-  grid.setName('PanelEmptyCheatsheet'); // CSS identity (.PanelEmptyCheatsheet)
   grid.addCssClass('PanelEmptyCheatsheet');
   grid.setRowSpacing(7);
   grid.setColumnSpacing(16);
@@ -108,7 +106,6 @@ export function welcomePanel(): Widget {
 // a clickable link to Kuwasha's sponsorship page (GtkLabel opens the URI itself).
 function buildHelpChildren(): InstanceType<typeof Gtk.Box> {
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-  box.setName('PanelEmptyFooter'); // CSS identity (.PanelEmptyFooter)
   box.addCssClass('PanelEmptyFooter');
   box.setHalign(Gtk.Align.CENTER);
 

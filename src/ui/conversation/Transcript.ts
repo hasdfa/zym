@@ -22,7 +22,7 @@ addStyles(/* css */`
     font-size: 1.05em;
   }
 
-  #Transcript viewport {
+  .Transcript viewport {
     padding: calc(2 * var(--t-spacing)) 0;
   }
 
@@ -91,7 +91,6 @@ export class Transcript {
       child = clamp;
     }
     this.root = new Gtk.ScrolledWindow({ vexpand: true });
-    this.root.setName('Transcript')
     this.root.addCssClass('Transcript');
     this.root.setChild(child);
     this.setupAutoScroll();

@@ -72,7 +72,6 @@ export class KeymapPanel {
     this.grid.setMarginEnd(12);
 
     this.root = new Gtk.ScrolledWindow();
-    this.root.setName('KeymapPanel'); // selector identity for keymap + CSS
     this.root.addCssClass('KeymapPanel');
     this.root.setChild(this.grid);
     this.root.setVexpand(true);

@@ -55,7 +55,6 @@ export class LocationBar {
 
   constructor(cwd: () => string) {
     this.cwd = cwd;
-    this.box.setName('LocationBar');
     this.box.addCssClass('LocationBar');
     this.pathLabel.addCssClass('path');
     this.pathLabel.setEllipsize(Pango.EllipsizeMode.MIDDLE);

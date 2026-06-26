@@ -99,7 +99,6 @@ export class ProjectSearchView {
 
     // --- Row 1: the query entry + the case/word/regex toggles.
     this.entry = new Gtk.SearchEntry({ placeholderText: 'Search the project…' });
-    this.entry.setName('ProjectSearchEntry'); // selector identity for the entry's own keymap
     this.entry.addCssClass('ProjectSearchEntry');
     this.entry.addCssClass('has-text-input'); // release the `space` leader so it types
     this.entry.setHexpand(true);
@@ -148,7 +147,6 @@ export class ProjectSearchView {
     this.content.append(this.status);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('ProjectSearchView');
     this.root.addCssClass('ProjectSearchView');
     this.root.append(header);
     this.root.append(this.content);

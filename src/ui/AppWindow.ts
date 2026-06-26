@@ -407,7 +407,6 @@ export class AppWindow {
     applyNotificationStyles();
 
     this.window = new Adw.ApplicationWindow({ application: app });
-    this.window.setName('AppWindow'); // selector identity for command/keymap rules
     this.window.addCssClass('AppWindow');
     this.window.setTitle(PROJECT_NAME); // OS taskbar label — the project, not the bare "node"
     this.window.setDefaultSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);

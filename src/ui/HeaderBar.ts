@@ -107,7 +107,6 @@ export class HeaderBar {
     });
 
     this.root = new Adw.HeaderBar();
-    this.root.setName('HeaderBar'); // CSS identity (.HeaderBar)
     this.root.addCssClass('HeaderBar');
     // The branch button and the GitHub PR pill are separate controls.
     this.root.packStart(this.branchButton.root);

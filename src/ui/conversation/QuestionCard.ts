@@ -68,7 +68,6 @@ export class QuestionCard {
     this.qs = req.questions;
     this.onAnswer = onAnswer;
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
-    this.root.setName('Question')
     this.root.addCssClass('Question');
     this.root.addCssClass('is-open'); // released on answer; the keymap scopes `space` to .Question.is-open
     this.root.setFocusable(true);

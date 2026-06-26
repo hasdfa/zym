@@ -50,14 +50,14 @@ addStyles(`
   }
   /* Inner widgets paint nothing — the card's background shows through, and rows
      get no min-height so a single match is exactly one row tall. */
-  #CompletionPopup scrolledwindow,
-  #CompletionPopup list,
-  #CompletionPopup row {
+  .CompletionPopup scrolledwindow,
+  .CompletionPopup list,
+  .CompletionPopup row {
     background-color: transparent;
     min-height: 0;
   }
-  #CompletionPopup row { padding: 1px ${ROW_PADDING_PX}px; }
-  #CompletionPopup row:selected { 
+  .CompletionPopup row { padding: 1px ${ROW_PADDING_PX}px; }
+  .CompletionPopup row:selected { 
     border-radius: 0; 
   }
   .CompletionPopup .completion-icon { 
@@ -67,7 +67,7 @@ addStyles(`
   .CompletionPopup .completion-label { font: var(--t-font-monospace); }
   .CompletionPopup .completion-detail { opacity: 0.55; margin-left: 0.5em; }
   .CompletionPopup .completion-description { opacity: 0.45; margin-left: 0.75em; font-size: 0.9em; }
-  #CompletionPopup separator.completion-divider { background-color: var(--border-color); }
+  .CompletionPopup separator.completion-divider { background-color: var(--border-color); }
   .CompletionPopup .completion-doc { padding: 6px 8px; }
 `);
 
@@ -126,7 +126,6 @@ export class CompletionPopup {
     this.docScroller.setVisible(false);
 
     this.panel = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.panel.setName('CompletionPopup');
     this.panel.addCssClass('CompletionPopup');
     this.panel.setHalign(Gtk.Align.START);
     this.panel.setValign(Gtk.Align.START);

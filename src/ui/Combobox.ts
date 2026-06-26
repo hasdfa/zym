@@ -79,7 +79,6 @@ export class Combobox {
     // Single entry, always in the layout. In closed state it has `combobox-button`
     // so it looks like a button (no caret). Opening removes that class.
     this.entry = new Gtk.Entry();
-    this.entry.setName('ComboboxEntry');
     this.entry.addCssClass('ComboboxEntry');
     this.entry.addCssClass('has-text-input');
     this.entry.addCssClass('combobox-button');
@@ -87,12 +86,10 @@ export class Combobox {
     this.entry.setIconActivatable(Gtk.EntryIconPosition.SECONDARY, false);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('Combobox');
     this.root.addCssClass('Combobox');
     this.root.append(this.entry);
 
     this.listBox = new Gtk.ListBox();
-    this.listBox.setName('ComboboxList');
     this.listBox.addCssClass('ComboboxList');
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
     this.listBox.setFocusable(false); // the entry keeps focus; we drive the highlight
@@ -103,7 +100,6 @@ export class Combobox {
     this.scrolled.setPolicy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
 
     this.popover = new Gtk.Popover();
-    this.popover.setName('ComboboxPopover');
     this.popover.addCssClass('ComboboxPopover');
     this.popover.setAutohide(false); // keep focus on the entry while filtering
     this.popover.setHasArrow(false);
@@ -275,7 +271,6 @@ export class Combobox {
 
   private buildItem(opt: ComboOption): InstanceType<typeof Gtk.ListBoxRow> {
     const label = new Gtk.Label({ xalign: 0 });
-    label.setName('ComboboxItem');
     label.addCssClass('ComboboxItem');
     label.setText(opt.label);
     label.setEllipsize(Pango.EllipsizeMode.END); // keep rows within the trigger width

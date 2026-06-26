@@ -54,7 +54,7 @@ const DIAG_ANIM_MS = 200;
 // secondary-text size (see docs/styling.md), matching GitBranchButton's counts.
 // Both buttons get the same horizontal padding so the pill and the icon match.
 addStyles(`
-  #WorkbenchStatus button { min-width: 0; padding-left: 6px; padding-right: 6px; }
+  .WorkbenchStatus button { min-width: 0; padding-left: 6px; padding-right: 6px; }
   .WorkbenchStatus .zym-lsp-ready { color: var(--t-ui-text-muted); }
   .WorkbenchStatus .zym-lsp-failed { color: var(--t-ui-status-error); }
   .WorkbenchStatus .zym-status-count { font-size: var(--t-font-ui-size-small); }
@@ -127,7 +127,6 @@ export class WorkbenchStatus {
     this.lspButton.on('clicked', () => options.onOpenLog());
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.root.setName('WorkbenchStatus'); // selector identity for command/keymap rules
     this.root.addCssClass('WorkbenchStatus');
     this.root.addCssClass('linked'); // join the two buttons into one grouped control
     this.root.append(this.diagnosticsButton);

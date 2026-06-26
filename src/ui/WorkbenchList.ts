@@ -149,7 +149,6 @@ export class WorkbenchList {
     // scrollable workbench list, so the bar matches the window header beside it and
     // the view manages the seam (and undershoot shadow) between header and list.
     this.root = new Adw.ToolbarView();
-    this.root.setName('WorkbenchList'); // selector identity + CSS (.WorkbenchList)
     this.root.addCssClass('WorkbenchList');
     this.root.addTopBar(this.buildHeader());
 
@@ -309,7 +308,6 @@ export class WorkbenchList {
     revealer.setChild(content);
 
     const row = new Gtk.ListBoxRow();
-    row.setName('WorkbenchRow')
     row.addCssClass('WorkbenchRow');
     row.setChild(revealer);
     return { entry, row, revealer, unsubs, removing: false };

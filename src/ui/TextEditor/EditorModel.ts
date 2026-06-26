@@ -219,7 +219,6 @@ export class EditorModel {
     // Selector identity for command/keymap rules: the view is the focused widget
     // and carries the mode CSS classes, so keymaps target it as `.TextEditor`
     // (e.g. `.TextEditor.normal-mode`) instead of the raw `GtkSourceView` type tag.
-    this.view.setName('TextEditor');
     this.view.addCssClass('TextEditor');
     this.selection = new Selection(this);
     // Indent with spaces by default; the host overrides via `setIndentation`

@@ -77,7 +77,6 @@ export class EditorPopover {
     this.child = child;
     this.chrome = opts.chrome ?? 0;
     this.popover = new Gtk.Popover();
-    this.popover.setName('EditorPopover'); // styling hook: .EditorPopover (see styling.md)
     this.popover.addCssClass('EditorPopover');
     this.popover.setChild(child);
     this.popover.setAutohide(false); // don't grab — dismissal is driven by the editor

@@ -27,8 +27,8 @@ addStyles(`
   }
   .DiffCommentInput { margin: var(--t-spacing) calc(2 * var(--t-spacing)); }
   /* Let the card background show through the editor. */
-  #DiffCommentInput textview,
-  #DiffCommentInput textview text { background: transparent; }
+  .DiffCommentInput textview,
+  .DiffCommentInput textview text { background: transparent; }
   /* Footer text — muted, sits below the body. The card's "Pending" label uses the UI font. */
   .diff-comment-hint { color: var(--t-ui-text-muted); padding-top: 4px; }
   .diff-comment-card-label { color: var(--t-ui-editor-foreground); }
@@ -131,7 +131,6 @@ export class DiffCommentBox {
     footer.append(this.badge);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('DiffCommentInput');
     this.root.addCssClass('DiffCommentInput');
     this.root.addCssClass('diff-comment-box');
     this.root.append(this.input.root);

@@ -281,7 +281,6 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // row); new-worktree is just a label.
   if (worktreeInTitle || newWorktree) {
     const title = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
-    title.setName('AgentLauncherTitle');
     title.addCssClass('AgentLauncherTitle');
     const label = new Gtk.Label({ xalign: 0, label: newWorktree ? 'Launch agent in new worktree:' : 'Launch agent in worktree' });
     label.addCssClass('launcher-title');
@@ -298,7 +297,6 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // enter/alt-enter keymap scopes to it. Seeded with any restored draft.
   const input = createInput({ placeholder: 'Prompt for the agent…', initialText: draft, grow: true, maxLines: 20, padding: CARD_PADDING });
   const promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-  promptContainer.setName('AgentLauncherPrompt');
   promptContainer.addCssClass('AgentLauncherPrompt');
   promptContainer.append(input.root);
   panel.append(promptContainer);
@@ -313,7 +311,6 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // than overflowing. Each field carries a caption above its control. The worktree field
   // only appears here in the default flow (the worktree flows surface it in the title).
   const optionsRow = new Adw.WrapBox({ childSpacing: 10, lineSpacing: 8 });
-  optionsRow.setName('AgentLauncherOptions');
   optionsRow.addCssClass('AgentLauncherOptions');
   optionsRow.append(field('agent', kindDropdown.root));
   optionsRow.append(field('model', modelDropdown.root));
@@ -391,7 +388,6 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
 // (Gtk.DropDown has no built-in label).
 function field(caption: string, control: InstanceType<typeof Gtk.Widget>): InstanceType<typeof Gtk.Box> {
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 3 });
-  box.setName('AgentLauncherField');
   box.addCssClass('AgentLauncherField');
   const label = new Gtk.Label({ xalign: 0, label: caption });
   label.addCssClass('field-caption');

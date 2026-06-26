@@ -52,7 +52,6 @@ export class Message {
   constructor(kind: MessageKind) {
     this.kind = kind;
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('Message');
     this.root.addCssClass('Message');
     this.root.addCssClass(`is-${kind}`); // surfaces the kind for the .Message.is-<kind> styling
 

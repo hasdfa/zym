@@ -25,7 +25,6 @@ export class Sidebar {
     this.list = new WorkbenchList(options);
 
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('WorkbenchSidebar'); // selector identity for CSS
     this.root.addCssClass('WorkbenchSidebar');
     this.root.addCssClass('sidebar-pane');
     this.list.root.setHexpand(true);

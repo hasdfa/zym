@@ -121,7 +121,7 @@ addStyles(/* css */`
   .GitPanel .GitRow .git-name { font: var(--t-font-monospace); }
   .GitPanel .GitRow .git-name.staged { color: var(--t-ui-status-success); }
   .GitPanel .GitRow .git-name.unstaged { color: var(--t-ui-status-error); }
-  #GitPanel row { min-height: 0; }
+  .GitPanel row { min-height: 0; }
   .GitPanel .GitRow { padding: 0 8px 0 16px; } /* indent entries under the section header */
   /* The state letter: bold, small, tabular figures; its margin-end is set in code
      (one row-spacing unit) so it sits clear of the path. */
@@ -133,7 +133,7 @@ addStyles(/* css */`
   .GitPanel .git-status .git-status-hint { color: var(--t-ui-text-muted); }
   /* The cursor (selected row) is highlighted with the theme selection color, and
      only while the panel is focused — an unfocused panel shows no highlight. */
-  #GitPanel row:selected { 
+  .GitPanel row:selected { 
     background-color: alpha(var(--window-fg-color), 0.1);
   }
   .GitPanelList:focus-within row:selected {
@@ -180,7 +180,6 @@ export class GitPanel {
     this.buildDiffView = options.buildDiffView;
 
     this.list = new Gtk.ListBox();
-    this.list.setName('GitPanelList'); // scopes the bare list keys (so they don't fire in the diff)
     this.list.addCssClass('GitPanelList');
     this.list.setSelectionMode(Gtk.SelectionMode.SINGLE); // the selected row is the cursor
 
@@ -195,7 +194,6 @@ export class GitPanel {
     // keeps a fixed width on resize; the diff absorbs the rest. No end child yet → the
     // Paned shows just the list, no handle.
     this.root = new Gtk.Paned({ orientation: Gtk.Orientation.HORIZONTAL });
-    this.root.setName('GitPanel'); // selector identity for command/keymap + CSS
     this.root.addCssClass('GitPanel');
     this.root.setStartChild(this.scrolled);
     this.root.setResizeStartChild(false);
@@ -471,7 +469,6 @@ export class GitPanel {
     name.addCssClass(kind); // 'staged' | 'unstaged' — matches the leading letter's color
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: ROW_SPACING });
-    box.setName('GitRow');
     box.addCssClass('GitRow');
     box.append(badge); // the state letter leads the row, before the path
     box.append(name);

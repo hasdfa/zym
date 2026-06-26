@@ -63,24 +63,23 @@ function statusMarkup(status: FileGitStatus | undefined): string {
 }
 
 // Use the active theme's foreground for tree text/icons (rather than Adwaita's
-// default), to match the editor. `.FileTree` is the ScrolledWindow's widget name
-// (gtk_widget_set_name → a CSS *id*, not an element name). Target `label`
-// directly — Adwaita colors row text on an inner node, so a color on the
-// container won't inherit down — and exclude `:selected` rows so the selection
-// keeps its own contrast.
+// default), to match the editor. `.FileTree` is the ScrolledWindow's component
+// CSS class (`addCssClass`). Target `label` directly — Adwaita colors row text
+// on an inner node, so a color on the container won't inherit down — and exclude
+// `:selected` rows so the selection keeps its own contrast.
 addStyles(`
   .FileTree .filetree-header {
     color: var(--t-ui-text-muted);
     font-weight: bold;
     padding: 6px 8px;
   }
-  #FileTree row:not(:selected) label {
+  .FileTree row:not(:selected) label {
     color: var(--t-ui-editor-foreground);
   }
-  #FileTree row:not(:selected) .filetree-icon {
+  .FileTree row:not(:selected) .filetree-icon {
     color: var(--t-ui-text-muted); /* mute the file-type icon */
   }
-  #FileTree expander {
+  .FileTree expander {
     color: alpha(var(--t-ui-editor-foreground), 0.45); /* mute the disclosure chevron */
   }
   /* When the tree isn't focused, drop the accent selection background (and
@@ -269,7 +268,6 @@ export class FileTree {
     this.header = header;
 
     const rootBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    rootBox.setName('FileTree'); // selector identity for command/keymap rules + chrome
     rootBox.addCssClass('FileTree');
     rootBox.append(header);
     rootBox.append(scrolled);

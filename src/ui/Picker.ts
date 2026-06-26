@@ -100,7 +100,7 @@ addStyles(/* css */`
     border-radius: var(--popover-radius);
   }
   /* Drop Adwaita's built-in row padding so only the label's inset applies. */
-  #PickerList row {
+  .PickerList row {
     padding: 0;
   }
   .PickerRow {
@@ -128,7 +128,7 @@ addStyles(/* css */`
     padding: 0.5em 1em;
     color: var(--accent-color);
   }
-  #PickerList row.action-row {
+  .PickerList row.action-row {
     border-top: 1px solid var(--border-color);
   }
 `);
@@ -374,7 +374,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
     placeholderText: options.placeholder ?? 'Search…',
   });
   entry.setHexpand(true);
-  entry.setName('PickerEntry');
   entry.addCssClass('PickerEntry');
   entry.addCssClass('has-text-input'); // release the `space` leader so it types
   if (options.proseEntry) entry.addCssClass('prose-entry');
@@ -393,7 +392,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
   if (options.fetch || options.promptIcon || options.loading) {
     entry.addCssClass('has-prompt');
     const slot = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
-    slot.setName('PickerPrompt');
     slot.addCssClass('PickerPrompt');
     slot.setHalign(Gtk.Align.START);
     slot.setValign(Gtk.Align.CENTER);
@@ -446,7 +444,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
   // Never scroll horizontally: rows ellipsize to the card's fixed width instead
   // of widening it / exposing a horizontal scrollbar for long labels.
   scrolled.setPolicy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
-  scrolled.setName('PickerList');
   scrolled.addCssClass('PickerList');
 
   // Teardown handles disposed when the card closes (declared up-front so the card's
@@ -593,7 +590,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
   const showMessage = (text: string, name: string) => {
     const label = new Gtk.Label({ xalign: 0 });
     label.setText(text);
-    label.setName(name);
     label.addCssClass(name);
     messageRow = new Gtk.ListBoxRow();
     messageRow.setChild(label);
@@ -639,7 +635,6 @@ export function openPicker(options: PickerOptions): PickerHandle {
     if (options.action && query.length > 0 && (!options.actionWhenEmpty || results.length === 0) && (options.action.visible === undefined || options.action.visible(query))) {
       const label = new Gtk.Label({ xalign: 0 });
       label.setText(options.action.label(query));
-      label.setName('PickerAction');
       label.addCssClass('PickerAction');
       actionRow = new Gtk.ListBoxRow();
       actionRow.setChild(label);

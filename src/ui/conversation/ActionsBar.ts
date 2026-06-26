@@ -49,7 +49,6 @@ export class ActionsBar {
     // can't be padded without eating into the wrap geometry).
     this.wrap = new Adw.WrapBox({ childSpacing: 6, lineSpacing: 6 });
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    this.root.setName('ActionsBar');
     this.root.addCssClass('ActionsBar');
     this.root.append(this.wrap);
     this.root.setVisible(false);
