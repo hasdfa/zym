@@ -83,6 +83,7 @@ export class GitBranchButton {
 
     this.root = new Gtk.Button();
     this.root.setName('GitBranchButton'); // selector identity for command/keymap rules
+    this.root.addCssClass('GitBranchButton');
     this.root.addCssClass('flat');
     this.root.addCssClass('zym-branch');
     this.root.setChild(box);

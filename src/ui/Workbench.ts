@@ -170,6 +170,7 @@ export class Workbench<TOwner = unknown> {
 
     this.root = this.hLeft;
     this.root.setName('Workbench'); // selector identity for command/keymap rules
+    this.root.addCssClass('Workbench');
 
     // The user's workbench docks the Files tree in the right slot but starts it
     // hidden — assigned so the dock toggle (and `file-tree:focus`) has something to

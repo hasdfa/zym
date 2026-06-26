@@ -141,6 +141,7 @@ export function openFloatingCard(options: FloatingCardOptions): FloatingCardHand
   // get-child-position handler (installed near the end) overrides that.
   const panel = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
   panel.setName(options.name);
+  panel.addCssClass(options.name);
   panel.addCssClass('floating-card'); // shared drop shadow
   panel.setHalign(Gtk.Align.CENTER);
   panel.setValign(Gtk.Align.START);

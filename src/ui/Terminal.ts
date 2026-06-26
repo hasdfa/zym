@@ -124,6 +124,7 @@ export class Terminal {
   private createContainer(terminal: VteTerminal): InstanceType<typeof Gtk.Box> {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     box.setName('Terminal'); // selector identity for command/keymap rules
+    box.addCssClass('Terminal');
     box.addCssClass('zym-terminal'); // shared selector for both Terminal & AgentTerminal
     box.setFocusable(true); // so normal mode can hold focus instead of the Vte
     box.append(terminal);

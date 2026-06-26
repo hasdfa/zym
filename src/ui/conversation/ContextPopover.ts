@@ -24,8 +24,8 @@ const n = (v: number): string => v.toLocaleString('en-US');
 addStyles(`
   /* The detail popover: a compact two-column key/value grid. */
   #ContextPopover grid { padding: 6px 4px; }
-  #ContextPopover .context-popover-title { font-weight: bold; margin-bottom: 2px; }
-  #ContextPopover .context-popover-caption { color: var(--t-ui-text-muted); }
+  .ContextPopover .context-popover-title { font-weight: bold; margin-bottom: 2px; }
+  .ContextPopover .context-popover-caption { color: var(--t-ui-text-muted); }
 `);
 
 export class ContextPopover {
@@ -51,6 +51,7 @@ export class ContextPopover {
 
     this.widget = new Gtk.Popover();
     this.widget.setName('ContextPopover');
+    this.widget.addCssClass('ContextPopover');
     this.widget.setChild(grid);
   }
 

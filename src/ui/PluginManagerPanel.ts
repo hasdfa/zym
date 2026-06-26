@@ -7,7 +7,7 @@
  * rebuilding the list, so expanded state is preserved.
  *
  * Keyboard bindings (j/k/o/space) are declared in src/keymaps/default.ts under
- * the #PluginManagerPanel selector and dispatched via the zym command system.
+ * the .PluginManagerPanel selector and dispatched via the zym command system.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -48,6 +48,7 @@ export class PluginManagerPanel {
 
     this.root = new Gtk.ScrolledWindow();
     this.root.setName('PluginManagerPanel');
+    this.root.addCssClass('PluginManagerPanel');
     this.root.setChild(viewport);
     this.root.setHexpand(true);
     this.root.setVexpand(true);

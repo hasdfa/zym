@@ -35,6 +35,7 @@ export class NotificationLog {
 
     this.root = new Gtk.ScrolledWindow();
     this.root.setName('NotificationLog'); // selector identity for keymap + CSS
+    this.root.addCssClass('NotificationLog');
     this.root.setChild(this.listBox);
     this.root.setVexpand(true);
 
@@ -75,7 +76,8 @@ export class NotificationLog {
     time.setValign(Gtk.Align.START);
 
     const box = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8 });
-    box.setName('NotificationRow'); // CSS identity (#NotificationRow)
+    box.setName('NotificationRow'); // CSS identity (.NotificationRow)
+    box.addCssClass('NotificationRow');
     box.addCssClass(`notification-${notification.getType()}`); // per-severity hook
     box.append(icon);
     box.append(text);
