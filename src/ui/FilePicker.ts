@@ -1,13 +1,18 @@
 /*
- * File picker — the first user of the fuzzy picker. Walks the current working
- * directory for files and opens the fuzzy picker over their paths (relative for
- * display), invoking `onSelect` with the absolute path of the chosen file.
+ * File picker — the first user of the fuzzy picker. Lists the files under the
+ * current working directory and opens the fuzzy picker over their paths
+ * (relative for display), invoking `onSelect` with the absolute path of the
+ * chosen file.
  *
- * The walk runs incrementally from a GLib idle source rather than `await
- * fs.promises`: Node's promise microtasks don't run while the GLib main loop is
- * blocked (node-gtk#430), so the loop would never see the result. Scanning a
- * bounded number of directories per idle tick keeps the UI responsive and
- * streams results into the picker as they're found.
+ * Two enumeration strategies:
+ *   - In a git repo, `listProjectFiles` lists tracked + untracked-non-ignored
+ *     files in one `git ls-files` call — near-instant and honouring `.gitignore`
+ *     (so build output / vendored trees don't pollute results).
+ *   - Otherwise, a manual walk falls back. It runs incrementally from a GLib idle
+ *     source rather than `await fs.promises` (Node's promise microtasks don't run
+ *     while the GLib main loop is blocked, node-gtk#430), scanning a bounded
+ *     number of directories per tick and streaming coalesced batches into the
+ *     picker as they're found.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -15,24 +20,29 @@ import { openPicker, highlightSegment, type PickerItem } from './Picker.ts';
 import { renderRowStacked } from './PickerRow.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons } from './icons.ts';
+import { listProjectFiles } from '../git.ts';
 import { Gtk } from '../gi.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 
-// Directories that are rarely what you want to open and expensive to walk.
+// Directories that are rarely what you want to open and expensive to walk. Only
+// consulted on the non-git walk fallback; in a repo `.gitignore` handles this.
 const IGNORED_DIRS = new Set([
   '.git', '.hg', '.svn', 'node_modules', 'dist', 'build', '.cache',
 ]);
 const MAX_FILES = 20_000;
 const DIRS_PER_TICK = 24; // directories scanned per idle iteration
+const FLUSH_INTERVAL_MS = 80; // coalesce streamed walk batches to ~once per this
 
 export function openFilePicker(host: Overlay, cwd: string, onSelect: (path: string) => void): void {
-  // Open immediately with an empty list; fill it as the background walk streams
-  // results, so a large tree never blocks the UI.
+  // Open immediately in the loading state; fill it once enumeration resolves
+  // (one-shot in a git repo, or streamed by the walk), so a large tree never
+  // blocks the UI.
   const picker = openPicker({
     host,
     placeholder: 'Search files…',
     promptIcon: Icons.search,
+    loading: true,
     // Rows carry their own (file-type) icon column, aligned under the prompt icon —
     // so skip the prompt-driven row indent.
     disableIconPadding: true,
@@ -58,7 +68,22 @@ export function openFilePicker(host: Overlay, cwd: string, onSelect: (path: stri
     },
     onSelect,
   });
-  collectFiles(cwd, (files) => picker.setItems(files.map((rel) => fileItem(cwd, rel))));
+
+  // Fast path: in a git repo, one `git ls-files` call lists everything
+  // (.gitignore-respecting). A `null` result means "not a repo / git failed" —
+  // fall back to the streaming walk. An empty array is a valid (empty) result,
+  // not a fallback trigger. The handle methods are safe if the picker has closed.
+  void listProjectFiles(cwd).then((paths) => {
+    if (paths !== null) {
+      picker.setItems(paths.slice(0, MAX_FILES).map((rel) => fileItem(cwd, rel)));
+      return;
+    }
+    collectFiles(
+      cwd,
+      (rels) => picker.appendItems(rels.map((rel) => fileItem(cwd, rel))),
+      () => picker.setLoading(false), // walk done — stop spinning even if nothing was found
+    );
+  });
 }
 
 /**
@@ -78,18 +103,29 @@ function fileItem(cwd: string, rel: string): PickerItem {
 }
 
 /**
- * Walk `root` for files, calling `onUpdate` with the growing list (paths
- * relative to `root`) as directories are scanned. Non-blocking: a fixed number
- * of directories are scanned per GLib idle tick.
+ * Walk `root` for files. Calls `onAppend` with each batch of newly-discovered
+ * paths (relative to `root`) — coalesced to ~once per `FLUSH_INTERVAL_MS` so a
+ * large tree doesn't re-rank the picker on every tick — and `onDone` once the
+ * walk finishes (which also fires when nothing was found, so the caller can stop
+ * its loading state). Non-blocking: a fixed number of directories are scanned
+ * per GLib idle tick.
  */
-function collectFiles(root: string, onUpdate: (files: string[]) => void): void {
-  const files: string[] = [];
+function collectFiles(root: string, onAppend: (rels: string[]) => void, onDone: () => void): void {
   const stack: string[] = [root];
+  let pending: string[] = []; // discovered but not yet flushed to onAppend
+  let total = 0; // total files found so far (drives the MAX_FILES cap)
+  let lastFlush = 0; // timestamp of the last flush; 0 → flush the first batch ASAP
+
+  const flush = () => {
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    onAppend(batch);
+  };
 
   const tick = () => {
     let scanned = 0;
-    let added = false;
-    while (stack.length > 0 && scanned < DIRS_PER_TICK && files.length < MAX_FILES) {
+    while (stack.length > 0 && scanned < DIRS_PER_TICK && total < MAX_FILES) {
       const dir = stack.pop();
       if (dir === undefined) break;
       scanned++;
@@ -101,20 +137,29 @@ function collectFiles(root: string, onUpdate: (files: string[]) => void): void {
         continue; // unreadable directory — skip it
       }
       for (const entry of entries) {
-        if (files.length >= MAX_FILES) break;
+        if (total >= MAX_FILES) break;
         const full = Path.join(dir, entry.name);
         if (entry.isDirectory()) {
           if (!IGNORED_DIRS.has(entry.name)) stack.push(full);
         } else if (entry.isFile()) {
-          files.push(Path.relative(root, full));
-          added = true;
+          pending.push(Path.relative(root, full));
+          total++;
         }
       }
     }
 
-    if (added) onUpdate(files.slice());
-    const done = stack.length === 0 || files.length >= MAX_FILES;
-    if (!done) setTimeout(tick, 0);
+    const done = stack.length === 0 || total >= MAX_FILES;
+    const now = Date.now();
+    if (done) {
+      flush();
+      onDone();
+    } else if (now - lastFlush >= FLUSH_INTERVAL_MS) {
+      lastFlush = now;
+      flush();
+      setTimeout(tick, 0);
+    } else {
+      setTimeout(tick, 0);
+    }
   };
   setTimeout(tick, 0);
 }
