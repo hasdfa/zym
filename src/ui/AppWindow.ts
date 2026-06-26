@@ -1963,6 +1963,9 @@ export class AppWindow {
     const manager = new PluginManagerPanel();
     const child = this.workbench.center.add(manager.root, { title: 'Plugin Manager', requireTabBar: true });
     this.pluginManagerTab = { root: manager.root, child };
+    // Sever the panel's command reg + per-row switch handlers when its tab closes
+    // (disposeChild fires this), else the whole panel leaks per open/close (rule 2).
+    this.tabCloseHandlers.set(manager.root, () => { manager.dispose(); this.pluginManagerTab = null; });
     manager.root.grabFocus();
   }
 

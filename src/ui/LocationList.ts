@@ -67,7 +67,7 @@ export class LocationList {
 
     this.listBox = new Gtk.ListBox();
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
-    this.listBox.on('row-activated', (row: any) => this.activate(row.getIndex()));
+    this.subs.connect(this.listBox, 'row-activated', (row: any) => this.activate(row.getIndex()));
 
     this.scrolled = new Gtk.ScrolledWindow();
     this.scrolled.setChild(this.listBox);

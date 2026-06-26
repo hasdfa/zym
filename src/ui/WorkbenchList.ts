@@ -159,7 +159,7 @@ export class WorkbenchList {
     this.listBox = new Gtk.ListBox();
     this.listBox.addCssClass('navigation-sidebar')
     this.listBox.setSelectionMode(Gtk.SelectionMode.SINGLE);
-    this.listBox.on('row-activated', (row: any) => {
+    this.subs.connect(this.listBox, 'row-activated', (row: any) => {
       const handle = this.handleForRow(row);
       if (handle && !handle.removing) this.activate(handle.entry);
     });
@@ -393,7 +393,9 @@ export class WorkbenchList {
     files.addCssClass('flat');
     files.addCssClass('workbenchrow-files');
     files.setCanFocus(false);
-    files.on('clicked', () => this.options.onOpenChanges?.(agent));
+    const onFilesClicked = () => this.options.onOpenChanges?.(agent);
+    files.on('clicked', onFilesClicked);
+    unsubs.push(() => files.off('clicked', onFilesClicked)); // node-gtk roots it; sever with the row (rule 2)
     const updateFiles = () => this.applyFiles(files, filesLabel, agent);
     updateFiles();
     unsubs.push(agent.onDidChangeFiles(updateFiles));

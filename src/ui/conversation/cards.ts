@@ -5,21 +5,23 @@
  */
 import { Gtk } from '../../gi.ts';
 import { summarizeInput } from './format.ts';
+import type { CompositeDisposable } from '../../util/eventKit.ts';
 import type { PermissionRequest } from '../../agents/claude-sdk/SdkSession.ts';
 
 type Box = InstanceType<typeof Gtk.Box>;
 
 /** Just the allow/deny button row — for embedding in a tool row's details (when the
  *  request can be tied to its tool row). `decide` receives the user's choice; the
- *  caller removes the buttons afterwards. */
-export function permissionButtons(decide: (allow: boolean) => void): Box {
+ *  caller removes the buttons afterwards. The `clicked` handlers are registered in
+ *  `subs` (node-gtk roots them; the buttons outlive their removal otherwise — rule 2). */
+export function permissionButtons(subs: CompositeDisposable, decide: (allow: boolean) => void): Box {
   const buttons = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
   buttons.addCssClass('conversation-perm-buttons');
   const allow = new Gtk.Button({ label: 'Allow' });
   allow.addCssClass('suggested-action');
   const deny = new Gtk.Button({ label: 'Deny' });
-  allow.on('clicked', () => decide(true));
-  deny.on('clicked', () => decide(false));
+  subs.connect(allow, 'clicked', () => decide(true));
+  subs.connect(deny, 'clicked', () => decide(false));
   buttons.append(allow);
   buttons.append(deny);
   return buttons;
@@ -27,7 +29,7 @@ export function permissionButtons(decide: (allow: boolean) => void): Box {
 
 /** An allow/deny permission card (the fallback when the request can't be tied to a
  *  tool row). `decide` receives the user's choice; the caller removes the card. */
-export function permissionCard(req: PermissionRequest, decide: (allow: boolean) => void): Box {
+export function permissionCard(subs: CompositeDisposable, req: PermissionRequest, decide: (allow: boolean) => void): Box {
   const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
   card.addCssClass('conversation-perm');
   const title = new Gtk.Label({ xalign: 0, label: `Allow ${req.toolName}?` });
@@ -35,6 +37,6 @@ export function permissionCard(req: PermissionRequest, decide: (allow: boolean) 
   detail.addCssClass('conversation-perm-detail');
   card.append(title);
   card.append(detail);
-  card.append(permissionButtons(decide));
+  card.append(permissionButtons(subs, decide));
   return card;
 }

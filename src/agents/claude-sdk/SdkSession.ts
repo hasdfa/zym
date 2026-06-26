@@ -21,7 +21,7 @@ import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Gio } from '../../gi.ts';
-import { Disposable, Emitter } from '../../util/eventKit.ts';
+import { CompositeDisposable, Disposable, Emitter } from '../../util/eventKit.ts';
 import { ClaudeStreamTransport, type Transport, type TransportOptions } from './transport.ts';
 import { userTurn, isSystemInit, isThinkingTokens, isResult, type StreamEvent, type ContentBlock, type Usage as TokenUsage } from './protocol.ts';
 import type { ReplayEntry } from './transcript.ts';
@@ -187,9 +187,11 @@ export class SdkSession {
   // workbench re-roots to the worktree the agent moved into.
   private readonly statusFile: string;
   private readonly mcpConfig: string;
-  private permMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private actionsMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
-  private cwdMonitor: InstanceType<typeof Gio.FileMonitor> | null = null;
+  // The IPC file-monitor watches + their `changed` handlers (node-gtk roots a connected
+  // monitor closure, which captures `this` → the whole session). `watchPath` routes each
+  // through `subs.connect` (the `.off()`) + `subs.defer` (the `.cancel()`), both fired by
+  // `subs.dispose()`. See rule 2.
+  private readonly subs = new CompositeDisposable();
   private lastPermId: string | null = null;
   private lastActions: string | null = null;
   private lastCwd: string | null = null;
@@ -257,20 +259,21 @@ export class SdkSession {
     transport.onExit((code) => this.handleExit(code));
     transport.start();
 
-    // Watch for permission requests (atomic tmp+rename → WATCH_MOVES).
-    const gfile = Gio.File.newForPath(this.permRequestFile);
-    this.permMonitor = FileProto.monitorFile.call(gfile, Gio.FileMonitorFlags.WATCH_MOVES, null);
-    this.permMonitor!.on('changed', () => this.readPermissionRequest());
+    // All atomic tmp+rename writes → WATCH_MOVES. Permission requests, registered actions
+    // (set_actions), and worktree moves (set_worktree writes `<statusFile>.cwd`).
+    this.watchPath(this.permRequestFile, () => this.readPermissionRequest());
+    this.watchPath(this.actionsFile, () => this.readActions());
+    this.watchPath(`${this.statusFile}.cwd`, () => this.readCwd());
+  }
 
-    // Watch for registered actions (set_actions writes atomically → WATCH_MOVES).
-    const afile = Gio.File.newForPath(this.actionsFile);
-    this.actionsMonitor = FileProto.monitorFile.call(afile, Gio.FileMonitorFlags.WATCH_MOVES, null);
-    this.actionsMonitor!.on('changed', () => this.readActions());
-
-    // Watch for worktree moves (set_worktree writes `<statusFile>.cwd` atomically).
-    const cfile = Gio.File.newForPath(`${this.statusFile}.cwd`);
-    this.cwdMonitor = FileProto.monitorFile.call(cfile, Gio.FileMonitorFlags.WATCH_MOVES, null);
-    this.cwdMonitor!.on('changed', () => this.readCwd());
+  /** Watch `path` for `changed`, routing the handler + cancel through `subs` so both the
+   *  node-gtk closure handle (`.off()`) and the OS watch (`.cancel()`) release on dispose. */
+  private watchPath(path: string, onChange: () => void): void {
+    const monitor = FileProto.monitorFile.call(
+      Gio.File.newForPath(path), Gio.FileMonitorFlags.WATCH_MOVES, null,
+    ) as InstanceType<typeof Gio.FileMonitor>;
+    this.subs.connect(monitor, 'changed', onChange);
+    this.subs.defer(() => monitor.cancel());
   }
 
   /** Send a user turn. Pushes a user row, then flips to `working`. */
@@ -427,12 +430,7 @@ export class SdkSession {
 
   /** Kill claude, stop watching, remove the IPC files. */
   dispose(): void {
-    this.permMonitor?.cancel();
-    this.permMonitor = null;
-    this.actionsMonitor?.cancel();
-    this.actionsMonitor = null;
-    this.cwdMonitor?.cancel();
-    this.cwdMonitor = null;
+    this.subs.dispose(); // `.off()` + `.cancel()` every IPC file monitor
     this.transport?.dispose();
     this.transport = null;
     try { Fs.rmSync(Path.dirname(this.permRequestFile), { recursive: true, force: true }); } catch { /* best effort */ }

@@ -9,6 +9,7 @@
  * conversation view calls it on every streaming delta.
  */
 import { Gtk } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
@@ -80,6 +81,7 @@ const HEADING_SIZE = ['x-large', 'large', 'large', 'medium', 'medium', 'small'];
 export class MarkdownView {
   readonly root: InstanceType<typeof Gtk.Box>;
   private lastMarkdown = ''; // the source last rendered, for "copy message"
+  private readonly renderSubs = new CompositeDisposable();
 
   constructor() {
     this.root = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
@@ -99,6 +101,7 @@ export class MarkdownView {
    * selectable. */
   setMarkdown(md: string): void {
     this.lastMarkdown = md;
+    this.renderSubs.clear(); // sever the previous render's code-block copy handlers
     clearChildren(this.root);
     // Track each prose block's type alongside its markup so the join can pick a
     // tighter gap after a heading (see HEADING_GAP).
@@ -115,7 +118,7 @@ export class MarkdownView {
       flow = [];
     };
     for (const block of parseBlocks(md)) {
-      if (block.type === 'code') { flush(); this.root.append(renderCode(block.lang, block.code)); }
+      if (block.type === 'code') { flush(); this.root.append(renderCode(block.lang, block.code, this.renderSubs)); }
       else if (block.type === 'table') { flush(); this.root.append(renderTable(block.headers, block.aligns, block.rows)); }
       else flow.push({ type: block.type, markup: blockMarkup(block) });
     }
@@ -123,6 +126,7 @@ export class MarkdownView {
   }
 
   dispose(): void {
+    this.renderSubs.dispose(); // sever the code-block copy handlers
     clearChildren(this.root);
   }
 }
@@ -171,7 +175,7 @@ function blockquoteMarkup(blocks: Block[]): string {
   return inner.split('\n').map((line) => bar + line).join('\n');
 }
 
-function renderCode(lang: string | undefined, code: string): Widget {
+function renderCode(lang: string | undefined, code: string, subs: CompositeDisposable): Widget {
   const inner = safeHighlight(code, lang) ?? escapeMarkup(code);
   const markup = `<span face="${attrEscape(fonts.monospaceFamily)}">${inner}</span>`;
   const label = markupLabel(markup, code);
@@ -188,7 +192,7 @@ function renderCode(lang: string | undefined, code: string): Widget {
   copy.setValign(Gtk.Align.START);
   copy.marginTop = 8
   copy.marginEnd = 8
-  copy.on('clicked', () => { clipboard.write(code); copy.setTooltipText('Copied'); });
+  subs.connect(copy, 'clicked', () => { clipboard.write(code); copy.setTooltipText('Copied'); });
 
   const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   box.addCssClass('MarkdownView-code');

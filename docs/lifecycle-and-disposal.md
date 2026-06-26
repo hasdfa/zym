@@ -50,9 +50,12 @@ at the end. Members dispose newest-first (LIFO).
 
 1. **`dispose()` is idempotent** — guard
    `if (this.disposed) return; this.disposed = true`.
-2. **Disconnect global/long-lived handlers in `dispose()`**, never gated on
-   `destroy` alone. Store the disconnect as a field (e.g. `detachStyleScheme`)
-   and call it.
+2. **Disconnect *every* GObject signal handler in `dispose()`**, never gated on
+   `destroy` alone — the `.on(...)` twin of rule 9 (node-gtk roots the closure even
+   on the owner's own buffer/view, so leaving it connected pins the graph). Route
+   signals through `disposables.connect(obj, sig, fn)` (or store the disconnect as a
+   field, e.g. `detachStyleScheme`); for a `Gio.FileMonitor`, pair `connect` with a
+   `defer(() => m.cancel())` — `.off()` releases node-gtk's handle, `cancel()` the OS watch.
 3. **`widget.on('destroy', () => this.dispose())` is a safety net, not the
    path** — always also dispose explicitly from the owner.
 4. **Own what you build** — dispose every child component/editor you
@@ -171,3 +174,15 @@ handler (rule 2). Native leak = `app.run()` frame dominates CPU with JS idle
   per-class `connect` helper + the `widgetControllers.ts` `trackController`/
   `detachControllers` shim (folded into the bag). The full hunt + per-site table is
   in `LEAK.md` Investigation #3.
+- **The same pin class via raw `.on()` *signal handlers* — the controller sweep's
+  blind spot (~30 sites)** — #3 funnelled every `addController` but never the raw
+  `obj.on('signal', …)` handlers on buffers/adjustments/`Gio.FileMonitor`s/buttons.
+  Decisively, `EditorModel` (every editor) had **no `dispose()`** and four
+  un-disconnected `this.buffer.on(...)` handlers, and `Document` (per file)
+  `cancel()`'d its monitor without `.off()` — so the editor/Document graph #2/#3
+  targeted was *still* pinned. Resolved by routing each through
+  `disposables.connect` (rule 2), per-render `nest()`/`clear()` bags for churned
+  content, a `dispose()` for the classes that lacked one (`EditorModel`/`Peek`/
+  `Transcript`/`PluginManagerPanel`), and `connect` + `defer(cancel)` for the session /
+  document file monitors. Found by static audit; regression in `eventKit.gtk.test.ts`.
+  Per-site table in `LEAK.md` Investigation #5.

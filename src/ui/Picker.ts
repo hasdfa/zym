@@ -11,6 +11,7 @@
  */
 import { Gtk } from '../gi.ts';
 import { zym } from '../zym.ts';
+import { CompositeDisposable } from '../util/eventKit.ts';
 import { addStyles } from '../styles.ts';
 import { iconLabel } from './icons.ts';
 import { fuzzyMatch } from './fuzzyMatch.ts';
@@ -451,6 +452,10 @@ export function openPicker(options: PickerOptions): PickerHandle {
   let commandsSub: { dispose(): void } | null = null;
   // Pending side-preview refresh (debounced as the selection moves); cleared on close.
   let previewTimer: NodeJS.Timeout | null = null;
+  // The entry/list-box signal handlers wired below close over the whole openPicker scope
+  // (items, results, options→onSelect/fetch, …). node-gtk roots each connected closure, so
+  // every palette/picker open would leak its whole graph; disposed in `onClose`. See rule 2.
+  const subs = new CompositeDisposable();
 
   // The floating card shell — mounts an opaque card at the overlay's top-centre,
   // remembers/restores focus, and dismisses on focus-loss. The Picker fills it with
@@ -462,6 +467,7 @@ export function openPicker(options: PickerOptions): PickerHandle {
     dim: true,
     fade: true,
     onClose: () => {
+      subs.dispose(); // sever the entry/list-box signal handlers (rule 2)
       commandsSub?.dispose();
       readlineSub.dispose();
       promptSpinner?.stop();
@@ -732,16 +738,16 @@ export function openPicker(options: PickerOptions): PickerHandle {
     // locally, filter the current pool instantly on each keystroke (the immediate
     // `changed` signal); a server-filtered picker skips that and just waits for
     // the fetch.
-    if (options.localFilter !== false) entry.on('changed', rebuild);
-    entry.on('search-changed', runFetch);
+    if (options.localFilter !== false) subs.connect(entry, 'changed', rebuild);
+    subs.connect(entry, 'search-changed', runFetch);
   } else {
-    entry.on('search-changed', rebuild);
+    subs.connect(entry, 'search-changed', rebuild);
   }
-  entry.on('activate', () => choose(null));
-  listBox.on('row-activated', (row) => choose(row));
+  subs.connect(entry, 'activate', () => choose(null));
+  subs.connect(listBox, 'row-activated', (row) => choose(row));
   // Drive the side preview off selection changes (keyboard move and click both go
   // through `selectRow`, so this single hook covers them).
-  if (options.preview) listBox.on('row-selected', refreshPreview);
+  if (options.preview) subs.connect(listBox, 'row-selected', refreshPreview);
 
   // Drive list navigation through the command/keymap system: register the
   // picker's `core:*` commands on the panel (named `.Picker`, so the keymap from
