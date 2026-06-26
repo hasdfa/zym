@@ -944,14 +944,15 @@ export class AgentConversation implements Agent {
         if (costUsd != null) this.modelContext.setCost(costUsd);
         if (contextWindow) this.modelContext.setWindow(contextWindow);
       }),
-      this.session.onError(({ message }) => this.addErrorRow(message)),
+      this.session.onError(({ message, detail }) => this.addErrorRow(message, detail)),
       this.session.onInterrupted(() => this.addInterruptedRow()),
       this.session.onUnhandled(({ event }) => this.addUnknownRow(event)),
       this.session.onPermission((req) => this.addPermissionCard(req)),
       this.session.onQuestion((req) => this.addQuestionCard(req)),
-      this.session.onExit(() => {
+      this.session.onExit(({ code }) => {
         this.endTurn();
-        this.addRow('conversation-system').setText('── process exited ──');
+        const note = code != null && code !== 0 ? `── process exited (code ${code}) ──` : '── process exited ──';
+        this.addRow('conversation-system').setText(note);
         this.promptContainer.setSensitive(false);
       }),
     );
@@ -1102,10 +1103,16 @@ export class AgentConversation implements Agent {
     return label;
   }
 
-  // An error notice in the conversation flow (refusal / max-turns / API error).
-  private addErrorRow(message: string): void {
+  // An error notice in the conversation flow (refusal / max-turns / API error). The
+  // optional `detail` (claude's own message, else the captured stderr tail) renders
+  // as a dim monospace sub-row so the cause is visible, not just the subtype.
+  private addErrorRow(message: string, detail?: string): void {
     const label = this.addRow('conversation-error');
     setMarkupSafe(label, `${iconSpan(NERDFONT.STATUS.CROSS, theme.ui.status.error)}  ${escapeMarkup(message)}`, message);
+    if (!detail) return;
+    const body = this.addRow('conversation-system');
+    body.addCssClass('conversation-unknown-body'); // monospace, wrapped
+    body.setText(detail);
   }
 
   // A muted notice that the user interrupted the turn (ctrl-c).

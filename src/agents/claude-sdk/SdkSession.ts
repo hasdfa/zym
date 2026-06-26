@@ -193,6 +193,10 @@ export class SdkSession {
   private lastPermId: string | null = null;
   private lastActions: string | null = null;
   private lastCwd: string | null = null;
+  // A bounded tail of claude's stderr. When a turn ends in `error_during_execution`
+  // (or the process crashes), the `result` payload is empty — the actual cause is
+  // printed here. Kept so we can surface/log *why* instead of a bare error code.
+  private readonly stderrTail: string[] = [];
 
   constructor(options: SdkSessionOptions) {
     this.options = options;
@@ -254,6 +258,7 @@ export class SdkSession {
     const transport = (this.options.createTransport ?? ((s) => new ClaudeStreamTransport(s)))(spec);
     this.transport = transport;
     transport.onEvent((event) => this.handleEvent(event));
+    transport.onStderr((chunk) => this.captureStderr(chunk));
     transport.onExit((code) => this.handleExit(code));
     transport.start();
 
@@ -400,7 +405,7 @@ export class SdkSession {
   onResult(cb: (m: { costUsd?: number; contextWindow?: number }) => void): Disposable { return this.emitter.on('result', cb as (v?: unknown) => void); }
   onContext(cb: (m: ContextUsage) => void): Disposable { return this.emitter.on('context', cb as (v?: unknown) => void); }
   onInit(cb: (m: { model: string; slashCommands: string[] }) => void): Disposable { return this.emitter.on('init', cb as (v?: unknown) => void); }
-  onError(cb: (m: { message: string }) => void): Disposable { return this.emitter.on('error', cb as (v?: unknown) => void); }
+  onError(cb: (m: { message: string; detail?: string }) => void): Disposable { return this.emitter.on('error', cb as (v?: unknown) => void); }
   onInterrupted(cb: () => void): Disposable { return this.emitter.on('interrupted', cb as (v?: unknown) => void); }
   onThinkingTokens(cb: (m: { tokens: number }) => void): Disposable { return this.emitter.on('thinking-tokens', cb as (v?: unknown) => void); }
   onTaskProgress(cb: (m: TaskProgress) => void): Disposable { return this.emitter.on('task-progress', cb as (v?: unknown) => void); }
@@ -414,7 +419,7 @@ export class SdkSession {
   onQuestion(cb: (r: QuestionRequest) => void): Disposable { return this.emitter.on('question', cb as (v?: unknown) => void); }
   onActions(cb: (m: { actions: AgentAction[] }) => void): Disposable { return this.emitter.on('actions', cb as (v?: unknown) => void); }
   onCwd(cb: (m: { cwd: string }) => void): Disposable { return this.emitter.on('cwd', cb as (v?: unknown) => void); }
-  onExit(cb: (code: number | null) => void): Disposable { return this.emitter.on('exit', cb as (v?: unknown) => void); }
+  onExit(cb: (m: { code: number | null; stderr: string }) => void): Disposable { return this.emitter.on('exit', cb as (v?: unknown) => void); }
 
   /** Stop the claude process but keep the session object (status → `exited`),
    *  so its widget can linger as the terminal agent's does. */
@@ -646,7 +651,10 @@ export class SdkSession {
       || (typeof r.subtype === 'string' && r.subtype.startsWith('error'));
     if (failed) {
       const reason = r.api_error_status || r.subtype || r.stop_reason || r.terminal_reason || 'error';
-      this.emitter.emit('error', { message: r.result ? `${reason}: ${r.result}` : `Agent error (${reason})` });
+      // claude rarely fills `result` on an execution error — fall back to the stderr
+      // tail so the row carries the real cause instead of just the subtype.
+      const detail = r.result || this.recentStderr();
+      this.emitter.emit('error', { message: `Agent error (${reason})`, detail: detail || undefined });
     }
   }
 
@@ -720,7 +728,28 @@ export class SdkSession {
 
   private handleExit(code: number | null): void {
     this.setStatus('exited');
-    this.emitter.emit('exit', code);
+    // A non-zero code is a crash (claude bailed — e.g. an `error_during_execution`
+    // turn that took the process down). Log the stderr tail so the cause survives in
+    // the app log even without ZYM_SDK_DEBUG. A null code is a signal / our own
+    // stop() — not surfaced as a fault.
+    if (code != null && code !== 0) logExit(code, this.recentStderr(40));
+    this.emitter.emit('exit', { code, stderr: this.recentStderr() });
+  }
+
+  // Accumulate claude's stderr, keeping only the most recent lines (the tail is
+  // what matters when surfacing why a turn/process died).
+  private captureStderr(chunk: string): void {
+    for (const line of chunk.split('\n')) {
+      const trimmed = line.trimEnd();
+      if (trimmed) this.stderrTail.push(trimmed);
+    }
+    const MAX = 40;
+    if (this.stderrTail.length > MAX) this.stderrTail.splice(0, this.stderrTail.length - MAX);
+  }
+
+  /** The last few stderr lines, for surfacing the cause of an error/crash. */
+  private recentStderr(maxLines = 12): string {
+    return this.stderrTail.slice(-maxLines).join('\n');
   }
 
   private setMode(mode: AgentMode): void {
@@ -903,6 +932,11 @@ function logSend(message: unknown): void {
 function logUnhandled(event: StreamEvent): void {
   console.log(`${RED}[claude → UNHANDLED]${RESET}`, JSON.stringify(event));
   fileLog('unhandled', event);
+}
+/** An abnormal process exit. Always logged (a real fault, not debug noise) so the
+ *  stderr tail that explains an `error_during_execution` crash isn't lost. */
+function logExit(code: number | null, stderr: string): void {
+  console.warn(`${RED}[claude] process exited (code ${code})${RESET}${stderr ? `\n${stderr}` : ''}`);
 }
 /** A permission interaction (`→` request from claude, `←` decision to claude). */
 function logPerm(direction: '→' | '←', payload: unknown): void {
