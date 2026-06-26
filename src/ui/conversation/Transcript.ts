@@ -10,6 +10,7 @@
  * the class directly.
  */
 import { Gtk, Adw } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { clearChildren, setMarkupSafe, escapeMarkup } from '../proseMarkup.ts';
 import { describeTool, toolFilePath } from '../toolDisplay.ts';
@@ -75,6 +76,10 @@ export class Transcript {
   // The open collapsed file-tool row (Read/Write/Edit/…), while a CONSECUTIVE run of
   // the SAME tool is appended to it. Any other entry clears it (see appendEntry).
   private fileGroup: { tool: string; files: InstanceType<typeof Gtk.Box> } | null = null;
+  // The two vadjustment handlers wired in setupAutoScroll capture `this`; node-gtk roots
+  // each behind a Global handle, so an un-disconnected one pins this Transcript (→ its whole
+  // entries column) after the conversation closes. `dispose()` severs them. See rule 2.
+  private readonly subs = new CompositeDisposable();
 
   constructor(opts: TranscriptOptions = {}) {
     this.box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
@@ -170,7 +175,7 @@ export class Transcript {
     button.addCssClass('transcript-file-path');
     button.setChild(new Gtk.Label({ xalign: 0, label: display }));
     button.setTooltipText(absPath);
-    button.on('clicked', () => opts.onOpenFile(absPath));
+    this.subs.connect(button, 'clicked', () => opts.onOpenFile(absPath));
     this.fileGroup.files.append(button);
     this.scrollToBottom();
 
@@ -219,8 +224,8 @@ export class Transcript {
     const adj = this.root.getVadjustment();
     this.lastValue = adj.getValue();
     this.lastUpper = adj.getUpper();
-    adj.on('changed', () => { if (this.stickToBottom) this.pinToBottom(); });
-    adj.on('value-changed', () => {
+    this.subs.connect(adj, 'changed', () => { if (this.stickToBottom) this.pinToBottom(); });
+    this.subs.connect(adj, 'value-changed', () => {
       const value = adj.getValue();
       const upper = adj.getUpper();
       if (!this.pinning) {
@@ -233,5 +238,11 @@ export class Transcript {
       this.lastValue = value;
       this.lastUpper = upper;
     });
+  }
+
+  /** Sever the vadjustment autoscroll handlers so a closed conversation stops pinning
+   *  this Transcript. Called from `AgentConversation.dispose()`. */
+  dispose(): void {
+    this.subs.dispose();
   }
 }

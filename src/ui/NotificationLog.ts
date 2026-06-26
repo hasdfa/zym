@@ -31,7 +31,7 @@ export class NotificationLog {
     this.listBox.addCssClass('NotificationList');
     // Activating a row (click / Enter) runs that notification's default action,
     // if any; the row is only activatable when it has one.
-    this.listBox.on('row-activated', (row: any) => this.rows[row.getIndex()]?.activate());
+    this.subs.connect(this.listBox, 'row-activated', (row: any) => this.rows[row.getIndex()]?.activate());
 
     this.root = new Gtk.ScrolledWindow();
     this.root.addCssClass('NotificationLog');

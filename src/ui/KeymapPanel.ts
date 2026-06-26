@@ -92,7 +92,9 @@ export class KeymapPanel {
     );
     // Catch up to the current bindings when the panel becomes visible, since
     // pending-change refreshes are skipped while it is hidden.
-    this.root.on('map', () => this.refresh());
+    const onMap = () => this.refresh();
+    this.root.on('map', onMap);
+    this.subscriptions.push({ dispose: () => this.root.off('map', onMap) });
   }
 
   /** Move keyboard focus into the table. */

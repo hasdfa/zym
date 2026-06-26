@@ -139,21 +139,21 @@ export class Terminal {
     terminal.setScrollOnKeystroke(true);
     terminal.setMouseAutohide(true);
     terminal.setFont(fonts.monospaceDescription());
-    // Follow the app monospace font live (VTE takes a description, not CSS); drop
-    // the subscription when the widget is destroyed.
-    const unsubscribe = fonts.onChange(() => terminal.setFont(fonts.monospaceDescription()));
-    terminal.on('destroy', () => unsubscribe());
+    // Follow the app monospace font live (VTE takes a description, not CSS). A closed
+    // terminal tab UNPARENTS the Vte (no `destroy` — see dispose()), so the drop must hang
+    // off `disposables`, not a `destroy` handler that never fires.
+    this.disposables.defer(fonts.onChange(() => terminal.setFont(fonts.monospaceDescription())));
 
     // The shell/agent's reported title (xterm OSC 0/2). VTE 0.78+ deprecated the
     // `window-title-changed` signal in favor of termprops, so the title arrives as
     // the `xterm.title` termprop via the detailed `termprop-changed` signal.
-    terminal.on('termprop-changed', (name: string) => {
+    this.disposables.connect(terminal, 'termprop-changed', (name: string) => {
       if (name !== XTERM_TITLE) return;
       const value = terminal.getTermpropString(XTERM_TITLE) as string | string[] | null;
       this._title = (Array.isArray(value) ? value[0] : value) || 'Terminal';
       this.emitTitleChange();
     });
-    terminal.on('child-exited', (status: number) => this.handleChildExit(status));
+    this.disposables.connect(terminal, 'child-exited', (status: number) => this.handleChildExit(status));
     return terminal;
   }
 
@@ -318,8 +318,9 @@ export class Terminal {
     // back instead of sending it. Deliver it to the child now — but only while
     // we're the focused terminal in insert mode, so normal-mode keys stay with
     // the app and a background terminal never steals the keystroke.
-    const fallthrough = zym.keymaps.onFallthrough((keys) => this.handleFallthrough(keys));
-    this.terminal.on('destroy', () => fallthrough.dispose());
+    // A closed terminal tab unparents (no `destroy`), so the fallthrough sub must hang off
+    // `disposables` directly — a `destroy` handler would never fire to drop it.
+    this.disposables.add(zym.keymaps.onFallthrough((keys) => this.handleFallthrough(keys)));
 
     // Whenever the Vte actually holds the keyboard, we are in insert mode — keeping
     // the "focus target == mode" invariant the modal design relies on. This covers

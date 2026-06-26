@@ -18,6 +18,7 @@
  * params). One peek at a time.
  */
 import { Gtk, type SourceView } from '../../gi.ts';
+import { CompositeDisposable } from '../../util/eventKit.ts';
 
 const asIter = (res: any): any => (Array.isArray(res) ? res[1] : res);
 
@@ -49,6 +50,11 @@ export class Peek {
   private readonly gapTag: any;
   private current: Current | null = null;
   private wired = false;
+  // The overlay/adjustment handlers wired below capture `this` (→ overlay + view); node-gtk
+  // roots them behind a Global handle, so a single un-disconnected one pins this Peek and,
+  // through `onClose`, the host editor. `dispose()` (from TextEditor.dispose) severs them.
+  private readonly subs = new CompositeDisposable();
+  private disposed = false;
 
   constructor(view: SourceView, overlay: InstanceType<typeof Gtk.Overlay>) {
     this.view = view;
@@ -105,7 +111,7 @@ export class Peek {
     // Position the peek at the gap's exact window coords; only the card's rect is
     // allocated, so input outside it passes through to the file. Other overlay
     // children (caret, hover, search bar, …) fall through to default positioning.
-    this.overlay.on('get-child-position', (child: any, alloc: any) => {
+    this.subs.connect(this.overlay, 'get-child-position', (child: any, alloc: any) => {
       const cur = this.current;
       if (!cur || child !== cur.widget || !alloc) return false;
       const [x, y] = this.gapWindowXY(cur.mark);
@@ -118,7 +124,18 @@ export class Peek {
 
     // Scroll-follow. The view's adjustment is the ScrolledWindow's by now (it's
     // already mounted), so this binds the live one.
-    this.view.getVadjustment?.()?.on('value-changed', () => this.reposition());
+    const vadj = this.view.getVadjustment?.();
+    if (vadj) this.subs.connect(vadj, 'value-changed', () => this.reposition());
+  }
+
+  /** Sever the overlay/adjustment handlers (so a closed peek stops pinning the editor)
+   *  and drop the gap tag. Called from `TextEditor.dispose()`; idempotent (rule 1). */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.close();
+    this.subs.dispose();
+    this.buffer.getTagTable().remove(this.gapTag);
   }
 
   /** The gap's top-left in the view's WIDGET coords (scroll-aware). */

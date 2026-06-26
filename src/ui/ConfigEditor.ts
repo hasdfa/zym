@@ -99,7 +99,7 @@ class ConfigEditor {
   private buildSwitchRow(key: string, schema: ConfigSchema): Row {
     const row = new Adw.SwitchRow();
     this.setMeta(row, key, schema, true);
-    row.on('notify::active', () => {
+    this.subs.connect(row, 'notify::active', () => {
       if (this.syncing) return;
       zym.config.set(key, row.getActive());
       saveConfig();
@@ -122,7 +122,7 @@ class ConfigEditor {
     });
     const row = new Adw.SpinRow({ adjustment, digits: isInt ? 0 : 2 });
     this.setMeta(row, key, schema, true);
-    adjustment.on('value-changed', () => {
+    this.subs.connect(adjustment, 'value-changed', () => {
       if (this.syncing) return;
       zym.config.set(key, adjustment.getValue());
       saveConfig();
@@ -136,7 +136,7 @@ class ConfigEditor {
     const row = new Adw.ComboRow();
     this.setMeta(row, key, schema, true);
     row.setModel(Gtk.StringList.new(options.map((o) => String(o))));
-    row.on('notify::selected', () => {
+    this.subs.connect(row, 'notify::selected', () => {
       if (this.syncing) return;
       const i = row.getSelected();
       if (i < 0 || i >= options.length) return;
@@ -158,7 +158,7 @@ class ConfigEditor {
     const toText = (v: ConfigValue | undefined) =>
       json ? JSON.stringify(v ?? null) : String(v ?? '');
 
-    row.on('apply', () => {
+    this.subs.connect(row, 'apply', () => {
       if (this.syncing) return;
       let value: ConfigValue;
       if (json) {

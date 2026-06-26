@@ -1984,6 +1984,9 @@ export class AppWindow {
     const manager = new PluginManagerPanel();
     const child = this.workbench.center.add(manager.root, { title: 'Plugin Manager', requireTabBar: true });
     this.pluginManagerTab = { root: manager.root, child };
+    // Sever the panel's command reg + per-row switch handlers when its tab closes
+    // (disposeChild fires this), else the whole panel leaks per open/close (rule 2).
+    this.tabCloseHandlers.set(manager.root, () => { manager.dispose(); this.pluginManagerTab = null; });
     manager.root.grabFocus();
   }
 
@@ -2041,12 +2044,11 @@ export class AppWindow {
   // and reused across close/reopen.
   private revealGitPanel() {
     const gitPanel = this.ensureGitPanel(this.workbench);
-    if (this.workbench.gitTab && Panel.containing(gitPanel.root)) {
-      this.workbench.gitTab.select();
+    if (this.workbench.center.reveal(gitPanel.root)) {
       gitPanel.focus();
       return;
     }
-    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed page
+    if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed/orphaned page
     this.workbench.gitTab = this.workbench.center.add(gitPanel.root, {
       title: `${Icons.git}  Git`,
       requireTabBar: true,
