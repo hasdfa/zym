@@ -21,7 +21,7 @@ declarative layer speak only of "block decorations", "anchors", and "specs".
   splice, **and** collapse/expand (also a `retarget` splice). The
   decoration's line needs **no re-derivation** across any of these.
 - The **only** operation that drops the mark is a true `materialize` /
-  `setText` — initial build, an explicit `ProjectionView.rebuild()`, or a
+  `setText` — initial build, an explicit `Screen.rebuild()`, or a
   Document file-reload. That is the *lone* point a decoration must be
   re-placed from a fresh projection.
 
@@ -71,7 +71,7 @@ decos.clear();
 ```
 
 Implementation lives in `BlockDecorationSet.ts`,
-`TextEditor.blockDecorations()`, `ProjectionView.onDidMaterialize`, and
+`TextEditor.blockDecorations()`, `Screen.onDidMaterialize`, and
 `TextEditorSource.viewRowForSource`. Tests:
 `BlockDecorationAnchor.test.ts` (mark survival), `BlockDecorationSet.test.ts`
 (the layer).
@@ -87,7 +87,7 @@ Behaviour of `set(specs)`:
 
 Between `set()` calls the editor does **nothing**: positions ride the
 primitive's marks. The editor re-runs each registered set's `set(lastSpecs)`
-only on a new narrow `ProjectionView.onDidMaterialize` (initial build /
+only on a new narrow `Screen.onDidMaterialize` (initial build /
 `rebuild` / reload) — the one case marks are lost.
 
 ## Who calls `set()`, and when (logical-model changes only)

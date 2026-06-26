@@ -29,8 +29,8 @@ per-file source of truth     the editor's content           what's displayed
 ## Transforms and where they live
 
 - **document ↔ buffer** — the multibuffer stitch (segment map) in
-  `ViewProjection`. Single file = identity, short-circuited.
-- **buffer ↔ screen** — code folds (the `ViewProjection` fold transform,
+  `CoordinatesMap`. Single file = identity, short-circuited.
+- **buffer ↔ screen** — code folds (the `CoordinatesMap` fold transform,
   materialized into the view buffer) plus soft-wrap (GtkSourceView at render
   time; pixel geometry for `gj`/`gk`).
 
@@ -53,7 +53,7 @@ Read these — both are intentional and will mislead if you assume otherwise.
 2. **`GtkSource.Buffer` is storage, not a coordinate level** — GTK is an
    implementation detail. The headless `GtkSource.Buffer` stores `document`; the
    materialized view `GtkSource.Buffer` stores `screen`. The `buffer` space
-   itself is logical (computed by `ViewProjection`) with no dedicated
+   itself is logical (computed by `CoordinatesMap`) with no dedicated
    `GtkBuffer`. Never infer a coordinate level from a GTK buffer field name.
 
 ## Current state (WIP)
@@ -61,12 +61,13 @@ Read these — both are intentional and will mislead if you assume otherwise.
 The vocabulary above is the target; the code is mid-migration.
 
 - **Stage 1 done — the projection layer speaks the canonical names.**
-  `ViewProjection` (`documentToScreen` / `screenToDocument` /
+  `CoordinatesMap` (`documentToScreen` / `screenToDocument` /
   `bufferOffsetToScreen` / `screenOffsetToBuffer` / `bufferRowForDocument` / …,
-  `Segment.documentKey`, `ScreenTarget`/`DocumentPosition`), the `FoldHost`
-  contract + its `ProjectionView` / `Document` implementations
-  (`documentLineForScreenLine` / `screenLineForDocumentLine` /
-  `documentPointFromScreen` / `screenPointFromDocument` / `foldScreenRange` / …),
+  `Segment.documentKey`, `ScreenTarget`/`DocumentPosition`), the `ScreenProjection`
+  contract — fold + document↔screen translation, implemented by `Screen` and held
+  directly by `SyntaxController` / the cursor model (so the `Document` no longer routes
+  fold calls by view buffer) — (`documentLineForScreenLine` / `screenLineForDocumentLine` /
+  `documentPointFromScreen` / `screenPointFromDocument` / `fold` / …),
   and `SyntaxController`'s internal translators (`documentRow` / `screenRow` /
   `documentPos` / `screenIterForDocument` / …) are all on **document / buffer /
   screen**. This was a rename-only change (no behavior change).
@@ -87,7 +88,7 @@ The vocabulary above is the target; the code is mid-migration.
     screen-in/screen-iter-out bridge for the genuine screen callers
     (`pixelPositionForScreenPosition`, `clipScreenPosition`, scroll-to-screen).
   - For a single-file editor `document == buffer`, so the `FoldAccess`
-    translators (the `document`-named `FoldHost` surface) ARE the `buffer` ones.
+    translators (delegating to the view's `ScreenProjection`) ARE the `buffer` ones.
   - Gated to **single-document editors** (`EditorModel.foldProjection`): a
     multibuffer keeps `buffer == screen` (folding off) and buffer-only editors have
     no projection — both stay identity. With **no active fold the transform is

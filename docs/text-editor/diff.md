@@ -9,7 +9,7 @@
 All diffs render on the continuous, multi-file multibuffer **`DiffView`**
 (`src/ui/DiffView.ts`). It stitches each changed file's old (HEAD/blob) and new
 (working-tree or live `Document`) sides into one scrollable editor via a
-`ViewProjection`: changed hunks plus a little context are shown, long unchanged
+`CoordinatesMap`: changed hunks plus a little context are shown, long unchanged
 runs elide to a `⋯` gap widget, and per-side tree-sitter highlighting,
 added/removed backgrounds, and old|new line-number gutters are painted on top.
 It is fully documented in **[multibuffer.md](multibuffer.md)** — start there.

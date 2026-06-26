@@ -153,7 +153,7 @@ Per-feature detail:
 - [Coordinates](text-editor/coordinates.md) — the `document`/`buffer`/`screen`
   position vocabulary (canonical); code/docs are mid-migration onto it.
 - [Multibuffer](text-editor/multibuffer.md) — every editor on a
-  `ViewProjection`/`ProjectionView` substrate; editable project-search + git-diff
+  `CoordinatesMap`/`Screen` substrate; editable project-search + git-diff
   shipped (folding off by design).
 - [Folding](text-editor/folding.md) — view-side text projection; model stays the
   source of truth, renderers translate + re-render on `onFoldsChanged`.
@@ -224,7 +224,7 @@ surfaced and fixed at the source. Workarounds for `node-gtk` should not be allow
 Unconfirmed gotcha: JS microtasks may not drain promptly under node-gtk's GLib main 
 loop. Evidence is mixed — `node-gtk`'s `loop.cc` flushes them in `loop_source_prepare` 
 every iteration, and `queueMicrotask`-deferred multi-cursor edit replication 
-(`EditorModel`) works in the app — yet `ProjectionView`/`DiffView` saw 
+(`EditorModel`) works in the app — yet `Screen`/`DiffView` saw 
 microtask-deferred work stay stale until later activity and switched to `setTimeout` 
 / the GTK frame clock. Cause unresolved; if work you defer doesn't seem to run promptly in the app, suspect
 this and prefer a macrotask (or the frame clock when it must land before a paint).

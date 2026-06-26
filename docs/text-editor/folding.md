@@ -29,16 +29,17 @@ newline-join; a U+FFFC char is excluded from `getText` but counted by offsets �
 pervasive off-by-one). The literal-text placeholder in a projected buffer avoids
 all of these.
 
-## The primitive — `Document` fold projection
+## The primitive — the `Screen` fold projection
 
-`src/ui/TextEditor/Document.ts`. A **fold** collapses a document range into a short
-placeholder in ONE view; folds are per-view (a split can fold what the other
-shows).
+`src/ui/TextEditor/Screen.ts` — the per-view handle `Document.createView()` returns; its
+consumers (`SyntaxController`, the cursor model) hold it directly. A **fold** collapses a
+document range into a short placeholder in ONE view; folds are per-view (a split can fold
+what the other shows).
 
 ```ts
-const fold = doc.foldScreenRange(buffer, viewStart, viewEnd, '[3]'); // collapse → placeholder
-doc.unfoldScreen(buffer, fold);                                       // restore document text
-const [ps, pe] = doc.foldPlaceholderRange(buffer, fold);           // live screen offsets
+const fold = screen.fold(viewStart, viewEnd, '[3]'); // collapse → placeholder
+screen.unfold(fold);                                  // restore document text
+const [ps, pe] = screen.foldPlaceholderRange(fold);   // live screen offsets
 ```
 
 Each fold owns four marks: `pStart/pEnd` (view, the placeholder) and
@@ -147,7 +148,7 @@ view≠model, and the easiest thing to forget.
 ## Reusing the projection for other inline markers
 
 Any "show a short stand-in for a longer model span, on one real navigable line"
-can reuse `foldScreenRange`/`unfoldScreen` + the `FoldAccess` atomicity, e.g.
+can reuse `Screen.fold`/`unfold` + the `FoldAccess` atomicity, e.g.
 collapsing a long string/array literal, a `// region` block, generated code, or
 a redacted span. Wire a consumer that (1) decides the view range + placeholder,
 (2) styles the placeholder via a tag, (3) reuses the document↔screen translation at
@@ -164,7 +165,7 @@ view shows *less*.
   change — see language-config.md). Indentation-based languages (Python) have no
   continuation line, so keep-footer doesn't apply.
 - **Nested folds** compose; folding over an already-folded region **subsumes**
-  the inner fold (`Document.foldScreenRange` drops it,
+  the inner fold (`Screen.fold` drops it,
   `SyntaxController.pruneDeadFolds` clears the handle, `isFoldAlive` guards the
   read paths). Covered by tests.
 - New **document-coord renderers** must translate *and* re-render on

@@ -22,7 +22,7 @@ Three layers:
 - **Document** — a parsed text unit: a `Document` (live/new side, via
   `DocumentRegistry`) or a parsed blob (old/base side). Owns its model
   buffer + shared `DocumentSyntax` parse + LSP doc + file I/O.
-- **`ViewProjection`** (`src/ui/TextEditor/ViewProjection.ts`) — pure,
+- **`CoordinatesMap`** (`src/ui/TextEditor/CoordinatesMap.ts`) — pure,
   GTK-free coordinate map over an ordered `Item[]` (`segment`s over
   documents + synthesized `block` rows). Maps **document `(documentKey,row,
   col)` ↔ buffer ↔ screen** (the vocabulary of
@@ -33,8 +33,8 @@ Three layers:
   path). The editability gate (`isScreenRangeEditable`) rejects block/
   phantom/cross-document/folded ranges. A no-fold **row-direct** fast path
   lets in-place edits skip the remap.
-- **`ProjectionView`** (`src/ui/TextEditor/ProjectionView.ts`) — per-view
-  materialize + bidirectional sync over a `ViewProjection`. Does
+- **`Screen`** (`src/ui/TextEditor/Screen.ts`) — per-view
+  materialize + bidirectional sync over a `CoordinatesMap`. Does
   write-through (screen→document, clamped to one editable segment),
   reverse-sync (document→screen, incremental mirror; `retarget` =
   minimal-churn splice re-diff for computed surfaces), incremental
@@ -69,7 +69,7 @@ UI classes carry no `MultiBuffer` in their name; that's the model layer
 (`src/ui/TextEditor/TextEditorSource.ts`) with two implementations:
 `Document` (one file/source) or `MultiBufferDocument`
 (`src/ui/multibuffer/MultiBufferDocument.ts`, N sources over one
-`ProjectionView`). A multi-source backing reports `isMultiSource`; the
+`Screen`). A multi-source backing reports `isMultiSource`; the
 editor derives `embedded` from it (no own line numbers / minimap / LSP /
 git gutter / folding). A peek view stays file-backed (keeps LSP + the
 shared parse). Buffer-only mode (commit message, diff panes, picker) is a
@@ -79,7 +79,7 @@ file-less `Document` + `BufferEditorOptions` presentation knobs, pinned by
 ## What ships today
 
 Single-file editing plus both multibuffer surfaces run on the
-`ViewProjection`/`ProjectionView` substrate:
+`CoordinatesMap`/`Screen` substrate:
 
 - **Editable everywhere** — single-file (identity), project search, and
   diff all write through to live `Document`s; replace-all across files is
@@ -131,7 +131,7 @@ Single-file editing plus both multibuffer surfaces run on the
   the search and rebuilds the results multibuffer (`SearchResultsView`).
   Ripgrep runs through the process runner (`projectSearch.ts`, see
   `docs/process-runner.md`). `file:save` routes to the active multibuffer.
-- **Cross-source undo/redo** — `ProjectionView` is the `UndoTarget`;
+- **Cross-source undo/redo** — `Screen` is the `UndoTarget`;
   re-entrant user actions; a multi-file edit is one `ctrl-z`.
 - **Multibuffer interaction** — vim works (real editor); expand-context
   (diff); copy is clean (headers AND gaps are widget bands in both
@@ -182,7 +182,7 @@ Single-file editing plus both multibuffer surfaces run on the
   multibuffer surface MUST keep code folding off, and the editor enforces
   this: a multi-source backing (`isMultiSource`) sets `folding: false`
   and the `embedded` flag. Single-file editors fold normally — their
-  *coordinates* go through the same fold-aware `ProjectionView`
+  *coordinates* go through the same fold-aware `Screen`
   substrate, but their *highlighting* uses the separate fold-aware
   single-source painter path. **Do not enable folding on any multibuffer
   surface** — captures would land on the wrong rows once a region
@@ -205,7 +205,7 @@ Single-file editing plus both multibuffer surfaces run on the
     a derived map must catch up (a one-frame lag is invisible) → a
     macrotask is fine, and `setTimeout` DOES fire under the GLib loop
     (libuv is pumped every loop iteration — see the `js-timers-refactor`
-    memory). `ProjectionView.scheduleSync` (the multi-source reverse-sync
+    memory). `Screen.scheduleSync` (the multi-source reverse-sync
     remap/rebuild for undo + cross-view edits) is the latter: it uses
     `setTimeout`, because the reverse-sync handlers already mirrored the
     exact edit into the view synchronously; only `this.projection` (the
@@ -217,7 +217,7 @@ Single-file editing plus both multibuffer surfaces run on the
     each view row from its projected source) must NOT run while a remap
     is pending — a reverse-sync `changed` fires *during* the mirror, when
     the map is still stale. `SearchResultsView` skips its repaint when
-    `ProjectionView.isSyncPending()` and re-runs it from
+    `Screen.isSyncPending()` and re-runs it from
     `setReflowHandler` (after the deferred rebuild). Header/gap *bands*
     don't need this — they're source-anchored block decorations that ride
     their marks (see `docs/text-editor/block-decorations.md`).
@@ -226,9 +226,9 @@ Single-file editing plus both multibuffer surfaces run on the
   non-contiguous document range — two regions of one file are the same
   document in different segments, with hidden rows between them.
   `EditorModel.setTextInBufferRange`'s `editableAt` gate (→
-  `ViewProjection.isScreenRangeEditable`) requires a SINGLE SEGMENT, so
+  `CoordinatesMap.isScreenRangeEditable`) requires a SINGLE SEGMENT, so
   such an edit is refused before GTK mutates the buffer. Rejecting later
-  (in `ProjectionView.writeThrough*`) is too late: the
+  (in `Screen.writeThrough*`) is too late: the
   `insert-text`/`delete-range` handlers are *before* handlers, so
   returning early skips the DOCUMENT write but GTK still applies the edit to
   the view buffer — screen and document diverge.
@@ -263,7 +263,7 @@ Single-file editing plus both multibuffer surfaces run on the
 
 ## Key code
 
-- Substrate: `src/ui/TextEditor/ViewProjection.ts`, `ProjectionView.ts`;
+- Substrate: `src/ui/TextEditor/CoordinatesMap.ts`, `Screen.ts`;
   `src/syntax/DocumentSyntax.ts`, `SyntaxProjection.ts`,
   `syntax-controller.ts`; `Document.ts`, `DocumentRegistry.ts`.
 - Surfaces (UI, `src/ui/`): `SearchResultsView.ts`, `ProjectSearchView.ts`

@@ -46,7 +46,7 @@ vim-mode-plus).
 | Code folding | **Built** (ours) | No upstream fold API in GtkSource 5; we use the `invisible` `TextTag`. |
 | Gutter (line nums, diagnostics, git bars) | **Native** | `GtkSourceGutterRenderer`. |
 | Inline virtual text / inlay hints / diff | **Built** | `VirtualText.ts` wraps native `GtkSourceAnnotations` (5.18+; we're on 5.20). |
-| Diff display | **Built** | One multibuffer `DiffView` (`src/ui/DiffView.ts`) on a `ViewProjection`. |
+| Diff display | **Built** | One multibuffer `DiffView` (`src/ui/DiffView.ts`) on a `CoordinatesMap`. |
 | Search UI | **Built** | `SearchController` + `SearchBar`. |
 | Minimap | **Native** | `GtkSource.Map`. |
 | Multiple cursors / block selection | **Built (emulated)** | No native support; emulated on `MarkerLayer` (Option A). |
@@ -309,7 +309,7 @@ undo in a couple of steps; replication covers inserts + single-line backspaces
 
 Every diff renders on the one multibuffer `DiffView` (`src/ui/DiffView.ts`): each
 changed file's old/new sides are stitched into a single scrollable editor via a
-`ViewProjection`, with changed hunks + context shown and long unchanged runs
+`CoordinatesMap`, with changed hunks + context shown and long unchanged runs
 elided to a `⋯` gap widget. Backgrounds come from `editor.decorations`; per-side
 syntax is painted through the projection. See [multibuffer.md](multibuffer.md)
 and [diff.md](diff.md). Diff *data* comes from the **Git** workstream;
