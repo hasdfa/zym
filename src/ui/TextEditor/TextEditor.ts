@@ -19,6 +19,7 @@ import { addStyles } from '../../styles.ts';
 import { EditorModel } from './EditorModel.ts';
 import { Document, type DocumentHost } from './Document.ts';
 import type { TextEditorSource } from './TextEditorSource.ts';
+import type { Screen } from './Screen.ts';
 import { InlayHintController } from './InlayHintController.ts';
 import { attachVim } from './vim/index.ts';
 import { zym } from '../../zym.ts';
@@ -381,6 +382,9 @@ export class TextEditor implements DocumentHost {
   // are native and independent per view (the A2 document-model architecture).
   private readonly document: TextEditorSource;
   private readonly releaseDocument: (() => void) | null;
+  // This view's buffer↔screen projection (folds + the multibuffer stitch); `this.buffer` is its
+  // backing GtkSource.Buffer. The fold/translation surface SyntaxController + the cursor model use.
+  private readonly screen: Screen;
   private readonly buffer: SourceBuffer;
   private readonly view: SourceView;
   // Drives the vim `fold:*` commands and owns the fold projection.
@@ -535,7 +539,8 @@ export class TextEditor implements DocumentHost {
     this.releaseDocument = options.document ? (options.onReleaseDocument ?? null) : null;
     // The view buffer comes from the backing — a `Screen` over one full-file segment for a
     // single source, or over N stitched sources for a multibuffer (identical seam either way).
-    this.buffer = this.document.createView();
+    this.screen = this.document.createView();
+    this.buffer = this.screen.buffer;
     // `embedded` = no single-file backing (a buffer-only input OR a multi-source surface): the
     // editor suppresses its own line numbers / minimap / scroll-past-end / LSP / git gutter / file
     // I/O. A peek view is file-backed (keeps LSP + the shared parse), only compact in presentation.
@@ -546,7 +551,7 @@ export class TextEditor implements DocumentHost {
     this.syntax = new SyntaxController(this.view, this.buffer, {
       lineNumbers: !(this.embedded || this.peekMode),
       folding: this.multiSource ? false : (this.bufferMode?.folding ?? (this.peekMode ? false : undefined)),
-      folds: this.document, // folding collapses view ranges through the model projection
+      screen: this.screen, // folding collapses view ranges through this view's screen projection
       // File / peek views share the document's ONE parse (model coords) — so a file open in N
       // views parses once. Buffer-only panes keep a private parse over their own view buffer; a
       // multibuffer paints its many sources stitched together via the projection instead.
@@ -564,10 +569,10 @@ export class TextEditor implements DocumentHost {
       placeholderRanges: () => this.syntax.placeholderRanges(),
       unfoldAt: (off) => this.syntax.unfoldAtViewOffset(off),
       unfoldAll: () => this.syntax.unfoldAll(),
-      screenPointFromDocument: (p) => this.document.screenPointFromDocument(this.buffer, p),
-      documentPointFromScreen: (p) => this.document.documentPointFromScreen(this.buffer, p),
-      documentLineForScreenLine: (row) => this.document.documentLineForScreenLine(this.buffer, row),
-      screenLineForDocumentLine: (row) => this.document.screenLineForDocumentLine(this.buffer, row),
+      screenPointFromDocument: (p) => this.screen.screenPointFromDocument(p),
+      documentPointFromScreen: (p) => this.screen.documentPointFromScreen(p),
+      documentLineForScreenLine: (row) => this.screen.documentLineForScreenLine(row),
+      screenLineForDocumentLine: (row) => this.screen.screenLineForDocumentLine(row),
       documentLineText: (row) => this.document.documentLineText(row),
       documentLineCount: () => this.document.documentLineCount(),
       documentTextInRange: (start, end) => this.document.documentTextInRange(start, end),
@@ -837,7 +842,7 @@ export class TextEditor implements DocumentHost {
     this.inlayHints = new InlayHintController(
       this.view,
       () => this.lspDocument ?? null,
-      (line) => this.document.screenLineForDocumentLine(this.buffer, line),
+      (line) => this.screen.screenLineForDocumentLine(line),
     );
     this.subs.add(zym.config.observe('editor.inlayHints', () => void this.inlayHints.refresh()));
     // A fold open/close shifts the view lines under the model-positioned decorations
@@ -908,7 +913,7 @@ export class TextEditor implements DocumentHost {
     this.editorModel.dispose(); // sever the buffer cursor/insert/delete/changed handlers (each pins this editor)
     this.inlinePeek?.dispose(); // sever the peek's overlay/adjustment handlers + drop its gap tag
     this.document.removeHost(this);
-    this.document.removeView(this.buffer);
+    this.document.removeView(this.screen);
     if (this.releaseDocument) this.releaseDocument();
     else this.document.dispose();
     this.diagnostics?.dispose(); // undefined for a buffer-only editor (installLsp skipped)
@@ -1011,7 +1016,7 @@ export class TextEditor implements DocumentHost {
       () => this._currentFile,
       () => this.document.getText(), // diff against the MODEL (full file), not the collapsed view
       this.gitRepo,
-      (line) => this.document.documentLineForScreenLine(this.buffer, line),
+      (line) => this.screen.documentLineForScreenLine(line),
       () => this.root.getMapped(), // off-screen editors defer their git-show refresh
     );
     // When this editor is shown again (tab activated / dock revealed), run any
@@ -1020,7 +1025,7 @@ export class TextEditor implements DocumentHost {
     // Let the vim layer reach the gutter's hunk ranges (for `]h`/`[h`). Hunk rows are
     // MODEL/file rows; translate to view rows (folded ones collapse onto one line).
     this.editorModel.setHunkProvider(() => [
-      ...new Set((this.gitGutter?.hunkStartRows() ?? []).map((r) => this.document.screenLineForDocumentLine(this.buffer, r))),
+      ...new Set((this.gitGutter?.hunkStartRows() ?? []).map((r) => this.screen.screenLineForDocumentLine(r))),
     ]);
     // Live updates: re-diff the buffer (debounced) on every edit.
     this.editorModel.onDidChangeText(() => this.gitGutter?.scheduleUpdate());
@@ -1785,11 +1790,11 @@ export class TextEditor implements DocumentHost {
 
   /** VIEW line → MODEL line through the fold projection (the diff gutter keys by it). */
   documentLineForScreenLine(line: number): number {
-    return this.document.documentLineForScreenLine(this.buffer, line);
+    return this.screen.documentLineForScreenLine(line);
   }
   /** MODEL line → VIEW line (a folded run's model lines have no view line). */
   screenLineForDocumentLine(line: number): number {
-    return this.document.screenPointFromDocument(this.buffer, new Point(line, 0)).row;
+    return this.screen.screenPointFromDocument(new Point(line, 0)).row;
   }
 
   /** After `zo`/`za` opens a fold, drop the caret (no selection) on the first non-blank
@@ -2097,7 +2102,7 @@ export class TextEditor implements DocumentHost {
   /** @internal The cursor for an LSP request (anchors completion/hover at this view).
    *  Translated to model space — inline fold anchors shift view columns past them. */
   lspCursor(): Point {
-    return this.document.documentPointFromScreen(this.buffer, this.editorModel.getCursorBufferPosition());
+    return this.screen.documentPointFromScreen(this.editorModel.getCursorBufferPosition());
   }
 
   // --- Identity --------------------------------------------------------------

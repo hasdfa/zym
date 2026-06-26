@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Gtk, GtkSource } from '../../gi.ts';
 import { EditorModel, type FoldAccess } from './EditorModel.ts';
 import { Document } from './Document.ts';
+import type { Screen } from './Screen.ts';
 import { unwrapIter } from './iter.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';
@@ -50,21 +51,21 @@ function identityFoldAccess(
   };
 }
 
-/** A FoldAccess wired to a real folded `Document` + its view buffer — the true buffer↔screen
+/** A FoldAccess wired to a real folded `Document` + its view `Screen` — the true buffer↔screen
  *  transform (`document == buffer` for a single file). `overrides` supply the reveal hooks. */
 function documentFoldAccess(
   doc: Document,
-  buffer: InstanceType<typeof GtkSource.Buffer>,
+  screen: Screen,
   overrides: Partial<FoldAccess>,
 ): FoldAccess {
   return {
     placeholderRanges: () => [],
     unfoldAt: () => false,
     unfoldAll: () => {},
-    screenPointFromDocument: (p) => doc.screenPointFromDocument(buffer, p),
-    documentPointFromScreen: (p) => doc.documentPointFromScreen(buffer, p),
-    documentLineForScreenLine: (row) => doc.documentLineForScreenLine(buffer, row),
-    screenLineForDocumentLine: (row) => doc.screenLineForDocumentLine(buffer, row),
+    screenPointFromDocument: (p) => screen.screenPointFromDocument(p),
+    documentPointFromScreen: (p) => screen.documentPointFromScreen(p),
+    documentLineForScreenLine: (row) => screen.documentLineForScreenLine(row),
+    screenLineForDocumentLine: (row) => screen.screenLineForDocumentLine(row),
     documentLineText: (row) => doc.documentLineText(row),
     documentLineCount: () => doc.documentLineCount(),
     documentTextInRange: (a, b) => doc.documentTextInRange(a, b),
@@ -284,14 +285,15 @@ test('setEditableCheck rejects edits on non-editable rows (diff phantom/header r
 test('editing across a fold reveals it and edits the real (former-folded) text', () => {
   const doc = new Document();
   doc.setText('abXYZcd\n');
-  const buffer = doc.createView();
+  const screen = doc.createView();
+  const buffer = screen.buffer;
   const view = new GtkSource.View({ buffer });
   const m = new EditorModel(view, buffer);
-  const fold = doc.foldScreenRange(buffer, 2, 5, '[...]'); // collapse "XYZ" → view "ab[...]cd"
+  const fold = screen.fold(2, 5, '[...]'); // collapse "XYZ" → view "ab[...]cd"
   let folded = true;
-  m.setFoldAccess(documentFoldAccess(doc, buffer, {
-    placeholderRanges: () => (folded ? [doc.foldPlaceholderRange(buffer, fold!)] : []),
-    unfoldAt: () => { doc.unfoldScreen(buffer, fold!); folded = false; return true; },
+  m.setFoldAccess(documentFoldAccess(doc, screen, {
+    placeholderRanges: () => (folded ? [screen.foldPlaceholderRange(fold!)] : []),
+    unfoldAt: () => { screen.unfold(fold!); folded = false; return true; },
   }));
   // A BUFFER-space delete spanning the fold's source range ("XYZ", document cols 2–5) reveals it
   // and deletes the real (former-folded) text — the cursor/vim layer speaks buffer coordinates.
@@ -306,12 +308,13 @@ test('editing across a fold reveals it and edits the real (former-folded) text',
 function modelWithMultilineFold() {
   const doc = new Document();
   doc.setText('line0\nline1\nline2\nline3\nline4\n');
-  const buffer = doc.createView();
+  const screen = doc.createView();
+  const buffer = screen.buffer;
   const view = new GtkSource.View({ buffer });
   const m = new EditorModel(view, buffer);
-  const fold = doc.foldScreenRange(buffer, 11, 23, '[2]');
-  m.setFoldAccess(documentFoldAccess(doc, buffer, {
-    placeholderRanges: () => [doc.foldPlaceholderRange(buffer, fold!)],
+  const fold = screen.fold(11, 23, '[2]');
+  m.setFoldAccess(documentFoldAccess(doc, screen, {
+    placeholderRanges: () => [screen.foldPlaceholderRange(fold!)],
   }));
   return { m, buffer, doc };
 }

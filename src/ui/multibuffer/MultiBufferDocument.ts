@@ -32,8 +32,8 @@ export class MultiBufferDocument implements TextEditorSource {
   }
 
   // --- view + lifecycle (the single view IS the surface's pre-built PV) -------
-  createView(): SourceBuffer {
-    return this.pv.buffer;
+  createView(): Screen {
+    return this.pv;
   }
   removeView(): void {
     /* the PV is disposed in dispose(); a multibuffer has exactly one view */

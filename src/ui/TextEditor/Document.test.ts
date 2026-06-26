@@ -16,10 +16,12 @@ const textOf = (buf: any): string => buf.getText(buf.getStartIter(), buf.getEndI
 function setup(text: string) {
   const doc = new Document();
   doc.setText(text);
-  const a = doc.createView();
-  const b = doc.createView();
+  const aScreen = doc.createView();
+  const bScreen = doc.createView();
+  const a = aScreen.buffer;
+  const b = bScreen.buffer;
   const synced = () => textOf(a) === doc.getText() && textOf(b) === doc.getText();
-  return { doc, a, b, synced };
+  return { doc, a, b, aScreen, bScreen, synced };
 }
 
 test('a new view is seeded with the current document text', () => {
@@ -66,8 +68,8 @@ test('setText re-syncs every view and clears modified', () => {
 });
 
 test('removed views stop receiving edits', () => {
-  const { doc, a, b } = setup('hi\n');
-  doc.removeView(b);
+  const { doc, a, b, bScreen } = setup('hi\n');
+  doc.removeView(bScreen);
   insertAt(a, 0, 'Q');
   assert.equal(doc.getText(), 'Qhi\n');
   assert.equal(textOf(a), 'Qhi\n');

@@ -240,19 +240,16 @@ export class Document implements TextEditorSource {
   /** Open a new view onto this document: a Screen over the model (one full-file
    *  editable segment), materialized + kept in sync. Returns its view buffer. Detach with
    *  `removeView` on the view's teardown. */
-  createView(): SourceBuffer {
-    const pv = new Screen([this.fullFileItem()], new Map([[SOURCE_KEY, this.model]]));
-    pv.buffer.setHighlightSyntax(true); // the painter turns this off once it owns highlighting
-    this.pvs.set(pv.buffer, pv);
-    return pv.buffer;
+  createView(): Screen {
+    const screen = new Screen([this.fullFileItem()], new Map([[SOURCE_KEY, this.model]]));
+    screen.buffer.setHighlightSyntax(true); // the painter turns this off once it owns highlighting
+    this.pvs.set(screen.buffer, screen);
+    return screen;
   }
 
-  removeView(buffer: SourceBuffer): void {
-    const pv = this.pvs.get(buffer);
-    if (pv) {
-      pv.dispose();
-      this.pvs.delete(buffer);
-    }
+  removeView(screen: Screen): void {
+    screen.dispose();
+    this.pvs.delete(screen.buffer);
   }
 
   get viewCount(): number {

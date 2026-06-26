@@ -14,9 +14,10 @@ Gtk.init();
 function setup(text: string) {
   const doc = new Document();
   doc.setText(text);
-  const buffer = doc.createView();
+  const screen = doc.createView();
+  const buffer = screen.buffer;
   const view = new GtkSource.View({ buffer });
-  const syntax = new SyntaxController(view, buffer, { folds: doc });
+  const syntax = new SyntaxController(view, buffer, { screen });
   const textOf = () => buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true);
   const registerFoldable = (startLine: number, endLine: number) =>
     syntax.foldsByHeaderLine.set(startLine, { startLine, endLine, folded: false });

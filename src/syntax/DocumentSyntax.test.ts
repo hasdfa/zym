@@ -53,9 +53,10 @@ test('one parse paints two independent view buffers', () => {
   doc.setText(SAMPLE);
 
   const make = () => {
-    const buffer = doc.createView();
+    const screen = doc.createView();
+    const buffer = screen.buffer;
     const view = new GtkSource.View({ buffer });
-    const syntax = new SyntaxController(view, buffer, { folds: doc, documentSyntax: doc.syntax });
+    const syntax = new SyntaxController(view, buffer, { screen, documentSyntax: doc.syntax });
     syntax.setLanguageForPath('/x.js');
     return { buffer, syntax };
   };
@@ -76,9 +77,10 @@ test('an edit through one view reparses the shared model and repaints both views
   doc.setText(SAMPLE);
 
   const make = () => {
-    const buffer = doc.createView();
+    const screen = doc.createView();
+    const buffer = screen.buffer;
     const view = new GtkSource.View({ buffer });
-    const syntax = new SyntaxController(view, buffer, { folds: doc, documentSyntax: doc.syntax });
+    const syntax = new SyntaxController(view, buffer, { screen, documentSyntax: doc.syntax });
     syntax.setLanguageForPath('/x.js');
     return { buffer, syntax };
   };

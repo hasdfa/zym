@@ -36,25 +36,29 @@ import { GutterRenderer } from './gutterRenderers.ts';
  *  The painter parses the *document* (via a shared `DocumentSyntax`) and translates captures
  *  + tree-query results through these, so the line/point translators are now part of the
  *  contract (each returns identity while a view has no collapsed folds). */
-export interface FoldHost {
-  foldScreenRange(buffer: SourceBuffer, screenStart: number, screenEnd: number, placeholder: string): any;
-  unfoldScreen(buffer: SourceBuffer, fold: any): void;
-  foldPlaceholderRange(buffer: SourceBuffer, fold: any): [number, number];
-  documentLineForScreenLine(buffer: SourceBuffer, screenLine: number): number;
-  screenLineForDocumentLine(buffer: SourceBuffer, documentLine: number): number;
-  documentPointFromScreen(buffer: SourceBuffer, point: Point): Point;
-  screenPointFromDocument(buffer: SourceBuffer, point: Point): Point;
-  documentLineText(row: number): string;
-  /** Number of document (unfolded) lines. */
-  documentLineCount(): number;
-  /** Document text within `[start, end)` (codepoint columns), including fold-collapsed content. */
-  documentTextInRange(start: Point, end: Point): string;
+/**
+ * The per-view buffer↔screen projection that SyntaxController — and, via TextEditor's
+ * FoldAccess adapter, the cursor model — consumes: fold operations plus document↔screen
+ * coordinate translation, all in ONE view's own coordinates. There is no buffer parameter:
+ * the caller holds the projection for its view. Satisfied by `Screen` (a single file through
+ * `Document.createView`, or a multibuffer surface). The fold handle is opaque (`any`) to
+ * consumers — they only store it and hand it back.
+ */
+export interface ScreenProjection {
+  fold(screenStart: number, screenEnd: number, placeholder: string): any;
+  unfold(fold: any): void;
+  foldPlaceholderRange(fold: any): [number, number];
+  /** The document text a fold currently collapses (for matching during search). */
+  foldDocumentText(fold: any): string;
+  /** The DOCUMENT row span `[startRow, endRow]` a fold covers (for buffer-space fold motions). */
+  foldDocumentRowSpan(fold: any): [number, number];
   /** False once an enclosing fold has subsumed this one (its marks are gone). */
   isFoldAlive(fold: any): boolean;
-  /** The document text a fold currently collapses (for matching during search). */
-  foldDocumentText(buffer: SourceBuffer, fold: any): string;
-  /** The DOCUMENT row span `[startRow, endRow]` a fold covers (for buffer-space fold motions). */
-  foldDocumentRowSpan(buffer: SourceBuffer, fold: any): [number, number];
+  documentPointFromScreen(point: Point): Point;
+  screenPointFromDocument(point: Point): Point;
+  documentLineForScreenLine(screenLine: number): number;
+  screenLineForDocumentLine(documentLine: number): number;
+  documentLineText(row: number): string;
 }
 
 // Paint newly-revealed lines this often *during* a scroll (a throttle, not a trailing
@@ -139,7 +143,7 @@ export class SyntaxController {
   // Styles each collapsed-fold placeholder ([...]) — muted + non-editable.
   private readonly foldPlaceholderTag: any;
   // The projection folds collapse through (editor's Document; null for diff panes).
-  private foldHost: FoldHost | null = null;
+  private screen: ScreenProjection | null = null;
   // Active fold handles, one per collapsed region (bodies live only in the model).
   private readonly activeFolds: any[] = [];
   // Folds the user wants closed, keyed by MODEL start row (stable across folding — folds
@@ -213,7 +217,7 @@ export class SyntaxController {
     options: {
       lineNumbers?: boolean;
       folding?: boolean;
-      folds?: FoldHost;
+      screen?: ScreenProjection;
       documentSyntax?: DocumentSyntax;
       projection?: SyntaxProjection;
     } = {},
@@ -249,7 +253,7 @@ export class SyntaxController {
     // freeze on open). Instead we install the gutter after the first paint, once the
     // view's line metrics are validated, so it only ever queries the visible lines.
     this.wantLineNumbers = !!options.lineNumbers;
-    if (this.foldingEnabled) this.foldHost = options.folds ?? null;
+    if (this.foldingEnabled) this.screen = options.screen ?? null;
 
     // The shared parse runs on the model; this painter owns only its view. Use the
     // supplied DocumentSyntax (one parse for all of a document's views) or, with none,
@@ -686,18 +690,18 @@ export class SyntaxController {
 
   /** Whether this view currently collapses any document range (folds shift screen lines/cols). */
   private get screenFolded(): boolean {
-    return this.translate && !!this.foldHost && this.activeFolds.length > 0;
+    return this.translate && !!this.screen && this.activeFolds.length > 0;
   }
 
   private documentRow(screenRow: number): number {
-    return this.screenFolded ? this.foldHost!.documentLineForScreenLine(this.buffer, screenRow) : screenRow;
+    return this.screenFolded ? this.screen!.documentLineForScreenLine(screenRow) : screenRow;
   }
   private screenRow(documentRow: number): number {
-    return this.screenFolded ? this.foldHost!.screenLineForDocumentLine(this.buffer, documentRow) : documentRow;
+    return this.screenFolded ? this.screen!.screenLineForDocumentLine(documentRow) : documentRow;
   }
   private documentPos(screenRow: number, screenCol: number): [number, number] {
     if (!this.screenFolded) return [screenRow, screenCol];
-    const p = this.foldHost!.documentPointFromScreen(this.buffer, new Point(screenRow, screenCol));
+    const p = this.screen!.documentPointFromScreen(new Point(screenRow, screenCol));
     return [p.row, p.column];
   }
   private documentLineRange(screenFrom: number, screenTo: number): [number, number] {
@@ -711,7 +715,7 @@ export class SyntaxController {
   private screenIterForDocument(documentRow: number, documentCol: number): any {
     if (this.screenFolded) {
       const col = this.docSyntax.hasAstral ? this.documentCodepointCol(documentRow, documentCol) : documentCol;
-      const vp = this.foldHost!.screenPointFromDocument(this.buffer, new Point(documentRow, col));
+      const vp = this.screen!.screenPointFromDocument(new Point(documentRow, col));
       return asIter(this.buffer.getIterAtLineOffset(vp.row, vp.column));
     }
     // screen line == document line, screen text == document text → resolve directly on the view buffer.
@@ -729,10 +733,10 @@ export class SyntaxController {
     const buffer = this.buffer;
     this.foldsByHeaderLine.clear();
     // Collapsed folds first: their placeholder occupies a view line; key by it.
-    if (this.foldHost) {
+    if (this.screen) {
       this.pruneDeadFolds();
       for (const handle of this.activeFolds) {
-        const [ps, pe] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+        const [ps, pe] = this.screen.foldPlaceholderRange(handle);
         const line = asIter(buffer.getIterAtOffset(ps)).getLine();
         if (!this.foldsByHeaderLine.has(line)) {
           this.foldsByHeaderLine.set(line, { startLine: line, endLine: line, folded: true, handle });
@@ -760,8 +764,8 @@ export class SyntaxController {
    *  (which feeds codepoint columns into the Document projection). Reads the model line
    *  text through the fold host. Only reached on astral + folded; uncached (rare). */
   private documentCodepointCol(documentRow: number, utf16Col: number): number {
-    if (utf16Col <= 0 || !this.foldHost) return utf16Col;
-    const text = this.foldHost.documentLineText(documentRow);
+    if (utf16Col <= 0 || !this.screen) return utf16Col;
+    const text = this.screen.documentLineText(documentRow);
     let cp = 0;
     for (let i = 0; i < utf16Col && i < text.length; cp++) {
       const code = text.charCodeAt(i);
@@ -799,16 +803,16 @@ export class SyntaxController {
     const cursorOff = asIter(buffer.getIterAtMark(buffer.getInsert())).getOffset();
     // Track this code fold's desired open/closed state by its MODEL start row. Captured
     // before the expand splices the body back.
-    const codeFold = !!this.foldHost;
+    const codeFold = !!this.screen;
     const modelStart = codeFold ? this.documentRow(region.startLine) : -1;
     let revealed: RevealedRange | null = null;
     if (region.folded && region.handle) {
       // Expand: restore the body text from the model and report the restored range so a
       // fold-open command can place the caret at its first non-blank char.
-      const [ps, pe] = this.foldHost!.foldPlaceholderRange(this.buffer, region.handle);
+      const [ps, pe] = this.screen!.foldPlaceholderRange(region.handle);
       const sm = buffer.createMark(null, asIter(buffer.getIterAtOffset(ps)), true);
       const em = buffer.createMark(null, asIter(buffer.getIterAtOffset(pe)), false);
-      this.foldHost!.unfoldScreen(this.buffer, region.handle);
+      this.screen!.unfold(region.handle);
       revealed = [this.pointAtOffset(this.markOffset(sm)), this.pointAtOffset(this.markOffset(em))];
       buffer.deleteMark(sm);
       buffer.deleteMark(em);
@@ -821,7 +825,7 @@ export class SyntaxController {
         // Re-collapse any children the user left closed, now that their text is back.
         this.reapplyDesiredChildFolds(modelStart);
       }
-    } else if (!region.folded && this.foldHost) {
+    } else if (!region.folded && this.screen) {
       // Collapse: physically replace the body with a placeholder in the VIEW buffer —
       // the model keeps the full text. Only move the caret if it was *inside* the
       // removed body (closing a fold shouldn't jump the cursor otherwise).
@@ -835,7 +839,7 @@ export class SyntaxController {
       const lines = join ? region.endLine - region.startLine + 1 : region.endLine - region.startLine - 1;
       const placeholder = `[${lines}]`; // lines folded
       const cursorInside = cursorOff > viewStart && cursorOff < viewEnd;
-      const handle = this.foldHost.foldScreenRange(this.buffer, viewStart, viewEnd, placeholder);
+      const handle = this.screen.fold(viewStart, viewEnd, placeholder);
       // foldScreenRange may have subsumed folds nested in this range — drop their handles.
       this.pruneDeadFolds();
       if (handle) {
@@ -843,7 +847,7 @@ export class SyntaxController {
         region.folded = true;
         region.handle = handle;
         if (codeFold) this.desiredClosed.add(modelStart);
-        const [ps, pe] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+        const [ps, pe] = this.screen.foldPlaceholderRange(handle);
         buffer.applyTag(this.foldPlaceholderTag, asIter(buffer.getIterAtOffset(ps)), asIter(buffer.getIterAtOffset(pe)));
         if (cursorInside) {
           // Vim leaves the caret on the fold's first line: land it on the last real char
@@ -885,7 +889,7 @@ export class SyntaxController {
    *  children stay in `desiredClosed`, re-applied when it later opens). Batched so the
    *  enclosing `toggleFold` does the one re-key/repaint. */
   private reapplyDesiredChildFolds(modelStart: number): void {
-    if (this.desiredClosed.size === 0 || !this.foldHost) return;
+    if (this.desiredClosed.size === 0 || !this.screen) return;
     const ranges = this.docSyntax.foldRanges();
     const parent = ranges.find((r) => r.startRow === modelStart);
     if (!parent) return;
@@ -1013,8 +1017,8 @@ export class SyntaxController {
     const tags = this.docSyntax.tagNamesAt(docRow, docCol);
     if (!tags || !this.screenFolded) return tags; // document coords == screen coords
     return tags.map((t) => {
-      const s = this.foldHost!.screenPointFromDocument(this.buffer, new Point(t.startRow, t.startColumn));
-      const e = this.foldHost!.screenPointFromDocument(this.buffer, new Point(t.endRow, t.endColumn));
+      const s = this.screen!.screenPointFromDocument(new Point(t.startRow, t.startColumn));
+      const e = this.screen!.screenPointFromDocument(new Point(t.endRow, t.endColumn));
       return { ...t, startRow: s.row, startColumn: s.column, endRow: e.row, endColumn: e.column };
     });
   }
@@ -1051,7 +1055,7 @@ export class SyntaxController {
   /** A folded FoldRegion for an active handle (reuse the map's tracked object when it
    *  matches, so toggleFold mutates/removes the same one). */
   private regionForHandle(handle: any, pStart: number | undefined): FoldRegion {
-    const p = pStart ?? this.foldHost!.foldPlaceholderRange(this.buffer, handle)[0];
+    const p = pStart ?? this.screen!.foldPlaceholderRange(handle)[0];
     const line = asIter(this.buffer.getIterAtOffset(p)).getLine();
     const existing = this.foldsByHeaderLine.get(line);
     if (existing && existing.handle === handle) return existing;
@@ -1068,9 +1072,9 @@ export class SyntaxController {
     //    own `za`/`zo`, offset-precise.
     let nearest: any = null;
     let nearestDist = Infinity;
-    if (this.foldHost) {
+    if (this.screen) {
       for (const handle of this.activeFolds) {
-        const [p, e] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+        const [p, e] = this.screen.foldPlaceholderRange(handle);
         if (off >= p && off <= e) return this.regionForHandle(handle, p); // on/at the marker
         if (asIter(buffer.getIterAtOffset(p)).getLine() === line) {
           const d = Math.min(Math.abs(off - p), Math.abs(off - e));
@@ -1122,9 +1126,9 @@ export class SyntaxController {
    * line — j/k skip a closed fold instead of stepping through its hidden rows.
    */
   documentFoldRangeAtRow(row: number): { startRow: number; endRow: number } | null {
-    if (!this.foldHost) return null;
+    if (!this.screen) return null;
     for (const handle of this.activeFolds) {
-      const [s, e] = this.foldHost.foldDocumentRowSpan(this.buffer, handle);
+      const [s, e] = this.screen.foldDocumentRowSpan(handle);
       if (row >= s && row <= e) return { startRow: s, endRow: e };
     }
     return null;
@@ -1133,9 +1137,9 @@ export class SyntaxController {
   /** Reveal the collapsed fold whose hidden body contains document `row` (vim `foldopen`, when a
    *  motion lands the cursor inside a fold). No-op on a visible row or a fold header. */
   unfoldDocumentRow(row: number): void {
-    if (!this.foldHost) return;
+    if (!this.screen) return;
     for (const handle of this.activeFolds) {
-      const [s, e] = this.foldHost.foldDocumentRowSpan(this.buffer, handle);
+      const [s, e] = this.screen.foldDocumentRowSpan(handle);
       if (row > s && row <= e) {
         this.toggleFold(this.regionForHandle(handle, undefined));
         return;
@@ -1200,7 +1204,7 @@ export class SyntaxController {
   unfoldAll(): void {
     this.desiredClosed.clear(); // `zr` opens every level and forgets all closed state.
     if (this.activeFolds.length === 0) return;
-    for (const handle of [...this.activeFolds]) this.foldHost?.unfoldScreen(this.buffer, handle);
+    for (const handle of [...this.activeFolds]) this.screen?.unfold(handle);
     this.activeFolds.length = 0;
     for (const region of this.foldsByHeaderLine.values()) { region.folded = false; region.handle = undefined; }
     // Re-key to the now-expanded view lines, and REPAINT: restoring a fold's body splices it
@@ -1216,20 +1220,20 @@ export class SyntaxController {
   /** Drop fold handles an enclosing fold has subsumed (their marks are gone), so the
    *  read paths never query a dead handle. */
   private pruneDeadFolds(): void {
-    if (!this.foldHost) return;
+    if (!this.screen) return;
     for (let i = this.activeFolds.length - 1; i >= 0; i--) {
-      if (!this.foldHost.isFoldAlive(this.activeFolds[i])) this.activeFolds.splice(i, 1);
+      if (!this.screen.isFoldAlive(this.activeFolds[i])) this.activeFolds.splice(i, 1);
     }
   }
 
   /** Reveal every collapsed fold whose model content satisfies `test` (search reveals
    *  folds that contain a match, leaving the rest folded — not a blanket unfold-all). */
   revealFoldsMatching(test: (text: string) => boolean): void {
-    if (!this.foldHost) return;
+    if (!this.screen) return;
     for (const handle of [...this.activeFolds]) {
-      if (!this.foldHost.isFoldAlive(handle)) continue;
-      if (test(this.foldHost.foldDocumentText(this.buffer, handle))) {
-        this.unfoldAtViewOffset(this.foldHost.foldPlaceholderRange(this.buffer, handle)[0]);
+      if (!this.screen.isFoldAlive(handle)) continue;
+      if (test(this.screen.foldDocumentText(handle))) {
+        this.unfoldAtViewOffset(this.screen.foldPlaceholderRange(handle)[0]);
       }
     }
   }
@@ -1237,17 +1241,17 @@ export class SyntaxController {
   /** View-offset [start,end) ranges of every collapsed-fold placeholder (atomic to
    *  the cursor + non-editable). */
   placeholderRanges(): Array<[number, number]> {
-    if (!this.foldHost) return [];
+    if (!this.screen) return [];
     this.pruneDeadFolds();
-    return this.activeFolds.map((h) => this.foldHost!.foldPlaceholderRange(this.buffer, h));
+    return this.activeFolds.map((h) => this.screen!.foldPlaceholderRange(h));
   }
 
   /** Unfold the fold whose placeholder contains view `offset` (editing/searching a
    *  fold reveals it); returns whether one was opened. */
   unfoldAtViewOffset(offset: number): boolean {
-    if (!this.foldHost) return false;
+    if (!this.screen) return false;
     for (const handle of [...this.activeFolds]) {
-      const [p, e] = this.foldHost.foldPlaceholderRange(this.buffer, handle);
+      const [p, e] = this.screen.foldPlaceholderRange(handle);
       if (offset >= p && offset < e) { this.toggleFold(this.regionForHandle(handle, p)); return true; }
     }
     return false;
@@ -1255,6 +1259,6 @@ export class SyntaxController {
 
   /** The model (file) line shown at view line `screenLine` — the gutter renders this. */
   modelLineFor(screenLine: number): number {
-    return this.foldHost ? this.foldHost.documentLineForScreenLine(this.buffer, screenLine) : screenLine;
+    return this.screen ? this.screen.documentLineForScreenLine(screenLine) : screenLine;
   }
 }

@@ -1,6 +1,6 @@
 /*
- * TextEditorSource — the backing a `TextEditor` is driven by. It supplies the view buffer,
- * the fold/translation surface (`FoldHost`), undo (`UndoTarget`), the syntax painter (a single
+ * TextEditorSource — the backing a `TextEditor` is driven by. It supplies the view (a `Screen`,
+ * which carries the fold/translation surface), undo (`UndoTarget`), the syntax painter (a single
  * `DocumentSyntax` OR a multi-source `SyntaxProjection`), and the file/LSP host bits.
  *
  * Two implementations, so `TextEditor` has ONE first-class backing (no scratch shim, no
@@ -12,12 +12,13 @@
 import type { SourceBuffer } from '../../gi.ts';
 import type { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import type { SyntaxProjection } from '../../syntax/SyntaxProjection.ts';
-import type { FoldHost } from '../../syntax/syntax-controller.ts';
+import type { Point } from '../../text/Point.ts';
+import type { Screen } from './Screen.ts';
 import type { UndoTarget } from './EditorModel.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';
 import type { DocumentHost } from './Document.ts';
 
-export interface TextEditorSource extends FoldHost, UndoTarget {
+export interface TextEditorSource extends UndoTarget {
   /** True when N sources are stitched through one `Screen` (the multibuffer surfaces):
    *  the editor then suppresses its own line numbers / LSP / git gutter / folding and paints via
    *  the `syntaxProjection`. False for a normal (single-source) file or buffer-only editor. */
@@ -41,11 +42,19 @@ export interface TextEditorSource extends FoldHost, UndoTarget {
   onDidMaterialize(cb: () => void): () => void;
 
   // --- view + lifecycle -----------------------------------------------------
-  createView(): SourceBuffer;
-  removeView(buffer: SourceBuffer): void;
+  createView(): Screen;
+  removeView(screen: Screen): void;
   dispose(): void;
   getText(): string;
   setText(text: string): void;
+
+  // --- document (unfolded source) reads, in document coordinates -------------
+  /** Document line text (no newline) — the real source line, even when collapsed on screen. */
+  documentLineText(row: number): string;
+  /** Number of document (unfolded) lines. */
+  documentLineCount(): number;
+  /** Document text within `[start, end)` (codepoint columns), including fold-collapsed content. */
+  documentTextInRange(start: Point, end: Point): string;
 
   // --- host (the active view's reactions; inert for multibuffer) ------------
   addHost(host: DocumentHost): void;

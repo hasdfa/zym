@@ -30,9 +30,10 @@ const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
 function setup(src: string) {
   const doc = new Document();
   doc.setText(src);
-  const buffer: any = doc.createView();
+  const screen = doc.createView();
+  const buffer: any = screen.buffer;
   const view = new GtkSource.View({ buffer });
-  const syntax = new SyntaxController(view, buffer, { folding: true, folds: doc, documentSyntax: doc.syntax });
+  const syntax = new SyntaxController(view, buffer, { folding: true, screen, documentSyntax: doc.syntax });
   syntax.setLanguageForPath('/x.ts');
   const text = () => buffer.getText(buffer.getStartIter(), buffer.getEndIter(), true) as string;
   const tagsAt = (row: number, col: number): string[] =>
