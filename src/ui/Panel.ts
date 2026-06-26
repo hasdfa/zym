@@ -37,7 +37,6 @@ addStyles(/* css */`
     background-color: alpha(white, 0.05);
   }
   .Panel tab .tab-title {
-    max-height: 10px;
     transform: scale(1);
   }
   .Panel tabboxchild {
