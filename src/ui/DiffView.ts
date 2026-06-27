@@ -289,9 +289,16 @@ export class DiffView {
         if (lineCountChanged) this.scheduleMicroReDiff();
         else this.scheduleReDiff();
       });
-      // Surface each new-side file's modified state as one event (for the tab's unsaved marker).
+      // Surface each new-side file's modified state as one event (for the tab's unsaved marker)
+      // and refresh the header bands, so the edited file's path picks up the modified marker.
       for (const entry of this.sources.values()) {
-        if (entry.document) this.modifiedUnsubs.push(entry.document.onModifiedChange(() => this.emitModified()));
+        if (entry.document)
+          this.modifiedUnsubs.push(
+            entry.document.onModifiedChange(() => {
+              this.emitModified();
+              this.installOverlays(this.dmb);
+            }),
+          );
       }
     }
     // Materializing the buffer (setText) leaves the caret at the END; start at the top.
@@ -624,8 +631,13 @@ export class DiffView {
    *  which flickers and jumps the text. Instead we reuse each handle in place (`update`), rebuilding
    *  its widget only when the anchor's CONTENT key changed, and add/remove just the count delta. A
    *  no-structure-change re-diff (typing within a line) updates nothing. */
-  private static headerKey(h: DiffMultiBuffer['headerAnchors'][number]): string {
-    return `${h.path}\n${h.label}\n${h.subtitle ?? ''}`;
+  private static headerKey(h: DiffMultiBuffer['headerAnchors'][number], modified: boolean): string {
+    return `${h.path}\n${h.label}\n${h.subtitle ?? ''}\n${modified ? 'M' : ''}`;
+  }
+  /** Whether `path`'s live new-side document has unsaved edits (drives the header's modified
+   *  marker). Always false in read-only mode (no document). */
+  private isFileModified(path: string): boolean {
+    return this.sources.get(newKey(path))?.document?.isModified() ?? false;
   }
   private static gapKey(g: DiffMultiBuffer['gapAnchors'][number]): string {
     return `${g.label}\n${g.revealRows.join(',')}`;
@@ -636,9 +648,10 @@ export class DiffView {
     const specs: BlockDecorationSpec[] = [];
     dmb.headerAnchors.forEach((h, i) => {
       const scope = new CompositeDisposable();
+      const modified = this.isFileModified(h.path);
       specs.push({
         id: `header:${i}`, // reconcile by ordinal: count changes by delta, content-key rebuilds the widget
-        key: DiffView.headerKey(h),
+        key: DiffView.headerKey(h, modified),
         anchor: { viewRow: h.viewRow },
         placement: 'above',
         build: () =>
@@ -651,6 +664,8 @@ export class DiffView {
             // A leading gap reveals TOWARD the content below it (extend the window up from its
             // bottom), like clicking any other gap.
             h.leadingRevealRows?.length ? () => this.revealChunk(h.leadingRevealRows!, false) : undefined,
+            // No file-type icon; bold the whole path; flag unsaved edits in warning + a dot.
+            { icon: false, boldPath: true, modified },
           ),
         dispose: () => scope.dispose(), // sever the header/gap click controllers when the band is replaced/removed
       });
@@ -777,6 +792,7 @@ export class DiffView {
     const lines = dmb.rowKinds.map((kind, row) => ({
       kind: kind === 'added' || kind === 'removed' ? kind : 'context',
       text: this.lineText(buffer, row),
+      wordRanges: dmb.wordRanges[row] ?? undefined, // intra-line word-add/word-del spans
     }));
     applyDiffDecorations(this.editor.decorations.layer('diff'), lines, /* terminated */ false);
   }
