@@ -47,12 +47,13 @@ export interface BlockDecorationOptions {
   line: number;
   widget: InstanceType<typeof Gtk.Widget>;
   placement?: BlockDecorationPlacement;
-  /** STICKY: pin the band to the viewport top once its anchor scrolls above it (the multi-file diff
-   *  file headers — VSCode-style sticky scroll). A sticky band is repositioned on every scroll and
-   *  its overlay Y is clamped to the scroll top; a non-sticky band just scrolls natively with the
-   *  text. The text view clips it to the viewport (no overflow), and — being a text-window child —
-   *  it neither swallows scroll nor needs an event controller. Only `placement: 'above'` is meant to
-   *  be sticky (headers). */
+  /** STICKY: a full-width bar pinned to the viewport (the multi-file diff file headers — VSCode-style
+   *  sticky scroll). Repositioned on every scroll: its Y clamps to the viewport top once its anchor
+   *  scrolls above it (pushed up by the next sticky band), and its X clamps to the viewport left with
+   *  the slot forced to the visible width, so it stays put and spans the viewport on BOTH axes. A
+   *  non-sticky band just scrolls natively with the text. The text view clips it (no overflow), and —
+   *  being a text-window child — it neither swallows scroll nor needs an event controller. Used with
+   *  `placement: 'on'` (the header covers its read-only row). */
   sticky?: boolean;
 }
 
@@ -80,7 +81,9 @@ interface Block {
   sticky: boolean; // pin to the viewport top when scrolled past (see BlockDecorationOptions.sticky)
   height: number;
   placed: boolean; // overlay (the slot) added to the view yet (deferred until mapped)
+  lastX: number; // last buffer-X the overlay was moved to (sticky bands pin X; skip no-op moves)
   lastY: number; // last buffer-Y the overlay was moved to (skip no-op moves)
+  lastWidth: number; // last width forced on the slot (sticky = full viewport width; -1 = natural)
 }
 
 // Frames to keep repositioning after a layout-changing event (fold toggle, edit).
@@ -143,12 +146,20 @@ export class BlockDecorations {
     const onVadjChanged = () => this.scheduleReposition();
     vadj.on('changed', onVadjChanged);
     this.subs.add(new Disposable(() => vadj.off('changed', onVadjChanged)));
-    // STICKY: a sticky band must re-clamp to the viewport top on every scroll. Non-sticky bands
-    // scroll natively (no per-scroll work). Done synchronously (not on a tick) so the pin tracks the
-    // scroll in the same frame; it reads only buffer-stable geometry (line rect), so it's safe here.
+    // STICKY: a sticky band must re-pin on every scroll — VERTICALLY (re-clamp to the viewport top) on
+    // the vadjustment, and HORIZONTALLY (re-pin X to the viewport left + re-fit the width) on the
+    // hadjustment (value = sideways scroll, changed = resize). Non-sticky bands scroll natively (no
+    // per-scroll work). Done synchronously so the pin tracks the scroll in the same frame; it reads
+    // only buffer-stable geometry, so it's safe here.
     const onScroll = () => { for (const b of this.blocks) if (b.placed && b.sticky) this.reposition(b); };
     vadj.on('value-changed', onScroll);
     this.subs.add(new Disposable(() => vadj.off('value-changed', onScroll)));
+    const hadj = this.view.getHadjustment?.();
+    if (hadj) {
+      hadj.on('value-changed', onScroll);
+      hadj.on('changed', onScroll);
+      this.subs.add(new Disposable(() => { hadj.off('value-changed', onScroll); hadj.off('changed', onScroll); }));
+    }
   }
 
   add(options: BlockDecorationOptions): BlockDecorationHandle {
@@ -158,6 +169,7 @@ export class BlockDecorations {
     // make a fresh Box that `place()` will add as a new overlay child.
     const reused = this.freeSlots.pop();
     const slot = reused ?? new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    slot.setSizeRequest(-1, -1); // a pooled slot may carry a sticky full-width request — reset to natural
     slot.append(options.widget);
     slot.setVisible(true);
     const block: Block = {
@@ -169,7 +181,9 @@ export class BlockDecorations {
       sticky: options.sticky ?? false,
       height: 0,
       placed: false, // set once place() runs; place() skips re-adding an already-parented slot
+      lastX: NaN,
       lastY: NaN,
+      lastWidth: NaN,
     };
     (this.buffer.getTagTable()).add(block.tag);
     this.blocks.add(block);
@@ -342,20 +356,32 @@ export class BlockDecorations {
     const rect = this.lineRect(this.markLine(block));
     if (rect.height === 0) return; // geometry momentarily invalid — keep last position
     let y = this.bandTop(block, rect);
-    if (block.sticky) {
-      // Pin to the viewport top once the band's buffer Y scrolls above it (overlay Y = scroll top →
-      // window Y ≈ 0). Below the top it stays at its natural Y (scrolls natively). The text view
-      // clips the part that slides above/below, so no overflow.
-      y = Math.max(y, Math.round(this.scrollTop()));
-      // PUSH UP so stacked sticky bands don't accumulate: a band can't sit lower than just above the
-      // next sticky band, so an earlier file's header slides up (then rides the text out of view) as
-      // the next one reaches the top — only the current (last-passed) header stays pinned.
-      const nextTop = this.nextStickyBandTop(block);
-      if (nextTop != null) y = Math.min(y, nextTop - block.height);
+    if (!block.sticky) {
+      // Non-sticky: anchored at the text-window left (buffer x=0), scrolls natively on both axes.
+      if (y === block.lastY) return; // no-op move (avoids churn during the settle window)
+      block.lastY = y;
+      this.view.moveOverlay(block.slot, 0, y);
+      return;
     }
-    if (y === block.lastY) return; // no-op move (avoids churn during the settle window)
+    // STICKY — a full-width bar pinned to the viewport. VERTICALLY: pin to the viewport top once the
+    // band scrolls above it; PUSH UP so stacked bands don't accumulate (the earlier header slides up
+    // and rides the text out of view as the next reaches the top).
+    y = Math.max(y, Math.round(this.scrollTop()));
+    const nextTop = this.nextStickyBandTop(block);
+    if (nextTop != null) y = Math.min(y, nextTop - block.height);
+    // HORIZONTALLY: pin X to the viewport left (buffer x = hscroll → window x ≈ 0) and force the slot
+    // to the visible width, so the bar spans the viewport and stays put as the text scrolls sideways.
+    const hadj = this.view.getHadjustment?.();
+    const x = hadj ? Math.round(hadj.getValue()) : 0;
+    const width = hadj ? Math.round(hadj.getPageSize()) : -1;
+    if (width > 0 && width !== block.lastWidth) {
+      block.slot.setSizeRequest(width, -1);
+      block.lastWidth = width;
+    }
+    if (x === block.lastX && y === block.lastY) return; // no-op move
+    block.lastX = x;
     block.lastY = y;
-    this.view.moveOverlay(block.slot, 0, y);
+    this.view.moveOverlay(block.slot, x, y);
   }
 
   /** The overlay's top in buffer coords for a block, by placement: 'below' = under the line, 'above'
