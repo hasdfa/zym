@@ -252,6 +252,11 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
     'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
     'z m': 'diff:collapse-context', // re-collapse expanded context
+    // Per-FILE collapse (distinct axis from the context controls above): `z a` toggles the file
+    // under the cursor (matching the search surface); capital `z C`/`z O` fold/unfold every file.
+    'z a': 'diff:toggle-file',
+    'z C': 'diff:collapse-all-files',
+    'z O': 'diff:expand-all-files',
     // Hunk staging (`space h s`/`u` → git:hunk-stage/git:hunk-unstage) is the unified binding from
     // `.AppWindow`; it routes here automatically (this embedded editor registers no gutter
     // variant). Bare `s`/`u` are left to vim (substitute / undo) since this surface is editable.

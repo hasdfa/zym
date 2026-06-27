@@ -34,6 +34,7 @@ import { BlockDecorations } from './BlockDecorations.ts';
 import { BlockDecorationSet } from './BlockDecorationSet.ts';
 import { EditorPopover } from './EditorPopover.ts';
 import { Peek, type PeekOptions } from './Peek.ts';
+import { StickyHeaders } from './StickyHeaders.ts';
 import { GitGutter } from './GitGutter.ts';
 import { IndentGuides } from './IndentGuides.ts';
 import { SearchController } from './SearchController.ts';
@@ -431,6 +432,7 @@ export class TextEditor implements DocumentHost {
   private hoverPopover!: EditorPopover;
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the floating cards
   private inlinePeek!: Peek; // focusable inline peek (see-definition); built in buildEditorArea
+  private stickyHeaderController!: StickyHeaders; // sticky multi-file diff headers (over the block surface)
   // The signature-help card: shown live while typing a call's arguments. Same
   // MarkupCard/EditorPopover as hover; `signatureSeq` drops stale async responses.
   private signatureCard!: MarkupCard;
@@ -616,6 +618,8 @@ export class TextEditor implements DocumentHost {
     this.textDecorations = new TextDecorations(this.editorModel);
     // Inline block surface (virtual content between lines: the diff fold placeholder).
     this.blockDecorationController = new BlockDecorations(this.view);
+    // Sticky multi-file diff headers — a thin layer over the block surface (above + sticky bands).
+    this.stickyHeaderController = new StickyHeaders(this.blockDecorationController);
     // Search/replace engine; its `SearchBar` widget is built in buildEditorArea.
     this.search = new SearchController(this.editorModel, this.textDecorations);
 
@@ -914,6 +918,7 @@ export class TextEditor implements DocumentHost {
     // The inline overlays/decorations install their own view/buffer/adjustment signal handlers
     // (outside `subs`); each un-disconnected one pins this editor, so tear them down explicitly.
     this.textDecorations.dispose(); // drops the diagnostic-squiggle overlay's handlers + marks
+    this.stickyHeaderController?.dispose(); // drop its header handles + sever each header's click controller (rides the block surface)
     this.blockDecorationController.dispose(); // drops map/changed/vadjustment handlers + tick callbacks
     this.indentGuides?.dispose(); // drops adjustment/view/buffer handlers + the config observer
     this.indentGuides = null;
@@ -1204,6 +1209,12 @@ export class TextEditor implements DocumentHost {
       for (const s of this.decorationSets) s.reproject();
     });
     return set;
+  }
+
+  /** The sticky multi-file diff headers — pinned header widgets on the sibling overlay, driven by
+   *  `DiffView` via `setHeaders()`. Inert (no headers) for every other editor. */
+  get stickyHeaders(): StickyHeaders {
+    return this.stickyHeaderController;
   }
 
   /** Open a focusable inline peek (e.g. see-definition) below `line` — defaults to

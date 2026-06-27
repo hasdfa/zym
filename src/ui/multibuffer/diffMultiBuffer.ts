@@ -52,31 +52,36 @@ export interface DiffMultiBuffer {
   sources: Map<string, string[]>;
   /** Source key → the path whose grammar highlights it. */
   language: Map<string, string>;
-  /** Widget mode only: where each file's header widget anchors (the view row its content starts
-   *  on, since no header/blank rows are emitted). `subtitle` carries a LEADING `⋯` gap (elided
-   *  rows above the first shown row) folded into the header, as it shares the anchor row. */
+  /** Widget mode only: each file's header. `viewRow` is the EMPTY, navigable `block` row emitted as
+   *  the file's first row — the surface places the filename widget OVER it and the caret lands on it
+   *  (collapse toggle). `added`/`removed` are the file's change counts (the `+N −M` stat). */
   headerAnchors: Array<{
     path: string;
     label: string;
     viewRow: number;
-    subtitle?: string;
-    /** New-side rows elided by a LEADING gap (for expand-context — reveal a chunk on demand). */
-    leadingRevealRows?: number[];
+    added: number;
+    removed: number;
   }>;
-  /** Widget mode only: each between/trailing `⋯` gap, anchored BELOW `viewRow` (the last shown
-   *  row before the elision) — a decoration band, not a navigable buffer row. `revealRows` are
-   *  the new-side rows it elides (expand-context reveals a chunk of them). */
-  gapAnchors: Array<{ viewRow: number; label: string; revealRows: number[] }>;
+  /** Widget mode only: each `⋯` gap, a decoration band (not a navigable buffer row). A LEADING gap
+   *  (the elided file head) anchors `'above'` the first content row; a between/trailing gap anchors
+   *  `'below'` the last shown row before the elision. `revealRows` are the new-side rows it elides;
+   *  `fromTop` is the chunk a click reveals first (true = the top chunk, for a between gap; false =
+   *  the bottom chunk nearest the content, for a leading gap). */
+  gapAnchors: Array<{ viewRow: number; label: string; revealRows: number[]; placement: 'above' | 'below'; fromTop: boolean }>;
 }
 
 export interface DiffLayoutOptions {
-  /** `'block'` (default) emits a filename header text row + a blank separator per file;
-   *  `'widget'` emits neither (the surface draws a header widget above each file via
-   *  `headerAnchors`), so the filename isn't navigable buffer text. */
+  /** `'block'` (default) emits a filename header TEXT row + a blank separator per file;
+   *  `'widget'` emits an EMPTY navigable header `block` row per file (the surface floats a filename
+   *  widget above it and the caret lands on it for collapse), so the filename itself isn't copyable
+   *  buffer text. */
   headers?: 'block' | 'widget';
   /** Expand-context: force these (otherwise-elided) NEW-side rows visible. Returns true for a
    *  new-side row the user has revealed, so it shows as context instead of folding into a gap. */
   reveal?: (newRow: number) => boolean;
+  /** Per-file collapse (widget mode): returns true for a file the user has collapsed, which then
+   *  contributes ONLY its header row (no windows/gaps/decorations) — a one-line overview entry. */
+  collapsed?: (path: string) => boolean;
 }
 
 const newKey = (path: string): string => `new:${path}`;
@@ -156,6 +161,29 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
     // symlink whose blob round-trips equal) is just a non-expandable dead entry.
     if (!recs.some((r) => r.op !== 'eq')) return;
 
+    const label = file.label ?? (cwd ? Path.relative(cwd, file.path) : Path.basename(file.path));
+    // Per-file change counts — shown on the header widget (`+N −M`), the only content of a
+    // collapsed file's one-line overview entry.
+    const added = recs.reduce((n, r) => n + (r.op === 'ins' ? 1 : 0), 0);
+    const removed = recs.reduce((n, r) => n + (r.op === 'del' ? 1 : 0), 0);
+    if (widgetHeaders) {
+      // The file's first row is an EMPTY, read-only, NAVIGABLE `block` row — the caret target the
+      // collapse toggle keys off — that the surface places the filename widget OVER. Empty text so a
+      // cross-file copy carries no header text. `viewRow` is recorded before the row is emitted.
+      headerAnchors.push({ path: file.path, label, viewRow: rowKinds.length, added, removed });
+      items.push({ type: 'block', block: { kind: 'header', text: '' } });
+      block('header');
+      // A COLLAPSED file contributes only its header row — no windows, gaps, or decorations.
+      if (opts.collapsed?.(file.path)) return;
+    } else {
+      if (fileIndex > 0) {
+        items.push({ type: 'block', block: { kind: 'blank', text: '' } });
+        block('blank');
+      }
+      items.push({ type: 'block', block: { kind: 'header', text: label } });
+      block('header');
+    }
+
     // Staged/unstaged classification (the gutter marker), when the index blob is known. A row
     // ADDED vs HEAD is staged iff its worktree line is already in the index; a row REMOVED vs HEAD
     // is staged iff that HEAD line is also gone from the index.
@@ -166,36 +194,21 @@ export function buildDiffMultiBuffer(files: DiffFile[], cwd?: string, opts: Diff
       return inIndex ? 'staged' : 'unstaged';
     };
 
-    const label = file.label ?? (cwd ? Path.relative(cwd, file.path) : Path.basename(file.path));
-    let header: DiffMultiBuffer['headerAnchors'][number] | null = null;
-    if (widgetHeaders) {
-      // No header/blank rows in the buffer — the surface anchors a header widget above the row
-      // the file's content starts on (recorded now, before its first row is emitted).
-      header = { path: file.path, label, viewRow: rowKinds.length };
-      headerAnchors.push(header);
-    } else {
-      if (fileIndex > 0) {
-        items.push({ type: 'block', block: { kind: 'blank', text: '' } });
-        block('blank');
-      }
-      items.push({ type: 'block', block: { kind: 'header', text: label } });
-      block('header');
-    }
-
-    // Emit an elided `⋯` gap: a block row (block mode), or — in widget mode — a LEADING gap folds
-    // into the header subtitle (it shares the header's anchor row), any other anchors a band
-    // below the last shown row (`rowKinds.length - 1`). Never a navigable buffer row in widget mode.
+    // Emit an elided `⋯` gap: a block row (block mode), or — in widget mode — a band anchor (never a
+    // navigable buffer row). A LEADING gap (the elided file head) is its OWN band anchored `'above'`
+    // the first content row (the next row to be emitted) — separate from the header; a between/
+    // trailing gap anchors `'below'` the last shown row (`rowKinds.length - 1`).
     const emitGap = (rows: DiffRow[], leading: boolean): void => {
       const count = rows.length;
       const revealRows = rows.map((r) => r.newRow); // the elided new-side rows (expand-context)
       if (!widgetHeaders) {
         items.push({ type: 'block', block: { kind: 'gap', text: gapLabel(count) } });
         block('gap');
-      } else if (leading && header) {
-        header.subtitle = gapLabel(count);
-        header.leadingRevealRows = revealRows;
+      } else if (leading) {
+        // A click reveals from the BOTTOM (the rows nearest the content below it).
+        gapAnchors.push({ viewRow: rowKinds.length, label: gapLabel(count), revealRows, placement: 'above', fromTop: false });
       } else {
-        gapAnchors.push({ viewRow: rowKinds.length - 1, label: gapLabel(count), revealRows });
+        gapAnchors.push({ viewRow: rowKinds.length - 1, label: gapLabel(count), revealRows, placement: 'below', fromTop: true });
       }
     };
 

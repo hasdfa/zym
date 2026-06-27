@@ -13,20 +13,52 @@ function project(dmb: ReturnType<typeof buildDiffMultiBuffer>): CoordinatesMap {
   return CoordinatesMap.build(dmb.items, (s: Segment) => dmb.sources.get(s.documentKey)!.slice(s.startRow, s.endRow + 1));
 }
 
-test('widget mode: no header/blank/gap block rows — headers + gaps are anchors, not buffer text', () => {
+test('widget mode: one EMPTY navigable header row per file; gaps stay anchor bands', () => {
   // Two changes far apart so the unchanged middle elides to a `⋯` gap between two windows.
   const mid = Array.from({ length: 10 }, (_, i) => `u${i}`).join('\n');
   const oldText = `t0\nXXX\nt2\n${mid}\nb0\nYYY\nb2\n`;
   const newText = `t0\nAAA\nt2\n${mid}\nb0\nBBB\nb2\n`;
   const dmb = buildDiffMultiBuffer([{ path: '/a.ts', oldText, newText }], undefined, { headers: 'widget' });
-  assert.ok(!dmb.rowKinds.includes('header') && !dmb.rowKinds.includes('gap') && !dmb.rowKinds.includes('blank'),
-    'no header/gap/blank rows in widget mode');
+  // The header row exists (a navigable caret target) but is EMPTY — and no gap/blank rows.
+  assert.equal(dmb.rowKinds[0], 'header', 'the file leads with a header block row');
+  assert.equal((dmb.items[0] as any).block.text, '', 'the header row carries no text (copy-clean)');
+  assert.ok(!dmb.rowKinds.includes('gap') && !dmb.rowKinds.includes('blank'), 'no gap/blank rows in widget mode');
   const p = project(dmb);
   assert.ok(!p.screenText.includes('unchanged'), 'the `⋯ unchanged lines` gap is not buffer text');
+  assert.ok(!p.screenText.includes('a.ts'), 'the filename is a widget, not buffer text');
   assert.equal(dmb.headerAnchors.length, 1);
-  assert.equal(dmb.headerAnchors[0].viewRow, 0, 'header anchors above the first content row');
+  assert.equal(dmb.headerAnchors[0].viewRow, 0, 'header anchors at its own (first) row');
+  assert.equal(dmb.headerAnchors[0].added, 2, 'two added lines');
+  assert.equal(dmb.headerAnchors[0].removed, 2, 'two removed lines');
   assert.equal(dmb.gapAnchors.length, 1, 'one between-window gap, as an anchor band');
   assert.ok(dmb.gapAnchors[0].label.includes('unchanged'), 'gap carries its `⋯ N unchanged lines` label');
+});
+
+test('widget mode: a collapsed file contributes only its header row', () => {
+  const files = [
+    { path: '/a.ts', oldText: 'a\nb\nc\n', newText: 'a\nX\nc\n' },
+    { path: '/b.ts', oldText: 'p\nq\n', newText: 'p\nQ\n' },
+  ];
+  const collapsed = buildDiffMultiBuffer(files, undefined, { headers: 'widget', collapsed: (p) => p === '/a.ts' });
+  // a.ts collapsed → a single (empty) header row; b.ts expanded → header + its diff rows.
+  assert.equal(collapsed.rowKinds[0], 'header', 'a.ts header row');
+  assert.equal(collapsed.rowKinds[1], 'header', 'next row is b.ts header — a.ts emitted nothing else');
+  assert.equal(collapsed.headerAnchors.length, 2, 'both files still have a header anchor');
+  assert.equal(collapsed.headerAnchors[0].viewRow, 0);
+  assert.equal(collapsed.headerAnchors[1].viewRow, 1, 'b.ts header directly follows the collapsed a.ts');
+  // Expanding a.ts grows the view (its diff rows reappear).
+  const expanded = buildDiffMultiBuffer(files, undefined, { headers: 'widget' });
+  assert.ok(expanded.rowKinds.length > collapsed.rowKinds.length, 'collapse shrinks the row count');
+});
+
+test('widget mode: an elided file head is its OWN `above` gap band (split from the header)', () => {
+  // Change far from the top so the head elides into a LEADING gap.
+  const head = Array.from({ length: 8 }, (_, i) => `h${i}`).join('\n');
+  const dmb = buildDiffMultiBuffer([{ path: '/a.ts', oldText: `${head}\nOLD\n`, newText: `${head}\nNEW\n` }], undefined, { headers: 'widget' });
+  const leading = dmb.gapAnchors.find((g) => g.placement === 'above');
+  assert.ok(leading, 'the elided head is a separate `above` gap band, not a header subtitle');
+  assert.equal(leading!.fromTop, false, 'a click reveals from the bottom (toward the content below)');
+  assert.equal((dmb.items[0] as any).block.text, '', 'the header row stays empty (no folded gap text)');
 });
 
 test('reveal forces elided rows visible (expand-context)', () => {

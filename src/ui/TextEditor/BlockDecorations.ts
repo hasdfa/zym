@@ -34,13 +34,24 @@
 import { Gtk, type SourceView } from '../../gi.ts';
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
 
-export type BlockDecorationPlacement = 'below' | 'above';
+// 'below'/'above' reserve a blank band under/over the anchor line (the widget floats in it, the line
+// stays its own text height). 'on' instead grows the anchor line to the widget's height and places
+// the widget OVER it — so the widget covers its (read-only) line and the caret rests on it (the diff
+// file headers). The anchor line must not be the last buffer line.
+export type BlockDecorationPlacement = 'below' | 'above' | 'on';
 
 export interface BlockDecorationOptions {
   /** Anchor line (buffer row). The band sits below it ('below') or above it ('above'). */
   line: number;
   widget: InstanceType<typeof Gtk.Widget>;
   placement?: BlockDecorationPlacement;
+  /** STICKY: pin the band to the viewport top once its anchor scrolls above it (the multi-file diff
+   *  file headers — VSCode-style sticky scroll). A sticky band is repositioned on every scroll and
+   *  its overlay Y is clamped to the scroll top; a non-sticky band just scrolls natively with the
+   *  text. The text view clips it to the viewport (no overflow), and — being a text-window child —
+   *  it neither swallows scroll nor needs an event controller. Only `placement: 'above'` is meant to
+   *  be sticky (headers). */
+  sticky?: boolean;
 }
 
 export interface BlockDecorationHandle {
@@ -64,6 +75,7 @@ interface Block {
   slot: any; // controller-owned Gtk.Box that IS the overlay child (holds `widget`)
   widget: any; // the consumer's widget, parented inside `slot`
   placement: BlockDecorationPlacement;
+  sticky: boolean; // pin to the viewport top when scrolled past (see BlockDecorationOptions.sticky)
   height: number;
   placed: boolean; // overlay (the slot) added to the view yet (deferred until mapped)
   lastY: number; // last buffer-Y the overlay was moved to (skip no-op moves)
@@ -129,6 +141,12 @@ export class BlockDecorations {
     const onVadjChanged = () => this.scheduleReposition();
     vadj.on('changed', onVadjChanged);
     this.subs.add(new Disposable(() => vadj.off('changed', onVadjChanged)));
+    // STICKY: a sticky band must re-clamp to the viewport top on every scroll. Non-sticky bands
+    // scroll natively (no per-scroll work). Done synchronously (not on a tick) so the pin tracks the
+    // scroll in the same frame; it reads only buffer-stable geometry (line rect), so it's safe here.
+    const onScroll = () => { for (const b of this.blocks) if (b.placed && b.sticky) this.reposition(b); };
+    vadj.on('value-changed', onScroll);
+    this.subs.add(new Disposable(() => vadj.off('value-changed', onScroll)));
   }
 
   add(options: BlockDecorationOptions): BlockDecorationHandle {
@@ -146,6 +164,7 @@ export class BlockDecorations {
       slot,
       widget: options.widget,
       placement,
+      sticky: options.sticky ?? false,
       height: 0,
       placed: false, // set once place() runs; place() skips re-adding an already-parented slot
       lastY: NaN,
@@ -295,12 +314,18 @@ export class BlockDecorations {
 
     block.height = Math.max(1, (block.slot.measure(Gtk.Orientation.VERTICAL, -1))[1]);
 
-    // Reserve the band on the anchor line (re-applied each place in case it moved).
-    const prop = block.placement === 'below' ? 'pixelsBelowLines' : 'pixelsAboveLines';
-    block.tag[prop] = block.height;
+    // Reserve space on the anchor line (re-applied each place in case it moved). Detach the tag
+    // first so the line is back to its NATURAL height before we reserve from it.
     const start = unwrap(this.buffer.getIterAtLine(line));
     const end = unwrap(this.buffer.getIterAtLine(line + 1)); // ok: anchors aren't the last line
     this.buffer.removeTag(block.tag, this.buffer.getStartIter(), this.buffer.getEndIter());
+    if (block.placement === 'on') {
+      // Grow the line to the widget's height (extra space BELOW its text), so the widget — placed at
+      // the line top — covers the whole (read-only) line and the caret rests on it.
+      block.tag.pixelsBelowLines = Math.max(1, block.height - this.lineRect(line).height);
+    } else {
+      block.tag[block.placement === 'below' ? 'pixelsBelowLines' : 'pixelsAboveLines'] = block.height;
+    }
     this.buffer.applyTag(block.tag, start, end);
 
     // Force a re-allocation: under node-gtk's cooperative loop, adding the overlay
@@ -314,12 +339,50 @@ export class BlockDecorations {
   private reposition(block: Block): void {
     const rect = this.lineRect(this.markLine(block));
     if (rect.height === 0) return; // geometry momentarily invalid — keep last position
-    // 'below': band starts at the anchor's bottom. 'above': the tag pushed the anchor
-    // down by `height`, so the band is the `height` px above its new top.
-    const y = block.placement === 'below' ? rect.y + rect.height : rect.y - block.height;
+    let y = this.bandTop(block, rect);
+    if (block.sticky) {
+      // Pin to the viewport top once the band's buffer Y scrolls above it (overlay Y = scroll top →
+      // window Y ≈ 0). Below the top it stays at its natural Y (scrolls natively). The text view
+      // clips the part that slides above/below, so no overflow.
+      y = Math.max(y, Math.round(this.scrollTop()));
+      // PUSH UP so stacked sticky bands don't accumulate: a band can't sit lower than just above the
+      // next sticky band, so an earlier file's header slides up (then rides the text out of view) as
+      // the next one reaches the top — only the current (last-passed) header stays pinned.
+      const nextTop = this.nextStickyBandTop(block);
+      if (nextTop != null) y = Math.min(y, nextTop - block.height);
+    }
     if (y === block.lastY) return; // no-op move (avoids churn during the settle window)
     block.lastY = y;
     this.view.moveOverlay(block.slot, 0, y);
+  }
+
+  /** The overlay's top in buffer coords for a block, by placement: 'below' = under the line, 'above'
+   *  = the band above the line, 'on' = the line top (the widget covers the grown line). */
+  private bandTop(block: Block, rect: { y: number; height: number }): number {
+    if (block.placement === 'below') return rect.y + rect.height;
+    if (block.placement === 'on') return rect.y;
+    return rect.y - block.height; // 'above': the tag pushed the line down by `height`
+  }
+
+  /** The viewport's top in buffer coords (the vadjustment value) — the clamp for sticky bands. */
+  private scrollTop(): number {
+    const vadj = this.view.getVadjustment?.();
+    return vadj ? vadj.getValue() : 0;
+  }
+
+  /** The natural band top (buffer Y) of the nearest sticky band BELOW `block` (next by anchor line),
+   *  or null if none — the ceiling that pushes a stacked sticky band up so they don't pile on top of
+   *  each other at the viewport top. */
+  private nextStickyBandTop(block: Block): number | null {
+    const line = this.markLine(block);
+    let best: Block | null = null;
+    let bestLine = Infinity;
+    for (const b of this.blocks) {
+      if (b === block || !b.sticky || !b.placed) continue;
+      const l = this.markLine(b);
+      if (l > line && l < bestLine) { bestLine = l; best = b; }
+    }
+    return best ? this.bandTop(best, this.lineRect(bestLine)) : null;
   }
 
   private removeBlock(block: Block): void {

@@ -2424,6 +2424,21 @@ export class AppWindow {
         description: 'Re-collapse expanded context back to the windowed diff',
         when: () => this.activeContinuousDiff() !== null,
       },
+      'diff:toggle-file': {
+        didDispatch: () => this.activeContinuousDiff()?.toggleFileCollapseAtCursor(),
+        description: 'Collapse / expand the file under the cursor',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:collapse-all-files': {
+        didDispatch: () => this.activeContinuousDiff()?.collapseAllFiles(),
+        description: 'Collapse every file to a one-line header (overview)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:expand-all-files': {
+        didDispatch: () => this.activeContinuousDiff()?.expandAllFiles(),
+        description: 'Expand every collapsed file back to its diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
       'search:toggle-collapse': {
         didDispatch: () => this.activeSearchResults()?.toggleCollapseAtCursor(),
         description: 'Collapse / expand the file under the cursor (search results)',

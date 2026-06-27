@@ -77,8 +77,16 @@ Two flavors of "text shown but not in the model":
   survive its own edits) stays up. `Peek` (focusable, sibling overlay) and `Leap`
   (mark layer) are specialized overlays.
 - **`block`** — `BlockDecorations`: a real widget *between* lines, reserving
-  vertical space (zero buffer footprint). The diff's `⋯ N lines`. See
-  [inline-widgets.md](inline-widgets.md).
+  vertical space (zero buffer footprint). The diff's `⋯ N lines` gaps,
+  review-comment cards, markdown images. See [inline-widgets.md](inline-widgets.md).
+- **`sticky` block** — the multi-file diff's per-file headers: a `BlockDecoration`
+  with `placement: 'on', sticky: true`, which COVERS an EMPTY navigable header
+  `block` row (the line is grown to the widget height; the caret rests on it — the
+  collapse-toggle target) and clamps its overlay Y to the viewport top so it PINS
+  when its file scrolls past (VSCode-style sticky scroll), while still being a
+  native-scrolling, viewport-clipped, click-through text-window child. `StickyHeaders`
+  (`src/ui/TextEditor/StickyHeaders.ts`) is a thin reconcile + focus layer the diff
+  drives (`editor.stickyHeaders.setHeaders`); see [diff.md](diff.md).
 
 ## The model↔view boundary (folds)
 

@@ -14,42 +14,59 @@ import { addStyles } from '../styles.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 
-addStyles(`
+addStyles(/* css */`
   .mb-header {
-    margin: var(--t-spacing) 0;
     padding: var(--t-spacing) calc(2 * var(--t-spacing));
-    background-color: rgba(255 255 255 / 16%);
+    background-color: var(--t-ui-editor-background);
+    background-image: linear-gradient(rgba(255 255 255 / 16%), rgba(255 255 255 / 16%));
     border-radius: 5px;
   }
   .mb-header-icon { color: var(--t-ui-text-muted); }
   .mb-header-label { color: var(--t-ui-editor-foreground); }
+  .mb-header-chevron { color: var(--t-ui-text-muted); }
+  .mb-header-add { color: var(--t-ui-status-success); }
+  .mb-header-del { color: var(--t-ui-status-error); }
+  /* The header whose (read-only) line the caret sits on (sticky-diff navigation) reads as focused.
+     The class lands on the .mb-header element itself (the header widget IS the row). */
+  .mb-header.mb-header-focused {
+    background-image: linear-gradient(rgba(255 255 255 / 26%), rgba(255 255 255 / 26%));
+    outline: 1px solid var(--t-ui-text-accent);
+    outline-offset: -1px;
+  }
   .mb-gap { color: var(--t-ui-text-muted); padding: 1px 8px 1px 6px; }
-  /* Every fold marker reads the same: a grey fill (distinct from the header's selected
-     background), whether it's a standalone between-windows gap or the leading gap that sits
-     directly under a header. */
+  /* Every fold marker reads the same grey fill (distinct from the header's selected background),
+     whether a between-windows gap or the leading gap above a file's first content row. */
   .mb-gap-band { background-color: rgba(128, 128, 128, 0.15); }
   .mb-gap-clickable:hover { color: var(--t-ui-text-accent); }
 `);
 
+/** Optional diff-surface extras on the header: a collapse `chevron` (`▾` expanded / `▸` collapsed)
+ *  and the file's `+N −M` change stats. Omitted by the search surface (no chevron/stats). */
+export interface HeaderExtras {
+  collapsed?: boolean;
+  added?: number;
+  removed?: number;
+}
+
 /** The header widget for one excerpt: `label` is the display path (dir dimmed, basename bold),
- *  `path` selects the file-type icon, `onActivate` fires on click (jump to the file). `subtitle`
- *  (a diff's leading `⋯` gap) renders a fold-marker band directly beneath the filename — styled
- *  exactly like every other gap band (not as part of the header), with `onExpand` revealing more
- *  context on click. */
+ *  `path` selects the file-type icon, `onActivate` fires on click (jump to the file). `extras` adds
+ *  the diff's collapse chevron + `+N −M` stats. (A leading `⋯` gap is a SEPARATE gap band — see
+ *  `buildGapWidget` — not part of the header.) The header row IS the returned widget. */
 export function buildHeaderWidget(
   scope: CompositeDisposable,
   label: string,
   path: string,
   onActivate: () => void,
-  subtitle?: string,
-  onExpand?: () => void,
+  extras?: HeaderExtras,
 ): InstanceType<typeof Gtk.Widget> {
-  // The outer container is transparent: the header's selected background lives on the filename
-  // row only, so a leading gap stacked below it keeps its own fold-marker style.
-  const outer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-
   const row = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
   row.addCssClass('mb-header');
+  // Collapse chevron (diff surface): `▾` when the file is expanded, `▸` when collapsed.
+  if (extras?.collapsed !== undefined) {
+    const chevron = new Gtk.Label({ label: extras.collapsed ? '▸' : '▾' });
+    chevron.addCssClass('mb-header-chevron');
+    row.append(chevron);
+  }
   const icon = new Gtk.Label({ label: fileIconGlyph(Path.basename(path), false) });
   const attrs = Pango.AttrList.new();
   attrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
@@ -65,20 +82,30 @@ export function buildHeaderWidget(
   name.addCssClass('mb-header-label');
   row.append(name);
 
-  // Click the filename row → jump to the file (scoped to the row so the leading gap's own click
-  // expands context instead of jumping).
+  // Change stats (diff surface): `+N` added (green), `−M` removed (red).
+  if (extras && (extras.added || extras.removed)) {
+    if (extras.added) {
+      const add = new Gtk.Label({ label: `+${extras.added}` });
+      add.addCssClass('mb-header-add');
+      row.append(add);
+    }
+    if (extras.removed) {
+      const del = new Gtk.Label({ label: `−${extras.removed}` });
+      del.addCssClass('mb-header-del');
+      row.append(del);
+    }
+  }
+
+  // Click the header → jump to the file.
   const click = new Gtk.GestureClick();
   click.on('released', () => onActivate());
   scope.addController(row, click); // severed when this band's widget is dropped (rule 9)
-  outer.append(row);
-
-  if (subtitle) outer.append(buildGapWidget(scope, subtitle, onExpand));
-  return outer;
+  return row;
 }
 
 /** A `⋯ N unchanged lines` gap band — a dim fold marker (not a navigable buffer row), anchored
- *  between two diff windows via `BlockDecorations`, or stacked under a header for a leading gap.
- *  `onActivate` (click) expands more context. */
+ *  between two diff windows (or above a file's first content row for the elided head) via
+ *  `BlockDecorations`. `onActivate` (click) expands more context. */
 export function buildGapWidget(
   scope: CompositeDisposable,
   label: string,

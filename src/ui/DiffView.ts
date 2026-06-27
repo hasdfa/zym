@@ -31,6 +31,7 @@ import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './mul
 import { buildHeaderWidget, buildGapWidget } from './HeaderBands.ts';
 import { DiffCommentBox, buildCommentCard } from './DiffCommentBox.ts';
 import type { BlockDecorationSpec, BlockDecorationSet, BlockDecorationAnchor } from './TextEditor/BlockDecorationSet.ts';
+import type { StickyHeaderSpec } from './TextEditor/StickyHeaders.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
@@ -140,19 +141,21 @@ export class DiffView {
   private readonly sources = new Map<string, SourceEntry>();
   private readonly screen: Screen;
   private lineNumbers: CombinedDiffLineNumberGutter | null = null;
-  // Header + `⋯` gap widgets (BlockDecoration bands). Reconciled (not torn down) on each re-diff:
-  // a re-flow moves them and changes their text (gap counts, leading-gap subtitle), but reusing the
-  // handles in place avoids the band collapse/re-expand that flickers + jumps the text. Each entry
-  // keeps the anchor's CONTENT key so we only rebuild the widget when its content actually changed.
-  // Header (filename, above each file's first row) + `⋯` gap (below the last shown row before each
-  // elision) widget bands, reconciled in place on each re-diff via a declarative block-decoration
-  // set. A computed surface: the structure (which gaps exist, header rows) is recomputed per re-diff,
-  // so the bands carry direct VIEW-row anchors and are re-`set()` on every reDiff.
+  // `⋯` gap widgets + review-comment cards as BlockDecoration bands (file headers ride the separate
+  // sticky-header layer). Reconciled (not torn down) on each re-diff: a re-flow moves them and
+  // changes their text (gap counts), but reusing the handles in place avoids the band collapse/
+  // re-expand that flickers + jumps the text. Each entry keeps a CONTENT key so the widget rebuilds
+  // only when its content changed. A computed surface: the structure (which gaps exist) is recomputed
+  // per re-diff, so the bands carry direct VIEW-row anchors and are re-`set()` on every reDiff.
   private bands!: BlockDecorationSet;
   // Expand-context state: NEW-side rows the user forced visible, and a reveal-everything flag.
   // The current diff's anchors, kept for the keyboard `expandContextAtCursor`.
   private revealAll = false;
   private readonly revealedNewRows = new Set<number>();
+  // Per-file collapse: paths the user has folded to a one-line header (stable across re-diff / live
+  // re-diff / HEAD-move rebase — keyed by path, not view row). A collapsed file contributes only its
+  // header row (see buildDiff → `collapsed`).
+  private readonly collapsedFiles = new Set<string>();
   private gapAnchors: DiffMultiBuffer['gapAnchors'] = [];
   private headerAnchors: DiffMultiBuffer['headerAnchors'] = [];
   private readonly onActivate?: (location: { path: string; row: number }) => void;
@@ -271,7 +274,7 @@ export class DiffView {
     this.installNavigation();
     // Track which file the caret sits in, to notify onCursorFileChanged subscribers (the GitPanel
     // keeps its change-list selection in sync). Disposed with the view.
-    this.disposables.add(this.editor.onDidChangeCursorPosition(() => this.emitCursorFile()));
+    this.disposables.add(this.editor.onDidChangeCursorPosition(() => { this.emitCursorFile(); this.updateHeaderFocus(); }));
     if (this.editable) {
       // Re-diff after an edit. A LINE-COUNT change (Enter / `o` / dd) reflows the diff and moves
       // the caret relative to the gaps, so re-diff IMMEDIATELY — debouncing it leaves the caret
@@ -314,7 +317,7 @@ export class DiffView {
     // Filename headers are widgets (not navigable buffer text), anchored above each file's rows.
     // `reveal` forces user-expanded (otherwise-elided) new-side rows visible (expand-context).
     const reveal = this.revealAll ? () => true : (r: number) => this.revealedNewRows.has(r);
-    return buildDiffMultiBuffer(files, this.cwd, { headers: 'widget', reveal });
+    return buildDiffMultiBuffer(files, this.cwd, { headers: 'widget', reveal, collapsed: (p) => this.collapsedFiles.has(p) });
   }
 
   // --- expand context (reveal elided unchanged lines) ------------------------
@@ -335,17 +338,13 @@ export class DiffView {
    *  whether the caret sits above or below the fold. */
   expandContextAtCursor(): void {
     const row = this.cursorRow();
-    // Each gap sits just below `viewRow` (the last shown row before it); a leading gap sits above
-    // the file's first content row (`header.viewRow`), i.e. just below `header.viewRow - 1`.
-    const gaps: Array<{ rows: number[]; viewRow: number }> = [
-      ...this.gapAnchors.map((g) => ({ rows: g.revealRows, viewRow: g.viewRow })),
-      ...this.headerAnchors.flatMap((h) => (h.leadingRevealRows?.length ? [{ rows: h.leadingRevealRows, viewRow: h.viewRow - 1 }] : [])),
-    ];
+    // Every gap (including the leading file-head gap) is a gapAnchor with a reference `viewRow`. The
+    // keyboard reveals TOWARD the caret (above the gap → from its top; below → from its bottom).
     let best: { rows: number[]; fromTop: boolean; dist: number } | null = null;
-    for (const g of gaps) {
+    for (const g of this.gapAnchors) {
       const above = row <= g.viewRow; // is the caret above this gap?
       const dist = above ? g.viewRow - row : row - (g.viewRow + 1);
-      if (!best || dist < best.dist) best = { rows: g.rows, fromTop: above, dist };
+      if (!best || dist < best.dist) best = { rows: g.revealRows, fromTop: above, dist };
     }
     if (best) this.revealChunk(best.rows, best.fromTop);
   }
@@ -361,6 +360,48 @@ export class DiffView {
     this.revealAll = false;
     this.revealedNewRows.clear();
     this.reDiff();
+  }
+
+  // --- per-file collapse -----------------------------------------------------
+
+  /** Collapse / expand the file under the cursor — collapsed, it folds to just its (navigable)
+   *  header row; the caret recovers onto that header (see reDiff). */
+  toggleFileCollapseAtCursor(): void {
+    const hit = this.fileAtViewRow(this.cursorRow());
+    if (!hit) return;
+    if (this.collapsedFiles.has(hit.path)) this.collapsedFiles.delete(hit.path);
+    else this.collapsedFiles.add(hit.path);
+    this.reDiff();
+  }
+
+  /** Collapse every file to its header — a one-line-per-file overview. */
+  collapseAllFiles(): void {
+    for (const f of this.files) this.collapsedFiles.add(f.path);
+    this.reDiff();
+  }
+
+  /** Expand every collapsed file back to its windowed diff. */
+  expandAllFiles(): void {
+    if (this.collapsedFiles.size === 0) return;
+    this.collapsedFiles.clear();
+    this.reDiff();
+  }
+
+  /** Highlight the header whose row the caret sits on (so it reads as focused even though the caret
+   *  rests on the empty line beneath the floating widget), or clear the highlight. */
+  private updateHeaderFocus(): void {
+    const row = this.cursorRow();
+    const onHeader = this.headerAnchors.some((h) => h.viewRow === row);
+    this.editor.stickyHeaders.setFocusedRow(onHeader ? row : null);
+  }
+
+  /** The header-row view position of the file owning `documentKey` (`new:<p>` / `old:<p>`) — the
+   *  caret-recovery target when its own row was collapsed away. */
+  private headerViewRowForDocumentKey(documentKey: string): { row: number; column: number } | null {
+    const sep = documentKey.indexOf(':');
+    const path = sep >= 0 ? documentKey.slice(sep + 1) : documentKey;
+    const h = this.headerAnchors.find((a) => a.path === path);
+    return h ? { row: h.viewRow, column: 0 } : null;
   }
 
   // --- hunk staging ----------------------------------------------------------
@@ -616,54 +657,60 @@ export class DiffView {
     );
   }
 
-  /** (Re)place the header widgets (above each file's first row) + the `⋯` gap bands (below the
-   *  last shown row before each elision). Both are real widgets, not navigable buffer rows.
+  /** (Re)place the file-header widgets (OVER each file's navigable header row, via the sticky layer)
+   *  + the `⋯` gap bands (the leading file-head gap and between-window gaps). All are real widgets,
+   *  not navigable buffer rows.
    *
-   *  RECONCILED by ordinal, not torn down: a re-flow moves the bands and changes their text, but
-   *  removing + re-adding every band collapses its reserved space and re-expands it a frame later,
-   *  which flickers and jumps the text. Instead we reuse each handle in place (`update`), rebuilding
-   *  its widget only when the anchor's CONTENT key changed, and add/remove just the count delta. A
-   *  no-structure-change re-diff (typing within a line) updates nothing. */
-  private static headerKey(h: DiffMultiBuffer['headerAnchors'][number]): string {
-    return `${h.path}\n${h.label}\n${h.subtitle ?? ''}`;
+   *  RECONCILED by id, not torn down: a re-flow moves the bands and changes their text, but removing
+   *  + re-adding every band collapses its reserved space and re-expands it a frame later, which
+   *  flickers and jumps the text. Instead each handle is reused in place, rebuilding its widget only
+   *  when its CONTENT key changed. A no-structure-change re-diff (typing within a line) updates
+   *  nothing. */
+  private static headerKey(h: DiffMultiBuffer['headerAnchors'][number], collapsed: boolean): string {
+    return `${h.path}\n${h.label}\n${collapsed ? 'c' : 'e'}\n${h.added}\n${h.removed}`;
   }
   private static gapKey(g: DiffMultiBuffer['gapAnchors'][number]): string {
-    return `${g.label}\n${g.revealRows.join(',')}`;
+    return `${g.placement}\n${g.label}\n${g.revealRows.join(',')}`;
   }
   private installOverlays(dmb: DiffMultiBuffer): void {
     this.gapAnchors = dmb.gapAnchors; // kept for the keyboard expand (`expandContextAtCursor`)
     this.headerAnchors = dmb.headerAnchors;
-    const specs: BlockDecorationSpec[] = [];
-    dmb.headerAnchors.forEach((h, i) => {
+
+    // File headers are STICKY block decorations placed OVER their (navigable) header row. Keyed by
+    // PATH so a file keeps its widget across re-diffs; rebuilt only when its content key (label /
+    // collapse / stats) changes.
+    const headerSpecs: StickyHeaderSpec[] = dmb.headerAnchors.map((h) => {
+      const collapsed = this.collapsedFiles.has(h.path);
       const scope = new CompositeDisposable();
-      specs.push({
-        id: `header:${i}`, // reconcile by ordinal: count changes by delta, content-key rebuilds the widget
-        key: DiffView.headerKey(h),
-        anchor: { viewRow: h.viewRow },
-        placement: 'above',
+      return {
+        id: `header:${h.path}`,
+        key: DiffView.headerKey(h, collapsed),
+        viewRow: h.viewRow,
         build: () =>
           buildHeaderWidget(
             scope,
             h.label,
             h.path,
             () => this.onActivate?.({ path: h.path, row: 0 }),
-            h.subtitle,
-            // A leading gap reveals TOWARD the content below it (extend the window up from its
-            // bottom), like clicking any other gap.
-            h.leadingRevealRows?.length ? () => this.revealChunk(h.leadingRevealRows!, false) : undefined,
+            { collapsed, added: h.added, removed: h.removed },
           ),
-        dispose: () => scope.dispose(), // sever the header/gap click controllers when the band is replaced/removed
-      });
+        dispose: () => scope.dispose(), // sever the header click controller when the widget is replaced/removed
+      };
     });
+    this.editor.stickyHeaders.setHeaders(headerSpecs);
+
+    // `⋯` gaps (incl. the leading file-head gap, now its own band) + accumulated review-comment
+    // cards stay ordinary (scrolling) block decorations.
+    const specs: BlockDecorationSpec[] = [];
     dmb.gapAnchors.forEach((g, i) => {
       const scope = new CompositeDisposable();
       specs.push({
         id: `gap:${i}`,
         key: DiffView.gapKey(g),
         anchor: { viewRow: g.viewRow },
-        placement: 'below',
-        // Clicking the gap reveals a chunk of its elided lines (extends the window above it).
-        build: () => buildGapWidget(scope, g.label, () => this.revealChunk(g.revealRows, true)),
+        placement: g.placement,
+        // Clicking the gap reveals a chunk of its elided lines (`fromTop` = which end first).
+        build: () => buildGapWidget(scope, g.label, () => this.revealChunk(g.revealRows, g.fromTop)),
         dispose: () => scope.dispose(),
       });
     });
@@ -762,11 +809,15 @@ export class DiffView {
     this.installOverlays(dmb); // re-place header + gap widgets (counts/positions re-flowed)
     // retarget swapped rows but didn't repaint — re-highlight the spliced sections.
     this.editor.repaintSyntax();
-    // Restore the caret to where its source position now shows (it followed the reflow).
+    // Restore the caret to where its source position now shows (it followed the reflow). If its row
+    // was collapsed away, fall back to the file's header row so the caret stays in the same file.
     if (anchor.kind === 'document') {
-      const pos = this.projection.documentToScreen(anchor.documentKey, anchor.row, anchor.column);
+      const pos =
+        this.projection.documentToScreen(anchor.documentKey, anchor.row, anchor.column) ??
+        this.headerViewRowForDocumentKey(anchor.documentKey);
       if (pos) this.editor.model.setCursorBufferPosition(pos);
     }
+    this.updateHeaderFocus(); // the caret may now sit on a header row (e.g. after a collapse)
     this.lastLineCount = this.screen.buffer.getLineCount(); // reflow changed it
   }
 
@@ -1229,6 +1280,7 @@ export class DiffView {
     this.pending.length = 0; // cards are torn down by bands.clear() below
     this.reviewHandlers.length = 0;
     this.bands.clear();
+    this.editor.stickyHeaders.clear(); // sever the header click controllers (editor.dispose() also does)
     this.lineNumbers?.dispose();
     // The editor owns the Screen (via its MultiBufferDocument) and disposes it below.
     for (const entry of this.sources.values()) {
