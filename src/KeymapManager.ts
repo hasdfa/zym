@@ -48,14 +48,16 @@ export function preemptsChord(fullIndices: number[], partialIndices: number[]): 
   return partialIndices.every(i => i > nearestFull);
 }
 
-// How long an incomplete chord prefix is held before it's abandoned. While a
-// prefix is queued every key is swallowed (so e.g. `ctrl-d` never reaches a
-// terminal as long as `ctrl-d ctrl-d` might still complete); after this idle gap
-// with no further key the pending state is resolved as a dead-end — any shorter
-// full match runs, otherwise the keys fall through to the focused widget. Long
-// enough not to fight a deliberate two-key chord, short enough that a single
-// `ctrl-d` reaches the child without a noticeable lag.
-const PARTIAL_MATCH_TIMEOUT_MS = 500;
+// Default time an incomplete chord prefix is held before it's abandoned, in ms.
+// Overridable live via the `keymap.partialMatchTimeoutMs` config key (read at
+// schedule time — see `partialMatchTimeoutMs`). While a prefix is queued every
+// key is swallowed (so e.g. `ctrl-d` never reaches a terminal as long as
+// `ctrl-d ctrl-d` might still complete); after this idle gap with no further key
+// the pending state is resolved as a dead-end — any shorter full match runs,
+// otherwise the keys fall through to the focused widget. Long enough not to
+// fight a deliberate two-key chord, short enough that a single `ctrl-d` reaches
+// the child without a noticeable lag. See docs/commands-keymaps.md.
+const DEFAULT_PARTIAL_MATCH_TIMEOUT_MS = 1000;
 
 const MATCH = {
   PARTIAL: 'PARTIAL',
@@ -175,7 +177,7 @@ export class KeymapManager {
   deferredFullMatches: KeybindingMatch[] | null = null;
 
   // A GLib timeout id while a chord prefix is queued (null otherwise); fires
-  // PARTIAL_MATCH_TIMEOUT_MS after the last key to abandon an unfinished chord.
+  // `partialMatchTimeoutMs()` after the last key to abandon an unfinished chord.
   private partialMatchTimer: number | null = null;
 
   // Fall-through handlers (terminal EOF, etc.) for timed-out chord prefixes.
@@ -419,8 +421,16 @@ export class KeymapManager {
     });
   }
 
+  // Live-read the configured chord timeout (ms), falling back to the default for
+  // a missing/invalid value (the schema clamps to its min/max). See
+  // DEFAULT_PARTIAL_MATCH_TIMEOUT_MS.
+  private partialMatchTimeoutMs(): number {
+    const value = Number(zym.config.get('keymap.partialMatchTimeoutMs'));
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_PARTIAL_MATCH_TIMEOUT_MS;
+  }
+
   private schedulePartialMatchTimeout(): void {
-    this.partialMatchTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, PARTIAL_MATCH_TIMEOUT_MS, () => {
+    this.partialMatchTimer = GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, this.partialMatchTimeoutMs(), () => {
       this.partialMatchTimer = null; // the source self-removes on the `false` return
       this.onPartialMatchTimeout();
       return false; // one-shot
