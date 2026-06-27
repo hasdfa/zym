@@ -6,7 +6,7 @@
  * a restart hint rather than re-theming in place.
  */
 import { openPicker, type PickerItem } from './Picker.ts';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { availableThemes } from '../theme/theme.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;

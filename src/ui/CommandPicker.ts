@@ -13,7 +13,7 @@
  * list reflects the context the user was in (the editor, the file tree, …) rather
  * than the picker itself.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, escapeMarkup, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { fonts } from '../fonts.ts';

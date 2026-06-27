@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { DocumentRegistry } from './DocumentRegistry.ts';
 
 // DocumentRegistry hands out live `Document`s, which wrap a GtkSource buffer — so

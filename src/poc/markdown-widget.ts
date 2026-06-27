@@ -16,7 +16,10 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Gtk, Adw, Gio, GLib, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { installStyles } from '../styles.ts';
 import { registerBundledFonts, fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
@@ -74,7 +77,6 @@ app.on('activate', async () => {
     });
     window.present();
 
-    startLoop();
     loop.run();
   } catch (e) {
     process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

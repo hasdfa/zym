@@ -19,7 +19,8 @@
  */
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Gio, Gtk } from './gi.ts';
+import Gio from 'gi:Gio-2.0';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FILES } from './icons.generated.ts';
 
 type Image = InstanceType<typeof Gtk.Image>;

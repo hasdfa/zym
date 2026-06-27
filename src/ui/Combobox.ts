@@ -18,7 +18,9 @@
  * set (CSS-transitioned). The trigger also auto-sizes to fit the shown value, clamped
  * to `maxWidth`.
  */
-import { Gtk, Gdk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { rank } from './Picker.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';

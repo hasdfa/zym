@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk, GtkSource, Gdk } from '../../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
 import { zym } from '../../../zym.ts';
 import { EditorModel } from '../EditorModel.ts';
 import { attachVim } from './index.ts';

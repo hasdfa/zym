@@ -21,7 +21,8 @@
 import * as Path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { FSWatcher } from 'chokidar';
-import { Gdk, Gtk } from './gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { Disposable } from './util/eventKit.ts';
 import { theme, themeUiCssVariables } from './theme/theme.ts';
 

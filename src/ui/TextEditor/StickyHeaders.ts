@@ -15,7 +15,7 @@
  * keeps exactly one header pinned — an earlier file's header slides up and out as the next reaches
  * the top. `DiffView` drives this via `setHeaders`.
  */
-import type { Gtk } from '../../gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import type { BlockDecorations, BlockDecorationHandle } from './BlockDecorations.ts';
 
 const FOCUSED_CLASS = 'mb-header-focused';

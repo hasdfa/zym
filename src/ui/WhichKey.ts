@@ -9,7 +9,7 @@
  * card floats at the bottom-centre of the supplied overlay, styled like the
  * picker.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';

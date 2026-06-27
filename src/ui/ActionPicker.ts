@@ -8,7 +8,7 @@
 import { openPicker, highlightSegment, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { Icons } from './icons.ts';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { defaultAction, type AgentAction } from '../agents/actions.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;

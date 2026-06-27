@@ -14,12 +14,14 @@
  *   - in replace: Enter replaces the current match, Ctrl+Enter replaces all
  *   - Alt+S cycles the case mode, Alt+R toggles regex (shown in the tooltips)
  */
-import { Gdk, Gtk } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
 import { regexSpans, replacementSpans, applySpans } from './regexHighlight.ts';
-import type { SourceView } from '../../gi.ts';
 import type { Point } from '../../text/Point.ts';
 import type { CaseMode, SearchController, SearchState } from './SearchController.ts';
 

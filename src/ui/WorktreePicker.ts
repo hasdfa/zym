@@ -7,7 +7,7 @@
  * cwd, file tree, and git (see docs/agents.md "git worktree integration"). The
  * agent itself still creates *new* worktrees; this only picks existing ones.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, highlightMarkup } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { Icons } from './icons.ts';

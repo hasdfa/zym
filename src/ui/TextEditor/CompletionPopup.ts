@@ -9,7 +9,10 @@
  * focus — it just renders the items and tracks the selection. It's a plain overlay
  * card, positioned by margins + top-left alignment, like the hover card.
  */
-import { Gtk, Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
 import { highlightMarkup } from '../Picker.ts';
@@ -18,7 +21,6 @@ import { iconLabel, completionKindGlyph } from '../icons.ts';
 import { EditorPopover } from './EditorPopover.ts';
 import { MarkupCard } from './MarkupCard.ts';
 import type { EditorModel } from './EditorModel.ts';
-import type { SourceView } from '../../gi.ts';
 import type { CompletionItem, RankedCompletion } from './CompletionSource.ts';
 
 const DETAIL_COLOR = theme.ui.text.muted;

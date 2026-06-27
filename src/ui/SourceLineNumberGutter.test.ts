@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { CoordinatesMap } from './TextEditor/CoordinatesMap.ts';
 import { excerptsToItems, type Excerpt } from './multibuffer/MultiBufferModel.ts';
 import { lineNumberLabel } from './SourceLineNumberGutter.ts';

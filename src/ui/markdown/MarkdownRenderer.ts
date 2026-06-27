@@ -34,8 +34,13 @@
  * Input uses Gtk.GestureClick + EventControllerMotion + EventControllerKey, each
  * attached through the CompositeDisposable per the lifecycle rules.
  */
-import { Gtk, Gdk, Gsk, Graphene, Pango, Gio } from '../../gi.ts';
-import { registerClass } from '../../gi.ts';
+import Gio from 'gi:Gio-2.0';
+import Pango from 'gi:Pango-1.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gsk from 'gi:Gsk-4.0';
+import Graphene from 'gi:Graphene-1.0';
+import Gtk from 'gi:Gtk-4.0';
+import { registerClass } from 'node-gtk';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
@@ -182,14 +187,14 @@ export class MarkdownRenderer extends Gtk.Widget {
 
   // --- GtkWidget vfuncs ------------------------------------------------------
 
-  getRequestMode() {
+  virtual_getRequestMode() {
     return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH;
   }
 
   // `orientation` is a Gtk.Orientation; typed as number since GTK enums aren't
   // referenceable as types through the node-gtk value import (method params are
   // bivariant, so this still satisfies the vfunc override).
-  measure(orientation: number, forSize: number): [number, number, number, number] {
+  virtual_measure(orientation: number, forSize: number): [number, number, number, number] {
     if (orientation === Gtk.Orientation.HORIZONTAL) {
       return [MIN_WIDTH, this.naturalWidth(), -1, -1];
     }
@@ -198,7 +203,7 @@ export class MarkdownRenderer extends Gtk.Widget {
     return [this.totalHeight, this.totalHeight, -1, -1];
   }
 
-  snapshot(snapshot: Snapshot): void {
+  virtual_snapshot(snapshot: Snapshot): void {
     const width = this.getWidth();
     if (width <= 0) return;
     if (width !== this.layoutWidth) this.relayout(width);
@@ -635,7 +640,7 @@ let registered = false;
 
 /** Create a MarkdownRenderer. Registers the GType on first use (instantiating an
  *  unregistered GObject subclass aborts the process), so this MUST be called after
- *  GTK is initialized (inside app activate / after startLoop). */
+ *  GTK is initialized (inside app activate). */
 export function createMarkdownRenderer(): MarkdownRenderer {
   if (!registered) {
     registerClass(MarkdownRenderer);

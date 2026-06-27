@@ -9,7 +9,7 @@
  * colour-coded state glyph, the author as a muted detail. The host wires it to a
  * command.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { proseMarkup, escapeMarkup } from './proseMarkup.ts';

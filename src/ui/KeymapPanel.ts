@@ -10,7 +10,7 @@
  * `onBindingsChanged`, so a live `keymap.json` edit updates it. Built on a
  * `Gtk.Grid` so the columns align; the scrollable table is exposed via `root`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';

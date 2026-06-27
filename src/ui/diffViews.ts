@@ -11,7 +11,7 @@
  * whole feature lives here rather than in the AppWindow.
  */
 import * as Path from 'node:path';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import { Icons } from './icons.ts';
 import { DiffView } from './DiffView.ts';

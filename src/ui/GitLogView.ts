@@ -27,7 +27,9 @@
  * the entry — holds focus. `/` jumps to the search; Enter/Down/Escape return to the
  * list. The assembled widget is exposed via `root`.
  */
-import { Adw, Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { addStyles } from '../styles.ts';
 import { ICON_FONT_FAMILY, fonts } from '../fonts.ts';
 import { zym } from '../zym.ts';

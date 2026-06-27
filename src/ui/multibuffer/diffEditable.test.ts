@@ -8,7 +8,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { Document } from '../TextEditor/Document.ts';
 import { Screen } from '../TextEditor/Screen.ts';
 import { buildDiffMultiBuffer } from './diffMultiBuffer.ts';

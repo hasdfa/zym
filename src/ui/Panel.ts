@@ -13,7 +13,8 @@
  * whatever is focused. This is the building block of the future splittable
  * panel tree (VS Code-style editor groups).
  */
-import { Adw, Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { addStyles } from '../styles.ts';
 import { zym } from '../zym.ts';

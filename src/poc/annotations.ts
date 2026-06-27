@@ -16,7 +16,12 @@
  *   You should see grey/red/yellow/blue trailing text after lines 2, 4, 6, 8.
  *   Ctrl+R re-adds them (tests removeAll + re-add); type to confirm they track the line.
  */
-import { Gtk, Gdk, Adw, GtkSource, GLib, Gio, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
 
 const SAMPLE = [
   'function add(a, b) {',
@@ -90,7 +95,6 @@ app.on('activate', () => {
     window.present();
     view.grabFocus();
 
-    startLoop();
     loop.run();
   } catch (e) {
     process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

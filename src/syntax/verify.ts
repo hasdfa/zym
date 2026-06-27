@@ -6,8 +6,10 @@
  *
  *   node src/syntax/verify.ts
  */
-import { createRequire } from 'node:module';
-import { Adw, GLib, Gtk, GtkSource } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
 import { SyntaxController } from './SyntaxController.ts';
 import { preloadGrammars } from './grammar.ts';
 
@@ -93,8 +95,9 @@ app.on('activate', () => {
 
   setTimeout(() => { loop.quit(); app.quit(); }, 5000);
 
-  createRequire(import.meta.url)('node-gtk').startLoop();
   loop.run();
 });
 
-process.exit(app.run([]));
+// Under the `gi:` ESM imports `app.run` returns immediately and yields no exit
+// status; the script quits from the activate handler (loop.quit + app.quit).
+app.run([]);

@@ -18,7 +18,7 @@
  * The `github:*` commands cover the repo/actions/issues/pulls/issue pages too.
  * Assembled control exposed via `root`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';

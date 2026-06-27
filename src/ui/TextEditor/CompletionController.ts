@@ -14,7 +14,10 @@
  * Tab/Shift-Tab cycle the candidates (re-filling), Enter commits, Esc is left to
  * vim (it exits insert mode); the host dismisses on any leave-insert.
  */
-import { Gdk, Gtk, type SourceView } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { Point } from '../../text/Point.ts';
 import { Range } from '../../text/Range.ts';

@@ -27,7 +27,9 @@
 import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Adw, Gio, GLib, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Adw from 'gi:Adw-1';
 import { installStyles } from '../styles.ts';
 import { registerBundledFonts, fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
@@ -435,7 +437,6 @@ app.on('activate', () => {
 
     agent.start(); // spawns the fake transport → plays the scripted scene
 
-    startLoop();
     loop.run();
   } catch (e) {
     process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

@@ -5,7 +5,7 @@
  * action via the git facade (`git.ts`). Notifies when there are none, and reports the result.
  * (Stashing changes is the separate `git:stash-push` command.)
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker } from './Picker.ts';
 import { Icons } from './icons.ts';
 import { zym } from '../zym.ts';

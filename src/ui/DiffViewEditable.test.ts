@@ -10,7 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Gtk, Gdk, GLib } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
 import { zym } from '../zym.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
@@ -318,9 +320,9 @@ test('editable diff: the gutter bottom-aligns an excerpt-first row, top-aligns t
 
   const renderer = ((mbv as any).lineNumbers as any).renderer;
   assert.deepEqual([...renderer.headerRows], [0], 'view row 0 is the excerpt-first row (header band above)');
-  renderer.queryData(null, 0);
+  renderer.virtual_queryData(null, 0);
   assert.equal(renderer.yalign, 1, 'excerpt-first row bottom-aligns the number onto the text line');
-  renderer.queryData(null, 1);
+  renderer.virtual_queryData(null, 1);
   assert.equal(renderer.yalign, 0, 'a normal row top-aligns');
   win.destroy();
   mbv.dispose();

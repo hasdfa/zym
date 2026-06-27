@@ -7,7 +7,7 @@
  * (`getIterAtLine`, `getIterAtLineOffset`). `unwrapIter` normalizes both shapes
  * so callers never have to remember which is which.
  */
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 
 export type TextIter = InstanceType<typeof Gtk.TextIter>;
 export type TextMark = InstanceType<typeof Gtk.TextMark>;

@@ -13,7 +13,8 @@
  * virtual content wants the gap-tag + overlay recipe instead — see
  * docs/text-editor/virtual-lines.md.
  */
-import { GtkSource, type SourceView } from '../../gi.ts';
+import GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 
 export type AnnotationStyleName = 'none' | 'warning' | 'error' | 'accent';
 

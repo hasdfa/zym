@@ -11,7 +11,7 @@
  * muted, on the right) and maps a row back to its symbol's location.
  */
 import * as Path from 'node:path';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openLocationPicker } from './LocationPicker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { escapeMarkup, type PickerItem } from './Picker.ts';

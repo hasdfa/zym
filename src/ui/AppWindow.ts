@@ -13,13 +13,11 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import {
-  Adw,
-  Gtk,
-  type Application,
-  type ApplicationWindow,
-  type ToastOverlay,
-} from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+type Application = InstanceType<typeof Adw.Application>;
+type ApplicationWindow = InstanceType<typeof Adw.ApplicationWindow>;
+type ToastOverlay = InstanceType<typeof Adw.ToastOverlay>;
 import { FileTree } from './FileTree.ts';
 import { Panel, type PanelChild } from './Panel.ts';
 import { PanelGroup, type Direction, type RestoredChild } from './PanelGroup.ts';
@@ -594,9 +592,9 @@ export class AppWindow {
     this.agentSubs.clear();
     this.onQuit();
     // node-gtk keeps Node's event loop interleaved with GLib's, so quitting the
-    // GLib loop + app doesn't unwind `app.run()` and lingering handles (LSP
-    // child processes, fetch/autofetch timers) keep the process alive. Exit
-    // explicitly once teardown has run so closing the window ends the process.
+    // GLib loop + app doesn't end the process — lingering handles (LSP child
+    // processes, fetch/autofetch timers) keep it alive. Exit explicitly once
+    // teardown has run so closing the window ends the process.
     process.exit(0);
   }
 

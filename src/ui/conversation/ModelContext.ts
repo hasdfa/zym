@@ -7,7 +7,7 @@
  * (ContextRing + ContextPopover), so AgentConversation just forwards session
  * events to the setters and appends `widget` to the footer.
  */
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { ContextRing } from './ContextRing.ts';
 import { ContextPopover } from './ContextPopover.ts';
 import type { ContextUsage } from '../../agents/claude-sdk/SdkSession.ts';

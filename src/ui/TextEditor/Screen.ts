@@ -24,7 +24,9 @@
  * window and shifting later same-source segments, then rebuilding the coordinate map WITHOUT
  * re-materializing (GTK applies the same edit to the view, so no flash / cursor jump).
  */
-import { Gtk, GtkSource, type SourceBuffer } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { Point } from '../../text/Point.ts';
 import { CoordinatesMap, type Item, type Fold } from './CoordinatesMap.ts';
 import { diffLines } from '../../util/lineDiff.ts';

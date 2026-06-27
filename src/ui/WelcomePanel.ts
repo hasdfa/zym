@@ -9,7 +9,7 @@
  * plain `welcomePanel()` builder rather than a class — the host just parents the
  * returned widget and drops it on close; there's nothing to dispose.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { ImageIcons } from '../icons.ts';
 import { keycap } from './Keycap.ts';

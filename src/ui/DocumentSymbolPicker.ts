@@ -12,7 +12,7 @@
  * name, with the container and line number muted on the right), and maps a row to
  * its location.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openLocationPicker } from './LocationPicker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { escapeMarkup, type PickerItem } from './Picker.ts';

@@ -8,7 +8,7 @@
  * the top (then pending, then passed). Choosing a run opens its page in the
  * browser. The GitHub mark is the prompt icon (and the loading spinner's home).
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, highlightMarkup, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { openUrl } from './openUrl.ts';

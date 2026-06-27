@@ -11,7 +11,10 @@
  * at runtime (the node-gtk vfunc constraint), width *primed* up front so a number measured on a
  * short line isn't cropped.
  */
-import { Gtk, GtkSource, registerClass, type SourceView } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
+import { registerClass } from 'node-gtk';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { theme } from '../theme/theme.ts';
 import type { BlockDecorationPlacement } from './TextEditor/BlockDecorations.ts';
 import type { CoordinatesMap } from './TextEditor/CoordinatesMap.ts';
@@ -34,7 +37,7 @@ class MultiBufferLineRenderer extends GtkSource.GutterRendererText {
   bandAt!: (line: number) => BlockDecorationPlacement | null;
   width = 1;
 
-  queryData(_lines: any, line: number) {
+  virtual_queryData(_lines: any, line: number) {
     // A header band ABOVE makes the cell taller above → bottom-align (yalign 1) keeps the number on
     // the text; a gap band BELOW (or 'on', extra space below) makes it taller below → top-align
     // (yalign 0). Plain rows: either (cell == text height). `queryData` runs per row before draw.

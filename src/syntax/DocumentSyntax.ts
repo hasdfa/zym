@@ -17,7 +17,8 @@
  * buffer instead, where model == view and the painter's translation is identity.
  */
 import { type Grammar, createParser, getGrammar, langIdForPath } from './grammar.ts';
-import type { SourceBuffer } from '../gi.ts';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { collectCaptures, type RawCapture, type VisibleRange } from './injection.ts';
 import { computeFoldRanges, type FoldRange } from './folds.ts';
 import { indentLevelAt, enclosingTypeMatches, enclosingNodeRange, type NodeRowRange } from './indent.ts';

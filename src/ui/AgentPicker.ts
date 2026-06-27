@@ -13,7 +13,7 @@
  * Items are keyed by a synthetic value and mapped back to their agent/session, so
  * colliding titles (two `claude` agents read alike) need no disambiguation.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { Icons } from './icons.ts';

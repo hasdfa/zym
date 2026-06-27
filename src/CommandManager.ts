@@ -17,7 +17,7 @@
 import { Emitter, Disposable } from './util/eventKit.ts';
 import { parseSelector, matchesRule, elementMatchKeys, elementContext, type Rule } from './util/selectors.ts';
 import { unreachable } from './util/assert.ts';
-import { Gtk } from './gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
 

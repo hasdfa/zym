@@ -19,7 +19,10 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Gdk, Gtk, GtkSource, type SourceBuffer } from '../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { TextEditor } from './TextEditor/TextEditor.ts';
 import { Document } from './TextEditor/Document.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';

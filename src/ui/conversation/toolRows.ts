@@ -14,7 +14,8 @@
  * Layout decisions (Bash command crop, file-tool collapsing, Task markdown card,
  * TodoWrite checklist, failure tint) live here, not in either caller.
  */
-import { Gtk, Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
 import { MarkdownView } from '../markdown/MarkdownView.ts';

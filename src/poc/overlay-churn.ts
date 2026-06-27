@@ -13,7 +13,11 @@
  *
  * Clean run prints nothing.
  */
-import { Gtk, Adw, GtkSource, GLib, Gio, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
 import { BlockDecorations, type BlockDecorationHandle } from '../ui/TextEditor/BlockDecorations.ts';
 
 const SAMPLE = Array.from({ length: 60 }, (_, i) => `line ${String(i + 1).padStart(2, ' ')}  — text to scroll past`).join('\n');
@@ -70,7 +74,6 @@ app.on('activate', () => {
       app.quit();
     }, 1400);
 
-    startLoop();
     loop.run();
   } catch (e) {
     process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

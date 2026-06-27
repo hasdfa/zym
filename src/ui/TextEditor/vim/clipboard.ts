@@ -15,7 +15,8 @@
  *
  * With no display (headless test runs) each degrades to a plain in-memory cache.
  */
-import { Gdk, GObject } from '../../../gi.ts';
+import GObject from 'gi:GObject-2.0';
+import Gdk from 'gi:Gdk-4.0';
 
 // node-gtk's generated types omit a few GTK4 clipboard members that exist at
 // runtime (Display.getClipboard / getPrimaryClipboard, GObject.TYPE_STRING) —

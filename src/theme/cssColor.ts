@@ -28,7 +28,8 @@
  * keys (layer-2 values are constant within a scheme); layer-3 results aren't cached,
  * since a display may appear after an early headless read and should then win.
  */
-import { Gdk, Gtk } from '../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { APP_COLORS, FALLBACK_COLORS, type Scheme } from './adwaitaColors.ts';
 
 /** A `Gdk.RGBA` (0–1 doubles) as a `#rrggbb` string, or `#rrggbbaa` when not fully

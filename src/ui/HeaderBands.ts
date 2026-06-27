@@ -9,7 +9,7 @@
  * jumps to the file.
  */
 import * as Path from 'node:path';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import type { CompositeDisposable } from '../util/eventKit.ts';
 import { addStyles } from '../styles.ts';
 import { fileIconGlyph } from './fileIcons.ts';

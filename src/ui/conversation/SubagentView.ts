@@ -4,7 +4,8 @@
  * as a single inline button in the main thread, an entry in a sticky "running"
  * panel, and a pushed NavigationView page showing the full transcript.
  */
-import { Gtk, Adw } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { Message } from './Message.ts';
 import { escapeMarkup, setMarkupSafe } from '../proseMarkup.ts';

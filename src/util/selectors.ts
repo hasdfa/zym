@@ -20,7 +20,7 @@
  *     map onto GTK widget names) — it stays as the extension point for aliases.
  */
 import { createRequire } from 'node:module';
-import type { Gtk } from '../gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import { assert, unreachable } from './assert.ts';
 
 // postcss-selector-parser is CommonJS; load it through createRequire so this

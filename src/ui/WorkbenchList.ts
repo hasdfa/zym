@@ -19,7 +19,9 @@
  */
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Adw, Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { zym } from '../zym.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';

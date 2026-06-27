@@ -18,7 +18,8 @@
 import { marked, type Token, type Tokens } from 'marked';
 import { theme, resolveSyntaxColor } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
-import { Pango, PangoCairo } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import PangoCairo from 'gi:PangoCairo-1.0';
 import { escapeMarkup } from '../proseMarkup.ts';
 
 export type Align = 'left' | 'center' | 'right';

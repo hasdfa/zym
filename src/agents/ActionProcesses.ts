@@ -15,7 +15,7 @@
  * `waitAsync` completion without blocking. Output is inherited (no terminal to
  * capture it); an exit the user didn't trigger surfaces as a notification.
  */
-import { Gio } from '../gi.ts';
+import Gio from 'gi:Gio-2.0';
 import { zym } from '../zym.ts';
 import type { AgentAction } from './actions.ts';
 

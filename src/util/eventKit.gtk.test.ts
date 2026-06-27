@@ -5,7 +5,7 @@
 // controllers in this node-gtk build (cf. Picker.test.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { CompositeDisposable } from './eventKit.ts';
 
 Gtk.init();

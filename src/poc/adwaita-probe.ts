@@ -10,14 +10,10 @@
  *
  *   node src/poc/adwaita-probe.ts
  */
-import { createRequire } from 'node:module';
 import * as Fs from 'node:fs';
-
-const require_ = createRequire(import.meta.url);
-const gi = require_('node-gtk') as typeof import('node-gtk');
-const GLib = gi.require('GLib', '2.0');
-const Gtk = gi.require('Gtk', '4.0');
-const Adw = gi.require('Adw', '1');
+import GLib from 'gi:GLib-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 
 // Every color variable listed in the libadwaita css-variables doc, by category.
 // Names are the CSS-variable name minus the leading `--`, with `-` kept; we probe

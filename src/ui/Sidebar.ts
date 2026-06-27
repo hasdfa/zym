@@ -8,7 +8,7 @@
  * Every callback (agent actions + the collapse toggle) is forwarded straight to the
  * `WorkbenchList` (exposed as `list`); the sidebar only adds the column assembly.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { WorkbenchList, type WorkbenchListOptions } from './WorkbenchList.ts';
 
 export type SidebarOptions = WorkbenchListOptions;

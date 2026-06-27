@@ -5,7 +5,7 @@
  * fenced blocks are syntax-highlighted via `highlight` (tree-sitter, editor-supplied).
  * Shared by the hover, signature, and completion-doc cards so they render identically.
  */
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { fonts } from '../../fonts.ts';
 import { markdownToPango } from '../markdownMarkup.ts';
 import { setMarkupSafe } from '../proseMarkup.ts';

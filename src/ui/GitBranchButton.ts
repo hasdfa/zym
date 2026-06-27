@@ -10,7 +10,8 @@
  * A flat button; clicking it invokes `onClicked` (the host opens the branch
  * picker). The assembled widget is exposed via `root`.
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';

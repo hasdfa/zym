@@ -11,7 +11,7 @@
  * contribution kinds are added here and on `PluginContext` (see PluginContext.ts).
  */
 import type { Disposable, DisposableLike } from '../util/eventKit.ts';
-import type { Gtk } from '../gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import type { TextEditor } from '../ui/TextEditor/index.ts';
 import type { LanguageDef, GrammarDef, ServerDef, InjectionRule } from '../lang/types.ts';
 import type { ConfigSchema } from '../util/Config.ts';

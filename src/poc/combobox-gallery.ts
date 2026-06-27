@@ -22,7 +22,10 @@
  *
  * Run:  node src/poc/combobox-gallery.ts
  */
-import { Gtk, Adw, Gio, GLib, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { addStyles, installStyles } from '../styles.ts';
 import { registerBundledFonts, fonts } from '../fonts.ts';
 import { theme } from '../theme/theme.ts';
@@ -260,7 +263,6 @@ app.on('activate', () => {
     window.on('close-request', () => { disposables.dispose(); loop.quit(); app.quit(); return false; });
     window.present();
 
-    startLoop();
     loop.run();
   } catch (e) {
     process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

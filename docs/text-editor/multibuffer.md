@@ -273,7 +273,7 @@ Single-file editing plus both multibuffer surfaces run on the
   region's first row) bottom-aligns its gutter number (`yalign=1`) so it
   sits next to the text under the reserved band; a band BELOW a row
   top-aligns it (`yalign=0`). Toggled per row inside the renderer's
-  `queryData` (the only gutter vfunc node-gtk invokes), via
+  `virtual_queryData` (the only gutter vfunc node-gtk invokes), via
   `BlockDecorations.placementAtLine`.
 - **Anchor a separator band to the STABLE side.** The search `⋯` gap is
   anchored ABOVE the *next* region's first row, not below the previous

@@ -14,12 +14,13 @@
  *
  * Headless API check:  POC_VERIFY=1 node src/poc/inline-overlay.ts
  */
-import { createRequire } from 'node:module';
-import { Gtk, Gdk, Adw, GtkSource, GLib, Gio, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
 import { BlockDecorations, type BlockDecorationHandle } from '../ui/TextEditor/BlockDecorations.ts';
-
-// (createRequire kept available for parity with other POCs; unused here.)
-void createRequire(import.meta.url);
 
 const ANCHOR_LINE = 5; // 0-based; the block sits below this line
 const SAMPLE = Array.from({ length: 40 }, (_, i) => `line ${String(i + 1).padStart(2, ' ')}  — some text to scroll past`).join('\n');
@@ -118,7 +119,6 @@ app.on('activate', () => {
     }, 500);
   }
 
-  startLoop();
   loop.run();
  } catch (e) {
   process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

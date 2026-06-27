@@ -11,7 +11,8 @@
  * Refetches the whole document (debounced) on edits + on demand; cheap timeout-bounded
  * LSP request. Gated by `editor.inlayHints`.
  */
-import type { SourceView } from '../../gi.ts';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { zym } from '../../zym.ts';
 import { VirtualText } from './VirtualText.ts';
 import type { LspDocument } from '../../lsp/LspManager.ts';

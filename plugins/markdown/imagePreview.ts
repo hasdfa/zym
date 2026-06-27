@@ -16,7 +16,9 @@
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Gdk, GdkPixbuf, Gtk } from '../../src/gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import GdkPixbuf from 'gi:GdkPixbuf-2.0';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../../src/zym.ts';
 import { Disposable } from '../../src/util/eventKit.ts';
 import type { PluginContext } from '../../src/plugin/types.ts';

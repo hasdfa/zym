@@ -11,12 +11,10 @@
  * tab can mirror e.g. the running command or current directory.
  */
 import * as Os from 'node:os';
-import {
-  GLib,
-  Gtk,
-  Vte,
-  type VteTerminal,
-} from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Vte from 'gi:Vte-3.91';
+type VteTerminal = InstanceType<typeof Vte.Terminal>;
 import { fonts } from '../fonts.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { addStyles } from '../styles.ts';

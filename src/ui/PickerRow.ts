@@ -11,7 +11,8 @@
  * its directory). Both take already-built Pango markup so the caller controls
  * highlighting, prose vs. plain text, and emphasis.
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { iconSpan } from './icons.ts';

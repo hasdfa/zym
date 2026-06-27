@@ -8,7 +8,7 @@
  * by the pickers that show free-text labels (resume conversations, switch/send-
  * to agent).
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { theme } from '../theme/theme.ts';
 import { fonts } from '../fonts.ts';
 

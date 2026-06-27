@@ -9,7 +9,7 @@
  * the candidate strings and an `onSelect` callback. Items may arrive
  * asynchronously via the returned handle's `setItems`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { addStyles } from '../styles.ts';

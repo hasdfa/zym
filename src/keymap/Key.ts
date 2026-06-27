@@ -8,7 +8,7 @@
  * native-keymap) is used to resolve shifted symbols (e.g. "!" ⇄ shift-1).
  */
 import { createRequire } from 'node:module';
-import { Gdk } from '../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
 import { CORRECTIONS, LOWER_TO_UPPER, MODIFIERS } from './keySymbols.ts';
 
 interface KeymapEntry {

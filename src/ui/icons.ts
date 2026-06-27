@@ -11,7 +11,8 @@
  * Glyphs are FontAwesome/Octicon codepoints (present in the Nerd Font); file-type
  * icons live separately in fileIcons.ts.
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { NERDFONT } from './nerdfont.ts';
 

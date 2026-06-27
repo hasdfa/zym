@@ -12,7 +12,10 @@
  * the visual result needs interactive verification (not exercised headlessly).
  */
 import * as Color from 'color-bits/string';
-import { Gdk, Gtk, type SourceView } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { Point } from '../../text/Point.ts';
 import { theme } from '../../theme/theme.ts';
 import { zym } from '../../zym.ts';

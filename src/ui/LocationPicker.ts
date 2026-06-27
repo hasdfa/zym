@@ -13,7 +13,7 @@
  * The workspace-symbol picker and the ripgrep search picker are both built on it.
  */
 import * as Fs from 'node:fs';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { openPicker, type PickerItem, type PickerOptions, type RowRenderer } from './Picker.ts';
 import { type CardAnchor } from './FloatingCard.ts';

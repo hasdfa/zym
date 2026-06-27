@@ -9,7 +9,8 @@
  */
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gtk, Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../../fonts.ts';
 import { NERDFONT } from '../nerdfont.ts';
 import { addStyles } from '../../styles.ts';

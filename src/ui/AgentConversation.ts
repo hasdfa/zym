@@ -15,7 +15,9 @@
  * first-class workbench owner registered in `zym.agents` — the chrome reads
  * `status` / `changedFiles` / etc., never the concrete class.
  */
-import { Gtk, Adw, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { zym } from '../zym.ts';

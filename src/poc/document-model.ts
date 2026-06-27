@@ -21,7 +21,12 @@
  * Run:  node src/poc/document-model.ts          # headless assertions
  *       node src/poc/document-model.ts --gui     # + interactive window
  */
-import { Gtk, Gdk, Adw, GtkSource, GLib, Gio, startLoop } from '../gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
 
 // node-gtk returns out-param iters either directly or as [ok, iter]; normalize.
 const asIter = (res: any): any => (Array.isArray(res) ? res[res.length - 1] : res);
@@ -311,7 +316,6 @@ function runGui(): void {
       window.present();
       a.view.grabFocus();
 
-      startLoop();
       loop.run();
     } catch (e) {
       process.stderr.write('[POC] activate threw: ' + (e as Error)?.stack + '\n');

@@ -8,7 +8,10 @@
  */
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gio, GObject, Gtk, Pango } from '../gi.ts';
+import GObject from 'gi:GObject-2.0';
+import Gio from 'gi:Gio-2.0';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';

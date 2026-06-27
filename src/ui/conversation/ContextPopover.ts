@@ -9,7 +9,8 @@
  * figures so the digits line up. `update()` only rewrites label text — the rows are
  * built once.
  */
-import { Gtk, Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../../styles.ts';
 import type { ContextUsage } from '../../agents/claude-sdk/SdkSession.ts';
 

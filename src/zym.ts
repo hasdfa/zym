@@ -11,7 +11,8 @@
  * The window is wired in once by `AppWindow` (`zym.window = …`) after it is
  * constructed, before `zym.keymaps.initialize()`.
  */
-import type { ApplicationWindow } from './gi.ts';
+import type Adw from 'gi:Adw-1';
+type ApplicationWindow = InstanceType<typeof Adw.ApplicationWindow>;
 import { CommandManager } from './CommandManager.ts';
 import { KeymapManager } from './KeymapManager.ts';
 import { NotificationManager } from './NotificationManager.ts';
