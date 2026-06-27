@@ -370,6 +370,20 @@ export class BlockDecorations {
     return vadj ? vadj.getValue() : 0;
   }
 
+  /** Pixels occluded at the viewport TOP by a sticky band pinned there (its height), or 0 when none
+   *  is scrolled past — the editor reserves this so the caret can't hide under it (`topInsetProvider`).
+   *  Heights are uniform, so the max over scrolled-past sticky bands is the pinned band's height. */
+  stickyTopInset(): number {
+    const scrollTop = Math.round(this.scrollTop());
+    let inset = 0;
+    for (const block of this.blocks) {
+      if (!block.sticky || !block.placed) continue;
+      const bandTop = this.bandTop(block, this.lineRect(this.markLine(block)));
+      if (bandTop <= scrollTop) inset = Math.max(inset, block.height); // scrolled past → pinned at the top
+    }
+    return inset;
+  }
+
   /** The natural band top (buffer Y) of the nearest sticky band BELOW `block` (next by anchor line),
    *  or null if none — the ceiling that pushes a stacked sticky band up so they don't pile on top of
    *  each other at the viewport top. */
