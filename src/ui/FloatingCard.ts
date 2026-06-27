@@ -9,7 +9,7 @@
  * `panel` and registers whatever keymap/commands it needs (the card only provides
  * `close`, which the caller can bind to Escape).
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 

@@ -20,7 +20,8 @@
  * The widget owns only the layout, the toggle, and the fade — the conversation
  * builds each tool's header and fills `content`.
  */
-import { Gtk, Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';

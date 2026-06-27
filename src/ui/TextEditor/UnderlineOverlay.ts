@@ -15,7 +15,10 @@
  * and reset with `clear`. Drawing needs a realized, allocated view, so the visual
  * result needs interactive verification (it can't be exercised headlessly).
  */
-import { Gdk, Gtk, type SourceView } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { Range } from '../../text/Range.ts';
 import { Point } from '../../text/Point.ts';
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';

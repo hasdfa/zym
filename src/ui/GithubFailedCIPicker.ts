@@ -6,7 +6,7 @@
  * with exactly one, it opens it directly (no picker); with several, it opens the
  * fuzzy picker over the check names and opens the chosen run.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker } from './Picker.ts';
 import { openUrl } from './openUrl.ts';
 import { zym } from '../zym.ts';

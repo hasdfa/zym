@@ -9,7 +9,8 @@
  * Callers append top-level entries through `appendEntry`; they never touch the box or
  * the class directly.
  */
-import { Gtk, Adw } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { clearChildren, setMarkupSafe, escapeMarkup } from '../proseMarkup.ts';

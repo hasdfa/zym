@@ -77,7 +77,7 @@ export type AgentDriverFactory = (baseCommand: string[], resume?: AgentResume) =
 
 // --- Agent (the workbench/sidebar-facing surface) ----------------------------
 
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import type { TabState } from '../SessionManager.ts';
 import type { WorktreeInfo } from '../git.ts';
 import type { AgentAction } from './actions.ts';

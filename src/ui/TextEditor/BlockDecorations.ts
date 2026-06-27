@@ -31,7 +31,9 @@
  * 0); `add()` before map defers placement to the `map` signal. Layout changes that
  * move anchors (edits, fold toggles) aren't auto-followed — call `repositionAll()`.
  */
-import { Gtk, type SourceView } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { CompositeDisposable, Disposable } from '../../util/eventKit.ts';
 
 export type BlockDecorationPlacement = 'below' | 'above';

@@ -13,7 +13,8 @@
  * `.LocationList` in the central keymap and backed by the `core:*` commands
  * registered here.
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';

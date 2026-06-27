@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../../zym.ts';
 import { TextEditor, createInput } from './TextEditor.ts';
 import { Range } from '../../text/Range.ts';

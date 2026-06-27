@@ -4,7 +4,8 @@
  * while running (with a Cancel button), and a pushed page to inspect its output.
  * Cancel uses the control protocol's stop_task (SdkSession.stopTask).
  */
-import { Gtk, Adw } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import * as Fs from 'node:fs';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';

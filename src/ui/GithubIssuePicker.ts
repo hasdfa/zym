@@ -5,7 +5,7 @@
  * "#<n> <title>" with the author as a muted detail. Notifies when gh is
  * unavailable or there are no open issues.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { proseMarkup } from './proseMarkup.ts';

@@ -14,7 +14,8 @@
  * hidden for the user's. Themed with the libadwaita `secondarySidebar` colors so it
  * reads as one surface with the agent widget it frames.
  */
-import { Adw, Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { addStyles } from '../styles.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import { ICON_FONT_FAMILY } from '../fonts.ts';

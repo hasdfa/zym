@@ -16,7 +16,7 @@
  *
  * "Band" is a consumer concept (a filename header band, a `⋯` gap band) — it does not appear here.
  */
-import type { Gtk } from '../../gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import type { BlockDecorations, BlockDecorationHandle, BlockDecorationPlacement } from './BlockDecorations.ts';
 
 /**

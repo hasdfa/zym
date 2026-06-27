@@ -16,7 +16,8 @@ import { Key } from './keymap/Key.ts';
 import { unreachable } from './util/assert.ts';
 import { parseSelector, matchesRule, matchesRuleInChain, elementMatchKeys, elementContext, type ElementContext, type Rule } from './util/selectors.ts';
 import { getActiveElements } from './util/getActiveElements.ts';
-import { GLib, Gtk } from './gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from './zym.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;
@@ -364,13 +365,13 @@ export class KeymapManager {
         for (const [keystroke, effect] of Object.entries(entry.keymap)) {
           const command = effectCommand(effect);
           if (command === undefined) continue;
-          const k = `${keystroke} ${entry.priority}`;
+          const k = `${keystroke}:${entry.priority}`;
           (byKey.get(k) ?? byKey.set(k, new Set()).get(k)!).add(command);
         }
       }
       for (const [k, commands] of byKey) {
         if (commands.size <= 1) continue;
-        const [keystroke, priority] = k.split(' ');
+        const [keystroke, priority] = k.split(':');
         conflicts.push({ selectorKey, keystroke, priority: Number(priority), commands: [...commands] });
       }
     }

@@ -6,7 +6,7 @@
  * turn looks and aligns the same. Callers mount `root` as a transcript entry and
  * stream markdown via `setMarkdown`.
  */
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../../styles.ts';
 import { MarkdownView } from '../markdown/MarkdownView.ts';
 

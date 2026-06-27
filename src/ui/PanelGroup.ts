@@ -14,7 +14,7 @@
  * current tree-root widget — swapped in place as the tree reshapes, so the host
  * holds one unchanging widget.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { Panel, type PanelChild } from './Panel.ts';
 import type { PanelNode, TabState } from '../SessionManager.ts';
 

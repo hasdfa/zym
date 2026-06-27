@@ -11,7 +11,7 @@
  */
 
 import { Disposable, type DisposableLike } from './util/eventKit.ts';
-import type { Gtk } from './gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import type { TextEditor } from './ui/TextEditor/index.ts';
 import type { TabState } from './SessionManager.ts';
 import { zym } from './zym.ts';

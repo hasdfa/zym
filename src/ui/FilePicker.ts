@@ -21,7 +21,7 @@ import { renderRowStacked } from './PickerRow.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons } from './icons.ts';
 import { listProjectFiles } from '../git.ts';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 

@@ -24,7 +24,10 @@ import { Cursor } from './Cursor.ts';
 import { MarkerLayer } from './MarkerLayer.ts';
 import { Emitter, Disposable, CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
-import { Gtk, type SourceBuffer, type SourceView } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
+type SourceView = InstanceType<typeof GtkSource.View>;
 
 /** Cursor shapes the vim layer switches between per mode. */
 export const CursorType = { BEAM: 'beam', BLOCK: 'block', UNDERLINE: 'underline' } as const;

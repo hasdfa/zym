@@ -11,7 +11,8 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Adw, Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { plugins, disabledPluginIds } from '../plugin/index.ts';
 import { saveConfig } from '../config/load.ts';
 import { zym } from '../zym.ts';

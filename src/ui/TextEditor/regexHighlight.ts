@@ -8,7 +8,7 @@
  * character classes, and escapes (and `$`-refs in the replacement) — enough to
  * read a pattern at a glance, not a full regex parser.
  */
-import { Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
 import { theme } from '../../theme/theme.ts';
 
 interface Span {

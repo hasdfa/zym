@@ -15,7 +15,7 @@ import { languages } from '../lang/index.ts';
 import { clearGrammar, refreshGrammarInjections } from '../syntax/grammar.ts';
 import { zym } from '../zym.ts';
 import { styles } from '../styles.ts';
-import type { Gtk } from '../gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import type { LanguageDef, GrammarDef, ServerDef, InjectionRule } from '../lang/types.ts';
 import type { ConfigSchema } from '../util/Config.ts';
 import type { CommandMap } from '../CommandManager.ts';

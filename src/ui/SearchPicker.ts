@@ -18,7 +18,7 @@ import { Buffer } from 'node:buffer';
 import { escapeMarkup, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
 import { openLocationPicker } from './LocationPicker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { Icons } from './icons.ts';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;

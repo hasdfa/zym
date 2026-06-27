@@ -16,7 +16,7 @@
 import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gio } from '../gi.ts';
+import Gio from 'gi:Gio-2.0';
 import { zym } from '../zym.ts';
 import type { ConfigValue } from '../util/Config.ts';
 import { Disposable } from '../util/eventKit.ts';

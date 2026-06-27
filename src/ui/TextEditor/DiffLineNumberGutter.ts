@@ -13,7 +13,10 @@
  * Like the other gutter renderers, a `GtkSource.GutterRendererText` subclass,
  * instantiated only at runtime (the node-gtk vfunc constraint).
  */
-import { Gtk, GtkSource, registerClass, type SourceView } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
+import { registerClass } from 'node-gtk';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { theme } from '../../theme/theme.ts';
 import type { StagedState } from '../multibuffer/diffMultiBuffer.ts';
 
@@ -55,7 +58,7 @@ class DiffLineNumberRenderer extends GtkSource.GutterRendererText {
   // Per-row cell background (`#rrggbbaa`) or null — added/removed rows tint their side's column.
   backgrounds: (string | null)[] | null = null;
 
-  queryData(_lines: any, line: number) {
+  virtual_queryData(_lines: any, line: number) {
     const model = this.viewToModel ? this.viewToModel(line) : line;
     const label = this.labels?.[model] ?? '';
     const bg = this.backgrounds?.[model] ?? null;
@@ -159,7 +162,7 @@ class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
   // drawn, so toggling `yalign` here applies per row.
   headerRows: Set<number> = new Set();
 
-  queryData(_lines: any, line: number) {
+  virtual_queryData(_lines: any, line: number) {
     this.yalign = this.headerRows.has(line) ? 1 : 0;
     // The leading staged/unstaged marker bar exists only on a live diff; read-only diffs drop it.
     const marker = this.live ? markerMarkup(this.stagedState?.[line] ?? null) : '';

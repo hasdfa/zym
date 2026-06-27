@@ -10,7 +10,8 @@
  * switch repaints correctly. Drawing needs a realized, allocated widget, so the
  * visual result is only exercised interactively (not headlessly).
  */
-import { Gdk, Gtk } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { theme } from '../../theme/theme.ts';
 
 const SIZE = 14; // widget px — sits on the footer's text baseline

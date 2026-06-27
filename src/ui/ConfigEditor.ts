@@ -18,7 +18,9 @@
  *
  * Opened per invocation via `openConfigEditor` and disposed when closed.
  */
-import { Adw, Gtk, type ApplicationWindow } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+type ApplicationWindow = InstanceType<typeof Adw.ApplicationWindow>;
 import { zym } from '../zym.ts';
 import { saveConfig } from '../config/load.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';

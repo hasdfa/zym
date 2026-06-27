@@ -9,7 +9,8 @@
  * widget owns only the layout + buttons; the host supplies run/stop and the
  * running-state query.
  */
-import { Gtk, Adw } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';

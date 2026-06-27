@@ -13,7 +13,9 @@
  * turns that into `openAgent`.
  */
 import { outdent } from 'outdent';
-import { Gtk, Gdk, Adw } from '../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';

@@ -14,7 +14,8 @@
  * model is exposed as `github` for the git:push command and the GitHub command
  * module.
  */
-import { Adw, Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { addStyles } from '../styles.ts';
 import { GitBranchButton } from './GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';

@@ -18,7 +18,7 @@
  * The host (AppWindow) keys this view by its `root` widget for save-routing and the collapse
  * commands (which act on the inner `results`); it disposes the view when the tab closes.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';

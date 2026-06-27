@@ -13,7 +13,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { tmpDir as makeTmpDir } from '../../util/testTmp.ts';
 import { zym } from '../../zym.ts';
 import { plugins, registerBuiltinPlugins } from '../../plugin/index.ts';

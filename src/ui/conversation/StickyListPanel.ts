@@ -3,7 +3,7 @@
  * conversation (the Tasks panel, the running-Subagents panel). Hidden until it
  * has rows; `render(rows)` swaps the list and shows/hides accordingly.
  */
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../../styles.ts';
 import { clearChildren } from '../proseMarkup.ts';
 

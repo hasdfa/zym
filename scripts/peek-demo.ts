@@ -8,7 +8,11 @@
  *
  *   node scripts/peek-demo.ts          (Ctrl+Space toggles the peek)
  */
-import { Adw, Gio, Gdk, Gtk, GLib, startLoop } from '../src/gi.ts';
+import GLib from 'gi:GLib-2.0';
+import Gio from 'gi:Gio-2.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { registerBundledFonts } from '../src/fonts.ts';
 import { installStyles } from '../src/styles.ts';
 import { preloadGrammars } from '../src/syntax/grammar.ts';
@@ -52,7 +56,6 @@ app.on('activate', () => {
   // Show a peek shortly after the view is laid out (geometry must be valid).
   GLib.timeoutAdd(GLib.PRIORITY_DEFAULT, 200, () => { togglePeek(); return false; });
 
-  startLoop();
   loop.run();
 });
 

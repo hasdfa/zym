@@ -20,7 +20,7 @@ import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { Gio } from '../../gi.ts';
+import Gio from 'gi:Gio-2.0';
 import { CompositeDisposable, Disposable, Emitter } from '../../util/eventKit.ts';
 import { ClaudeStreamTransport, type Transport, type TransportOptions } from './transport.ts';
 import { userTurn, isSystemInit, isThinkingTokens, isResult, type StreamEvent, type ContentBlock, type Usage as TokenUsage } from './protocol.ts';

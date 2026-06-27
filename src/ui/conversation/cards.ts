@@ -3,7 +3,7 @@
  * conversation flow. (AskUserQuestion lives in QuestionCard.ts.) A factory
  * returning the card widget; the conversation wires the decision to the session.
  */
-import { Gtk } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { summarizeInput } from './format.ts';
 import type { CompositeDisposable } from '../../util/eventKit.ts';
 import type { PermissionRequest } from '../../agents/claude-sdk/SdkSession.ts';

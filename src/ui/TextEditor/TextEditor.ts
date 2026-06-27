@@ -52,14 +52,12 @@ import type { TextEdit, SignatureHelp, ParameterInformation } from 'vscode-langu
 import { escapeMarkup } from '../Picker.ts';
 import type { GitRepo } from '../../git.ts';
 import type { TabState } from '../../SessionManager.ts';
-import {
-  Adw,
-  Gdk,
-  Gtk,
-  GtkSource,
-  type SourceBuffer,
-  type SourceView,
-} from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
+type SourceView = InstanceType<typeof GtkSource.View>;
 
 addStyles(/* css */`
   .zym-editor {

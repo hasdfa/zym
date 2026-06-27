@@ -10,18 +10,14 @@
  *
  *   node src/poc/gutter-visual.ts
  */
-import { createRequire } from 'node:module';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const require_ = createRequire(import.meta.url);
-const gi = require_('node-gtk') as typeof import('node-gtk');
-const GLib = gi.require('GLib', '2.0');
-const Gtk = gi.require('Gtk', '4.0');
-const Adw = gi.require('Adw', '1');
-const GtkSource = gi.require('GtkSource', '5');
-const PangoCairo = gi.require('PangoCairo', '1.0');
-const Graphene = gi.require('Graphene', '1.0');
+import GLib from 'gi:GLib-2.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
+import PangoCairo from 'gi:PangoCairo-1.0';
+import Graphene from 'gi:Graphene-1.0';
 
 const fontDir = Path.join(Path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'fonts');
 
@@ -115,7 +111,6 @@ app.on('activate', async () => {
     return false;
   });
 
-  gi.startLoop();
   loop.run();
 });
 

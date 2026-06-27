@@ -5,7 +5,7 @@
  * text color its context sets (the muted welcome cheatsheet, a tooltip, …). Use
  * `keycap()` wherever a binding is shown to the user as a discrete chip.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 
 addStyles(`

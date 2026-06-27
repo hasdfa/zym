@@ -35,15 +35,15 @@ line)` and:
   rect's vertical extent comes from `lines.getLineYrange(line, CELL)`
   (the full cell height, which includes the `pixels-above-lines`
   reservation);
-- chains up with `super.snapshotLine(...)` so the parent
+- chains up with `super.virtual_snapshotLine(...)` so the parent
   `GutterRendererText` still draws the line-number text on top.
 
-The `super.<vfunc>()` chain-up is the load-bearing piece: it lets a
+The `super.virtual_<vfunc>()` chain-up is the load-bearing piece: it lets a
 `GutterRendererText` subclass add a band **and** keep the parent's text
 drawing. It was added to node-gtk (merged to node-gtk master, PR
 romgrk/node-gtk#451). See the node-gtk super-vfunc-chain-up memory.
 
-Per-row data is supplied by overriding `queryData(lines, line)`, which
+Per-row data is supplied by overriding `virtual_queryData(lines, line)`, which
 is invoked once per visible row. It sets the line-number markup
 (`[space][number][space]` per old/new column, background spans the
 spaces) and per-row `yalign` (header rows bottom-align the number onto
@@ -64,9 +64,10 @@ per-row drawing but does not make the gutter faster. See `text-editor.md`
 - **Instantiate vfunc-overriding subclasses only after the main loop is
   running.** `new` before then segfaults (see the node-gtk constraints
   memory).
-- node-gtk maps a JS method to a vfunc by `lodash.snakeCase`
-  (`snapshotLine` → `snapshot_line`) and only registers the override if
-  the parent class actually defines that vfunc.
+- node-gtk wires a method into the vtable only when it is named
+  `virtual_` + the camelCase vfunc name (`virtual_snapshotLine` overrides
+  `snapshot_line`). A plain method is never an override; a `virtual_*`
+  name matching no parent/interface vfunc throws at `registerClass`.
 - There is **no gutter-renderer background property** in GtkSource 5.x
   (`setBackgroundRgba` / `background-rgba` are absent / read as
   `undefined`); painting via `snapshot_line` is the supported path.

@@ -11,7 +11,7 @@
  * window-scoped bindings like `.AppWindow` pane navigation would silently stop
  * working whenever focus is lost.
  */
-import type { Gtk } from '../gi.ts';
+import type Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 
 type Widget = InstanceType<typeof Gtk.Widget>;

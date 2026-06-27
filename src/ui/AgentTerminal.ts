@@ -25,7 +25,7 @@
  * unless an explicit `command` is passed.
  */
 import * as Path from 'node:path';
-import { Gdk } from '../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
 import { Terminal, type TerminalOptions } from './Terminal.ts';
 import type { Agent, AgentDriver, AgentDriverFactory, AgentHost, AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
 import type { AgentAction } from '../agents/actions.ts';

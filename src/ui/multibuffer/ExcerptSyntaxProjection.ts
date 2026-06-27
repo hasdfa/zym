@@ -10,7 +10,8 @@
  * editor uses): `segmentRunsInScreenRange` gives the source slices to paint, `blockRows` the
  * header / gap rows to style.
  */
-import { Gtk, Pango } from '../../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { theme } from '../../theme/theme.ts';
 import type { DocumentSyntax } from '../../syntax/DocumentSyntax.ts';
 import type { SyntaxProjection, SyntaxSlice } from '../../syntax/SyntaxProjection.ts';

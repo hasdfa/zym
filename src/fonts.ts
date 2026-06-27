@@ -24,7 +24,9 @@
  */
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Gio, Pango, PangoCairo } from './gi.ts';
+import Gio from 'gi:Gio-2.0';
+import Pango from 'gi:Pango-1.0';
+import PangoCairo from 'gi:PangoCairo-1.0';
 import { zym } from './zym.ts';
 import { styles } from './styles.ts';
 

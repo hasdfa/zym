@@ -6,7 +6,8 @@
  * file behind it.
  */
 import * as Path from 'node:path';
-import { Gdk, Gtk } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { theme } from '../../theme/theme.ts';
 import { addStyles } from '../../styles.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';

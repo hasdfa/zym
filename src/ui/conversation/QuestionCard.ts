@@ -12,7 +12,9 @@
  * A question with no selected option is skipped. On submit the card swaps itself
  * to a compact record of the choices.
  */
-import { Gtk, Adw, Gdk } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';

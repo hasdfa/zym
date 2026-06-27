@@ -13,7 +13,8 @@
  * The commit message is edited in a normal editor tab (see AppWindow.onCommit);
  * this widget just presents status. The assembled panel is exposed via `root`.
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
 import { zym } from '../zym.ts';

@@ -10,7 +10,7 @@
  *
  * The assembled, scrollable list is exposed via `root`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Notification } from '../Notification.ts';

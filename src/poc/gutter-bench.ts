@@ -30,15 +30,11 @@
  *
  *   node src/poc/gutter-bench.ts
  */
-import { createRequire } from 'node:module';
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const require_ = createRequire(import.meta.url);
-const gi = require_('node-gtk') as typeof import('node-gtk');
-const Pango = gi.require('Pango', '1.0');
-const PangoCairo = gi.require('PangoCairo', '1.0');
+import Pango from 'gi:Pango-1.0';
+import PangoCairo from 'gi:PangoCairo-1.0';
 
 // ---------------------------------------------------------------------------
 // Pango setup — a monospace layout context, plus the bundled Nerd Font so the

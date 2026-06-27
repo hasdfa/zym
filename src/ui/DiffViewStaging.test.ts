@@ -15,7 +15,7 @@ import * as Fs from 'node:fs';
 import * as Path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpDir as makeTmpDir } from '../util/testTmp.ts';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import { DocumentRegistry } from './TextEditor/DocumentRegistry.ts';
 import { DiffView } from './DiffView.ts';

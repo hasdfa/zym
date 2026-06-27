@@ -14,7 +14,8 @@
  * are converted to zym `Range`s via `EditorModel` + `position.lspToRange`.
  * Re-renders whenever the store updates for this editor's file.
  */
-import { type SourceView } from '../../gi.ts';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { zym } from '../../zym.ts';

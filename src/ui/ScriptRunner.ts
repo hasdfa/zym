@@ -16,7 +16,7 @@ import * as Path from 'node:path';
 import { openPicker, highlightSegment, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { Icons } from './icons.ts';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 
 type Overlay = InstanceType<typeof Gtk.Overlay>;
 

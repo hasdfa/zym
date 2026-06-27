@@ -15,7 +15,7 @@
  */
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, HIGHLIGHT_COLOR, type PickerItem } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { iconSpan } from './icons.ts';

@@ -20,7 +20,8 @@
  * reads its owning controller off `this.controller` (assigned right after
  * construction) — node-gtk preserves instance props as `this` inside vfuncs.
  */
-import { GtkSource, registerClass } from '../gi.ts';
+import GtkSource from 'gi:GtkSource-5';
+import { registerClass } from 'node-gtk';
 import { theme } from '../theme/theme.ts';
 
 // Line-number gutter color (muted), matching how syntax colors are themed. The git
@@ -66,7 +67,7 @@ export interface GutterCellSink {
 // [git][line number][chevron][diagnostic] — the change bar at the far-left edge,
 // the diagnostic glyph nearest the text.
 export class GutterRenderer extends GtkSource.GutterRendererText {
-  queryData(_lines: any, line: number) {
+  virtual_queryData(_lines: any, line: number) {
     const c = (this as any).controller as GutterHost | undefined;
     if (!c) { this.setText(' ', -1); return; }
     let markup = '';

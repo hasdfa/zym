@@ -20,7 +20,11 @@
  * `foldAll`/`unfoldAll` methods; the editor wires them to `fold:*` commands that
  * the vim keymap's `z`-prefix (za/zo/zc/zr/zm) dispatches.
  */
-import { Gtk, Pango, type SourceBuffer, type SourceView } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { Point } from '../text/Point.ts';
 import { theme } from '../theme/theme.ts';
 import { findBracketPair } from './bracketMatch.ts';

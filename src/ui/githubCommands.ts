@@ -6,7 +6,7 @@
  * overlay + active workbench's cwd/git are injected as getters (the workbench switches).
  */
 import * as Path from 'node:path';
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import { repoRoot, type GitRepo } from '../git.ts';
 import { lineWebUrl, fetchCommitPullRequestUrl, type GithubService } from '../github.ts';

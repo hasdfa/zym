@@ -13,13 +13,18 @@
  *   - Keyboard shortcuts: Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save-as,
  *     Ctrl+Q quit
  *
- * Run with:  pnpm start [file]   (or: node src/index.ts [file])
+ * Run with:  pnpm start [file]
+ *   (directly: node --import node-gtk/register src/index.ts [file] — the flag
+ *    installs node-gtk's `gi:` import hooks before the static graph resolves)
  *
  * Structure:
- *   gi.ts             node-gtk bootstrap + typed namespace exports
  *   application.ts    Adw.Application + main-loop lifecycle
  *   editor-window.ts  the editor window UI and file operations
  *   index.ts          this entry point
+ *
+ * GObject namespaces are imported directly via the `gi:` scheme
+ * (`import Gtk from 'gi:Gtk-4.0'`); node-gtk's own API (`registerClass`) imports
+ * from the `node-gtk` package by name.
  */
 import * as Path from 'node:path';
 import { Application } from './application.ts';

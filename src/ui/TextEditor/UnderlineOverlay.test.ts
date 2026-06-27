@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Gtk, GtkSource } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import GtkSource from 'gi:GtkSource-5';
 import { EditorModel } from './EditorModel.ts';
 import { UnderlineOverlay } from './UnderlineOverlay.ts';
 import { Range } from '../../text/Range.ts';

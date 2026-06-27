@@ -10,7 +10,7 @@
  *   - `ctrl-enter` starts review mode (accumulate) → `onStartReview()`,
  *   - `escape`/`q` (normal mode) cancels → `onCancel()`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import { addStyles } from '../styles.ts';
 import { TextEditor, createInput } from './TextEditor/TextEditor.ts';

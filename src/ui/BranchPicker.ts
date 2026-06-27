@@ -8,7 +8,7 @@
  * branch button and gutters update via `GitRepo.onChange`. Results surface
  * through `zym.notifications`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { openPicker, highlightMarkup } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
 import { Icons } from './icons.ts';

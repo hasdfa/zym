@@ -13,19 +13,19 @@
     "zym": "src/index.ts"
   },
   "scripts": {
-    "start": "pnpm run generate-icons && node src/index.ts",
+    "start": "pnpm run generate-icons && node --import node-gtk/register src/index.ts",
     "postinstall": "pnpm run generate-types && pnpm run generate-icons",
     "generate-icons": "node scripts/generate-icons.ts",
-    "poc": "node src/poc/fold-highlight.ts",
-    "poc:inline": "node src/poc/inline-overlay.ts",
-    "poc:peek": "node src/poc/sibling-peek.ts",
-    "poc:mdwidget": "node src/poc/markdown-widget.ts",
-    "poc:conversation": "node src/poc/conversation-transcript.ts",
-    "poc:combobox": "node src/poc/combobox-gallery.ts",
+    "poc": "node --import node-gtk/register src/poc/fold-highlight.ts",
+    "poc:inline": "node --import node-gtk/register src/poc/inline-overlay.ts",
+    "poc:peek": "node --import node-gtk/register src/poc/sibling-peek.ts",
+    "poc:mdwidget": "node --import node-gtk/register src/poc/markdown-widget.ts",
+    "poc:conversation": "node --import node-gtk/register src/poc/conversation-transcript.ts",
+    "poc:combobox": "node --import node-gtk/register src/poc/combobox-gallery.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "node --test 'src/**/*.test.ts' 'plugins/**/*.test.ts'",
-    "test:sdk": "node --test 'src/agents/claude-sdk/*.test.ts'",
+    "test": "node --import node-gtk/register --test 'src/**/*.test.ts' 'plugins/**/*.test.ts'",
+    "test:sdk": "node --import node-gtk/register --test 'src/agents/claude-sdk/*.test.ts'",
     "generate-types": "node-gtk generate-types Gtk-4.0 Gio-2.0 Adw-1 GtkSource-5 Vte-3.91"
   },
   "dependencies": {

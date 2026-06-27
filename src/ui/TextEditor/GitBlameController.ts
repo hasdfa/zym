@@ -12,7 +12,8 @@
  * An edit invalidates the cache, so the next render re-blames (debounced).
  */
 import * as Path from 'node:path';
-import type { SourceView } from '../../gi.ts';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { zym } from '../../zym.ts';
 import { VirtualText } from './VirtualText.ts';
 import { escapeMarkup } from '../Picker.ts';

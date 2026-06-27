@@ -26,7 +26,8 @@
  * active the rest of the visible text is dimmed (when `leapDimEditor`) so the
  * marks stand out. The pure target/label logic lives in `./leapTargets.ts`.
  */
-import { Gdk, Gtk } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
 import { addStyles } from '../../styles.ts';
 import { theme } from '../../theme/theme.ts';
 import { zym } from '../../zym.ts';

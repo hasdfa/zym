@@ -17,7 +17,9 @@
  * `get-child-position` requires node-gtk #444 (caller-allocated out-struct signal
  * params). One peek at a time.
  */
-import { Gtk, type SourceView } from '../../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { CompositeDisposable } from '../../util/eventKit.ts';
 
 const asIter = (res: any): any => (Array.isArray(res) ? res[1] : res);

@@ -23,7 +23,10 @@
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
-import { Adw, Gio, GtkSource, type SourceBuffer } from '../../gi.ts';
+import Gio from 'gi:Gio-2.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { zym } from '../../zym.ts';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { Point } from '../../text/Point.ts';

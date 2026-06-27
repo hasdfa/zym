@@ -25,7 +25,7 @@
  * Nesting (outermost → in):
  *   hLeft[ left | hCenterRight[ vTop[ top | vBottom[ center | bottom ] ] | right ] ]
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { releaseGitRepo, type GitRepo } from '../git.ts';
 import type { DiagnosticsPanel } from '../lsp/diagnostics/DiagnosticsPanel.ts';
 import type { FileTree } from './FileTree.ts';

@@ -12,7 +12,7 @@
  * The cursor/word operations run on the GtkEditable surface directly (character
  * offsets), so they work regardless of the underlying entry widget.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { zym } from '../zym.ts';
 import type { CommandMap } from '../CommandManager.ts';
 import type { Disposable } from '../util/eventKit.ts';

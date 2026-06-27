@@ -13,7 +13,7 @@
  * the model stays in sync. Meant to be added as an overlay child aligned to the
  * bottom-right; the assembled stack is exposed via `root`.
  */
-import { Gtk } from '../gi.ts';
+import Gtk from 'gi:Gtk-4.0';
 import { CompositeDisposable } from '../util/eventKit.ts';
 import type { Notification } from '../Notification.ts';
 import { Icons, iconLabel } from './icons.ts';

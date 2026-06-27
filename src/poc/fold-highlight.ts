@@ -25,6 +25,12 @@
 import { createRequire } from 'node:module';
 import * as Path from 'node:path';
 import * as Fs from 'node:fs';
+import GLib from 'gi:GLib-2.0';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
+import GtkSource from 'gi:GtkSource-5';
+import { registerClass } from 'node-gtk';
 
 const require_ = createRequire(import.meta.url);
 
@@ -34,13 +40,6 @@ const require_ = createRequire(import.meta.url);
 const Parser = require_('web-tree-sitter');
 type TSNode = any;
 
-// node-gtk is a CJS native addon; load it through createRequire from this ESM.
-const gi = require_('node-gtk') as typeof import('node-gtk');
-const GLib = gi.require('GLib', '2.0');
-const Gdk = gi.require('Gdk', '4.0');
-const Gtk = gi.require('Gtk', '4.0');
-const Adw = gi.require('Adw', '1');
-const GtkSource = gi.require('GtkSource', '5');
 
 // ---------------------------------------------------------------------------
 // tree-sitter setup (web-tree-sitter / wasm)
@@ -276,7 +275,7 @@ function toggleFoldAtCursor() {
 
 class FoldRenderer extends GtkSource.GutterRendererText {
   // Called per line before drawing: set the glyph for this line.
-  queryData(_lines: any, line: number) {
+  virtual_queryData(_lines: any, line: number) {
     const region = foldsByHeaderLine.get(line);
     if (region) {
       this.setMarkup(region.folded ? '▸' : '▾', -1);
@@ -286,19 +285,17 @@ class FoldRenderer extends GtkSource.GutterRendererText {
   }
 
   // Only fold-header lines respond to clicks.
-  queryActivatable(iter: any, _area: any) {
+  virtual_queryActivatable(iter: any, _area: any) {
     return foldsByHeaderLine.has(iter.getLine());
   }
 
   // Click handler: toggle the fold on this line.
-  // @ts-expect-error - overriding the activate vfunc; the base class also
-  // exposes a no-arg activate() action method, so the signatures don't unify.
-  activate(iter: any, _area: any, _button: number, _state: any, _nPresses: number) {
+  virtual_activate(iter: any, _area: any, _button: number, _state: any, _nPresses: number) {
     const region = foldsByHeaderLine.get(iter.getLine());
     if (region) toggleFold(region);
   }
 }
-gi.registerClass(FoldRenderer);
+registerClass(FoldRenderer);
 
 // ---------------------------------------------------------------------------
 // Window
@@ -406,8 +403,7 @@ app.on('activate', () => {
     }, 600);
   }
 
-  gi.startLoop();
   loop.run();
 });
 
-process.exit(app.run([]));
+app.run([]);

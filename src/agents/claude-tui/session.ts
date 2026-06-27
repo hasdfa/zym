@@ -21,7 +21,7 @@ import * as Os from 'node:os';
 import * as Path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { Gio } from '../../gi.ts';
+import Gio from 'gi:Gio-2.0';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import type { AgentDriver, AgentHost, AgentMode, AgentResume } from '../types.ts';
 import { resumeFlags } from '../resume.ts';

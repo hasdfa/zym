@@ -17,7 +17,10 @@
  * autohide=false throughout: these are informational, keyboard-driven surfaces that must
  * never steal focus from the editor.
  */
-import { Gdk, Gtk, type SourceView } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceView = InstanceType<typeof GtkSource.View>;
 import { addStyles } from '../../styles.ts';
 import type { EditorModel } from './EditorModel.ts';
 

@@ -9,7 +9,8 @@
  * equivalent Pango markup — for contexts that render markup rather than widgets
  * (the picker rows, which are markup-only labels).
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';

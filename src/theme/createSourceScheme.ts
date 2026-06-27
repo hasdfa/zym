@@ -18,7 +18,7 @@
 import * as Fs from 'node:fs';
 import * as Os from 'node:os';
 import * as Path from 'node:path';
-import { GtkSource } from '../gi.ts';
+import GtkSource from 'gi:GtkSource-5';
 import type { Theme } from './theme.ts';
 
 type StyleScheme = InstanceType<typeof GtkSource.StyleScheme>;

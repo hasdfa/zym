@@ -16,7 +16,8 @@
  * Tag priority follows creation order, so the owner must build this BEFORE any
  * other tags it layers on top (bracket-match, fold placeholders).
  */
-import { Gtk, Pango } from '../gi.ts';
+import Pango from 'gi:Pango-1.0';
+import Gtk from 'gi:Gtk-4.0';
 import { theme, type SyntaxStyle, resolveSyntaxColor, resolveSyntaxStyle, resolveByCaptureName } from '../theme/theme.ts';
 import { computeStyleRuns, type StyleSpan } from './highlightRuns.ts';
 import type { RawCapture } from './injection.ts';

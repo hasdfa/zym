@@ -22,7 +22,10 @@
  * with its consumer: GUTTER icons and trailing VIRTUAL TEXT (inlay hints, error
  * lens) — gutter source-marks + `GtkSourceAnnotations` (see `VirtualText`).
  */
-import { Gdk, Gtk, type SourceBuffer } from '../../gi.ts';
+import Gdk from 'gi:Gdk-4.0';
+import Gtk from 'gi:Gtk-4.0';
+import type GtkSource from 'gi:GtkSource-5';
+type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { Range, type RangeLike } from '../../text/Range.ts';
 import { theme } from '../../theme/theme.ts';
 import type { EditorModel } from './EditorModel.ts';
