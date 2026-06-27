@@ -830,6 +830,10 @@ export class DiffView {
       text: this.lineText(buffer, row),
     }));
     applyDiffDecorations(this.editor.decorations.layer('diff'), lines, /* terminated */ false);
+    // Hide the caret on the read-only header rows — the band reads `.focused` instead. Range spans
+    // each header row's newline so the marker is present at column 0 (an empty line has no glyph).
+    const headerRange = (row: number): [[number, number], [number, number]] => [[row, 0], [row + 1, 0]];
+    this.editor.decorations.setNoCursorRanges(dmb.headerAnchors.map((h) => headerRange(h.viewRow)));
   }
 
   private lineText(buffer: any, row: number): string {

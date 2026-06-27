@@ -1625,6 +1625,8 @@ export class TextEditor implements DocumentHost {
     // — including on cursor-position changes, so a mouse click repositions it.
     this.editorModel.onCursorOverlay = (kind, iter) => this.renderCursorOverlay(kind, iter);
     this.editorModel.onExtraCursors = (carets) => this.renderExtraCarets(carets);
+    // Suppress the caret where a `no-cursor` decoration is set (the diff's read-only header rows).
+    this.editorModel.shouldHideCursorAt = (iter) => this.textDecorations.isCursorHiddenAt(iter);
 
     // The overlay caret is placed from view geometry, which is all-zero until the
     // first size-allocate — so the caret painted during load (cursor at 0,0 on an

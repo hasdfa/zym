@@ -26,6 +26,7 @@ import { Gdk, Gtk, type SourceBuffer } from '../../gi.ts';
 import { Range, type RangeLike } from '../../text/Range.ts';
 import { theme } from '../../theme/theme.ts';
 import type { EditorModel } from './EditorModel.ts';
+import type { TextIter } from './iter.ts';
 import { UnderlineOverlay, type Underline } from './UnderlineOverlay.ts';
 
 export type { Underline };
@@ -88,11 +89,37 @@ export class TextDecorations {
   // Drawn diagnostic squiggles live here too — an internal Cairo overlay, so producers
   // push underlines through this one surface rather than holding the overlay directly.
   private readonly underlines: UnderlineOverlay;
+  // A BEHAVIORAL decoration (paints nothing): the ranges where the cursor is HIDDEN. The cursor
+  // model consults `isCursorHiddenAt`; one shared marker tag, replace-the-set like `setUnderlines`.
+  // Used by the diff for its read-only header rows (the caret rests on them but shows no box).
+  private noCursorTag: InstanceType<typeof Gtk.TextTag> | null = null;
 
   constructor(editor: EditorModel) {
     this.editor = editor;
     this.buffer = editor.buffer;
     this.underlines = new UnderlineOverlay(editor.view, editor);
+  }
+
+  /** Replace the set of ranges where the cursor is HIDDEN — a behavioral decoration that paints
+   *  nothing. A caret whose position carries it renders no block / overlay / native caret (the
+   *  cursor model checks `isCursorHiddenAt`). The marker tag tracks edits between updates, like the
+   *  layer tags. */
+  setNoCursorRanges(ranges: RangeLike[]): void {
+    if (!this.noCursorTag) {
+      this.noCursorTag = new Gtk.TextTag({ name: 'deco:no-cursor' }); // no visual props — a pure marker
+      this.buffer.getTagTable().add(this.noCursorTag);
+    }
+    const [start, end] = this.buffer.getBounds();
+    this.buffer.removeTag(this.noCursorTag, start, end);
+    for (const range of ranges) {
+      const r = Range.fromObject(range);
+      this.buffer.applyTag(this.noCursorTag, this.editor.iterAtPoint(r.start), this.editor.iterAtPoint(r.end));
+    }
+  }
+
+  /** Whether the cursor at `iter` is hidden (its position carries the no-cursor decoration). */
+  isCursorHiddenAt(iter: TextIter): boolean {
+    return this.noCursorTag != null && iter.hasTag(this.noCursorTag);
   }
 
   /** The squiggle overlay's widget — the editor adds it to its overlay layer once. */

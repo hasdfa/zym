@@ -207,6 +207,12 @@ export class EditorModel {
   // sets this; `hidden` means the tag (or native caret) covers it.
   onCursorOverlay?: (kind: 'hidden' | 'hollow' | 'filled', iter?: TextIter) => void;
 
+  // Whether the caret at `iter` should be HIDDEN (no block / overlay / native caret) — a generic
+  // hook the host wires to a "no-cursor" decoration (the diff's read-only header rows). Applies to
+  // the primary AND every extra cursor. The caret still MOVES there (navigation works); it's just
+  // not drawn.
+  shouldHideCursorAt?: (iter: TextIter) => boolean;
+
   // Host-drawn carets for the *extra* cursors (multi-cursor / blockwise). Block
   // carets over a glyph are painted as tags; beam carets (insert mode) and carets
   // with no glyph to cover are drawn by the host here. Empty array clears them.
@@ -841,6 +847,7 @@ export class EditorModel {
       }
       const headPoint = this.cursorDisplayResolver?.(selection) ?? selection.getHeadBufferPosition();
       const headIter = this.iterAtPoint(headPoint);
+      if (this.shouldHideCursorAt?.(headIter)) continue; // cursor-hidden line: paint no extra caret
       const noGlyph = headIter.endsLine() || headIter.isEnd();
       if (!beam && !noGlyph) {
         // Block caret over the character — a reverse-video tag (cheap, no widget).
@@ -1731,15 +1738,23 @@ export class EditorModel {
     const [start, end] = this.buffer.getBounds();
     this.buffer.removeTag(this.cursorTag, start, end);
 
+    const iter = this.cursorDisplayPoint
+      ? this.iterAtPoint(this.cursorDisplayPoint)
+      : unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
+
+    // A cursor-hidden line (e.g. a diff's read-only header row): no caret at all (the caret still
+    // moved here — navigation works — it's just not drawn). Checked before every mode/EOL branch.
+    if (this.shouldHideCursorAt?.(iter)) {
+      this.view.setCursorVisible(false);
+      this.onCursorOverlay?.('hidden');
+      return;
+    }
+
     if (!this.blockCursor) {
       this.view.setCursorVisible(true);
       this.onCursorOverlay?.('hidden');
       return;
     }
-
-    const iter = this.cursorDisplayPoint
-      ? this.iterAtPoint(this.cursorDisplayPoint)
-      : unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
 
     if (!this.focused) {
       // An inactive editor shows no caret at all (no block, no overlay).

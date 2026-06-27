@@ -47,6 +47,16 @@ highlight, so a producer never touches the overlay directly. (It's a Cairo
 overlay, so it tracks scroll/edits by re-binding `value-changed` on
 `notify::vadjustment` + repainting on buffer `changed`.)
 
+`TextDecorations` also carries one **behavioral** (non-painting) decoration:
+**`no-cursor`** (`setNoCursorRanges` / `isCursorHiddenAt`) — a marker tag over
+ranges where the caret is hidden. The cursor model (`EditorModel`) consults it
+via the generic `shouldHideCursorAt` hook (wired by `TextEditor`) and draws no
+block / overlay / native caret there, for the **primary and every extra
+(multi-)cursor** — the caret still moves there, it's just invisible. The diff
+marks its read-only header rows with it (the caret rests on a header but shows
+no box; the band reads `.focused` instead). See
+[diff.md](diff.md).
+
 ## Virtual text — EOL *and* mid-line
 
 Two flavors of "text shown but not in the model":

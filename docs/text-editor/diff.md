@@ -34,8 +34,10 @@ It is fully documented in **[multibuffer.md](multibuffer.md)** — start there.
 Each file's header is an **empty, read-only, navigable `block` row** (the file's first row), which
 the filename widget **covers** as an `on`-placed `sticky` `BlockDecoration` (`placement: 'on', sticky:
 true`) — the widget sits OVER its own line (the line is grown to the widget's height), so the caret
-lands *on the headerband* (`j`/`k` stops there, and the band reads `.focused`), making it clear the
-cursor operates on the header. Being an ordinary text-window `add_overlay` child it **scrolls
+lands *on the headerband* (`j`/`k` stops there). The caret box itself is **suppressed** on the header
+rows via a `no-cursor` decoration (`editor.decorations.setNoCursorRanges`, applied in
+`applyDecorations`) — the band reads `.focused` instead, so it's clear the cursor is on the header
+without a stray box over the filename. Being an ordinary text-window `add_overlay` child it **scrolls
 natively** — smooth on a touchpad, never swallows scroll (it bubbles to the view), stays click-to-jump,
 and is **clipped to the viewport by the text view** (so nothing draws over the tab bar). The `sticky`
 flag (in `BlockDecorations`) clamps the overlay's Y to the scroll top and re-clamps it on every

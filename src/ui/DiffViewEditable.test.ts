@@ -384,3 +384,14 @@ test('collapse: collapseAllFiles folds every file; expandAllFiles restores', () 
   assert.equal(linesOf(mbv).length, before, 'expand-all restores every file');
   mbv.dispose();
 });
+
+test('header rows are cursor-hidden (the caret rests on them but the box is suppressed)', () => {
+  const { mbv } = setup(); // header at row 0, content (line1/…) below
+  const buffer = mbv.editor.sourceView.getBuffer();
+  const at = (row: number) => asIter(buffer.getIterAtLine(row));
+  assert.equal(mbv.editor.decorations.isCursorHiddenAt(at(0)), true, 'the (read-only) header row hides the cursor');
+  const contentRow = linesOf(mbv).indexOf('line1');
+  assert.ok(contentRow > 0);
+  assert.equal(mbv.editor.decorations.isCursorHiddenAt(at(contentRow)), false, 'a real content row shows the cursor');
+  mbv.dispose();
+});
