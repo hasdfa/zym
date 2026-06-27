@@ -119,6 +119,9 @@ interface SourceEntry {
   syntax: DocumentSyntax;
   /** Editable mode, new side only: the live Document backing it (released on dispose). */
   document?: Document;
+  /** Select the grammar + parse this side (deferred); run by the projection when the hunk nears
+   *  the viewport (lazy syntax). */
+  parse: () => void;
 }
 
 export class DiffView {
@@ -221,7 +224,9 @@ export class DiffView {
     this.dmb = dmb;
 
     const sourceBuffers = new Map([...this.sources].map(([key, e]) => [key, e.buffer] as const));
-    const syntaxMap = new Map([...this.sources].map(([key, e]) => [key, e.syntax] as const));
+    // Lazy syntax: each side parses (deferred) when its hunk nears the viewport — TextEditor's
+    // lazy-syntax driver runs the thunk, not all sides up front.
+    const syntaxMap = new Map([...this.sources].map(([key, e]) => [key, { syntax: e.syntax, ensureParsed: e.parse }] as const));
     this.screen = new Screen(dmb.items, sourceBuffers);
 
     // One editor, natively backed by the multi-source projection (no buffer-mode shim): the
@@ -695,22 +700,27 @@ export class DiffView {
     if (entry) this.sources.set(newKey(file.path), entry);
   }
 
-  /** A read-only blob buffer + its own parse (the base side, and both sides when read-only). */
+  /** A read-only blob buffer + its own (deferred) parse (the base side, and both sides when
+   *  read-only). The parse is lazy — run when the hunk nears the viewport (see the projection). */
   private snapshotSource(text: string, path: string): SourceEntry {
     const buffer = new GtkSource.Buffer();
     buffer.setText(text, -1);
     const syntax = new DocumentSyntax(buffer);
-    syntax.setLanguageForPath(path);
-    return { buffer, syntax };
+    return { buffer, syntax, parse: () => syntax.setLanguageForPath(path, { deferParse: true }) };
   }
 
   /** Editable new side: the shared live Document's model buffer + its own parse (no double
-   *  parse). Loads from disk only if not already open (preserving an open tab's unsaved edits). */
+   *  parse, deferred). Loads from disk only if not already open (preserving an open tab's unsaved
+   *  edits). */
   private acquireNewSide(file: DiffFile): SourceEntry {
     const { document } = this.registry!.acquire(file.path);
     if (!document.isLoaded) document.loadFile(file.path);
-    document.syntax.setLanguageForPath(file.path);
-    return { buffer: document.modelBuffer, syntax: document.syntax, document };
+    return {
+      buffer: document.modelBuffer,
+      syntax: document.syntax,
+      document,
+      parse: () => document.syntax.setLanguageForPath(file.path, { deferParse: true }),
+    };
   }
 
   private scheduleReDiff(): void {
