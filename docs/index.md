@@ -225,7 +225,7 @@ surfaced and fixed at the source. Workarounds for `node-gtk` should not be allow
 `import Gtk from 'gi:Gtk-4.0'` (the default export is the namespace object;
 static named imports aren't supported, destructure from the default instead).
 There is no central `gi.ts` hub. node-gtk's own API imports from the package by
-name: `import { registerClass } from 'node-gtk'`. The `gi:` hooks must be
+name (e.g. `import { getGType } from 'node-gtk'`). The `gi:` hooks must be
 installed before the importing module's static graph resolves, so **every entry
 point runs with `node --import node-gtk/register`** (wired into the `start` /
 `poc:*` / `test` scripts; pass it yourself for an ad-hoc `node src/…`). GTK enums
@@ -242,11 +242,17 @@ a main loop runs — there is no `startLoop()`. Under the `gi:` (ESM) imports th
 run call must be the last statement and cleanup/exit happens from handlers (never
 `process.exit(app.run([]))`).
 
-**Vfunc overrides.** A registered subclass overrides a virtual function only by a
-method named `virtual_` + the camelCase vfunc name (`virtual_snapshot`,
+**Class registration.** JS GObject subclasses register automatically — node-gtk
+lazily registers a subclass (and any unregistered ancestor) the first time it is
+constructed, so `registerClass()` is not called in this codebase. It stays
+available from `node-gtk` for the rare case that needs the GType before any
+instance exists (e.g. `getGType`, GtkBuilder templates).
+
+**Vfunc overrides.** A subclass overrides a virtual function only by a method
+named `virtual_` + the camelCase vfunc name (`virtual_snapshot`,
 `virtual_queryData`, `virtual_measure`); a plain method is never an override, and
-a `virtual_*` name matching no vfunc throws at `registerClass`. Chain up with
-`super.virtual_<name>()`. See
+a `virtual_*` name matching no vfunc throws when the subclass is registered (on
+its first construction). Chain up with `super.virtual_<name>()`. See
 [text-editor/gutter-cell-background.md](text-editor/gutter-cell-background.md).
 
 Unconfirmed gotcha: JS microtasks may not drain promptly under node-gtk's GLib main 
