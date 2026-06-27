@@ -64,9 +64,19 @@ interface SourceEntry {
   lines: string[];
   /** Editable mode: the live Document backing this source (released on dispose). */
   document?: Document;
+  /** Lazy syntax: whether `parse()` has run yet (it runs when the excerpt nears the viewport). */
+  parsed: boolean;
+  /** Select the grammar + parse this source (deferred). Idempotent via `parsed`. */
+  parse: () => void;
 }
 
 const asIter = (r: any): any => (Array.isArray(r) ? r[r.length - 1] : r);
+
+// Coalesce scroll bursts before re-checking which excerpt sources need their syntax parsed.
+const LAZY_SYNTAX_THROTTLE_MS = 50;
+// Parse sources this many view rows beyond the viewport, so an excerpt is already highlighted
+// by the time it scrolls in (mirrors the painter's VIEWPORT_MARGIN_LINES).
+const LAZY_SYNTAX_MARGIN_ROWS = 100;
 
 export class SearchResultsView {
   readonly root: InstanceType<typeof Gtk.Widget>;
@@ -89,6 +99,10 @@ export class SearchResultsView {
   private lastLineCount = 0; // view buffer line count, to detect row-count-changing edits
   private readonly disposables = new CompositeDisposable();
   private disposed = false;
+  // Lazy syntax: the scroll adjustment we're bound to (re-bound when the ScrolledWindow swaps
+  // it in), and the throttle for re-checking which excerpt sources to parse.
+  private scrollAdj: any = null;
+  private lazyThrottleId: NodeJS.Timeout | null = null;
 
   /** The LIVE coordinate map (re-segmentation swaps the underlying projection, so always read
    *  it through the Screen rather than caching it). */
@@ -135,6 +149,7 @@ export class SearchResultsView {
       this.editor.model.setEditableCheck((s, e) => this.screen.view.isScreenRangeEditable(s, e));
     }
     this.installNavigation();
+    this.installLazySyntax();
     // Per-excerpt source line numbers: a left gutter that asks the live projection for the
     // source row behind each view row (blank on header/gap/blank). Sized to the widest source.
     let maxLine = 1;
@@ -335,6 +350,67 @@ export class SearchResultsView {
     return excerpts;
   }
 
+  /** Lazy syntax highlighting: parse an excerpt's source only when it nears the viewport, not
+   *  all matched files up front (a broad search can match hundreds of files; parsing each is
+   *  O(file)). Sources are read + their geometry built eagerly (the buffer/line-count feed the
+   *  view), but the tree-sitter parse waits here. Bound to the view's vertical scroll (the
+   *  ScrolledWindow swaps the adjustment in after construction, so re-bind on
+   *  notify::vadjustment — mirrors SyntaxController / IndentGuides), throttled, plus a one-shot
+   *  pass once the view is mapped (its visible-row math is valid then). A parsed source
+   *  repaints itself via the painter's `onDidReparse` subscription. */
+  private installLazySyntax(): void {
+    const view = this.editor.sourceView;
+    const schedule = (): void => {
+      if (this.lazyThrottleId || this.disposed) return;
+      this.lazyThrottleId = setTimeout(() => {
+        this.lazyThrottleId = null;
+        this.parseVisibleSources();
+      }, LAZY_SYNTAX_THROTTLE_MS);
+    };
+    const connectScroll = (): void => {
+      const vadj = view.getVadjustment?.();
+      if (vadj && vadj !== this.scrollAdj) {
+        this.scrollAdj = vadj;
+        this.disposables.connect(vadj, 'value-changed', schedule); // scroll
+        this.disposables.connect(vadj, 'changed', schedule); // size-allocate / content height (first real viewport)
+      }
+    };
+    this.disposables.connect(view, 'notify::vadjustment', connectScroll);
+    connectScroll();
+    if (view.getMapped()) this.parseVisibleSources();
+    else this.disposables.connect(view, 'map', () => this.parseVisibleSources());
+  }
+
+  /** Parse the syntax of every source whose excerpt overlaps the viewport (± a margin). */
+  private parseVisibleSources(): void {
+    if (this.disposed) return;
+    // Unrealized, the model reports the WHOLE buffer as "visible" — which would parse every
+    // source and defeat the laziness. The triggers all fire post-realize; guard regardless.
+    if (!this.editor.sourceView.getRealized()) return;
+    const model = this.editor.model;
+    const top = Math.max(0, model.getFirstVisibleScreenRow() - LAZY_SYNTAX_MARGIN_ROWS);
+    const bottom = model.getLastVisibleScreenRow() + LAZY_SYNTAX_MARGIN_ROWS;
+    this.ensureSyntaxForScreenRange(top, bottom);
+  }
+
+  /** Parse (once) the syntax of every source whose excerpt overlaps screen rows `[from, to]`.
+   *  The lazy trigger calls this with the viewport; exposed so a caller can pre-warm a range.
+   *  Each source parses deferred (see `DocumentSyntax.setLanguageForPath` deferParse) and then
+   *  repaints itself via the painter's `onDidReparse` subscription. */
+  ensureSyntaxForScreenRange(from: number, to: number): void {
+    if (this.disposed || from > to) return;
+    const seen = new Set<string>();
+    for (const run of this.projection.segmentRunsInScreenRange(from, to)) {
+      if (seen.has(run.documentKey)) continue;
+      seen.add(run.documentKey);
+      const entry = this.sources.get(run.documentKey);
+      if (entry && !entry.parsed) {
+        entry.parsed = true;
+        entry.parse();
+      }
+    }
+  }
+
   /** Resolve a source once: a live Document (editable) or a disk-snapshot buffer (read-only).
    *  Returns null if unreadable. */
   private ensureSource(path: string): SourceEntry | null {
@@ -355,15 +431,17 @@ export class SearchResultsView {
       this.registry!.release(document);
       return null;
     }
-    // Select the grammar + parse so the painter has captures. A tab already showing this file
-    // had its SyntaxController do this; a file opened only by the search did not — without it,
-    // only the already-open file got highlighted. Idempotent (reuses an existing parse).
-    document.syntax.setLanguageForPath(path);
+    // Select the grammar + parse so the painter has captures — but DEFERRED, on demand when
+    // the excerpt nears the viewport (see `parseVisibleSources`), so a search across many
+    // files doesn't parse them all up front. A tab already showing this file parsed it
+    // already; `setLanguageForPath` is idempotent (reuses the existing parse).
     return {
       buffer: document.modelBuffer,
       syntax: document.syntax, // owned by the Document; not disposed here
       lines: document.getText().split('\n'),
       document,
+      parsed: false,
+      parse: () => document.syntax.setLanguageForPath(path, { deferParse: true }),
     };
   }
 
@@ -379,8 +457,15 @@ export class SearchResultsView {
     const buffer = new GtkSource.Buffer();
     buffer.setText(text, -1);
     const syntax = new DocumentSyntax(buffer);
-    syntax.setLanguageForPath(path); // synchronous parse (grammars are preloaded)
-    return { buffer, syntax, lines: text.split('\n') };
+    // Parse is DEFERRED until the excerpt nears the viewport (see `parseVisibleSources`) — a
+    // search across many files shouldn't parse every match up front.
+    return {
+      buffer,
+      syntax,
+      lines: text.split('\n'),
+      parsed: false,
+      parse: () => syntax.setLanguageForPath(path, { deferParse: true }),
+    };
   }
 
   /** Enter (on the focused view) + double-click activate the row under the cursor/pointer.
@@ -444,6 +529,7 @@ export class SearchResultsView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.lazyThrottleId) { clearTimeout(this.lazyThrottleId); this.lazyThrottleId = null; }
     // Sever the navigation controllers FIRST, while the source view still exists: their
     // closures capture `this`, and node-gtk roots connected-handler closures, so leaving them
     // on would pin this whole view (editor + acquired Documents + buffers + tags) — the

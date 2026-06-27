@@ -52,6 +52,19 @@ Three layers:
     **linear** document→screen mapping (`sliceIter`) — **NOT fold-aware**
     (see the invariant below).
 
+- **Lazy syntax (project search).** A broad search can match hundreds of
+  files; parsing each is O(file), so `SearchResultsView` reads + builds each
+  source's geometry up front but **defers the tree-sitter parse** until the
+  excerpt nears the viewport. `parseVisibleSources` (bound to vertical scroll +
+  the adjustment's `changed`, throttled, plus a one-shot once mapped) calls
+  `ensureSyntaxForScreenRange`, which parses each visible source via
+  `DocumentSyntax.setLanguageForPath(path, { deferParse: true })` — grammar
+  selected now, the whole source parsed on the next tick (the bounded *head*
+  parse used on single-file open is useless here: excerpts are scattered through
+  a file, not at its head). A just-parsed source repaints itself through the
+  painter's `onDidReparse` subscription. `DiffView` still parses its sides
+  eagerly (a diff is usually few files).
+
 **Surfaces** are thin orchestrators over a normal `TextEditor` natively
 backed by a `MultiBufferDocument`, so vim/search/decorations come free.
 UI classes carry no `MultiBuffer` in their name; that's the model layer

@@ -63,6 +63,19 @@ test('a large file parses its head synchronously, the rest deferred', async () =
   assert.ok(ds.captures(1500, 1550).length > 0, 'tail parsed after the deferred full parse');
 });
 
+test('deferParse selects the grammar now but parses the whole file on the next tick', async () => {
+  if (!hasJs) return;
+  const doc = new Document();
+  doc.setText(SAMPLE);
+  const ds = doc.syntax;
+  // A multibuffer excerpt source: parse is deferred until the excerpt nears the viewport.
+  assert.equal(ds.setLanguageForPath('/x.js', { deferParse: true }), true);
+  assert.equal(ds.hasTree, false, 'no synchronous parse with deferParse');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(ds.hasTree, true, 'whole file parsed on the next tick');
+  assert.ok(ds.captures(0, 3).length > 0, 'captures available after the deferred parse');
+});
+
 test('one parse paints two independent view buffers', () => {
   if (!hasJs) return;
   const doc = new Document();

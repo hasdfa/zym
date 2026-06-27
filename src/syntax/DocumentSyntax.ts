@@ -130,7 +130,7 @@ export class DocumentSyntax {
    * bounded first parse (the file's head, INITIAL_PARSE_LINES); the rest of the file is
    * parsed deferred (scheduleFullParse) so a large file opens without a parse freeze.
    */
-  setLanguageForPath(path: string): boolean {
+  setLanguageForPath(path: string, opts: { deferParse?: boolean } = {}): boolean {
     const langId = langIdForPath(path);
     const grammar = langId ? getGrammar(langId) : null;
     if (!grammar) {
@@ -143,12 +143,21 @@ export class DocumentSyntax {
     this.resetTree();
     this.grammar = grammar;
     this.parser = createParser(grammar);
-    // Parse only the head synchronously so a large file opens instantly; the full parse
-    // follows on the next loop iteration (after the first paint), upgrading every view.
-    // Silent: the painter that selected the language repaints its own view explicitly;
-    // sibling views (already painted) must not be force-repainted by a language set.
-    this.reparse({ full: true, silent: true, maxLines: INITIAL_PARSE_LINES });
-    if (this.treeIsPartial) this.scheduleFullParse();
+    if (opts.deferParse) {
+      // A multibuffer excerpt source: select the grammar now but parse the WHOLE source
+      // deferred, when the excerpt nears the viewport — not all matched files up front. The
+      // bounded head parse is useless here (excerpts are scattered through the file, not at
+      // its head), so skip it; the painter highlights this source once the deferred parse
+      // emits. See docs/text-editor/multibuffer.md.
+      this.scheduleFullParse();
+    } else {
+      // Parse only the head synchronously so a large file opens instantly; the full parse
+      // follows on the next loop iteration (after the first paint), upgrading every view.
+      // Silent: the painter that selected the language repaints its own view explicitly;
+      // sibling views (already painted) must not be force-repainted by a language set.
+      this.reparse({ full: true, silent: true, maxLines: INITIAL_PARSE_LINES });
+      if (this.treeIsPartial) this.scheduleFullParse();
+    }
     return true;
   }
 
@@ -223,16 +232,18 @@ export class DocumentSyntax {
     }, HIGHLIGHT_DEBOUNCE_MS);
   }
 
-  /** Run the deferred whole-file parse after a bounded first parse, on the next loop
-   *  iteration — a macrotask, so it lands after the first paint (not a microtask, per the
-   *  node-gtk main-loop caveat in docs/index.md). Emits a reparse so every painter repaints
-   *  its viewport from the full tree and rebuilds its fold map. Skipped if an edit reparse
-   *  already upgraded the tree to a whole-file one. */
+  /** Run a deferred whole-file parse on the next loop iteration — a macrotask, so it lands
+   *  after the first paint (not a microtask, per the node-gtk main-loop caveat in
+   *  docs/index.md). Used both after a bounded first parse (open) and for a deferred-parse
+   *  multibuffer source (lazy-by-visibility). Emits a reparse so every painter repaints its
+   *  viewport from the full tree and rebuilds its fold map. Skipped if the tree is already a
+   *  whole-file one (an edit reparse upgraded it first). */
   private scheduleFullParse(): void {
     if (this.fullParseId) clearTimeout(this.fullParseId);
     this.fullParseId = setTimeout(() => {
       this.fullParseId = null;
-      if (this.disposed || !this.grammar || !this.treeIsPartial) return;
+      if (this.disposed || !this.grammar) return;
+      if (this.tree && !this.treeIsPartial) return; // already a whole-file tree
       this.reparse({ full: true });
     }, 0);
   }
