@@ -260,8 +260,10 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   // targets.vim: arguments (with separator handling) and indentation blocks.
   'i a': 'InnerArguments',
   'a a': 'AArguments',
-  'i i': 'InnerIndentation',
-  'a i': 'AIndentation',
+  // Indentation block: `i i` and `a i` both select the block including its
+  // surrounding blank lines (no inner/around split — see Indentation in text-object.ts).
+  'i i': 'Indentation',
+  'a i': 'Indentation',
   // gn/gN: the next/previous search match (operate on it: `cgn`, `dgn`; or extend
   // a visual selection). Needs an active search — see SearchController's pattern
   // bridge to globalState.lastSearchPattern.

@@ -60,7 +60,7 @@ operator's target range**, not the whole buffer. The pattern is *resolved* in
 but the *scan* is deferred to `selectTarget`, after `target.execute()` has selected
 the range: `OccurrenceManager.materializeWithin(pattern, editor.getSelectedBufferRanges())`
 scans only within those ranges (via `collectRangeByScan`'s `scanRange`). So `c i i`
-(change inner-indentation) scans/marks only the indentation block — not every match
+(change the indentation block) scans/marks only the indentation block — not every match
 in the file. The marks are torn down after the operation (the existing
 transient-occurrence cleanup); the persistent visual is always the recolored search
 layer.

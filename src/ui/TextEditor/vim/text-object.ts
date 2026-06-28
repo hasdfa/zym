@@ -474,17 +474,17 @@ class Paragraph extends TextObject {
   }
 }
 
+// The run of rows around the cursor whose indent is at least the cursor row's.
+// Blank rows are always included, so `i i` and `a i` select the same block (both
+// bound to this class in vim/index.ts) — there is no inner/around variant.
 class Indentation extends Paragraph {
   getRange (selection: Selection): Range | null | undefined {
     const fromRow = this.getCursorPositionForSelection(selection).row
     const baseIndentLevel = this.editor.indentationForBufferRow(fromRow)
-    const rowRange = this.findRowRangeBy(fromRow, (row: number) => {
-      if (this.editor.isBufferRowBlank(row)) {
-        return this.isA()
-      } else {
-        return this.editor.indentationForBufferRow(row) >= baseIndentLevel
-      }
-    })
+    const rowRange = this.findRowRangeBy(fromRow, (row: number) =>
+      this.editor.isBufferRowBlank(row) ||
+      this.editor.indentationForBufferRow(row) >= baseIndentLevel
+    )
     return this.getBufferRangeForRowRange(rowRange)
   }
 }
@@ -1017,7 +1017,6 @@ const __operations = Object.assign(
   AngleBracket.deriveClass(true, true),
   Tag.deriveClass(true),
   Paragraph.deriveClass(true),
-  Indentation.deriveClass(true),
   Comment.deriveClass(true),
   BlockComment.deriveClass(true),
   CommentOrParagraph.deriveClass(true),
