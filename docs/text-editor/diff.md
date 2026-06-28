@@ -29,6 +29,46 @@ It is fully documented in **[multibuffer.md](multibuffer.md)** — start there.
   (`openCommitPicker`). Both live in **`src/ui/diffViews.ts`**, which builds the
   `DiffFile[]` from git blobs and opens a non-editable `DiffView` in a tab.
 
+## Sticky + collapsible file headers
+
+Each file's header is an **empty, read-only, navigable `block` row** (the file's first row), which
+the filename widget **covers** as an `on`-placed `sticky` `BlockDecoration` (`placement: 'on', sticky:
+true`) — the widget sits OVER its own line (the line is grown to the widget's height), so the caret
+lands *on the headerband* (`j`/`k` stops there). The caret box itself is **suppressed** on the header
+rows (a `no-cursor` decoration) and the band reads `.focused` instead — both owned by `StickyHeaders`
+(see below) — so it's clear the cursor is on the header without a stray box over the filename. Being
+an ordinary text-window `add_overlay` child it **scrolls
+natively** — smooth on a touchpad, never swallows scroll (it bubbles to the view), stays click-to-jump,
+and is **clipped to the viewport by the text view** (so nothing draws over the tab bar). The `sticky`
+flag (in `BlockDecorations`) clamps the overlay's Y to the scroll top and re-clamps it on every
+`value-changed`, so once a file scrolls past the top its header **pins** there; below the top it just
+rides the text. To stop stacked pinned headers from accumulating, a sticky band is also clamped to sit
+no lower than just above the **next** sticky band (`nextStickyBandTop`), so an earlier file's header
+slides up and rides the text out of view as the next reaches the top — only the current (last-passed)
+file's header stays pinned. The opaque header fill (editor background + tint) lets it occlude the diff
+scrolling underneath.
+
+`StickyHeaders` (`src/ui/TextEditor/StickyHeaders.ts`) is a **reusable, surface-agnostic** abstraction
+over the block primitive (the diff today, project-search next): a surface drives it via
+`editor.stickyHeaders.setHeaders(...)` (one `{ viewRow, build, id, key }` per excerpt — for the diff,
+reconciled by path from `installOverlays`), and it owns everything generic — the pinning, the
+caret-follow `.focused` highlight, and the `no-cursor` decoration over the header rows. Nothing
+diff-specific lives in it; the surface only supplies the header set + its own widget look. The diff's
+header widget shows a `▾`/`▸` chevron
++ `+N −M` stats, and **only** the filename (the elided file head is now its own gap band, not a header
+subtitle). `⋯` gaps — the leading file-head gap (`'above'` the first content row) and between-window
+gaps (`'below'` the last shown row) — plus review-comment cards are ordinary (non-sticky)
+`BlockDecorations`.
+
+**Per-file collapse** — `z a` (`diff:toggle-file`) folds the file under the cursor to just its header
+row; `z C` / `z O` (`diff:collapse-all-files` / `diff:expand-all-files`) fold/unfold every file (a
+one-line-per-file overview). A collapsed file emits only its header row
+(`buildDiffMultiBuffer`'s `collapsed` predicate, keyed by path in `DiffView.collapsedFiles`); the
+re-derive rides the existing `reDiff()` refresh path and the caret recovers onto the file's header
+row when its own line is folded away. This is orthogonal to the **context** controls (`z o`/`z R`/`z m`,
+which reveal elided unchanged lines *within* an expanded file). The search surface's headers stay
+`BlockDecorations` bands (it has its own per-excerpt collapse).
+
 ## Comment & review (any diff)
 
 `DiffView` carries a comment/review layer (`startComment`, review mode,

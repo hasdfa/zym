@@ -34,6 +34,7 @@ import { BlockDecorations } from './BlockDecorations.ts';
 import { BlockDecorationSet } from './BlockDecorationSet.ts';
 import { EditorPopover } from './EditorPopover.ts';
 import { Peek, type PeekOptions } from './Peek.ts';
+import { StickyHeaders } from './StickyHeaders.ts';
 import { GitGutter } from './GitGutter.ts';
 import { IndentGuides } from './IndentGuides.ts';
 import { SearchController } from './SearchController.ts';
@@ -447,6 +448,7 @@ export class TextEditor implements DocumentHost {
   private hoverPopover!: EditorPopover;
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the floating cards
   private inlinePeek!: Peek; // focusable inline peek (see-definition); built in buildEditorArea
+  private stickyHeaderController!: StickyHeaders; // reusable per-excerpt sticky headers (diff / search)
   // The signature-help card: shown live while typing a call's arguments. Same
   // MarkupCard/EditorPopover as hover; `signatureSeq` drops stale async responses.
   private signatureCard!: MarkupCard;
@@ -637,6 +639,9 @@ export class TextEditor implements DocumentHost {
     this.textDecorations = new TextDecorations(this.editorModel);
     // Inline block surface (virtual content between lines: the diff fold placeholder).
     this.blockDecorationController = new BlockDecorations(this.view);
+    // Reusable per-excerpt sticky headers (diff / project-search) — over the block surface, plus the
+    // caret-follow focus + no-cursor decoration it owns (hence the model + decorations).
+    this.stickyHeaderController = new StickyHeaders(this.blockDecorationController, this.editorModel, this.textDecorations);
     // Search/replace engine; its `SearchBar` widget is built in buildEditorArea.
     this.search = new SearchController(this.editorModel, this.textDecorations);
 
@@ -940,6 +945,7 @@ export class TextEditor implements DocumentHost {
     // The inline overlays/decorations install their own view/buffer/adjustment signal handlers
     // (outside `subs`); each un-disconnected one pins this editor, so tear them down explicitly.
     this.textDecorations.dispose(); // drops the diagnostic-squiggle overlay's handlers + marks
+    this.stickyHeaderController?.dispose(); // drop its header handles + sever each header's click controller (rides the block surface)
     this.blockDecorationController.dispose(); // drops map/changed/vadjustment handlers + tick callbacks
     this.indentGuides?.dispose(); // drops adjustment/view/buffer handlers + the config observer
     this.indentGuides = null;
@@ -1232,6 +1238,13 @@ export class TextEditor implements DocumentHost {
       for (const s of this.decorationSets) s.reproject();
     });
     return set;
+  }
+
+  /** Reusable per-excerpt sticky headers (the multi-file diff, project-search next) — a multibuffer
+   *  surface drives it via `setHeaders()`; it owns the pinning + caret-follow focus + no-cursor
+   *  decoration. Inert (no headers) for every other editor. */
+  get stickyHeaders(): StickyHeaders {
+    return this.stickyHeaderController;
   }
 
   /** Open a focusable inline peek (e.g. see-definition) below `line` — defaults to
@@ -1747,6 +1760,11 @@ export class TextEditor implements DocumentHost {
     // — including on cursor-position changes, so a mouse click repositions it.
     this.editorModel.onCursorOverlay = (kind, iter) => this.renderCursorOverlay(kind, iter);
     this.editorModel.onExtraCursors = (carets) => this.renderExtraCarets(carets);
+    // Suppress the caret where a `no-cursor` decoration is set (the diff's read-only header rows).
+    this.editorModel.shouldHideCursorAt = (iter) => this.textDecorations.isCursorHiddenAt(iter);
+    // Keep the caret below any sticky block pinned at the viewport top (the diff's pinned header), so
+    // scrolloff/motions don't park it underneath. 0 for a plain editor (no sticky bands).
+    this.editorModel.topInsetProvider = () => this.blockDecorationController.stickyTopInset();
 
     // The overlay caret is placed from view geometry, which is all-zero until the
     // first size-allocate — so the caret painted during load (cursor at 0,0 on an

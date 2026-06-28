@@ -57,17 +57,18 @@ per-row drawing but does not make the gutter faster. See `text-editor.md`
 ## Still-governing constraints
 
 - **Define gutter/renderer subclasses at module top level only.**
-  Defining a `GObject` subclass **inside a function** and calling
-  `registerClass` there segfaults (`g_type_set_qdata: assertion 'node
-  != NULL' failed` → `cannot retrieve class for invalid type` →
-  SIGSEGV). All existing renderers are module-level.
+  Defining a `GObject` subclass **inside a function** segfaulted when it
+  was registered (`g_type_set_qdata: assertion 'node != NULL' failed` →
+  `cannot retrieve class for invalid type` → SIGSEGV). All existing
+  renderers are module-level.
 - **Instantiate vfunc-overriding subclasses only after the main loop is
   running.** `new` before then segfaults (see the node-gtk constraints
   memory).
 - node-gtk wires a method into the vtable only when it is named
   `virtual_` + the camelCase vfunc name (`virtual_snapshotLine` overrides
   `snapshot_line`). A plain method is never an override; a `virtual_*`
-  name matching no parent/interface vfunc throws at `registerClass`.
+  name matching no parent/interface vfunc throws when the subclass is
+  registered (on its first construction).
 - There is **no gutter-renderer background property** in GtkSource 5.x
   (`setBackgroundRgba` / `background-rgba` are absent / read as
   `undefined`); painting via `snapshot_line` is the supported path.

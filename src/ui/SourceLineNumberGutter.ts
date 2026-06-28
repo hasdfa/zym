@@ -13,9 +13,9 @@
  */
 import Gtk from 'gi:Gtk-4.0';
 import GtkSource from 'gi:GtkSource-5';
-import { registerClass } from 'node-gtk';
 type SourceView = InstanceType<typeof GtkSource.View>;
 import { theme } from '../theme/theme.ts';
+import type { BlockDecorationPlacement } from './TextEditor/BlockDecorations.ts';
 import type { CoordinatesMap } from './TextEditor/CoordinatesMap.ts';
 
 const COLOR = theme.ui.editor.lineNumber;
@@ -31,21 +31,21 @@ export function lineNumberLabel(projection: CoordinatesMap, viewRow: number, wid
 class MultiBufferLineRenderer extends GtkSource.GutterRendererText {
   // Assigned after construction; read on every draw.
   getProjection!: () => CoordinatesMap;
-  // The band placement at a row ('above' = header band, 'below' = gap band, null = none), so the
-  // number can be aligned onto the text instead of floating into the reserved band.
-  bandAt!: (line: number) => 'above' | 'below' | null;
+  // The band placement at a row ('above' = header band, 'below'/'on' = gap / over-line band, null =
+  // none), so the number can be aligned onto the text instead of floating into the reserved band.
+  bandAt!: (line: number) => BlockDecorationPlacement | null;
   width = 1;
 
   virtual_queryData(_lines: any, line: number) {
     // A header band ABOVE makes the cell taller above → bottom-align (yalign 1) keeps the number on
-    // the text; a gap band BELOW makes it taller below → top-align (yalign 0). Plain rows: either
-    // (cell == text height). `queryData` runs per row right before it's drawn, so this is per-row.
-    this.yalign = this.bandAt(line) === 'below' ? 0 : 1;
+    // the text; a gap band BELOW (or 'on', extra space below) makes it taller below → top-align
+    // (yalign 0). Plain rows: either (cell == text height). `queryData` runs per row before draw.
+    const placement = this.bandAt(line);
+    this.yalign = placement === 'below' || placement === 'on' ? 0 : 1;
     const label = lineNumberLabel(this.getProjection(), line, this.width);
     this.setMarkup(`<span foreground="${COLOR}">${label || ' '}</span>`, -1);
   }
 }
-registerClass(MultiBufferLineRenderer);
 
 export class SourceLineNumberGutter {
   private readonly view: SourceView;
@@ -56,7 +56,7 @@ export class SourceLineNumberGutter {
    *  padding, never the rendered number, which is read live). `bandAt` reports the band placement
    *  at a row (from the live `BlockDecorations`) so the number aligns onto the text, not into the
    *  reserved header/gap band. */
-  constructor(view: SourceView, getProjection: () => CoordinatesMap, maxLineNumber: number, bandAt: (line: number) => 'above' | 'below' | null) {
+  constructor(view: SourceView, getProjection: () => CoordinatesMap, maxLineNumber: number, bandAt: (line: number) => BlockDecorationPlacement | null) {
     this.view = view;
     this.renderer = new MultiBufferLineRenderer();
     this.renderer.getProjection = getProjection;

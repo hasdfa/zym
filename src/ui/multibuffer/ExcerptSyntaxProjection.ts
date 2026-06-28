@@ -88,6 +88,12 @@ export class ExcerptSyntaxProjection implements SyntaxProjection {
    *  from the painter's highlight tags, so no collision). */
   decorate(buffer: any): void {
     if (!this.headerTag) this.buildTags(buffer);
+    // Clear the PREVIOUS header/gap styling first: a re-diff / collapse-expand shifts which rows are
+    // block rows, so without this the old tags linger on rows that are now code — a muted,
+    // selected-background band with no syntax (the header tag's foreground wins). Mirrors the
+    // painter clearing its highlight tags before each repaint.
+    buffer.removeTag(this.headerTag, buffer.getStartIter(), buffer.getEndIter());
+    buffer.removeTag(this.gapTag, buffer.getStartIter(), buffer.getEndIter());
     for (const { screenRow, kind } of this.getProjection().blockRows()) {
       if (kind === 'header') this.applyRow(buffer, this.headerTag, screenRow);
       else if (kind === 'gap') this.applyRow(buffer, this.gapTag, screenRow);
