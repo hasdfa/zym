@@ -117,8 +117,8 @@ test('editable diff: re-diff re-flows the view — making new == old removes the
   await flushReDiff();
   const lines = linesOf(mbv);
   // With no remaining change, the windowed diff elides the whole file — the phantom `line2`
-  // removed row and the `CHANGED` added row are both gone (the elision is a header-subtitle
-  // widget now, not a buffer row).
+  // removed row and the `CHANGED` added row are both gone (the elision is a gap-band widget now,
+  // not a buffer row).
   assert.ok(!lines.includes('CHANGED'), 're-diff re-flowed: the edited-away change no longer shows');
   assert.ok(!lines.includes('line2'), 'the removed phantom row is gone too');
   mbv.dispose();
@@ -245,27 +245,30 @@ test('editable diff: `O` on an excerpt-first line re-diffs under the GLib loop (
   win.present();
   mbv.editor.sourceView.grabFocus();
   pumpUntil(() => mbv.editor.sourceView.getMapped?.());
-  assert.equal(linesOf(mbv)[0], 'aaaa', 'a leading gap elides the head — first shown row is the context `aaaa`');
+  // Row 0 is the EMPTY navigable header row; row 1 is the first shown content (a leading `⋯` gap,
+  // folded into the header, elides the head so the first content is the context `aaaa`).
+  assert.equal(linesOf(mbv)[0], '', 'row 0 is the navigable (empty) header row');
+  assert.equal(linesOf(mbv)[1], 'aaaa', 'first shown content is the context `aaaa`');
 
-  mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
+  mbv.editor.model.setCursorBufferPosition({ row: 1, column: 0 });
   // `O` via the real key dispatch (vim insert-above-with-newline).
   zym.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
   // Let the frame clock dispatch — the re-diff runs on a tick callback (it would NEVER run under a
-  // microtask here). The caret leaves row 0 only once the re-diff reflows the view.
-  pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 2);
+  // microtask here). The caret leaves its row only once the re-diff reflows the view.
+  pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 3);
 
   const caret = mbv.editor.model.getCursorBufferPosition();
   assert.equal(linesOf(mbv)[caret.row], '', 'caret sits on the just-inserted blank row');
-  assert.ok(caret.row >= 2, `caret followed the reflow off the pre-reflow top row (row ${caret.row})`);
+  assert.ok(caret.row >= 3, `caret followed the reflow off the pre-reflow row (row ${caret.row})`);
   win.destroy();
   mbv.dispose();
 });
 
-test('editable diff: re-diff reconciles the header/gap bands in place (no teardown → no flicker)', () => {
-  // The re-flow moves the bands and changes their text (the leading `⋯` subtitle disappears, the
-  // trailing gap shifts), but removing + re-adding each band collapses its reserved space and
-  // re-expands it a frame later — the flicker. The bands must be REUSED in place: same handle
-  // objects, zero add/remove churn across the re-diff.
+test('editable diff: re-diff reconciles the gap band in place (no teardown → no flicker)', () => {
+  // The re-flow moves the trailing gap and changes its text, but removing + re-adding it collapses
+  // its reserved space and re-expands it a frame later — the flicker. The gap band must be REUSED in
+  // place: same handle object, zero add/remove churn across the re-diff. (Headers now ride the sticky
+  // overlay layer, not `bands` — covered by the StickyHeaders tests.)
   const oldText = '\naaaa\naaaa\naaaa\n\nxxxx\nxxxx\nxxxx\n\nbbbb\nbbbb\nbbbb\n';
   const newText = '\naaaa\naaaa\naaaa\n\nyyyy\nyyyy\nyyyy\n\nbbbb\nbbbb\nbbbb\n';
   const path = tmpFile(newText);
@@ -285,17 +288,15 @@ test('editable diff: re-diff reconciles the header/gap bands in place (no teardo
   const origAdd = ib.add.bind(ib);
   ib.add = (o: any) => { adds++; return origAdd(o); };
   const entries = (mbv as any).bands.entries as Map<string, { handle: any }>;
-  const header = entries.get('header:0')!.handle;
   const gap = entries.get('gap:0')!.handle;
-  for (const h of [header, gap]) { const r = h.remove.bind(h); h.remove = () => { removes++; return r(); }; }
+  { const r = gap.remove.bind(gap); gap.remove = () => { removes++; return r(); }; }
 
-  mbv.editor.model.setCursorBufferPosition({ row: 0, column: 0 });
+  mbv.editor.model.setCursorBufferPosition({ row: 1, column: 0 });
   zym.keymaps.onWindowKeyPressEvent(Gdk.unicodeToKeyval('O'.charCodeAt(0)), 0, 0);
-  pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 2);
+  pumpUntil(() => mbv.editor.model.getCursorBufferPosition().row >= 3);
 
-  assert.equal(adds, 0, 'no bands added across the re-diff (reused in place)');
-  assert.equal(removes, 0, 'no bands removed across the re-diff (reused in place)');
-  assert.equal(entries.get('header:0')!.handle, header, 'the header band handle is the same (reused, not recreated)');
+  assert.equal(adds, 0, 'no gap bands added across the re-diff (reused in place)');
+  assert.equal(removes, 0, 'no gap bands removed across the re-diff (reused in place)');
   assert.equal(entries.get('gap:0')!.handle, gap, 'the gap band handle is the same (reused, not recreated)');
   win.destroy();
   mbv.dispose();
@@ -335,5 +336,73 @@ test('editable diff: save() persists the edited new-side file', () => {
   mbv.save();
   assert.equal(Fs.readFileSync(path, 'utf8'), 'line1\nYCHANGED\nline3\n', 'written to disk');
   assert.equal(mbv.isModified(), false, 'clean after save');
+  mbv.dispose();
+});
+
+test('collapse: a file folds to just its (empty, navigable) header row; expand restores it', () => {
+  // Two changed files (read-only diff — collapse is a pure re-derive, no realized view needed).
+  const a = tmpFile('a1\na2\na3\n');
+  const b = tmpFile('b1\nb2\nb3\n');
+  const mbv = new DiffView({
+    files: [
+      { path: a, oldText: 'a1\na2\na3\n', newText: 'a1\nA2\na3\n' },
+      { path: b, oldText: 'b1\nb2\nb3\n', newText: 'b1\nB2\nb3\n' },
+    ],
+  });
+  const before = linesOf(mbv).length;
+  assert.equal(linesOf(mbv)[0], '', 'file A leads with an empty (navigable) header row');
+  // Cross-file copy stays clean: no filename text in the buffer (headers are widgets, rows empty).
+  assert.ok(!mbv.editor.getText().includes('.ts'), 'no header path text in the buffer');
+
+  // Caret on file A's first content row (row 1, just under its header row 0) → collapse A.
+  mbv.editor.model.setCursorBufferPosition({ row: 1, column: 0 });
+  mbv.toggleFileCollapseAtCursor();
+  const collapsed = linesOf(mbv);
+  assert.ok(collapsed.length < before, 'collapsing A shrinks the view');
+  assert.equal(collapsed[0], '', 'A keeps its (empty) header row');
+  assert.equal(collapsed[1], '', 'B header row directly follows — A emitted no content');
+  assert.equal(mbv.editor.model.getCursorBufferPosition().row, 0, 'caret recovered onto A header row');
+
+  // Toggling again (caret on A header) expands A back to its full diff.
+  mbv.toggleFileCollapseAtCursor();
+  assert.equal(linesOf(mbv).length, before, 'expanding A restores the full view');
+  mbv.dispose();
+});
+
+test('collapse: collapseAllFiles folds every file; expandAllFiles restores', () => {
+  const a = tmpFile('a1\na2\n');
+  const b = tmpFile('b1\nb2\n');
+  const mbv = new DiffView({
+    files: [
+      { path: a, oldText: 'a1\na2\n', newText: 'A1\na2\n' },
+      { path: b, oldText: 'b1\nb2\n', newText: 'B1\nb2\n' },
+    ],
+  });
+  const before = linesOf(mbv).length;
+  mbv.collapseAllFiles();
+  // Both files collapsed → exactly two (empty header) rows.
+  assert.deepEqual(linesOf(mbv), ['', ''], 'every file folds to a one-line header overview');
+  mbv.expandAllFiles();
+  assert.equal(linesOf(mbv).length, before, 'expand-all restores every file');
+  mbv.dispose();
+});
+
+test('header rows are cursor-hidden (the caret rests on them but the box is suppressed)', () => {
+  const { mbv } = setup(); // header at row 0, content (line1/…) below
+  const buffer = mbv.editor.sourceView.getBuffer();
+  const at = (row: number) => asIter(buffer.getIterAtLine(row));
+  assert.equal(mbv.editor.decorations.isCursorHiddenAt(at(0)), true, 'the (read-only) header row hides the cursor');
+  const contentRow = linesOf(mbv).indexOf('line1');
+  assert.ok(contentRow > 0);
+  assert.equal(mbv.editor.decorations.isCursorHiddenAt(at(contentRow)), false, 'a real content row shows the cursor');
+  mbv.dispose();
+});
+
+test('cursor-hide: a collapsed file whose header is the last (newline-less) line stays hidden', () => {
+  const { mbv } = setup();
+  mbv.collapseAllFiles(); // single file → its empty header row is now the last buffer line
+  assert.deepEqual(linesOf(mbv), [''], 'collapsed to a single header row');
+  const endIter = asIter(mbv.editor.sourceView.getBuffer().getEndIter());
+  assert.equal(mbv.editor.decorations.isCursorHiddenAt(endIter), true, 'hidden via the end-of-buffer fallback');
   mbv.dispose();
 });

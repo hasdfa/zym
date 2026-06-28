@@ -41,7 +41,8 @@ app.on('activate', async () => {
       theme.appearance === 'light' ? Adw.ColorScheme.FORCE_LIGHT : Adw.ColorScheme.FORCE_DARK,
     );
 
-    // Import AFTER GTK init: the module's factory does the one-time registerClass.
+    // Import AFTER GTK init: the factory constructs the renderer, which node-gtk
+    // lazily registers on first construction.
     const { createMarkdownRenderer } = await import('../ui/markdown/MarkdownRenderer.ts');
 
     const md = Fs.readFileSync(fixturePath, 'utf8');

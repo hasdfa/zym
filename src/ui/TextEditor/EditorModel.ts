@@ -210,6 +210,18 @@ export class EditorModel {
   // sets this; `hidden` means the tag (or native caret) covers it.
   onCursorOverlay?: (kind: 'hidden' | 'hollow' | 'filled', iter?: TextIter) => void;
 
+  // Whether the caret at `iter` should be HIDDEN (no block / overlay / native caret) — a generic
+  // hook the host wires to a "no-cursor" decoration (the diff's read-only header rows). Applies to
+  // the primary AND every extra cursor. The caret still MOVES there (navigation works); it's just
+  // not drawn.
+  shouldHideCursorAt?: (iter: TextIter) => boolean;
+
+  // Pixels reserved at the viewport TOP that the caret must stay clear of — a sticky element
+  // (the diff's pinned file header) occludes them, so the scroll/scrolloff reveal keeps the caret
+  // below `topInset + ~one line`. A generic hook the host wires to whatever floats at the top
+  // (today: the sticky `BlockDecorations`); returns 0 when nothing is pinned / for a plain editor.
+  topInsetProvider?: () => number;
+
   // Host-drawn carets for the *extra* cursors (multi-cursor / blockwise). Block
   // carets over a glyph are painted as tags; beam carets (insert mode) and carets
   // with no glyph to cover are drawn by the host here. Empty array clears them.
@@ -844,6 +856,7 @@ export class EditorModel {
       }
       const headPoint = this.cursorDisplayResolver?.(selection) ?? selection.getHeadBufferPosition();
       const headIter = this.iterAtPoint(headPoint);
+      if (this.shouldHideCursorAt?.(headIter)) continue; // cursor-hidden line: paint no extra caret
       const noGlyph = headIter.endsLine() || headIter.isEnd();
       if (!beam && !noGlyph) {
         // Block caret over the character — a reverse-video tag (cheap, no widget).
@@ -1734,15 +1747,23 @@ export class EditorModel {
     const [start, end] = this.buffer.getBounds();
     this.buffer.removeTag(this.cursorTag, start, end);
 
+    const iter = this.cursorDisplayPoint
+      ? this.iterAtPoint(this.cursorDisplayPoint)
+      : unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
+
+    // A cursor-hidden line (e.g. a diff's read-only header row): no caret at all (the caret still
+    // moved here — navigation works — it's just not drawn). Checked before every mode/EOL branch.
+    if (this.shouldHideCursorAt?.(iter)) {
+      this.view.setCursorVisible(false);
+      this.onCursorOverlay?.('hidden');
+      return;
+    }
+
     if (!this.blockCursor) {
       this.view.setCursorVisible(true);
       this.onCursorOverlay?.('hidden');
       return;
     }
-
-    const iter = this.cursorDisplayPoint
-      ? this.iterAtPoint(this.cursorDisplayPoint)
-      : unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
 
     if (!this.focused) {
       // An inactive editor shows no caret at all (no block, no overlay).
@@ -1814,6 +1835,31 @@ export class EditorModel {
   scrollCursorOnscreen(): void {
     if (!this.view.getRealized()) return;
     this.view.scrollToMark(this.buffer.getInsert(), this.scrollMarginFraction(), false, 0, 0);
+    this.clampCaretBelowTopInset();
+  }
+
+  /**
+   * Keep the caret clear of any sticky element occluding the viewport TOP (the diff's pinned file
+   * header): GtkTextView's `within_margin` is symmetric, so the small scrolloff above doesn't
+   * account for the header — the caret can land under it. After the reveal, if the caret sits within
+   * `topInset + ~one line` of the top, nudge the scroll up so it clears. Reads only the caret's own
+   * (on-screen, valid) geometry, so it sidesteps the unlaid-out-view estimate `scroll_to_mark`
+   * avoids; a no-op when no inset is registered (every plain editor).
+   */
+  private clampCaretBelowTopInset(): void {
+    const inset = this.topInsetProvider?.() ?? 0;
+    if (inset <= 0) return;
+    const vadj = this.view.getVadjustment?.();
+    if (!vadj) return;
+    const iter = unwrapIter(this.buffer.getIterAtMark(this.buffer.getInsert()));
+    const loc = this.view.getIterLocation(iter);
+    const rect = Array.isArray(loc) ? loc[0] ?? loc[1] : loc;
+    if (!rect || rect.height === 0) return;
+    const winY = this.view.bufferToWindowCoords(Gtk.TextWindowType.WIDGET, 0, rect.y)[1];
+    const minY = inset + this.getLineHeightInPixels(); // header + ~one line of context
+    if (winY >= 0 && winY < minY) {
+      vadj.setValue(Math.max(vadj.getLower(), vadj.getValue() - (minY - winY)));
+    }
   }
 
   scrollToCursorPosition(_options?: unknown): void {

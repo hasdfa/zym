@@ -47,6 +47,16 @@ highlight, so a producer never touches the overlay directly. (It's a Cairo
 overlay, so it tracks scroll/edits by re-binding `value-changed` on
 `notify::vadjustment` + repainting on buffer `changed`.)
 
+`TextDecorations` also carries one **behavioral** (non-painting) decoration:
+**`no-cursor`** (`setNoCursorRanges` / `isCursorHiddenAt`) — a marker tag over
+ranges where the caret is hidden. The cursor model (`EditorModel`) consults it
+via the generic `shouldHideCursorAt` hook (wired by `TextEditor`) and draws no
+block / overlay / native caret there, for the **primary and every extra
+(multi-)cursor** — the caret still moves there, it's just invisible.
+`StickyHeaders` sets it over the read-only header rows (the caret rests on a
+header but shows no box; the band reads `.focused` instead). See
+[diff.md](diff.md).
+
 ## Virtual text — EOL *and* mid-line
 
 Two flavors of "text shown but not in the model":
@@ -77,8 +87,17 @@ Two flavors of "text shown but not in the model":
   survive its own edits) stays up. `Peek` (focusable, sibling overlay) and `Leap`
   (mark layer) are specialized overlays.
 - **`block`** — `BlockDecorations`: a real widget *between* lines, reserving
-  vertical space (zero buffer footprint). The diff's `⋯ N lines`. See
-  [inline-widgets.md](inline-widgets.md).
+  vertical space (zero buffer footprint). The diff's `⋯ N lines` gaps,
+  review-comment cards, markdown images. See [inline-widgets.md](inline-widgets.md).
+- **`sticky` block** — the multi-file diff's per-file headers: a `BlockDecoration`
+  with `placement: 'on', sticky: true`, which COVERS an EMPTY navigable header
+  `block` row (the line is grown to the widget height; the caret rests on it — the
+  collapse-toggle target) and clamps its overlay Y to the viewport top so it PINS
+  when its file scrolls past (VSCode-style sticky scroll), while still being a
+  native-scrolling, viewport-clipped, click-through text-window child. `StickyHeaders`
+  (`src/ui/TextEditor/StickyHeaders.ts`) is the reusable surface-agnostic abstraction
+  a multibuffer drives (`editor.stickyHeaders.setHeaders`) — it owns the pinning, the
+  caret-follow `.focused` highlight, and the `no-cursor` decoration; see [diff.md](diff.md).
 
 ## The model↔view boundary (folds)
 

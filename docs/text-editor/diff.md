@@ -29,14 +29,57 @@ It is fully documented in **[multibuffer.md](multibuffer.md)** — start there.
   (`openCommitPicker`). Both live in **`src/ui/diffViews.ts`**, which builds the
   `DiffFile[]` from git blobs and opens a non-editable `DiffView` in a tab.
 
+## Sticky + collapsible file headers
+
+Each file's header is an **empty, read-only, navigable `block` row** (the file's first row), which
+the filename widget **covers** as an `on`-placed `sticky` `BlockDecoration` (`placement: 'on', sticky:
+true`) — the widget sits OVER its own line (the line is grown to the widget's height), so the caret
+lands *on the headerband* (`j`/`k` stops there). The caret box itself is **suppressed** on the header
+rows (a `no-cursor` decoration) and the band reads `.focused` instead — both owned by `StickyHeaders`
+(see below) — so it's clear the cursor is on the header without a stray box over the filename. Being
+an ordinary text-window `add_overlay` child it **scrolls
+natively** — smooth on a touchpad, never swallows scroll (it bubbles to the view), stays click-to-jump,
+and is **clipped to the viewport by the text view** (so nothing draws over the tab bar). The `sticky`
+flag (in `BlockDecorations`) clamps the overlay's Y to the scroll top and re-clamps it on every
+`value-changed`, so once a file scrolls past the top its header **pins** there; below the top it just
+rides the text. To stop stacked pinned headers from accumulating, a sticky band is also clamped to sit
+no lower than just above the **next** sticky band (`nextStickyBandTop`), so an earlier file's header
+slides up and rides the text out of view as the next reaches the top — only the current (last-passed)
+file's header stays pinned. The opaque header fill (editor background + tint) lets it occlude the diff
+scrolling underneath.
+
+`StickyHeaders` (`src/ui/TextEditor/StickyHeaders.ts`) is a **reusable, surface-agnostic** abstraction
+over the block primitive (the diff today, project-search next): a surface drives it via
+`editor.stickyHeaders.setHeaders(...)` (one `{ viewRow, build, id, key }` per excerpt — for the diff,
+reconciled by path from `installOverlays`), and it owns everything generic — the pinning, the
+caret-follow `.focused` highlight, and the `no-cursor` decoration over the header rows. Nothing
+diff-specific lives in it; the surface only supplies the header set + its own widget look. The diff's
+header widget shows a `▾`/`▸` chevron
++ `+N −M` stats, and **only** the filename (the elided file head is now its own gap band, not a header
+subtitle). `⋯` gaps — the leading file-head gap (`'above'` the first content row) and between-window
+gaps (`'below'` the last shown row) — plus review-comment cards are ordinary (non-sticky)
+`BlockDecorations`.
+
+**Per-file collapse** — `z a` (`diff:toggle-file`) folds the file under the cursor to just its header
+row; `z C` / `z O` (`diff:collapse-all-files` / `diff:expand-all-files`) fold/unfold every file (a
+one-line-per-file overview). A collapsed file emits only its header row
+(`buildDiffMultiBuffer`'s `collapsed` predicate, keyed by path in `DiffView.collapsedFiles`); the
+re-derive rides the existing `reDiff()` refresh path and the caret recovers onto the file's header
+row when its own line is folded away. This is orthogonal to the **context** controls (`z o`/`z R`/`z m`,
+which reveal elided unchanged lines *within* an expanded file). The search surface's headers stay
+`BlockDecorations` bands (it has its own per-excerpt collapse).
+
 ## Comment & review (any diff)
 
 `DiffView` carries a comment/review layer (`startComment`, review mode,
 `submitReview`; `src/ui/DiffCommentBox.ts`) that turns the cursor row or a visual
 selection into a `path:line` reference + unified-diff hunk + `On <locator>:` + your
-text, formats it, and hands it to an agent. It's enabled whenever the host wires
-`onSend` — which **every** diff surface now does, live or historical, so a review
-can always be sent to an agent:
+text, formats it, and hands it to an agent. The box and the message format
+(`formatAgentComment`) are shared with ordinary file editors, which get the same
+single-comment gesture — see [comment-to-agent.md](comment-to-agent.md). The diff
+adds **review mode** (accumulate, batch-send) on top. It's enabled whenever the
+host wires `onSend` — which **every** diff surface now does, live or historical, so
+a review can always be sent to an agent:
 
 - `enter` opens the inline comment box on the row/selection (`g d` still jumps to
   the file); `ctrl-enter` / `diff:review-toggle` starts **review mode**, which
@@ -44,8 +87,10 @@ can always be sent to an agent:
   one message, `diff:review-remove` drops one).
 - **Targeting** (`buildCommentTarget`): a visual selection sends exactly the
   selected rows; a bare cursor widens the *patch* to the surrounding hunk (for
-  context) but the `locator` + `navLine` still pin the **cursor's own line**, so
-  the agent knows precisely which line the comment is about.
+  context), capped at `COMMENT_MAX_LINES` rows around the cursor so a huge changed
+  block doesn't send a wall of context — the `locator` + `navLine` still pin the
+  **cursor's own line**, so the agent knows precisely which line the comment is
+  about. (The cap is bare-cursor only; a visual selection is never trimmed.)
 - **Revision context**: a historical diff sets `reviewContext` (e.g. ``Review of
   commit `a0c0365` (subject)`` or ``Review of `branch` vs `master```), prefixed to
   the message so the agent knows the lines refer to that revision, not the working
@@ -54,8 +99,11 @@ can always be sent to an agent:
   `reviewToAgent`: with a running agent it sends straight to it and **reveals** it
   (so the review visibly lands). With none running it opens the agent picker, whose
   highlighted **"Send to new agent"** entry (`AgentPickerOptions.newAgent`) opens the
-  **AgentLauncher** (pick model / permission / worktree); the review is then
-  delivered to the agent it starts. The live staging surface (`openLiveDiff`) and
+  **AgentLauncher** (pick model / permission / worktree) with the review **pre-filled
+  as the prompt** (`initialPrompt`), so it becomes the new agent's **first turn** —
+  the launch prompt is the spawn argument and is reliably delivered (sending it as a
+  separate post-launch turn races with the just-spawned agent and is dropped). The
+  live staging surface (`openLiveDiff`) and
   the editor-hosted single-file diff call `reviewToAgent` directly; the decoupled
   commit/branch views go through the workspace seam.
 - Read-only diffs register a **session participant**, so unsent (accumulated)

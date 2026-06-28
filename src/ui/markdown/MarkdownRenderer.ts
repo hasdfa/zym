@@ -24,10 +24,10 @@
  *     `measure` returns the [min, nat, minBaseline, natBaseline] tuple node-gtk
  *     marshals into the vfunc's four out-params.
  *   - State is initialised in a normal constructor (node-gtk subclass constructors
- *     work fine — verified; see node-gtk#457). registerClass must run ONCE before
- *     the first `new` — instantiating an unregistered subclass aborts the process —
- *     so the `createMarkdownRenderer()` factory registers on first use; call it
- *     after GTK init.
+ *     work fine — verified; see node-gtk#457). node-gtk lazily registers a JS
+ *     GObject subclass on its first construction, so `createMarkdownRenderer()`
+ *     just constructs one — but must run after GTK init (the type system has to
+ *     be up to build a widget subclass).
  *   - Teardown is `teardown()`, NOT `dispose()`: `dispose` snake-cases onto the
  *     GObject::dispose vfunc and we must not shadow it. See docs/lifecycle-and-disposal.md.
  *
@@ -40,7 +40,6 @@ import Gdk from 'gi:Gdk-4.0';
 import Gsk from 'gi:Gsk-4.0';
 import Graphene from 'gi:Graphene-1.0';
 import Gtk from 'gi:Gtk-4.0';
-import { registerClass } from 'node-gtk';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { theme } from '../../theme/theme.ts';
 import { fonts } from '../../fonts.ts';
@@ -636,16 +635,10 @@ export class MarkdownRenderer extends Gtk.Widget {
   }
 }
 
-let registered = false;
-
-/** Create a MarkdownRenderer. Registers the GType on first use (instantiating an
- *  unregistered GObject subclass aborts the process), so this MUST be called after
- *  GTK is initialized (inside app activate). */
+/** Create a MarkdownRenderer. node-gtk lazily registers the GType on first
+ *  construction, so this MUST be called after GTK is initialized (inside app
+ *  activate). */
 export function createMarkdownRenderer(): MarkdownRenderer {
-  if (!registered) {
-    registerClass(MarkdownRenderer);
-    registered = true;
-  }
   return new MarkdownRenderer();
 }
 

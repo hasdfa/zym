@@ -23,7 +23,7 @@
  *   index.ts          this entry point
  *
  * GObject namespaces are imported directly via the `gi:` scheme
- * (`import Gtk from 'gi:Gtk-4.0'`); node-gtk's own API (`registerClass`) imports
+ * (`import Gtk from 'gi:Gtk-4.0'`); node-gtk's own API (e.g. `getGType`) imports
  * from the `node-gtk` package by name.
  */
 import * as Path from 'node:path';

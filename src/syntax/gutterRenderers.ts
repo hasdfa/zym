@@ -21,7 +21,6 @@
  * construction) — node-gtk preserves instance props as `this` inside vfuncs.
  */
 import GtkSource from 'gi:GtkSource-5';
-import { registerClass } from 'node-gtk';
 import { theme } from '../theme/theme.ts';
 
 // Line-number gutter color (muted), matching how syntax colors are themed. The git
@@ -88,4 +87,3 @@ export class GutterRenderer extends GtkSource.GutterRendererText {
     this.setMarkup(markup || ' ', -1);
   }
 }
-registerClass(GutterRenderer);
