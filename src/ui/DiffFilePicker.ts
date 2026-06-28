@@ -26,7 +26,8 @@ export function openDiffFilePicker(host: Overlay, diff: DiffView): void {
   openPicker({
     host,
     anchor: { to: diff.root }, // centre over the diff editor, not the whole window
-    placeholder: 'Go to file in diff…',
+    dim: false, // sit over the diff without darkening it
+    placeholder: 'Jump to file…',
     promptIcon: Icons.search,
     items,
     renderRow: (item, positions) => {
