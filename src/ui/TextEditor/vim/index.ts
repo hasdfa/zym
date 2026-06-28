@@ -306,8 +306,10 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   'a c': 'AClass',
   // Brackets use the targets.vim-style *AllowForwarding* variants: when the cursor
   // isn't inside a pair, the text object seeks to the next pair on the line (an
-  // enclosing pair still wins). `b`/`B` are vim's aliases for ()/{}; either
-  // member key (open or close) selects the pair.
+  // enclosing pair still wins). Either member key (open or close) selects the pair,
+  // plus letter aliases that don't need a shift/AltGr reach: `b`=() , `r`=[] , `k`={}
+  // (these mirror the surround pair aliases — see `pairsByAlias` in
+  // operator-transform-string.ts; surround additionally accepts `a`=`<>`).
   'i (': 'InnerParenthesisAllowForwarding',
   'a (': 'AParenthesisAllowForwarding',
   'i )': 'InnerParenthesisAllowForwarding',
@@ -318,12 +320,14 @@ const TEXT_OBJECT_BINDINGS: Record<string, string> = {
   'a [': 'ASquareBracketAllowForwarding',
   'i ]': 'InnerSquareBracketAllowForwarding',
   'a ]': 'ASquareBracketAllowForwarding',
+  'i r': 'InnerSquareBracketAllowForwarding',
+  'a r': 'ASquareBracketAllowForwarding',
   'i {': 'InnerCurlyBracketAllowForwarding',
   'a {': 'ACurlyBracketAllowForwarding',
   'i }': 'InnerCurlyBracketAllowForwarding',
   'a }': 'ACurlyBracketAllowForwarding',
-  'i B': 'InnerCurlyBracketAllowForwarding',
-  'a B': 'ACurlyBracketAllowForwarding',
+  'i k': 'InnerCurlyBracketAllowForwarding',
+  'a k': 'ACurlyBracketAllowForwarding',
   'i <': 'InnerAngleBracketAllowForwarding',
   'a <': 'AAngleBracketAllowForwarding',
   'i >': 'InnerAngleBracketAllowForwarding',

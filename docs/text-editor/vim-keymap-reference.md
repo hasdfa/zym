@@ -89,7 +89,7 @@ space-separated, so `g g` is the two-press `gg` and `ctrl-v` is one chord.
 | `>` `<` `=` | Indent / Outdent / AutoIndent | `>>`/`<<`/`==` via same-key repeat |
 | `g U` `g u` `g ~` | UpperCase / LowerCase / ToggleCase | case operators |
 | `s` | ReplaceWithRegister | `s{motion}` replace with register; `ss` line |
-| `y s` / `d s` / `c s` | Surround / DeleteSurround / ChangeSurround | vim-surround; the target/replacement char is read as input — pairs `( [ { < b B`, quotes `" ' \``, tags `t`, plus `f` = function **call** (text-based: `dsf` `fn(x)`→`x`, `csf`/`ysiwf` wrap a call) |
+| `y s` / `d s` / `c s` | Surround / DeleteSurround / ChangeSurround | vim-surround; the target/replacement char is read as input. Pairs `( ) [ ] { } < >`, aliases `b`=`()` `r`=`[]` `k`=`{}` `a`=`<>` (`pairsByAlias`), quotes `" ' \``, tags `t`, plus `f` = function **call** (text-based: `dsf` `fn(x)`→`x`, `csf`/`ysiwf` wrap a call) |
 
 ### Shortcut operators (preset target — run immediately)
 
@@ -124,8 +124,8 @@ space-separated, so `g g` is the two-press `gg` and `ctrl-v` is one chord.
 | `f` | Inner/AFunction | tree-sitter |
 | `c` | Inner/AClass | tree-sitter (class/interface/enum) |
 | `(` `)` `b` | …ParenthesisAllowForwarding | seeks forward to next pair on line |
-| `[` `]` | …SquareBracketAllowForwarding | |
-| `{` `}` `B` | …CurlyBracketAllowForwarding | |
+| `[` `]` `r` | …SquareBracketAllowForwarding | `r` = home-row alias |
+| `{` `}` `k` | …CurlyBracketAllowForwarding | `k` = home-row alias |
 | `<` `>` | …AngleBracketAllowForwarding | |
 | `"` `'` `` ` `` | Inner/ADoubleQuote, …SingleQuote, …BackTick | quotes seek forward |
 | `g n` / `g N` | SearchMatchForward/Backward | next/prev search match |
