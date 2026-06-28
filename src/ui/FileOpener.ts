@@ -61,6 +61,10 @@ interface PathPickerOptions {
   query: string;
   /** List only directories (the folder picker). */
   foldersOnly?: boolean;
+  /** List the directory's entries as fuzzy-match candidates (default true). Off for
+   *  the rename picker, where suggesting existing files is just an overwrite hazard
+   *  — it's a pure name input driven by the action row. */
+  completions?: boolean;
   /** Frecency namespace for ranking/recording chosen entries (omit to disable). */
   frecency?: string;
   /** Called with the real (resolved) absolute path of a chosen *file* entry. */
@@ -79,8 +83,10 @@ function openPathPicker(opts: PathPickerOptions): void {
     query: opts.query,
     // Re-list whenever the directory part of the path changes; the Picker's local
     // fuzzy filter narrows + highlights the entries against the typed path in
-    // between (debounced re-list, instant filter).
-    fetch: (query, onResult) => onResult(listDir(directoryOf(query, opts.cwd), opts.cwd, opts.foldersOnly)),
+    // between (debounced re-list, instant filter). `completions: false` suppresses
+    // the listing entirely (the rename picker).
+    fetch: (query, onResult) =>
+      onResult(opts.completions === false ? [] : listDir(directoryOf(query, opts.cwd), opts.cwd, opts.foldersOnly)),
     // Show just the entry's name with a file/folder glyph and (folders) a trailing
     // slash; the shared directory prefix is already in the prompt, so a muted detail
     // column would only repeat it on every row. The glyph needs a blank cell for
@@ -163,10 +169,11 @@ export function openFolderPicker(host: Overlay, cwd: string, dir: string, onChoo
 
 /**
  * Open a rename/relocate picker seeded with `file`'s path (shortened against
- * `cwd`, cursor at the end, the directory listed and filtered by the current
- * name). Edit the path and confirm via the action row to rename to the typed
- * path; selecting an existing file targets it instead (the caller prompts before
- * overwriting). `onChoose` receives the real (resolved) absolute destination path.
+ * `cwd`, cursor at the end). It's a pure name input — no completion candidates,
+ * so existing files aren't suggested (and can't be picked into by accident);
+ * editing the path and confirming via the always-present action row renames to
+ * the typed path. `onChoose` receives the real (resolved) absolute destination
+ * (the caller prompts before overwriting / when it equals the source).
  */
 export function openRenamePicker(host: Overlay, cwd: string, file: string, onChoose: (path: string) => void): void {
   openPathPicker({
@@ -174,13 +181,12 @@ export function openRenamePicker(host: Overlay, cwd: string, file: string, onCho
     cwd,
     placeholder: 'Rename to…',
     query: relativize(file, cwd),
-    onChoose,
+    completions: false,
     action: {
       label: (query) => `Rename to: ${Path.basename(query)}`,
-      // Surface when the query names a file (non-empty basename, no trailing slash)
-      // that resolves to somewhere other than the source path.
-      visible: (query) =>
-        !query.endsWith('/') && Path.basename(query).length > 0 && resolvePath(query, cwd) !== file,
+      // The only row, so keep it whenever the query names a file (non-empty
+      // basename, no trailing slash); a no-op same-name confirm is caught downstream.
+      visible: (query) => !query.endsWith('/') && Path.basename(query).length > 0,
       run: (query) => onChoose(resolvePath(query, cwd)),
     },
   });
