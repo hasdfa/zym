@@ -15,7 +15,6 @@
  */
 import Gtk from 'gi:Gtk-4.0';
 import GtkSource from 'gi:GtkSource-5';
-import { registerClass } from 'node-gtk';
 type SourceView = InstanceType<typeof GtkSource.View>;
 import { theme } from '../../theme/theme.ts';
 import type { StagedState } from '../multibuffer/diffMultiBuffer.ts';
@@ -71,7 +70,6 @@ class DiffLineNumberRenderer extends GtkSource.GutterRendererText {
     this.setMarkup(`<span ${attrs}>${label || ' '}</span>`, -1);
   }
 }
-registerClass(DiffLineNumberRenderer);
 
 export class DiffLineNumberGutter {
   private readonly view: SourceView;
@@ -173,7 +171,6 @@ class CombinedDiffLineNumberRenderer extends GtkSource.GutterRendererText {
     this.setMarkup(`${marker}${oldCell}${newCell}`, -1); // [marker] old then new, each space-padded (new's trailing space → code)
   }
 }
-registerClass(CombinedDiffLineNumberRenderer);
 
 /**
  * A SINGLE gutter renderer drawing BOTH the old and new file line numbers per row (one

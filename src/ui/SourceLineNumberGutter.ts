@@ -13,7 +13,6 @@
  */
 import Gtk from 'gi:Gtk-4.0';
 import GtkSource from 'gi:GtkSource-5';
-import { registerClass } from 'node-gtk';
 type SourceView = InstanceType<typeof GtkSource.View>;
 import { theme } from '../theme/theme.ts';
 import type { BlockDecorationPlacement } from './TextEditor/BlockDecorations.ts';
@@ -47,7 +46,6 @@ class MultiBufferLineRenderer extends GtkSource.GutterRendererText {
     this.setMarkup(`<span foreground="${COLOR}">${label || ' '}</span>`, -1);
   }
 }
-registerClass(MultiBufferLineRenderer);
 
 export class SourceLineNumberGutter {
   private readonly view: SourceView;

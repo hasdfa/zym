@@ -71,6 +71,11 @@ Core pieces:
   keymaps.
 - `keymap.json` live-reloads via a `Gio.FileMonitor`; edits re-register the
   user layer live (`keymaps/load.ts`, mirrors `config.json`).
+- **Partial-match timeout** — an incomplete multi-key chord prefix is held for
+  `keymap.partialMatchTimeoutMs` (config, default 1000ms) before it's abandoned
+  and the keys fall through to the focused widget (or a shorter binding fires).
+  Read live at schedule time in `KeymapManager.schedulePartialMatchTimeout`
+  (`DEFAULT_PARTIAL_MATCH_TIMEOUT_MS` is the fallback).
 - Conflict detection at load: `KeymapManager.findConflicts()` reports
   keystrokes bound to multiple commands at the same selector + priority.
 

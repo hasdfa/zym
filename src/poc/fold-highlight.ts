@@ -30,7 +30,6 @@ import Gdk from 'gi:Gdk-4.0';
 import Gtk from 'gi:Gtk-4.0';
 import Adw from 'gi:Adw-1';
 import GtkSource from 'gi:GtkSource-5';
-import { registerClass } from 'node-gtk';
 
 const require_ = createRequire(import.meta.url);
 
@@ -295,7 +294,6 @@ class FoldRenderer extends GtkSource.GutterRendererText {
     if (region) toggleFold(region);
   }
 }
-registerClass(FoldRenderer);
 
 // ---------------------------------------------------------------------------
 // Window
