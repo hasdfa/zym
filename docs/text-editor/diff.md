@@ -54,7 +54,9 @@ rides the text. To stop stacked pinned headers from accumulating, a sticky band 
 no lower than just above the **next** sticky band (`nextStickyBandTop`), so an earlier file's header
 slides up and rides the text out of view as the next reaches the top — only the current (last-passed)
 file's header stays pinned. The opaque header fill (editor background + tint) lets it occlude the diff
-scrolling underneath.
+scrolling underneath — including the `⋯` gap bands and review-comment cards, which are kept strictly
+**below** the headers in the overlay draw order (sticky bands stay at the `add_overlay` queue tail; see
+the z-order constraint in [inline-widgets.md](inline-widgets.md)).
 
 `StickyHeaders` (`src/ui/TextEditor/StickyHeaders.ts`) is a **reusable, surface-agnostic** abstraction
 over the block primitive (the diff today, project-search next): a surface drives it via

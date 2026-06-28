@@ -21,6 +21,12 @@
  * (`Gtk.Box.remove`, which works) and hides+pools the slot for the view's lifetime;
  * `add()` reuses a pooled slot rather than creating a new overlay child.
  *
+ * Z-order note: text-view overlays draw in append-only `add_overlay` (queue) order, which can't be
+ * reordered and from which an overlay can't be cleanly removed in this GTK build. So sticky bands (the
+ * diff file headers), which must stay ABOVE the scrolling gap/comment bands, are kept at the queue tail:
+ * a sticky never reuses a pooled slot, and a new non-sticky overlay re-lifts the stickies on top
+ * (`restackStickies`). See docs/text-editor/inline-widgets.md.
+ *
  * Scope: this is the **non-interactive / click-only** path (`add_overlay` children
  * are descendants of the text view, so a focusable nested *editor* leaks IM input
  * — see inline-widgets.md). Clickable widgets (the fold placeholder, code-lens
@@ -170,12 +176,16 @@ export class BlockDecorations {
 
   add(options: BlockDecorationOptions): BlockDecorationHandle {
     const placement = options.placement ?? 'below';
+    const sticky = options.sticky ?? false;
     const lineIter = unwrap(this.buffer.getIterAtLine(options.line));
     // Reuse a pooled slot (already an overlay child of the view) if available, else
-    // make a fresh Box that `place()` will add as a new overlay child.
-    const reused = this.freeSlots.pop();
+    // make a fresh Box that `place()` will add as a new overlay child. STICKY bands never reuse a
+    // pooled slot: overlays draw in append-only queue order and must keep the sticky bands on top
+    // (see the z-order note in docs/text-editor/inline-widgets.md), so a sticky always takes a fresh
+    // slot appended on top, while pooled slots are kept strictly below the sticky bands (restackStickies).
+    const reused = sticky ? undefined : this.freeSlots.pop();
     const slot = reused ?? new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    slot.setSizeRequest(-1, -1); // a pooled slot may carry a sticky full-width request — reset to natural
+    slot.setSizeRequest(-1, -1); // a pooled slot may carry a full-width request — reset to natural
     slot.append(options.widget);
     slot.setVisible(true);
     const block: Block = {
@@ -184,7 +194,7 @@ export class BlockDecorations {
       slot,
       widget: options.widget,
       placement,
-      sticky: options.sticky ?? false,
+      sticky,
       fullWidth: options.fullWidth ?? false,
       height: 0,
       placed: false, // set once place() runs; place() skips re-adding an already-parented slot
@@ -330,7 +340,8 @@ export class BlockDecorations {
 
     // Add the slot as an overlay first so it's parented and can measure correctly.
     // A reused (pooled) slot is already an overlay child — keep it, just (re)position.
-    if (!block.slot.getParent?.()) {
+    const appended = !block.slot.getParent?.();
+    if (appended) {
       this.view.addOverlay(block.slot, 0, this.lineRect(line).y);
     }
     block.placed = true;
@@ -356,6 +367,40 @@ export class BlockDecorations {
     // stays unreserved and the overlay child unallocated (invisible) until some
     // external event (e.g. a window resize) forces a relayout.
     this.view.queueResize?.();
+    this.reposition(block);
+
+    // Z-ORDER: a freshly-appended NON-sticky overlay lands at the queue tail — ON TOP of every sticky
+    // band, which must stay above the scrolling bands (docs/text-editor/inline-widgets.md). Lift the
+    // sticky bands back on top. Only a brand-new slot can break the order: a reused pooled slot already
+    // sits below the sticky bands, and a re-placed already-parented block keeps its queue position — so
+    // this fires rarely (a new gap/comment band past the pool, never per-scroll or per-edit).
+    if (appended && !block.sticky) this.restackStickies();
+  }
+
+  /** Re-append every placed sticky band to the overlay queue so they sit on TOP again — called after a
+   *  new non-sticky overlay was appended above them. Overlays draw in append-only queue order and an
+   *  overlay can't be reordered or cleanly removed in this GTK build (see the file header), so reaching
+   *  the tail means moving each sticky's widget into a fresh slot; the vacated old slots now sit below
+   *  every sticky and re-enter the non-sticky pool for reuse. */
+  private restackStickies(): void {
+    for (const block of this.blocks) if (block.placed && block.sticky) this.reslot(block);
+  }
+
+  /** Move a sticky band's widget into a fresh overlay slot appended on top, retiring the old slot to the
+   *  (now strictly-below-sticky) non-sticky pool. */
+  private reslot(block: Block): void {
+    const fresh = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+    if (block.widget.getParent?.() === block.slot) block.slot.remove(block.widget);
+    fresh.append(block.widget);
+    fresh.setVisible(true);
+    const old = block.slot;
+    block.slot = fresh;
+    block.lastX = NaN; // fresh slot: force the next reposition + width re-fit (no carried-over no-op guard)
+    block.lastY = NaN;
+    block.lastWidth = NaN;
+    this.view.addOverlay(fresh, 0, this.lineRect(this.markLine(block)).y); // → queue tail (drawn on top)
+    old.setVisible(false);
+    this.freeSlots.push(old); // vacated slot is below every re-appended sticky — safe for a scrolling band
     this.reposition(block);
   }
 
@@ -456,9 +501,11 @@ export class BlockDecorations {
     // file header). Hide it and pool it for reuse instead.
     if (block.widget.getParent?.() === block.slot) block.slot.remove(block.widget);
     block.slot.setVisible(false);
-    // Re-pool any slot that's an overlay child of the view (parented), regardless of
-    // whether it finished placing; a never-parented fresh slot is just dropped (GC).
-    if (block.slot.getParent?.()) this.freeSlots.push(block.slot);
+    // Re-pool any NON-sticky slot that's an overlay child of the view (parented), regardless of whether
+    // it finished placing. A sticky slot sits on top of the append-only z-order, so reusing it for a
+    // scrolling band would draw that band over the sticky ones — drop it instead (sticky bands are only
+    // removed at disposal in practice; see add()/restackStickies). A never-parented fresh slot is GC'd.
+    if (!block.sticky && block.slot.getParent?.()) this.freeSlots.push(block.slot);
   }
 
   /** Tear down on editor disposal: drop every view/buffer/adjustment signal handler (each

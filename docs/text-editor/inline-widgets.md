@@ -83,6 +83,32 @@ removal detaches the consumer widget (`Gtk.Box.remove`, which works) and
 pooled slot. Repro + regression check: `src/poc/overlay-churn.ts` (must
 print nothing on stderr).
 
+### Overlay z-order constraint (sticky bands on top)
+
+`GtkTextViewChild` draws its overlays in **`add_overlay` (internal queue)
+order** (`gtktextviewchild.c`, `snapshot` iterates `overlays.head`): the
+last-added overlay is drawn on top. That order is effectively **append-only** —
+there is no reorder API, and (per the removal constraint above) an overlay
+can't be cleanly removed and re-added; node-gtk exposes none of
+`GtkTextViewChild`'s methods either. Because a freed slot is **pooled and
+reused at its fixed queue position**, a later non-sticky band reusing an old
+slot — or a brand-new one appended on top — can end up drawn over a *sticky*
+band. That was the "diff file headers scroll under the `⋯` fold markers" bug.
+
+`BlockDecorations` keeps the **sticky** bands (the diff file headers — `sticky:
+true`) at the queue tail so they always draw on top of the scrolling gap/comment
+bands:
+
+- a sticky band **never reuses a pooled slot** — it always takes a fresh slot
+  appended on top (`add()`), and its slot is **not** re-pooled on removal
+  (it sits on top; a scrolling band reusing it would draw over the headers);
+- whenever a **brand-new non-sticky** overlay is appended (past the pool — a new
+  gap on collapse, a review comment), it lands on top, so `place()` calls
+  **`restackStickies()`**: each sticky's widget moves into a fresh slot appended
+  on top and the vacated slots (now strictly below every sticky) re-enter the
+  non-sticky pool. This fires only on genuinely-new overlays — never per-scroll
+  or per-edit (a reused/already-parented slot keeps its position).
+
 ## Why not the alternatives
 
 - **`GtkTextChildAnchor`** — embeds a real widget but **consumes one
