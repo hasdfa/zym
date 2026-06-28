@@ -33,6 +33,7 @@ import { CombinedDiffLineNumberGutter } from './TextEditor/DiffLineNumberGutter.
 import { buildDiffMultiBuffer, type DiffFile, type DiffMultiBuffer } from './multibuffer/diffMultiBuffer.ts';
 import { buildHeaderWidget, buildGapWidget } from './HeaderBands.ts';
 import { DiffCommentBox, buildCommentCard } from './DiffCommentBox.ts';
+import { formatAgentComment } from './agentComment.ts';
 import type { BlockDecorationSpec, BlockDecorationSet, BlockDecorationAnchor } from './TextEditor/BlockDecorationSet.ts';
 import { buildRowMap, computeHunks, formatHunkPatch, hunkContainsBufferRow, type Hunk } from '../util/hunkPatch.ts';
 import { applyPatch, git, repoRoot, type GitDone, type GitRepo } from '../git.ts';
@@ -1145,9 +1146,12 @@ export class DiffView {
 
   /** The view-row range of the diff hunk at (or nearest) `row`: the contiguous run of changed
    *  (added/removed) rows around the cursor, plus a few context lines each side — bounded by the
-   *  shown block (header/blank/gap rows stop the expansion). For the no-selection comment, so the
-   *  agent sees a hunk with context rather than a lone line. */
+   *  shown block (header/blank/gap rows stop the expansion), then capped to `COMMENT_MAX_LINES`
+   *  around the anchor so a huge changed block doesn't send a wall of context (the comment still
+   *  pins the cursor's own line via the locator). For the no-selection comment, so the agent sees a
+   *  hunk with context rather than a lone line; a VISUAL selection bypasses this and is sent exactly. */
   private static readonly COMMENT_CONTEXT = 3;
+  private static readonly COMMENT_MAX_LINES = 10;
   private hunkRangeAt(row: number): [number, number] {
     const kinds = this.dmb.rowKinds;
     const isReal = (r: number): boolean => r >= 0 && r < kinds.length && (kinds[r] === 'context' || kinds[r] === 'added' || kinds[r] === 'removed');
@@ -1164,6 +1168,14 @@ export class DiffView {
     let s = cs, e = ce;
     for (let k = 0; k < DiffView.COMMENT_CONTEXT && isReal(s - 1); k++) s--;
     for (let k = 0; k < DiffView.COMMENT_CONTEXT && isReal(e + 1); k++) e++;
+    // Cap an over-long hunk to a window of at most COMMENT_MAX_LINES rows around the anchor.
+    const max = DiffView.COMMENT_MAX_LINES;
+    if (e - s + 1 > max) {
+      const lo = s, hi = e, half = Math.floor(max / 2);
+      s = Math.max(lo, anchor - half);
+      e = Math.min(hi, s + max - 1);
+      s = Math.max(lo, e - max + 1); // re-expand upward if the window hit the block's bottom
+    }
     return [s, e];
   }
 
@@ -1273,11 +1285,17 @@ export class DiffView {
 }
 
 /** One comment as an agent prompt: a `path:line` reference, the targeted lines as a unified-diff
- *  hunk (so old/new is explicit), then `On <locator>:` + the comment — the location restated right
- *  next to the text so the agent knows exactly which line it's about (not just from the header). */
+ *  hunk (so old/new is explicit), then `On <locator>:` + the comment. The shape is shared with the
+ *  file-editor comment via `formatAgentComment` — here the fence is `diff` and the body is the hunk. */
 function formatDiffComment(c: DiffComment, cwd: string): string {
-  const rel = Path.relative(cwd, c.path);
-  return [`${rel}:${c.navLine}`, '', '```diff', c.patch, '```', '', `On ${c.locator}:`, c.comment].join('\n');
+  return formatAgentComment({
+    rel: Path.relative(cwd, c.path),
+    line: c.navLine,
+    fence: 'diff',
+    body: c.patch,
+    locator: c.locator,
+    comment: c.comment,
+  });
 }
 
 /** A review as an agent prompt: a single comment formats as itself; a batch becomes a numbered list

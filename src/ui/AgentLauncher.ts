@@ -92,6 +92,11 @@ export interface AgentLauncherOptions {
   /** Pre-select this worktree choice instead of the last-used one (`default` mode only). The
    *  review-send flow seeds `'current'` so a review runs against the working tree by default. */
   initialWorktree?: 'current' | 'create';
+  /** Pre-fill the prompt editor (the agent's first turn) — the review-send flow seeds the formatted
+   *  comment so it's visible/editable and is delivered as the launch prompt. Unlike a restored draft
+   *  it doesn't start fully-selected (a stray keystroke shouldn't wipe it) and isn't persisted as a
+   *  draft on dismissal (it's specific to this launch, not a leftover the next launch should restore). */
+  initialPrompt?: string;
   /** Invoked with the assembled launch request when the user submits. */
   onLaunch: (request: AgentLaunchRequest) => void;
 }
@@ -194,6 +199,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   const worktreeInTitle = mode === 'existing-worktree' || mode === 'this-worktree';
 
   const draft = savedDraft; // an unsent prompt from a previous dismissal, if any
+  const seededPrompt = options.initialPrompt; // a flow-specific pre-fill (the review), not a draft
 
   // Owns everything the launcher pins that node-gtk would otherwise root past the card's
   // lifetime: the comboboxes (each pins controllers + a parented popover) and the launcher's
@@ -209,7 +215,9 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     // persist to the next launch; submit clears the draft below (but keeps the options).
     onClose: () => {
       // Read the option values BEFORE disposing — disposing tears down the comboboxes.
-      savedDraft = input.getText();
+      // A flow-specific pre-fill (the review) isn't a draft — don't persist it, so the next plain
+      // launch isn't seeded with a leftover review.
+      if (!seededPrompt) savedDraft = input.getText();
       savedModel = modelDropdown.getValue();
       savedPermission = permissionDropdown.getValue();
       savedEffort = effortDropdown.getValue();
@@ -299,7 +307,7 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
   // The prompt — a buffer-only editor (full vim editing) that auto-grows with its
   // content up to 20 lines (then scrolls), wrapped in a named container so the
   // enter/alt-enter keymap scopes to it. Seeded with any restored draft.
-  const input = createInput({ placeholder: 'Prompt for the agent…', initialText: draft, grow: true, maxLines: 20, padding: CARD_PADDING });
+  const input = createInput({ placeholder: 'Prompt for the agent…', initialText: seededPrompt ?? draft, grow: true, maxLines: 20, padding: CARD_PADDING });
   const promptContainer = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
   promptContainer.addCssClass('AgentLauncherPrompt');
   promptContainer.append(input.root);
@@ -385,7 +393,9 @@ export function openAgentLauncher(host: Overlay, options: AgentLauncherOptions):
     worktreeDropdown.focus(false);
   } else {
     input.focusInsert(); // ready to type the prompt immediately
-    if (draft) input.selectAll(); // a restored draft starts fully selected (keep or overtype)
+    // A restored draft starts fully selected (keep or overtype); a seeded review does NOT — the user
+    // means to send it, so a stray keystroke mustn't wipe it (cursor sits at the start to add to it).
+    if (draft && !seededPrompt) input.selectAll();
   }
 }
 

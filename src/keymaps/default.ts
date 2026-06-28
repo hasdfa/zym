@@ -194,6 +194,17 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     K: 'lsp:hover',
   },
 
+  // Comment the current line / selection to an agent (file editors only — `editor:comment` is
+  // registered just on commenting-enabled editors, so it's inert elsewhere). `enter` in normal mode
+  // / on a visual selection opens the inline box; insert-mode `enter` stays a newline. `:not(.zym-input)`
+  // keeps it off inputs/pickers. Mirrors the diff's `enter`-opens-the-comment-box gesture.
+  '.TextEditor.normal-mode:not(.zym-input)': {
+    enter: 'editor:comment',
+  },
+  '.TextEditor.visual-mode:not(.zym-input)': {
+    enter: 'editor:comment',
+  },
+
   // Tab switching, routed to whichever panel holds focus.
   '.Panel': TAB_BINDINGS,
 
