@@ -52,6 +52,7 @@ import { tildify } from '../util/tilde.ts';
 import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
+import { openDiffFilePicker } from './DiffFilePicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
 import { SearchResultsView } from './SearchResultsView.ts';
 import { ProjectSearchView } from './ProjectSearchView.ts';
@@ -2180,6 +2181,13 @@ export class AppWindow {
 
   // List the current file's symbol outline (via its language server) in a picker
   // and jump to the chosen one within the active editor.
+  /** `diff:go-to-file` (`z /`) — pick a file in the active continuous diff and jump to its header. */
+  private diffFilePicker() {
+    const diff = this.activeContinuousDiff();
+    if (!diff) return;
+    openDiffFilePicker(this.overlay, diff);
+  }
+
   private async documentSymbolPicker() {
     const editor = this.activeEditor;
     if (!editor) return;
@@ -2444,6 +2452,31 @@ export class AppWindow {
         description: 'Collapse / expand the file under the cursor',
         when: () => this.activeContinuousDiff() !== null,
       },
+      'diff:collapse-file': {
+        didDispatch: () => this.activeContinuousDiff()?.collapseFileAtCursor(),
+        description: 'Collapse the file under the cursor to its header',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:expand-file': {
+        didDispatch: () => this.activeContinuousDiff()?.expandFileAtCursor(),
+        description: 'Expand the file under the cursor back to its diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:next-file': {
+        didDispatch: () => this.activeContinuousDiff()?.nextFile(),
+        description: 'Move to the next file in the diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:prev-file': {
+        didDispatch: () => this.activeContinuousDiff()?.previousFile(),
+        description: 'Move to the previous file in the diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:go-to-file': {
+        didDispatch: () => this.diffFilePicker(),
+        description: 'Jump to a file in the diff…',
+        when: () => this.activeContinuousDiff() !== null,
+      },
       'diff:collapse-all-files': {
         didDispatch: () => this.activeContinuousDiff()?.collapseAllFiles(),
         description: 'Collapse every file to a one-line header (overview)',
@@ -2652,14 +2685,15 @@ export class AppWindow {
         const oldText = await showHead(Path.relative(root, path));
         const open = this.documents.find(path);
         let newText = open ? open.getText() : '';
+        let deleted = false;
         if (!open) {
           try {
             newText = Fs.readFileSync(path, 'utf8');
           } catch {
-            /* deleted on disk */
+            deleted = true; // gone from the working tree (and not held open) → a deletion
           }
         }
-        return { path, oldText, newText };
+        return { path, oldText, newText, deleted };
       }),
     );
     return new DiffView({

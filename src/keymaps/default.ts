@@ -263,14 +263,24 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   // Scoped to `.normal-mode` so the `z`/`g` prefixes don't shadow typing those characters while
   // inserting (this surface is editable) — same reason `K: lsp:hover` is normal-mode only.
   '.TextEditor.continuous-diff.normal-mode': {
-    'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
-    'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
-    'z m': 'diff:collapse-context', // re-collapse expanded context
-    // Per-FILE collapse (distinct axis from the context controls above): `z a` toggles the file
-    // under the cursor (matching the search surface); capital `z C`/`z O` fold/unfold every file.
+    // Per-FILE folding, vim-style: `z c`/`z o` close/open the file under the cursor, `z a` toggles
+    // it, `z r`/`z m` open/close every file. (Revealing the elided unchanged lines at a `⋯` gap is
+    // a click on the gap marker — `z o` is the file open now, not the context expand.)
+    'z c': 'diff:collapse-file',
+    'z o': 'diff:expand-file',
     'z a': 'diff:toggle-file',
-    'z C': 'diff:collapse-all-files',
-    'z O': 'diff:expand-all-files',
+    'z r': 'diff:expand-all-files',
+    'z m': 'diff:collapse-all-files',
+    // `z j`/`z k` step between files; `z /` opens a picker to jump to one.
+    'z j': 'diff:next-file',
+    'z k': 'diff:prev-file',
+    'z /': 'diff:go-to-file',
+    // Reveal the elided unchanged lines at a `⋯` gap (`.` mirrors the dots): `z .` expands the
+    // nearest gap a chunk at a time, `z >` reveals the whole files, `z <` re-collapses to the
+    // windowed diff. (Clicking a `⋯` marker also expands it.)
+    'z .': 'diff:expand-context',
+    'z >': 'diff:expand-all',
+    'z <': 'diff:collapse-context',
     // Hunk staging (`space h s`/`u` → git:hunk-stage/git:hunk-unstage) is the unified binding from
     // `.AppWindow`; it routes here automatically (this embedded editor registers no gutter
     // variant). Bare `s`/`u` are left to vim (substitute / undo) since this surface is editable.
