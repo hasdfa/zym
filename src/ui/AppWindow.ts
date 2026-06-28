@@ -123,7 +123,7 @@ const SIDEBAR_COLLAPSED_WIDTH = 48;
 const AGENT_SIDEBAR_WIDTH = 480;
 
 addStyles(/* css */`
-  .AppWindow--paned > separator { opacity: 0 }
+  .AppWindow--paned > separator { opacity: 0; }
 `)
 
 type Widget = InstanceType<typeof Gtk.Widget>;

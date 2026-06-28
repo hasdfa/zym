@@ -93,9 +93,9 @@ disposable-aware:
 - `LanguageRegistry.registerLanguage/Grammar/Server` return Disposables
   that remove the entry (no-op if it was replaced meanwhile).
 - `Config.removeSchema(keyPath)` is the inverse of `setSchema`.
-- `StyleManager.addRemovable(css)` queues-or-installs (plugins activate
-  *before* the Gdk display exists), returning a Disposable that removes
-  the sheet whether installed or still queued.
+- `PluginContext.registerStyles(css)` installs a sheet via
+  `styles.add(css, { watch: false })` (queued before the Gdk display exists,
+  flushed at install), returning a Disposable that removes it.
 - `grammar.clearGrammar(langId)` drops a cached parse when a grammar is
   unregistered, so a re-register isn't shadowed by a stale parse.
 - A grammar owns its highlights file: `GrammarDef.highlightsPath` is an

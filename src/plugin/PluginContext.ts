@@ -95,7 +95,9 @@ export class PluginContextImpl implements PluginContext {
   }
 
   registerStyles(css: string): Disposable {
-    return this.track(styles.addRemovable(css));
+    // watch:false — a plugin sheet is programmatic (no source module to re-import).
+    const sheet = styles.add(css, { watch: false });
+    return this.track(new Disposable(() => sheet.remove()));
   }
 
   observeTextEditors(callback: (editor: TextEditor) => DisposableLike | void): Disposable {
