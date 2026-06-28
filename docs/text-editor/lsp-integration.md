@@ -63,8 +63,14 @@ The language layer (`src/lang/`) holds the contribution model; the LSP core
   server; ungrouped linters contribute diagnostics only). Root resolution =
   root markers → `.git` → file dir (`resolveRootDir`). Crash recovery restarts
   a crashed server with exponential backoff, giving up after a bounded number
-  of rapid crashes (a stable run resets the count). Pure helpers
-  (`resolveRootDir`, `locationToTarget`) are exported for testing.
+  of rapid crashes (a stable run resets the count). **Idle shutdown:** when a
+  server's last open document closes, it is stopped after a short debounced
+  delay (`IDLE_SHUTDOWN_MS`) — kept non-zero so a `didClose`→`didOpen`
+  reload/rename or a quick reopen re-claims the process instead of bouncing it.
+  Without this, servers for closed files (and for closed workbenches/worktrees,
+  which on close re-attribute to the user workbench's LSP count) would live
+  until app quit. Pure helpers (`resolveRootDir`, `locationToTarget`) are
+  exported for testing.
 - `which.ts` / `installer.ts` — server-binary resolution and managed install
   (see decisions above).
 - `workspaceEdit.ts` — `applyTextEdits` / `normalizeWorkspaceEdit`: apply a

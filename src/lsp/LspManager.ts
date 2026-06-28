@@ -146,6 +146,13 @@ const BASE_RESTART_DELAY_MS = 1000;
 const MAX_RESTART_DELAY_MS = 16000;
 const STABILITY_MS = 30000;
 
+// Idle shutdown: once a server's last open document closes, stop it after this
+// delay. Non-zero so a synchronous didClose→didOpen (a reload/rename re-opens the
+// same doc) or a quick reopen re-claims the process instead of bouncing it. Without
+// this, servers for closed files — and closed workbenches/worktrees — would live
+// until app quit, inflating the header LSP count. See docs/text-editor/lsp-integration.md.
+const IDLE_SHUTDOWN_MS = 5000;
+
 interface RestartState {
   attempts: number;
   stableTimer?: ReturnType<typeof setTimeout>;
@@ -187,6 +194,8 @@ export class LspManager {
   private readonly installing = new Set<string>();
   // Per-server lifecycle state for the header LSP indicator, keyed like `servers`.
   private readonly serverStatuses = new Map<string, ServerStatus>();
+  // Debounced timer for the idle-server sweep (stops servers with no open docs).
+  private idleSweepTimer?: ReturnType<typeof setTimeout>;
   private autoInstall = false;
   private readonly emitter = new Emitter();
 
@@ -321,6 +330,10 @@ export class LspManager {
     this.openDocs.delete(path);
     for (const server of this.runningServersForPath(path)) server.didClose(path);
     this.diagnostics.clear(path);
+    // A server whose last document just closed should be stopped — otherwise servers
+    // for closed files (and closed workbenches/worktrees) leak. Deferred + debounced
+    // so a didClose→didOpen reload/rename doesn't tear the process down and respawn it.
+    this.scheduleIdleSweep();
   }
 
   // --- requests --------------------------------------------------------------
@@ -744,6 +757,38 @@ export class LspManager {
     return server;
   }
 
+  // --- idle shutdown ---------------------------------------------------------
+
+  // Debounced sweep: stop every running server with no remaining open document.
+  // Scheduled from didClose; the delay lets a synchronous didClose→didOpen
+  // (reload/rename) or a quick reopen re-claim the server before it's torn down.
+  private scheduleIdleSweep(): void {
+    if (this.idleSweepTimer) return;
+    this.idleSweepTimer = setTimeout(() => {
+      this.idleSweepTimer = undefined;
+      for (const key of [...this.servers.keys()]) {
+        if (this.docsForKey(key).length === 0) this.stopServer(key);
+      }
+    }, IDLE_SHUTDOWN_MS);
+  }
+
+  // Stop a server for good (its last document closed): cancel any pending restart,
+  // drop its status, and tear the process down. A deliberate shutdown suppresses
+  // the client's exit event, so this never trips crash recovery.
+  private stopServer(key: string): void {
+    const server = this.servers.get(key);
+    if (!server) return;
+    this.servers.delete(key);
+    const st = this.restartState.get(key);
+    if (st?.stableTimer) clearTimeout(st.stableTimer);
+    if (st?.pendingTimer) clearTimeout(st.pendingTimer);
+    this.restartState.delete(key);
+    const name = this.serverStatuses.get(key)?.name ?? key;
+    this.clearServerStatus(key);
+    this.notice('trace', `stopping ${name}`, 'no open documents');
+    void server.shutdown();
+  }
+
   // --- crash recovery --------------------------------------------------------
 
   // A server crashed: clear its now-stale diagnostics, then schedule a restart
@@ -913,8 +958,10 @@ export class LspManager {
   }
 
 
-  /** Shut down every server (e.g. on app quit) and cancel pending restarts. */
+  /** Shut down every server (e.g. on app quit) and cancel pending restarts/sweeps. */
   async shutdownAll(): Promise<void> {
+    if (this.idleSweepTimer) clearTimeout(this.idleSweepTimer);
+    this.idleSweepTimer = undefined;
     for (const st of this.restartState.values()) {
       if (st.stableTimer) clearTimeout(st.stableTimer);
       if (st.pendingTimer) clearTimeout(st.pendingTimer);
