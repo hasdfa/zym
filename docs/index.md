@@ -224,53 +224,12 @@ agent's diff (needs the editor Diff renderer first), and worktree lifecycle
 ## node-gtk
 
 This project is the flagship demo for `node-gtk`, and bugs in `node-gtk` should be
-surfaced and fixed at the source. Workarounds for `node-gtk` should not be allowed.
-
-**Imports.** GObject namespaces are imported directly via the `gi:` scheme —
-`import Gtk from 'gi:Gtk-4.0'` (the default export is the namespace object;
-static named imports aren't supported, destructure from the default instead).
-There is no central `gi.ts` hub. node-gtk's own API imports from the package by
-name (e.g. `import { getGType } from 'node-gtk'`). The `gi:` hooks must be
-installed before the importing module's static graph resolves, so **every entry
-point runs with `node --import node-gtk/register`** (wired into the `start` /
-`poc:*` / `test` scripts; pass it yourself for an ad-hoc `node src/…`). GTK enums
-and classes are values, not types, so a type annotation reads
-`InstanceType<typeof GtkSource.View>` (declare a local alias per file).
-
-**Types.** `node-gtk generate-types` (run on `postinstall`) writes
-`node_modules/.node-gtk-types`, declaring each `gi:<Ns>-<ver>` module; importing
-a namespace not in the `generate-types` list is a TS error naming the fix.
-
-**Main loop.** The Node↔GLib loop integration starts automatically the first time
-a main loop runs — there is no `startLoop()`. Under the `gi:` (ESM) imports the
-`app.run()` / `loop.run()` calls **return immediately and yield no value**, so the
-run call must be the last statement and cleanup/exit happens from handlers (never
-`process.exit(app.run([]))`).
-
-**Class registration.** JS GObject subclasses register automatically — node-gtk
-lazily registers a subclass (and any unregistered ancestor) the first time it is
-constructed, so `registerClass()` is not called in this codebase. It stays
-available from `node-gtk` for the rare case that needs the GType before any
-instance exists (e.g. `getGType`, GtkBuilder templates).
-
-**Vfunc overrides.** A subclass overrides a virtual function only by a method
-named `virtual_` + the camelCase vfunc name (`virtual_snapshot`,
-`virtual_queryData`, `virtual_measure`); a plain method is never an override, and
-a `virtual_*` name matching no vfunc throws when the subclass is registered (on
-its first construction). Chain up with `super.virtual_<name>()`. See
-[text-editor/gutter-cell-background.md](text-editor/gutter-cell-background.md).
-
-Unconfirmed gotcha: JS microtasks may not drain promptly under node-gtk's GLib main 
-loop. Evidence is mixed — `node-gtk`'s `loop.cc` flushes them in `loop_source_prepare` 
-every iteration, and `queueMicrotask`-deferred multi-cursor edit replication 
-(`EditorModel`) works in the app — yet `Screen`/`DiffView` saw 
-microtask-deferred work stay stale until later activity and switched to `setTimeout` 
-/ the GTK frame clock. Cause unresolved; if work you defer doesn't seem to run promptly in the app, suspect
-this and prefer a macrotask (or the frame clock when it must land before a paint).
+surfaced and fixed at the source.
 
 ## Tasks & runners
 
 Idea — not started.
+
 See [tasks-and-runners.md](tasks-and-runners.md).
 
 ## Debugger (DAP)
