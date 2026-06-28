@@ -11,9 +11,11 @@
  */
 
 /** Live status of an agent session. */
-// `disconnected`: a resumed agent whose conversation is shown but whose process
-// hasn't been (re)spawned yet — it reconnects on the next user turn. See AgentConversation.
-export type AgentStatus = 'idle' | 'working' | 'waiting' | 'exited' | 'disconnected';
+// `disconnected`: the agent's process isn't running — it either exited, or was
+// resumed but not yet reconnected; the next user turn (re)spawns it. The single
+// "not running" state (it replaced the former separate `exited`). See AgentConversation.
+// `error`: error-colored; POC-only for now — no production path emits it yet.
+export type AgentStatus = 'idle' | 'working' | 'waiting' | 'disconnected' | 'error';
 
 /** An agent's permission mode (Claude's `shift-tab` cycle; other tools may map a
  *  subset). `default` asks; the rest auto-allow to varying degrees, `plan` only

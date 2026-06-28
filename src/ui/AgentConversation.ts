@@ -597,7 +597,7 @@ export class AgentConversation implements Agent {
   get effectiveCwd(): string { return this._effectiveCwd; }
   get sessionId(): string | null { return this.session.sessionId; }
   get renamed(): boolean { return this._displayName !== null; }
-  get exited(): boolean { return this._status === 'exited'; }
+  get exited(): boolean { return this._status === 'disconnected'; }
   get unannouncedWorktree(): string | null { return null; }
 
   get worktree(): WorktreeInfo | null {
@@ -957,7 +957,7 @@ export class AgentConversation implements Agent {
     this.refreshThinking();
     // Turn ended: stop any tool row still spinning (interrupted / crashed before its
     // result landed; a completed row already cleared its own spinner via onResult).
-    if (status === 'idle' || status === 'exited') {
+    if (status === 'idle' || status === 'disconnected') {
       for (const entry of this.toolRows.values()) entry.row?.setRunning(false);
     }
     this.updateFooter();

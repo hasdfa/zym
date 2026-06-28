@@ -24,25 +24,39 @@ import Gtk from 'gi:Gtk-4.0';
 import { ICON_FILES } from './icons.generated.ts';
 
 type Image = InstanceType<typeof Gtk.Image>;
+type Paintable = InstanceType<typeof Gtk.IconPaintable>;
 
 // Generated paths are repo-root-relative; this module lives in `src/`.
 const ROOT_DIR = Path.join(Path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Render a bundled SVG (repo-root-relative `path`) into a `Gtk.Image` sized to
- *  `pixelSize`. The paintable rasterizes the vector at that size, so it stays
- *  crisp at any scale. */
-function loadImage(path: string, pixelSize: number): Image {
+/** Load a bundled symbolic SVG (repo-root-relative `path`) as a recolorable
+ *  `Gtk.IconPaintable` rasterized at `pixelSize`. The paintable follows the
+ *  widget's `color` (the `-symbolic` recolor hint) and stays crisp at any scale. */
+function loadPaintable(path: string, pixelSize: number): Paintable {
   const file = Gio.File.newForPath(Path.join(ROOT_DIR, path));
-  const paintable = Gtk.IconPaintable.newForFile(file, pixelSize, 1);
-  const image = Gtk.Image.newFromPaintable(paintable);
+  return Gtk.IconPaintable.newForFile(file, pixelSize, 1);
+}
+
+/** Render a bundled SVG into a `Gtk.Image` sized to `pixelSize`. */
+function loadImage(path: string, pixelSize: number): Image {
+  const image = Gtk.Image.newFromPaintable(loadPaintable(path, pixelSize));
   image.setPixelSize(pixelSize);
   return image;
 }
 
 /** Build a `Gtk.Image` for the named icon at `pixelSize`. */
 type IconBuilder = (pixelSize: number) => Image;
+/** Build a `Gtk.IconPaintable` for the named icon at `pixelSize`. */
+type PaintableBuilder = (pixelSize: number) => Paintable;
 
 /** The bundled icon catalog: `ImageIcons.CAT_SLEEPING(52)` → a sized `Gtk.Image`. */
 export const ImageIcons = Object.fromEntries(
   Object.entries(ICON_FILES).map(([key, path]) => [key, (pixelSize: number) => loadImage(path, pixelSize)]),
 ) as Record<keyof typeof ICON_FILES, IconBuilder>;
+
+/** The same catalog as raw paintables — for a single `Gtk.Image` whose icon is
+ *  swapped in place via `setFromPaintable` (e.g. the live agent status icon)
+ *  rather than a fresh widget per state. */
+export const ImagePaintables = Object.fromEntries(
+  Object.entries(ICON_FILES).map(([key, path]) => [key, (pixelSize: number) => loadPaintable(path, pixelSize)]),
+) as Record<keyof typeof ICON_FILES, PaintableBuilder>;

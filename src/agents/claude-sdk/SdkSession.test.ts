@@ -307,13 +307,13 @@ test('subagent events are captured into a transcript, kept out of the main threa
   session.dispose();
 });
 
-test('process exit flips to exited and fires onExit', () => {
+test('process exit flips to disconnected and fires onExit', () => {
   const { session, fake } = makeSession();
   let exitCode: number | null | undefined;
   session.onExit(({ code }) => { exitCode = code; });
   session.start();
   fake.emitExit(3);
-  assert.equal(session.status, 'exited');
+  assert.equal(session.status, 'disconnected');
   assert.equal(exitCode, 3);
   session.dispose();
 });

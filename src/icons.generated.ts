@@ -7,7 +7,12 @@ export const ICON_FILES = {
   CAT_SLEEPING: 'assets/icons/cat-sleeping-symbolic.svg',
   CIRCLE_OUTLINE: 'assets/icons/circle-outline-symbolic.svg',
   DOT: 'assets/icons/dot-symbolic.svg',
+  GIT_COMMIT: 'assets/icons/git-commit-symbolic.svg',
+  GIT: 'assets/icons/git-symbolic.svg',
   LOADING: 'assets/icons/loading-symbolic.svg',
   MEDIA_PLAYBACK_STOP: 'assets/icons/media-playback-stop-symbolic.svg',
+  TERMINAL: 'assets/icons/terminal-symbolic.svg',
+  USER: 'assets/icons/user-symbolic.svg',
+  WARNING_SHIELD: 'assets/icons/warning-shield-symbolic.svg',
   WARNING: 'assets/icons/warning-symbolic.svg',
 } as const;

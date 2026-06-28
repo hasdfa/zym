@@ -86,12 +86,13 @@ What already exists and is reused, not rebuilt:
   - initial title = the agent's program basename until the CLI reports its own
     (OSC) title; `prompt` option appends a launch prompt to argv;
   - on process exit the widget is **not** torn down and the agent/workbench is
-    **not** closed — it prints a "process exited" notice, flips to `exited`,
-    and stays listed; the user restarts (`agent:restart`/`r`) or stops
+    **not** closed — it prints a "process exited" notice, flips to `disconnected`
+    (the single "not running" state), and stays listed; the user restarts
+    (`agent:restart`/`r`) or stops
     (`agent:stop`/`x`) it from the workbench list. Closing its tab
     (`tab:close`) never retires it — it just backgrounds it (a running agent
     keeps working); `agent:close`/`d d` retires it;
-  - **live status** (`idle | working | waiting | exited`, via `status` /
+  - **live status** (`idle | working | waiting | disconnected`, via `status` /
     `onDidChangeStatus`): for a `claude` agent it injects a per-session
     `--settings` block whose **hooks** write a status word to a file the
     terminal watches with a `Gio.FileMonitor`. Reporter:
@@ -151,8 +152,14 @@ What already exists and is reused, not rebuilt:
   selected-by-default) row is the **user** (person glyph + name, as a pseudo-agent
   — `onActivateUser`), the rest are the running agents (status indicator + title;
   the per-agent edited-files badge moved to the AgentSidebar header, reflecting the
-  *active* agent). **Never empty** (the user row is always present → no
-  empty state). The header bar + scrollable list are assembled in an
+  *active* agent). The status indicator is a bundled symbolic `ImageIcons` SVG
+  (`createAgentStatusIcon` in `agentStatusIcon.ts`, shared with the conversation
+  footer): a single `Gtk.Image` swapped in place per state — dot (idle, green;
+  disconnected/not-running, dimmed), warning shield (waiting/needs-permission,
+  amber), loading ellipsis (working, muted), warning sign (error, red — POC-only
+  for now). The user row's leading icon is the dimmed `user-symbolic` person, and
+  all row titles (user + agents) share the `Workbenchrow--label` font class.
+  **Never empty** (the user row is always present → no empty state). The header bar + scrollable list are assembled in an
   `Adw.ToolbarView` (its `root`): the project-title `Adw.HeaderBar` (themed to
   match the window header bar) is a **top bar** over the list as **content**, so
   the bar matches the window header beside it and the view manages the seam
@@ -253,7 +260,7 @@ Lifecycle commands are registered on `AppWindow`, bound centrally in
 `src/keymaps/default.ts`; the list dispatches the selected row's command:
 
 - `agent:stop` — terminate the process (SIGTERM the VTE child) but keep the
-  widget listed (it flips to `exited`, restartable). The list's `x` key / row
+  widget listed (it flips to `disconnected`, restartable). The list's `x` key / row
   action.
 - Closing the agent's tab (`tab:close`) never retires the agent, whatever its
   state: the terminal-tab close is vetoed (the terminal stays in its workbench
@@ -305,7 +312,10 @@ injectable (`AgentConversationOptions.oneShot`) for tests.
 
 **Tab affordance** — the agent's tab title is prefixed with a status glyph
 (`agentTabTitle` in AppWindow), refreshed on status change; mirrors the sidebar
-indicator, sans colour.
+indicator's states with the equivalent text glyph (Adw tab titles are plain text —
+no image/colour), so the waiting state drives Adw's `needs-attention` highlight
+instead. The same glyph fallback (`agentStatusMarkup`) covers the markup-only
+picker rows / SubagentView, which can't embed the sidebar's `Gtk.Image`.
 
 **Attention notifications** — `AppWindow.notifyAgentAttention` posts an in-app
 `zym.notifications` toast (click → reveal) when an agent goes **waiting**

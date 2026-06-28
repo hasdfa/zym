@@ -424,10 +424,10 @@ export class SdkSession {
   onCwd(cb: (m: { cwd: string }) => void): Disposable { return this.emitter.on('cwd', cb as (v?: unknown) => void); }
   onExit(cb: (m: { code: number | null; stderr: string }) => void): Disposable { return this.emitter.on('exit', cb as (v?: unknown) => void); }
 
-  /** Stop the claude process but keep the session object (status → `exited`),
+  /** Stop the claude process but keep the session object (status → `disconnected`),
    *  so its widget can linger as the terminal agent's does. */
   stop(): void {
-    if (this._status === 'exited') return;
+    if (this._status === 'disconnected') return;
     this.transport?.dispose();
     this.transport = null;
     this.handleExit(null);
@@ -725,7 +725,7 @@ export class SdkSession {
   }
 
   private handleExit(code: number | null): void {
-    this.setStatus('exited');
+    this.setStatus('disconnected');
     // A non-zero code is a crash (claude bailed — e.g. an `error_during_execution`
     // turn that took the process down). Log the stderr tail so the cause survives in
     // the app log even without ZYM_SDK_DEBUG. A null code is a signal / our own
@@ -757,7 +757,9 @@ export class SdkSession {
   }
 
   private setStatus(status: AgentStatus): void {
-    if (this._status === 'exited' || status === this._status) return;
+    // `disconnected` is terminal for a session object: once the process exits the
+    // status is frozen (a resume spins up a fresh SdkSession).
+    if (this._status === 'disconnected' || status === this._status) return;
     this._status = status;
     this.emitter.emit('status');
   }

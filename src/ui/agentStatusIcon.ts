@@ -1,19 +1,27 @@
 /*
- * agentStatusIcon — the shared agent status indicator. The same glyph the
- * WorkbenchList sidebar shows on each agent row is reused by the agent picker, so
- * the two stay in lockstep: a colored dot (●) for idle/waiting/exited, or the
- * nf-fa-ellipsis_h glyph (…) while the agent is working.
+ * agentStatusIcon — the shared agent status indicator.
  *
- * `createAgentStatusIcon` returns a live, self-updating Gtk.Label — for contexts
- * that hold real widgets (the sidebar list). `agentStatusMarkup` returns the
- * equivalent Pango markup — for contexts that render markup rather than widgets
- * (the picker rows, which are markup-only labels).
+ * The widget path (`createAgentStatusIcon`, used by the WorkbenchList sidebar rows
+ * and the conversation footer) renders a bundled symbolic `ImageIcons` SVG, swapped
+ * in place on a single `Gtk.Image` as the agent's status changes:
+ *   - dot            → idle / disconnected (the dimmed "not running" state)
+ *   - warning shield → waiting (needs permission)
+ *   - loading (…)    → working (in progress)
+ *   - warning        → error (POC-only for now)
+ * Colour comes from a per-status CSS class (symbolic icons recolor to `color`):
+ * idle is success-green, waiting is warning-amber, error is error-red, working is
+ * muted, and disconnected dims the inherited foreground via opacity.
+ *
+ * The markup path (`agentStatusMarkup`) is for contexts that render Pango markup
+ * rather than widgets (the picker rows / SubagentView, which are markup-only
+ * labels and can't embed a Gtk.Image): it mirrors the same states with the
+ * equivalent glyphs (● / …).
  */
-import Pango from 'gi:Pango-1.0';
 import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
+import { ImagePaintables } from '../icons.ts';
 import { Icons } from './icons.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { escapeMarkup } from './proseMarkup.ts';
@@ -21,67 +29,69 @@ import type { AgentStatus, WorktreeInfo } from './AgentTerminal.ts';
 import type { Agent } from '../agents/types.ts';
 
 export const STATUS_DOT = '●';
-export const DISCONNECTED_DOT = '○'; // hollow: resumed but not reconnected
 export const WORKING_GLYPH = NERDFONT.STATUS.WORKING;
 
-// Status → indicator color for the *colored* states (waiting on the user →
-// warning/amber, idle/ready → success/green), used by the *markup* path only —
-// markup can't read CSS variables, so it interpolates the literal. The CSS path
-// uses the matching var(--t-ui-status-*) directly. The muted states — working
-// (ellipsis), exited, and disconnected (resumed-not-reconnected) — carry no color;
-// they dim the inherited foreground (Adwaita's muted idiom: `--dim-opacity` in
-// CSS, `alpha="55%"` in markup) rather than picking a grey.
+// The pixel size of the status image (the SVGs are authored on a 16px grid).
+const STATUS_ICON_SIZE = 16;
+
+// status → bundled symbolic icon (see ImageIcons). `idle`/`disconnected` share the
+// filled dot — colour/opacity (below) distinguishes them; `waiting` (needs permission)
+// shows the warning shield; `working` the loading ellipsis; `error` the warning sign.
+const STATUS_ICON: Record<AgentStatus, keyof typeof ImagePaintables> = {
+  idle: 'DOT',
+  waiting: 'WARNING_SHIELD',
+  working: 'LOADING',
+  disconnected: 'DOT',
+  error: 'WARNING',
+};
+
+// Status → indicator color for the *colored* states (waiting → warning/amber, idle →
+// success/green, error → error/red), used by the *markup* path only — markup can't
+// read CSS variables, so it interpolates the literal. The CSS path uses the matching
+// var(--t-ui-status-*) directly. The muted states — working (ellipsis) and
+// disconnected (not running) — carry no color; they dim the inherited foreground
+// (Adwaita's muted idiom: `--dim-opacity` in CSS, `alpha="55%"` in markup).
 const STATUS_COLOR: Partial<Record<AgentStatus, string>> = {
   waiting: theme.ui.status.warning,
   idle: theme.ui.status.success,
+  error: theme.ui.status.error,
 };
 
-const DOT_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle', 'zym-agent-exited', 'zym-agent-disconnected'];
+// Symbolic icons recolor to the CSS `color`, so each status drives the tint: the
+// colored states set an explicit foreground (waiting → amber, idle → green, error →
+// red); the muted states (working, disconnected) leave `color` inherited and instead
+// dim via opacity (Adwaita's muted idiom — see the markup path's `alpha="55%"`).
+const STATUS_CLASSES = ['zym-agent-working', 'zym-agent-waiting', 'zym-agent-idle', 'zym-agent-disconnected', 'zym-agent-error'];
 addStyles(`
   .zym-agent-working { color: var(--t-ui-text-muted); }
   .zym-agent-waiting { color: var(--t-ui-status-warning); }
   .zym-agent-idle    { color: var(--t-ui-status-success); }
-  .zym-agent-exited  { opacity: var(--dim-opacity); }
+  .zym-agent-error   { color: var(--t-ui-status-error); }
   .zym-agent-disconnected { opacity: var(--dim-opacity); }
 `);
 
-// The working ellipsis is rendered in the icon font; the plain dot uses the default
-// font. Built lazily and shared across every icon.
-let iconAttrs: InstanceType<typeof Pango.AttrList> | null = null;
-function iconFontAttrs(): InstanceType<typeof Pango.AttrList> {
-  if (!iconAttrs) {
-    iconAttrs = Pango.AttrList.new();
-    iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
-  }
-  return iconAttrs;
-}
-
-/** Set `label` to reflect `status`: the colored dot, or the ellipsis glyph while working. */
-export function applyAgentStatus(label: InstanceType<typeof Gtk.Label>, status: AgentStatus): void {
-  for (const cls of DOT_CLASSES) label.removeCssClass(cls);
-  label.addCssClass(`zym-agent-${status}`); // idle | working | waiting | exited
-  if (status === 'working') {
-    label.setText(WORKING_GLYPH);
-    label.setAttributes(iconFontAttrs());
-  } else {
-    label.setText(status === 'disconnected' ? DISCONNECTED_DOT : STATUS_DOT);
-    label.setAttributes(null);
-  }
+/** Set `image` to reflect `status`: swap its symbolic icon (`STATUS_ICON`) and the
+ *  colour class, in place — the widget stays the same so callers keep their slot. */
+export function applyAgentStatus(image: InstanceType<typeof Gtk.Image>, status: AgentStatus): void {
+  for (const cls of STATUS_CLASSES) image.removeCssClass(cls);
+  image.addCssClass(`zym-agent-${status}`); // idle | working | waiting | disconnected | error
+  image.setFromPaintable(ImagePaintables[STATUS_ICON[status]](STATUS_ICON_SIZE));
 }
 
 /**
- * A live status indicator for `agent`: a Gtk.Label that re-renders as the agent's
- * status changes. Call `dispose` to unsubscribe (e.g. when a row is rebuilt).
+ * A live status indicator for `agent`: a Gtk.Image whose icon re-renders as the
+ * agent's status changes. Call `dispose` to unsubscribe (e.g. when a row is rebuilt).
  */
 export function createAgentStatusIcon(agent: Agent): {
-  widget: InstanceType<typeof Gtk.Label>;
+  widget: InstanceType<typeof Gtk.Image>;
   dispose: () => void;
 } {
-  const label = new Gtk.Label({ label: STATUS_DOT });
-  const update = () => applyAgentStatus(label, agent.status);
+  const image = new Gtk.Image();
+  image.setPixelSize(STATUS_ICON_SIZE);
+  const update = () => applyAgentStatus(image, agent.status);
   update();
   const unsubStatus = agent.onDidChangeStatus(update);
-  return { widget: label, dispose: unsubStatus };
+  return { widget: image, dispose: unsubStatus };
 }
 
 /**
@@ -97,7 +107,7 @@ export function agentStatusMarkup(status: AgentStatus): string {
   if (status === 'working') {
     return `<span ${fg} font_family="${ICON_FONT_FAMILY}">${WORKING_GLYPH}</span>`;
   }
-  return `<span ${fg}>${status === 'disconnected' ? DISCONNECTED_DOT : STATUS_DOT}</span>`;
+  return `<span ${fg}>${STATUS_DOT}</span>`;
 }
 
 /**

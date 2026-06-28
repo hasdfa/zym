@@ -230,9 +230,11 @@ export class AgentTerminal extends Terminal implements Agent {
     this.emitTitleChange();
   }
 
-  /** Whether the agent process has exited (the widget lingers afterward). */
+  /** Whether the agent process has exited (the widget lingers afterward). The
+   *  process-ended state is the single `disconnected` status (the TUI never enters
+   *  the transient resume-disconnect, so here it only ever means "exited"). */
   get exited(): boolean {
-    return this._status === 'exited';
+    return this._status === 'disconnected';
   }
 
   /**
@@ -366,7 +368,7 @@ export class AgentTerminal extends Terminal implements Agent {
   }
 
   private setStatus(status: AgentStatus): void {
-    if (this._status === 'exited') return; // exit is terminal; ignore later writes
+    if (this._status === 'disconnected') return; // exit is terminal; ignore later writes
     if (status === this._status) return;
     const wasAttention = this.needsAttention;
     this._status = status;
@@ -385,8 +387,8 @@ export class AgentTerminal extends Terminal implements Agent {
   }
 
   private onChildExited(): void {
-    if (this._status === 'exited') return;
-    this.setStatus('exited');
+    if (this._status === 'disconnected') return;
+    this.setStatus('disconnected');
     // Print a notice into the (now child-less) terminal so the pane shows why it
     // went quiet, rather than closing or freezing on the last frame. The agent and
     // its workbench linger — the user restarts (`r`) or closes (`X`) it from the

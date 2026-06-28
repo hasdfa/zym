@@ -23,15 +23,15 @@ import Pango from 'gi:Pango-1.0';
 import Gtk from 'gi:Gtk-4.0';
 import Adw from 'gi:Adw-1';
 import { zym } from '../zym.ts';
-import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
 import { CompositeDisposable } from '../util/eventKit.ts';
+import { ImageIcons } from '../icons.ts';
 import { createAgentStatusIcon } from './agentStatusIcon.ts';
 import { Icons, iconLabel } from './icons.ts';
-import { NERDFONT } from './nerdfont.ts';
 import type { Agent } from '../agents/types.ts';
 
-const USER_GLYPH = NERDFONT.SOCIAL.USER; // the default/user entry
+// The user row's leading icon size — matches the agent status icon so the two rows line up.
+const USER_ICON_SIZE = 16;
 // Project name shown in the sidebar header: the last path component of the cwd.
 export const PROJECT_NAME = Path.basename(process.cwd());
 // Add/remove animation duration: each row rides in/out inside a Gtk.Revealer that
@@ -51,6 +51,10 @@ addStyles(/* css */`
   
   .Workbenchrow--label {
     font-weight: bold;
+  }
+  /* The user row's icon is dimmed to match the exited agent icon (muted foreground). */
+  .Workbenchrow--user-icon {
+    opacity: var(--dim-opacity);
   }
 `);
 
@@ -97,8 +101,6 @@ export class WorkbenchList {
   private readonly scrolled: InstanceType<typeof Gtk.ScrolledWindow>;
   private readonly options: WorkbenchListOptions;
   private readonly userName: string;
-  // Renders nerd-font glyphs (header robot, user, working ellipsis) in the icon font.
-  private readonly iconAttrs: InstanceType<typeof Pango.AttrList>;
   // The built rows, in list-box order (user first, then agents in launch order).
   // Includes rows mid-removal (`removing`) until their collapse transition finishes.
   private handles: RowHandle[] = [];
@@ -123,9 +125,6 @@ export class WorkbenchList {
   constructor(options: WorkbenchListOptions = {}) {
     this.options = options;
     this.userName = options.userName ?? Os.userInfo().username;
-
-    this.iconAttrs = Pango.AttrList.new();
-    this.iconAttrs.insert(Pango.attrFontDescNew(Pango.FontDescription.fromString(ICON_FONT_FAMILY)));
 
     // An Adw.ToolbarView holds the project-title header bar as a top bar over the
     // scrollable workbench list, so the bar matches the window header beside it and
@@ -340,10 +339,11 @@ export class WorkbenchList {
     return box;
   }
 
-  // The default row's content: the user, rendered like an agent — a person glyph + name.
+  // The default row's content: the user, rendered like an agent — a symbolic person
+  // icon (dimmed to match the exited agent icon) + name.
   private buildUserContent(): InstanceType<typeof Gtk.Box> {
-    const icon = new Gtk.Label({ label: USER_GLYPH });
-    icon.setAttributes(this.iconAttrs);
+    const icon = ImageIcons.USER(USER_ICON_SIZE);
+    icon.addCssClass('Workbenchrow--user-icon');
     const label = new Gtk.Label({ label: this.userName, xalign: 0, hexpand: true, ellipsize: Pango.EllipsizeMode.END });
     label.addCssClass('Workbenchrow--label')
     return this.rowContent(icon, label);
@@ -355,8 +355,9 @@ export class WorkbenchList {
     agent: Agent,
     unsubs: Array<() => void>,
   ): InstanceType<typeof Gtk.Box> {
-    // Status indicator (shared with the agent picker): a colored dot, or the
-    // ellipsis glyph while working. Shown in both modes; kept in sync.
+    // Status indicator (shared with the conversation footer): a bundled symbolic
+    // icon — dot (idle/waiting), loading (working), circle outline (disconnected) —
+    // swapped in place as the status changes. Shown in both modes; kept in sync.
     const status = createAgentStatusIcon(agent);
     unsubs.push(status.dispose);
     const dot = status.widget;
@@ -364,6 +365,7 @@ export class WorkbenchList {
     if (this.collapsed) return this.rowContent(dot); // icon only
 
     const label = new Gtk.Label({ xalign: 0, hexpand: true, ellipsize: Pango.EllipsizeMode.END });
+    label.addCssClass('Workbenchrow--label'); // same title font as the user row
     label.setText(agent.title);
     unsubs.push(agent.onTitleChange(() => label.setText(agent.title)));
 
