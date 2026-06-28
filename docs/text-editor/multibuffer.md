@@ -157,15 +157,16 @@ Single-file editing plus both multibuffer surfaces run on the
 - **Cross-source undo/redo** — `Screen` is the `UndoTarget`;
   re-entrant user actions; a multi-file edit is one `ctrl-z`.
 - **Multibuffer interaction** — vim works (real editor); expand-context
-  (diff); copy is clean (headers AND gaps are widget bands in both
-  surfaces, never buffer rows, so a yank across excerpts carries only
-  real source lines, no copy-time filtering); per-excerpt collapse
-  (`SearchResultsView`, `z a` toggle / `z M` all / `z R` none) re-derives
-  the items so a collapsed file shows only its first source row (`▸`
-  chevron). All three band consumers (diff, search, markdown image
-  preview) declare their header/gap/image bands as SOURCE-anchored block
-  decorations via `editor.blockDecorations()` — see
-  `docs/text-editor/block-decorations.md`.
+  (diff); copy is clean (search headers + all gaps are widget bands, never
+  buffer rows; the diff's headers ride an EMPTY navigable header row, so a
+  yank across excerpts carries only real source lines + blank header lines,
+  no copy-time filtering); per-file collapse — `SearchResultsView` (`z a`
+  toggle / `z M` all / `z R` none) shows a collapsed file's first source
+  row; `DiffView` (`z a` / `z C` / `z O`) folds it to just its navigable
+  header row. Gaps + markdown images are SOURCE-anchored block decorations
+  via `editor.blockDecorations()`; the diff's per-file headers are `sticky`
+  block decorations (above + pinned) reconciled by `StickyHeaders` — see
+  `docs/text-editor/block-decorations.md` and `docs/text-editor/diff.md`.
 
 ## Remaining / planned
 
@@ -263,8 +264,10 @@ Single-file editing plus both multibuffer surfaces run on the
   mark across every edit/undo/splice; reconcile matches by `id`, rebuilds
   a widget only when its `key` changed, and the editor re-projects only on
   a re-materialize. Full design + the mark-survival proof:
-  `docs/text-editor/block-decorations.md`. Headers AND gaps are widget
-  bands (never buffer rows).
+  `docs/text-editor/block-decorations.md`. Search headers AND all gaps are
+  widget bands (never buffer rows); the **diff's** per-file headers instead
+  are `sticky` block decorations (`StickyHeaders`) floating above an empty
+  navigable header row — see `docs/text-editor/diff.md`.
 - **Per-row gutter alignment.** A row that carries a band ABOVE it (a
   filename header, or the search `⋯` gap — anchored above the NEXT
   region's first row) bottom-aligns its gutter number (`yalign=1`) so it
@@ -297,6 +300,11 @@ Single-file editing plus both multibuffer surfaces run on the
 - Block decorations: `src/ui/TextEditor/BlockDecorations.ts` (generic
   primitive), `BlockDecorationSet.ts` (declarative source-anchored layer)
   — full design in `block-decorations.md`.
+- Sticky headers: `src/ui/TextEditor/StickyHeaders.ts` — the reusable,
+  surface-agnostic abstraction over `sticky` `BlockDecorations` (owns pinning +
+  caret-follow focus + the no-cursor decoration); any multibuffer drives it via
+  `editor.stickyHeaders.setHeaders` (the diff today, project-search next). See
+  `diff.md`.
 - Model (`src/ui/multibuffer/`): `MultiBufferModel.ts`,
   `MultiBufferDocument.ts`, `diffMultiBuffer.ts`, `diffSegments.ts`,
   `projectSearch.ts`, `ExcerptSyntaxProjection.ts`.

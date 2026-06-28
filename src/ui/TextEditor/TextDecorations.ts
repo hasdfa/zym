@@ -29,6 +29,7 @@ type SourceBuffer = InstanceType<typeof GtkSource.Buffer>;
 import { Range, type RangeLike } from '../../text/Range.ts';
 import { theme } from '../../theme/theme.ts';
 import type { EditorModel } from './EditorModel.ts';
+import type { TextIter } from './iter.ts';
 import { UnderlineOverlay, type Underline } from './UnderlineOverlay.ts';
 
 export type { Underline };
@@ -91,11 +92,47 @@ export class TextDecorations {
   // Drawn diagnostic squiggles live here too — an internal Cairo overlay, so producers
   // push underlines through this one surface rather than holding the overlay directly.
   private readonly underlines: UnderlineOverlay;
+  // A BEHAVIORAL decoration (paints nothing): the ranges where the cursor is HIDDEN. The cursor
+  // model consults `isCursorHiddenAt`; one shared marker tag, replace-the-set like `setUnderlines`.
+  // Used by the diff for its read-only header rows (the caret rests on them but shows no box).
+  private noCursorTag: InstanceType<typeof Gtk.TextTag> | null = null;
+  // A tag can't cover the buffer's LAST line when it has no trailing newline (an empty last line IS
+  // the buffer end) — so remember when the suppressed set reaches it, for the end-of-buffer fallback.
+  private endLineSuppressed = false;
 
   constructor(editor: EditorModel) {
     this.editor = editor;
     this.buffer = editor.buffer;
     this.underlines = new UnderlineOverlay(editor.view, editor);
+  }
+
+  /** Replace the set of ranges where the cursor is HIDDEN — a behavioral decoration that paints
+   *  nothing. A caret whose position carries it renders no block / overlay / native caret (the
+   *  cursor model checks `isCursorHiddenAt`). The marker tag tracks edits between updates, like the
+   *  layer tags. */
+  setNoCursorRanges(ranges: RangeLike[]): void {
+    if (!this.noCursorTag) {
+      this.noCursorTag = new Gtk.TextTag({ name: 'deco:no-cursor' }); // no visual props — a pure marker
+      this.buffer.getTagTable().add(this.noCursorTag);
+    }
+    const [start, end] = this.buffer.getBounds();
+    this.buffer.removeTag(this.noCursorTag, start, end);
+    const lastLine = Math.max(0, this.buffer.getLineCount() - 1);
+    this.endLineSuppressed = false;
+    for (const range of ranges) {
+      const r = Range.fromObject(range);
+      this.buffer.applyTag(this.noCursorTag, this.editor.iterAtPoint(r.start), this.editor.iterAtPoint(r.end));
+      // The range reaches past the last line's start (e.g. a header that IS the last, newline-less
+      // line) — the tag couldn't land there, so flag the end for `isCursorHiddenAt`'s fallback.
+      if (r.end.row > lastLine || (r.end.row === lastLine && r.end.column > 0)) this.endLineSuppressed = true;
+    }
+  }
+
+  /** Whether the cursor at `iter` is hidden (its position carries the no-cursor decoration). The
+   *  end-of-buffer fallback covers a suppressed last line that has no newline for the tag to span. */
+  isCursorHiddenAt(iter: TextIter): boolean {
+    if (this.noCursorTag != null && iter.hasTag(this.noCursorTag)) return true;
+    return this.endLineSuppressed && iter.isEnd();
   }
 
   /** The squiggle overlay's widget — the editor adds it to its overlay layer once. */

@@ -28,7 +28,7 @@ import Gio from 'gi:Gio-2.0';
 import Pango from 'gi:Pango-1.0';
 import PangoCairo from 'gi:PangoCairo-1.0';
 import { zym } from './zym.ts';
-import { styles } from './styles.ts';
+import { styles, type StyleSheet } from './styles.ts';
 
 /** Pango family name of the bundled icon font (see assets/fonts). */
 export const ICON_FONT_FAMILY = 'Symbols Nerd Font Mono';
@@ -128,7 +128,8 @@ const roundHalf = (pt: number): number => Math.round(pt * 2) / 2;
 class FontStore {
   private readonly settings = new Gio.Settings({ schemaId: 'org.gnome.desktop.interface' });
   private readonly listeners = new Set<() => void>();
-  private ready = false; // the display (and so `styles.set`) isn't available until init
+  private ready = false; // the display isn't available until init
+  private sheet: StyleSheet | null = null; // the reactive font stylesheet (see registerSheet)
 
   private _monoCss!: FontCss;
   private _uiCss!: FontCss;
@@ -192,9 +193,20 @@ class FontStore {
     this._uiFamily = familyOf(ui, 'sans-serif');
   }
 
+  /** Install the reactive font stylesheet. Called from this module's top level so
+   *  node-gtk watches the file for hot-reload: a re-import re-runs `styles.add`
+   *  with the edited CSS template, and node-gtk swaps the fresh provider in for
+   *  the previous one. The guarded singleton (bottom of file) keeps `this` the
+   *  live store across re-imports, so the render reads real (post-init) fonts. */
+  registerSheet(): void {
+    // A render function (re-run on hot-reload and via the handle's refresh()),
+    // not a fixed string — the font sheet is derived from live state.
+    this.sheet = styles.add(() => this.css());
+  }
+
   private apply(): void {
-    if (!this.ready) return; // changes before init() are flushed by init()
-    styles.set(this.css(), { key: 'app-fonts' });
+    if (!this.ready) return; // changes before init() are applied once registerSheet + init have run
+    this.sheet?.refresh();   // re-render the sheet with the current fonts
   }
 
   /** The reactive font sheet: the `--t-font-*` variables + the UI-font baseline,
@@ -264,5 +276,13 @@ class FontStore {
   }
 }
 
-/** The application's single font store. */
-export const fonts = new FontStore();
+// The application's single font store. Guarded on globalThis so a dev hot-reload
+// of this module (node-gtk re-imports it on edit) re-applies the CSS template
+// without spawning a second store — it owns GSettings/config listeners. See
+// docs/styling.md → Fonts.
+const globalForFonts = globalThis as typeof globalThis & { __zymFonts?: FontStore };
+export const fonts = (globalForFonts.__zymFonts ??= new FontStore());
+
+// Self-registering, hot-reloadable font stylesheet. Runs at module top so node-gtk
+// watches this file; the guard above means a re-import drives the same live store.
+fonts.registerSheet();

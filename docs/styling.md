@@ -10,9 +10,11 @@ Design system and CSS concerns.
 Two mechanisms, picked per widget:
 
 - **GTK CSS** — the default for component look. Install via `addStyles(css)`
-  (static), `styles.set(css, { key })` (theme-derived, replaceable), or
-  `styles.addRemovable(css)` (plugins; returns a `Disposable`) — all from
-  `src/styles.ts`. Selectors follow the convention below.
+  (static, hot-reloaded), `styles.add(() => css)` (dynamic/theme-derived — a
+  render function; re-apply via the returned handle's `refresh()`), or
+  `styles.add(css, { watch: false })` (programmatic/plugin sheets; the handle's
+  `remove()` drops it). All come from `src/styles.ts`, a thin re-export of
+  `node-gtk/styles`. Selectors follow the convention below.
 - **Pango markup** — inline `<span ...>` runs in one `Gtk.Label`
   (`useMarkup: true`), for a single label mixing styles across its text
   (`GitBranchButton`). CSS can't style a label sub-run; markup can.
@@ -181,9 +183,10 @@ Which form to use:
 - **Pango markup** (`<span foreground="…">`) → interpolate `theme.ui.*`
   directly; markup can't read CSS variables. Same for **GtkTextTag /
   draw-func colors** — those are JS values, not CSS.
-- **The dynamic theme-chrome / notification keyed sheets** (`styles.set` in
-  `AppWindow.ts`) interpolate concrete `theme.ui.*`; they're rebuilt per
-  theme.
+- **The dynamic theme-chrome / notification sheets** (`styles.add(() => …)`
+  render functions in `chromeStyles.ts`, the font sheet in `fonts.ts`)
+  interpolate concrete `theme.ui.*` / font state; they re-render via the
+  handle's `refresh()` on the relevant change.
 
 **Muted text and borders have native idioms — prefer them over a theme
 color** so they track the inherited foreground on any scheme (and map onto
@@ -240,4 +243,12 @@ GTK `.linked` class on their container `Gtk.Box` (spacing 0): `GithubButtons`
 ## Hot-reload
 
 Editing a file's `addStyles(...)` CSS updates the running app live — no restart.
-**On by default.** Opt out with `ZYM_STYLE_HOT_RELOAD=0`.
+Hot-reload is owned by `node-gtk/styles` (zym re-exports it from `src/styles.ts`);
+see that package's `doc/styles.md`. It runs **only with `NODE_ENV=development`**
+(the `start` script sets it); opt out with `NODE_GTK_STYLE_HOT_RELOAD=0`.
+
+A module with `addStyles` / `styles.add` at its top level is re-imported on edit,
+so keep it side-effect-free. Dynamic sheets (`styles.add(() => css)`) re-render on
+edit too, and on demand via the handle's `refresh()`. A stateful owner whose
+template you still want to hot-reload (e.g. `fonts.ts`) guards its singleton on
+`globalThis` so the re-run drives the live store rather than a duplicate.

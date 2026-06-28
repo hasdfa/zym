@@ -34,6 +34,7 @@ import { BlockDecorations } from './BlockDecorations.ts';
 import { BlockDecorationSet } from './BlockDecorationSet.ts';
 import { EditorPopover } from './EditorPopover.ts';
 import { Peek, type PeekOptions } from './Peek.ts';
+import { StickyHeaders } from './StickyHeaders.ts';
 import { GitGutter } from './GitGutter.ts';
 import { IndentGuides } from './IndentGuides.ts';
 import { SearchController } from './SearchController.ts';
@@ -50,7 +51,10 @@ import { replaceOverwrite, replaceBackspace } from './replaceMode.ts';
 import type { PositionEncoding } from '../../lsp/position.ts';
 import type { TextEdit, SignatureHelp, ParameterInformation } from 'vscode-languageserver-protocol';
 import { escapeMarkup } from '../Picker.ts';
+import { DiffCommentBox } from '../DiffCommentBox.ts';
+import { formatAgentComment } from '../agentComment.ts';
 import type { GitRepo } from '../../git.ts';
+import * as Path from 'node:path';
 import type { TabState } from '../../SessionManager.ts';
 import Gdk from 'gi:Gdk-4.0';
 import Gtk from 'gi:Gtk-4.0';
@@ -239,6 +243,11 @@ export interface TextEditorOptions {
   source?: TextEditorSource;
   /** Called on teardown for a registry-owned `document` (drop this view's ref). */
   onReleaseDocument?: () => void;
+  /** Enables "comment to agent" on this editor (a file editor): `enter` in normal mode / on a
+   *  visual selection opens an inline box whose submit is formatted (`path:line` + fenced code +
+   *  `On <locator>:` + text) and handed to this sink — the same seam diffs use (`reviewToAgent`).
+   *  Omitted on inputs / peeks / multibuffers, so the feature is file-editor-only. */
+  onComment?: (message: string) => void;
   /** Read-only, compact view onto the given `document` — the live see-definition peek
    *  (a second view of an open file). Requires `document`. */
   peek?: boolean;
@@ -439,6 +448,7 @@ export class TextEditor implements DocumentHost {
   private hoverPopover!: EditorPopover;
   private contentOverlay!: InstanceType<typeof Gtk.Overlay>; // hosts the floating cards
   private inlinePeek!: Peek; // focusable inline peek (see-definition); built in buildEditorArea
+  private stickyHeaderController!: StickyHeaders; // reusable per-excerpt sticky headers (diff / search)
   // The signature-help card: shown live while typing a call's arguments. Same
   // MarkupCard/EditorPopover as hover; `signatureSeq` drops stale async responses.
   private signatureCard!: MarkupCard;
@@ -534,6 +544,10 @@ export class TextEditor implements DocumentHost {
   private readonly growToContent: boolean;
   private readonly growMaxHeight: number | undefined;
   private readonly growMaxLines: number | undefined;
+  // Comment-to-agent sink (file editors only); when set, `installComment` wires the `editor:comment`
+  // command. `commentBox` is the one open inline box (mirrors DiffView's single-box invariant).
+  private readonly onComment: ((message: string) => void) | undefined;
+  private commentBox: DiffCommentBox | null = null;
 
   constructor(options: TextEditorOptions = {}) {
     this.bufferMode = options.buffer ?? null;
@@ -545,6 +559,7 @@ export class TextEditor implements DocumentHost {
     this.growToContent = options.grow ?? false;
     this.growMaxHeight = options.maxHeight;
     this.growMaxLines = options.maxLines;
+    this.onComment = options.onComment;
     this.workbenchCwd = options.cwd ?? (() => process.cwd());
 
     // The backing this editor is a view onto: a multi-source `MultiBufferDocument` (the
@@ -624,6 +639,9 @@ export class TextEditor implements DocumentHost {
     this.textDecorations = new TextDecorations(this.editorModel);
     // Inline block surface (virtual content between lines: the diff fold placeholder).
     this.blockDecorationController = new BlockDecorations(this.view);
+    // Reusable per-excerpt sticky headers (diff / project-search) — over the block surface, plus the
+    // caret-follow focus + no-cursor decoration it owns (hence the model + decorations).
+    this.stickyHeaderController = new StickyHeaders(this.blockDecorationController, this.editorModel, this.textDecorations);
     // Search/replace engine; its `SearchBar` widget is built in buildEditorArea.
     this.search = new SearchController(this.editorModel, this.textDecorations);
 
@@ -645,6 +663,7 @@ export class TextEditor implements DocumentHost {
     this.installLsp();
     this.installGitGutter();
     this.installSearch();
+    if (this.onComment) this.installComment();
     if (this.bufferMode) this.installBufferMode(this.bufferMode);
     // A multibuffer paints its stitched projection directly (there's no single-language
     // first-parse step to trigger it). Its excerpt sources parse lazily as they near the
@@ -926,10 +945,13 @@ export class TextEditor implements DocumentHost {
     // The inline overlays/decorations install their own view/buffer/adjustment signal handlers
     // (outside `subs`); each un-disconnected one pins this editor, so tear them down explicitly.
     this.textDecorations.dispose(); // drops the diagnostic-squiggle overlay's handlers + marks
+    this.stickyHeaderController?.dispose(); // drop its header handles + sever each header's click controller (rides the block surface)
     this.blockDecorationController.dispose(); // drops map/changed/vadjustment handlers + tick callbacks
     this.indentGuides?.dispose(); // drops adjustment/view/buffer handlers + the config observer
     this.indentGuides = null;
     this.editorModel.dispose(); // sever the buffer cursor/insert/delete/changed handlers (each pins this editor)
+    this.commentBox?.dispose(); // close any open comment box (idempotent; also dropped via the peek's onClose)
+    this.commentBox = null;
     this.inlinePeek?.dispose(); // sever the peek's overlay/adjustment handlers + drop its gap tag
     this.document.removeHost(this);
     this.document.removeView(this.screen);
@@ -1218,6 +1240,13 @@ export class TextEditor implements DocumentHost {
     return set;
   }
 
+  /** Reusable per-excerpt sticky headers (the multi-file diff, project-search next) — a multibuffer
+   *  surface drives it via `setHeaders()`; it owns the pinning + caret-follow focus + no-cursor
+   *  decoration. Inert (no headers) for every other editor. */
+  get stickyHeaders(): StickyHeaders {
+    return this.stickyHeaderController;
+  }
+
   /** Open a focusable inline peek (e.g. see-definition) below `line` — defaults to
    *  the cursor's line. Replaces any current peek. Returns nothing; `closePeek()`
    *  dismisses it (and clicking a close button in `widget` should call it). */
@@ -1229,6 +1258,111 @@ export class TextEditor implements DocumentHost {
   /** Dismiss the inline peek, if open. */
   closePeek(): void {
     this.inlinePeek.close();
+  }
+
+  // --- Comment to agent ------------------------------------------------------
+  // The same inline box + message format the diff uses (DiffCommentBox / formatAgentComment), but on
+  // an ordinary file editor: `enter` in normal mode (or on a visual selection) opens the box and the
+  // submit is delivered to `onComment`. Single comment only — no review-mode accumulation (that
+  // stays diff-only). See docs/text-editor/comment-to-agent.md.
+
+  /** Register the `editor:comment` command (the `enter`/visual action). Wired only when `onComment`
+   *  was provided — i.e. on file editors, not inputs/peeks/multibuffers. */
+  private installComment(): void {
+    this.subs.add(
+      zym.commands.add(this.view, {
+        'editor:comment': {
+          didDispatch: () => this.startComment(),
+          description: 'Comment on this line / selection to the agent',
+        },
+      }),
+    );
+  }
+
+  /** Open the inline comment box on the cursor row or the active selection; on submit, format the
+   *  `path:line` + code + text and hand it to the agent (`onComment`). No-op without a file path. */
+  startComment(): void {
+    const onComment = this.onComment;
+    if (!onComment) return;
+    if (this.commentBox) this.closeComment(); // re-target onto the current row
+    const hadSelection = !this.editorModel.getSelectedBufferRange().isEmpty();
+    const target = this.buildEditorCommentTarget();
+    if (!target) return void zym.notifications.addTrace('No file line to comment on');
+    const { anchorRow, ...parts } = target;
+
+    const box = new DiffCommentBox({
+      reviewable: false, // single comment only on a file editor
+      onSubmit: (text) => {
+        const comment = text.trim();
+        this.closeComment();
+        if (!comment) return;
+        // Sending consumes a visual selection — drop it (back to normal mode, like Esc) so the
+        // commented range isn't left highlighted. A bare-cursor comment leaves the cursor as-is.
+        if (hadSelection) this.vimState.resetNormalMode();
+        onComment(formatAgentComment({ ...parts, comment }));
+      },
+      onCancel: () => this.closeComment(),
+    });
+    this.commentBox = box;
+    this.showPeek({
+      line: anchorRow,
+      widget: box.root,
+      height: box.height,
+      alignLeft: true,
+      // Defer box teardown off its own key dispatch (disposing the nested editor synchronously is
+      // unsafe — see Peek); when the view itself is tearing down, dispose now (no tick on a dead view).
+      onClose: () => {
+        if (this.commentBox === box) this.commentBox = null;
+        if (this.disposed) return void box.dispose();
+        this.view.addTickCallback(() => (box.dispose(), false));
+      },
+    });
+    box.focus();
+  }
+
+  private closeComment(): void {
+    if (!this.commentBox) return;
+    this.closePeek(); // the peek's onClose disposes the box
+    this.focus();
+  }
+
+  /** Build the comment target from the cursor / selection: the file-relative `path:line`, the
+   *  selected lines as plain code, a `L…`/`cols…` locator, and the view row to anchor the box below.
+   *  Line numbers are DOCUMENT lines (fold-correct). Returns null when the editor has no file. */
+  private buildEditorCommentTarget(): { rel: string; line: number; fence: string; body: string; locator: string; anchorRow: number } | null {
+    const path = this._currentFile;
+    if (!path) return null;
+    const range = this.editorModel.getSelectedBufferRange();
+    const empty = range.isEmpty();
+    const r0 = range.start.row;
+    // An exclusive end at column 0 means the last row isn't actually selected (line-wise selection).
+    const r1 = !empty && range.end.row > r0 && range.end.column === 0 ? range.end.row - 1 : range.end.row;
+
+    // View rows → document lines (fold-correct), clamped to the file.
+    const docCount = this.document.documentLineCount();
+    const toDoc = (viewRow: number): number =>
+      Math.max(0, Math.min(docCount - 1, this.screen.documentPointFromScreen(new Point(viewRow, 0)).row));
+    const docStart = toDoc(r0);
+    const docEnd = Math.max(docStart, toDoc(r1));
+
+    const body = Array.from({ length: docEnd - docStart + 1 }, (_, i) => this.document.documentLineText(docStart + i)).join('\n');
+    // Locator: line span, plus columns for an explicit sub-line selection (where it adds information).
+    const span = docStart === docEnd ? `L${docStart + 1}` : `L${docStart + 1}-${docEnd + 1}`;
+    const cols: string[] = [];
+    if (!empty && r0 === r1) {
+      const sc = range.start.column, ec = range.end.column; // selection covers [sc, ec)
+      const len = this.document.documentLineText(docStart).length;
+      if (sc === ec) cols.push(`col ${sc + 1}`);
+      else if (!(sc === 0 && ec >= len)) cols.push(`cols ${sc + 1}-${ec}`);
+    }
+    return {
+      rel: Path.relative(this.workbenchCwd(), path),
+      line: docStart + 1, // 1-based file line
+      fence: langIdForPath(path) ?? '',
+      body,
+      locator: [span, ...cols].join(', '),
+      anchorRow: r1,
+    };
   }
 
   /** Reveal `row` near the top of this (peek) view. `map` fires before the first
@@ -1626,6 +1760,11 @@ export class TextEditor implements DocumentHost {
     // — including on cursor-position changes, so a mouse click repositions it.
     this.editorModel.onCursorOverlay = (kind, iter) => this.renderCursorOverlay(kind, iter);
     this.editorModel.onExtraCursors = (carets) => this.renderExtraCarets(carets);
+    // Suppress the caret where a `no-cursor` decoration is set (the diff's read-only header rows).
+    this.editorModel.shouldHideCursorAt = (iter) => this.textDecorations.isCursorHiddenAt(iter);
+    // Keep the caret below any sticky block pinned at the viewport top (the diff's pinned header), so
+    // scrolloff/motions don't park it underneath. 0 for a plain editor (no sticky bands).
+    this.editorModel.topInsetProvider = () => this.blockDecorationController.stickyTopInset();
 
     // The overlay caret is placed from view geometry, which is all-zero until the
     // first size-allocate — so the caret painted during load (cursor at 0,0 on an

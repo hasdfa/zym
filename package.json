@@ -13,7 +13,7 @@
     "zym": "src/index.ts"
   },
   "scripts": {
-    "start": "pnpm run generate-icons && node --import node-gtk/register src/index.ts",
+    "start": "pnpm run generate-icons && NODE_ENV=development node --import node-gtk/register src/index.ts",
     "postinstall": "pnpm run generate-types && pnpm run generate-icons",
     "generate-icons": "node scripts/generate-icons.ts",
     "poc": "node --import node-gtk/register src/poc/fold-highlight.ts",
