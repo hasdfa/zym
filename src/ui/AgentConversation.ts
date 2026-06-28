@@ -27,7 +27,7 @@ import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.
 import { MarkdownView } from './markdown/MarkdownView.ts';
 import { escapeMarkup, setMarkupSafe } from './proseMarkup.ts';
 import { iconSpan } from './icons.ts';
-import { formatCount, parseLocalCommand } from './conversation/format.ts';
+import { formatCount, formatElapsed, parseLocalCommand } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { Transcript } from './conversation/Transcript.ts';
 import { Message, type MessageKind } from './conversation/Message.ts';
@@ -76,6 +76,9 @@ addStyles(/* css */`
     padding: 6px 10px;
     margin: 0 12px;
   }
+  /* The queued message's Edit / Cancel controls: compact flat buttons under the text. */
+  .AgentConversation .conversation-pending-controls { margin-top: 4px; }
+  .AgentConversation .conversation-pending-action { padding: 0 6px; min-height: 0; }
 
   /* The input + its status strip, as a borderless rounded card with its own bg.
      No top margin — the card sits flush under the transcript (no gap above). */
@@ -233,6 +236,14 @@ export class AgentConversation implements Agent {
   private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // pending (queued) message above the prompt
   private readonly thinkingLabel: InstanceType<typeof Gtk.Label>; // "Thinking…" + live token count (footer)
   private readonly thinkingFooter: InstanceType<typeof Gtk.Box>; // footer slot: spinner + label, replaces the status icon while working
+  // The live "Thinking…" footer state: latest reasoning-token count + the turn's start
+  // time, recomposed each second into "Thinking… (1.2k tokens · 12s)" so a long turn
+  // reads as still-going rather than stuck. The ticking interval lives in its own bag
+  // (re-armed per turn, cleared when the turn ends); `thinkingTimerActive` guards it.
+  private thinkingTokens = 0;
+  private thinkingStartMs = 0;
+  private thinkingTimerActive = false;
+  private readonly thinkingTimerSubs = new CompositeDisposable();
   private readonly pendingBox: InstanceType<typeof Gtk.Box>; // a queued message shown above the prompt
   private readonly pendingLabel: InstanceType<typeof Gtk.Label>;
   private pendingText = ''; // a message submitted while busy, sent once the agent is idle
@@ -366,15 +377,32 @@ export class AgentConversation implements Agent {
     this.thinkingLabel.addCssClass('conversation-system');
     this.thinkingFooter.append(this.thinkingLabel);
 
+    this.subs.add(this.thinkingTimerSubs); // the per-turn "Thinking…" tick interval
+
     // Above the prompt, in a slide Revealer: a right-aligned "pending" message — a
     // turn the user queued while the agent was busy. Revealed while a message is pending.
     this.pendingBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, halign: Gtk.Align.END });
     this.pendingBox.addCssClass('conversation-pending');
     this.pendingLabel = new Gtk.Label({ xalign: 1, wrap: true });
-    const pendingHint = new Gtk.Label({ xalign: 1, label: 'Pending' });
-    pendingHint.addCssClass('conversation-system');
     this.pendingBox.append(this.pendingLabel);
-    this.pendingBox.append(pendingHint);
+    // The queued turn is sent automatically once the agent goes idle; until then the
+    // user can amend it (Edit → moves it back into the prompt) or drop it (Cancel).
+    const pendingControls = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, halign: Gtk.Align.END, spacing: 4 });
+    pendingControls.addCssClass('conversation-pending-controls');
+    const pendingHint = new Gtk.Label({ label: 'Pending' });
+    pendingHint.addCssClass('conversation-system');
+    const editPending = new Gtk.Button({ label: 'Edit' });
+    editPending.addCssClass('flat');
+    editPending.addCssClass('conversation-pending-action');
+    const cancelPending = new Gtk.Button({ label: 'Cancel' });
+    cancelPending.addCssClass('flat');
+    cancelPending.addCssClass('conversation-pending-action');
+    this.subs.connect(editPending, 'clicked', () => this.editPending());
+    this.subs.connect(cancelPending, 'clicked', () => this.cancelPending());
+    pendingControls.append(pendingHint);
+    pendingControls.append(editPending);
+    pendingControls.append(cancelPending);
+    this.pendingBox.append(pendingControls);
 
     this.thinkingReveal = new Gtk.Revealer();
     this.thinkingReveal.setTransitionType(Gtk.RevealerTransitionType.SLIDE_UP);
@@ -749,8 +777,29 @@ export class AgentConversation implements Agent {
     this.ensureConnected(); // a lazily-resumed agent spawns claude on its first turn
     if (this._status === 'idle') { this.session.prompt(text); return; }
     // The agent is busy — queue (accumulate) the message; it's sent on next idle.
-    this.pendingText = this.pendingText ? `${this.pendingText}\n\n${text}` : text;
+    this.setPendingText(this.pendingText ? `${this.pendingText}\n\n${text}` : text);
+  }
+
+  /** Set (or clear) the queued message and refresh the pending bubble. */
+  private setPendingText(text: string): void {
+    this.pendingText = text;
     this.refreshThinking();
+  }
+
+  /** Pull the queued message back into the prompt to amend it (prepended ahead of any
+   *  text already typed), clearing the queue — it's being edited, not waiting. */
+  private editPending(): void {
+    const text = this.pendingText;
+    if (!text) return;
+    const current = this.input.getText();
+    this.input.setText(current ? `${text}\n\n${current}` : text);
+    this.setPendingText('');
+    this.input.focusInsert();
+  }
+
+  /** Discard the queued message without sending it. */
+  private cancelPending(): void {
+    this.setPendingText('');
   }
 
   /** Run a zym-local slash command the headless CLI can't (today only `/rename`,
@@ -845,12 +894,14 @@ export class AgentConversation implements Agent {
         // holds the clean version and is preferred in namingContext().
         if (this.firstUserText === null && text !== this.launchPrompt) this.firstUserText = text;
         this.endTurn();
-        this.thinkingLabel.setText('Thinking…'); // reset the live token count for the new turn
+        // The token count + elapsed clock reset on the working transition (startThinkingTimer).
         this.addMarkdownBlock('user').setMarkdown(text);
       }),
-      // Live "Thinking… (N tokens)" while the model reasons before producing output.
+      // Live "Thinking… (N tokens · Ms)" while the model reasons before producing output;
+      // the elapsed time is folded in by refreshThinkingLabel.
       this.session.onThinkingTokens(({ tokens }) => {
-        this.thinkingLabel.setText(tokens > 0 ? `Thinking… (${formatCount(tokens)} tokens)` : 'Thinking…');
+        this.thinkingTokens = tokens;
+        this.refreshThinkingLabel();
       }),
       // Subagent / background-task live progress → the originating tool row.
       this.session.onTaskProgress((p) => this.toolRows.get(p.id)?.onProgress?.(p)),
@@ -893,7 +944,7 @@ export class AgentConversation implements Agent {
             this.transcript.appendGroupItem(SUBAGENT_GROUP.key, SUBAGENT_GROUP.icon, SUBAGENT_GROUP.head, this.subagentView.spawn(id, input));
             return;
           }
-          this.recordChangedFile(name, input); this.endTurn(); this.addToolRow(id, name, input); return;
+          this.recordChangedFile(name, input); this.endTurn(); this.addToolRow(id, name, input, false); return;
         }
         if (name === 'AskUserQuestion') return; // handled by the interactive question card
         if (name === 'Agent') { this.endTurn(); this.transcript.appendGroupItem(SUBAGENT_GROUP.key, SUBAGENT_GROUP.icon, SUBAGENT_GROUP.head, this.subagentView.spawn(id, input)); return; }
@@ -904,7 +955,7 @@ export class AgentConversation implements Agent {
         }
         this.recordChangedFile(name, input);
         this.endTurn(); // close the current message; post-tool text opens a fresh bubble
-        this.addToolRow(id, name, input);
+        this.addToolRow(id, name, input, true); // live: the row spins until its result lands
       }),
       this.session.onToolResult(({ id, isError, text }) => {
         if (this.handleTaskResult(id, text)) return; // TaskCreate result → record the new task id
@@ -936,6 +987,11 @@ export class AgentConversation implements Agent {
     this._status = status;
     this._acknowledged = this._viewed;
     this.refreshThinking();
+    // Turn ended: stop any tool row still spinning (interrupted / crashed before its
+    // result landed; a completed row already cleared its own spinner via onResult).
+    if (status === 'idle' || status === 'exited') {
+      for (const entry of this.toolRows.values()) entry.row?.setRunning(false);
+    }
     this.updateFooter();
     for (const handler of this.statusHandlers) handler();
     if (this.needsAttention !== wasAttention) this.emitAttention();
@@ -957,6 +1013,38 @@ export class AgentConversation implements Agent {
     this.thinkingFooter.setVisible(working);
     this.pendingLabel.setText(this.pendingText);
     this.thinkingReveal.setRevealChild(pending);
+    // Run the per-turn elapsed-time tick only while working (started/stopped here so a
+    // queued-message refresh mid-turn doesn't restart the clock — see startThinkingTimer).
+    if (working) this.startThinkingTimer();
+    else this.stopThinkingTimer();
+  }
+
+  // Begin (or keep) the per-turn "Thinking…" clock: reset the token count + start time
+  // and tick the footer label once a second. Idempotent within a turn — a no-op while
+  // already running, so it resets exactly once per working transition.
+  private startThinkingTimer(): void {
+    if (this.thinkingTimerActive) return;
+    this.thinkingTimerActive = true;
+    this.thinkingTokens = 0;
+    this.thinkingStartMs = Date.now();
+    this.refreshThinkingLabel();
+    this.thinkingTimerSubs.interval(() => this.refreshThinkingLabel(), 1000);
+  }
+
+  // Stop the clock when the turn ends (idle / waiting / exited); clears the interval.
+  private stopThinkingTimer(): void {
+    if (!this.thinkingTimerActive) return;
+    this.thinkingTimerActive = false;
+    this.thinkingTimerSubs.clear();
+  }
+
+  // Recompose the footer indicator from the latest token count + elapsed time:
+  // "Thinking…", "Thinking… (12s)", or "Thinking… (1.2k tokens · 1m 05s)".
+  private refreshThinkingLabel(): void {
+    const parts: string[] = [];
+    if (this.thinkingTokens > 0) parts.push(`${formatCount(this.thinkingTokens)} tokens`);
+    if (this.thinkingStartMs > 0) parts.push(formatElapsed(Date.now() - this.thinkingStartMs));
+    this.thinkingLabel.setText(parts.length ? `Thinking… (${parts.join(' · ')})` : 'Thinking…');
   }
 
   private recordChangedFile(toolName: string, input: unknown): void {
@@ -1100,8 +1188,8 @@ export class AgentConversation implements Agent {
   // file-tool group, or generic toggle row) so the main transcript and each subagent
   // page render tools identically. We only key the returned handle by tool_use_id so
   // the matching result / progress event can update it.
-  private addToolRow(id: string, name: string, input: unknown): void {
-    const entry = appendToolRow(this.transcript, name, input, { cwd: this.cwd, onOpenFile: this.onOpenFile, subs: this.subs });
+  private addToolRow(id: string, name: string, input: unknown, live: boolean): void {
+    const entry = appendToolRow(this.transcript, name, input, { cwd: this.cwd, onOpenFile: this.onOpenFile, subs: this.subs, live });
     if (id) this.toolRows.set(id, { row: entry.row, name, input, onResult: entry.onResult, onProgress: entry.onProgress });
   }
 

@@ -12,6 +12,10 @@ worktree spine — they differ only in how a turn is displayed:
   the conversation in **native GTK widgets** (no terminal, no Ink/Vte repaint
   cost). Deep dive: **[agents/claude-sdk.md](agents/claude-sdk.md)**.
 
+UX rework backlog for the native conversation view (discoverability + in-the-
+moment controls: send/stop, inline retry, copy, jump-to-latest, richer
+permission prompt): **[agents/conversation-ux.md](agents/conversation-ux.md)**.
+
 `src/agents/configs.ts` is the kind registry — `resolveAgentKind()` picks the
 kind from the config flag (default `claude-tui`); a single
 `AppWindow.openAgent()` launch path serves both, each agent getting its own

@@ -140,13 +140,17 @@ the full captured call+result) wires the result once. Tool rows carry nerdfont i
 the header (toggle button) is one ellipsized line, full text behind the toggle
 (`ToolRow.toolHeaderLabel`); the Bash command is plain monospace, cropped to one line
 until expanded. A non-zero Bash exit shows a trailing red dot, leaving the icon +
-command untouched (other tools swap to a red ✗ on a genuine failure). Richer turn
-surfaces:
+command untouched (other tools swap to a red ✗ on a genuine failure). A **live**
+tool row spins (an `Adw.Spinner` in the icon slot, `ToolRow.setRunning`) from
+tool-use until its result lands, so an in-flight Bash/Task reads differently from a
+finished one; replayed and subagent-page rows pass `live:false` and never spin.
+Richer turn surfaces:
 
-- Thinking spinner + token meter (the footer "Thinking…" indicator, always shown
-  while the model reasons). The inline dim *thinking blocks* in the transcript are
-  opt-in via the `agent.showThinking` config flag (off by default); the footer
-  indicator is unaffected.
+- Thinking spinner + token + elapsed meter (the footer "Thinking…" indicator, shown
+  while the model reasons; a 1s tick folds the turn's elapsed time in beside the
+  reasoning-token count — `Thinking… (1.2k tokens · 1m 05s)`). The inline dim
+  *thinking blocks* in the transcript are opt-in via the `agent.showThinking` config
+  flag (off by default); the footer indicator is unaffected.
 - **Subagents:** per-`Agent`-tool transcript captured off the main thread. A run
   of consecutive spawns **collapses into one inline entry** (a single subagent icon
   + an "Agent" head + each spawn stacked as a clickable item) — the same
@@ -156,7 +160,9 @@ surfaces:
   rows go through the shared `appendToolRow`.
 - **Shell monitors:** sticky panel + inspect page + cancel.
 - **AskUserQuestion:** an `Adw.ViewSwitcher` card (j/k/h/l + notes).
-- **Message queueing** while busy: right-aligned "Pending" bubble.
+- **Message queueing** while busy: right-aligned "Pending" bubble with **Edit**
+  (pull it back into the prompt to amend) and **Cancel** (discard) controls; sent
+  automatically on the next idle if left alone.
 - **Interrupt** on `ctrl-c`; **close** on `ctrl-d ctrl-d` (anywhere — re-declared on
   the prompt editor so vim's `ctrl-d` scroll doesn't preempt the chord).
 - Unknown event types surface as raw-JSON rows, never dropped.

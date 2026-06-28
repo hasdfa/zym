@@ -42,6 +42,11 @@ export interface ToolRowContext {
    *  node-gtk-rooted header-button handler is severed when the owner is torn down
    *  (the conversation / a subagent page). See `ToolRowOptions.subs`. */
   subs?: CompositeDisposable;
+  /** Live stream (not a replay / static subagent page): the row spins from tool-use
+   *  until its result lands, so an in-flight Bash/Task is visibly distinct from a
+   *  finished one. Off (the default) for replayed and captured rows, which already
+   *  hold their result and must never spin forever. */
+  live?: boolean;
 }
 
 /** A built tool entry: the caller wires its result + (optional) live progress. */
@@ -60,7 +65,7 @@ export interface ToolEntry {
  *  grouped row per consecutive run (when `onOpenFile` is set); everything else is a
  *  generic toggle row. */
 export function appendToolRow(transcript: Transcript, name: string, input: unknown, ctx: ToolRowContext): ToolEntry {
-  if (name === 'Bash') return appendBashRow(transcript, input, ctx.subs);
+  if (name === 'Bash') return appendBashRow(transcript, input, ctx);
 
   // Read/Write/Edit/… collapse into one row per consecutive run of the same tool —
   // the Transcript builds it; we only wire the (failure-only) result back here.
@@ -90,12 +95,13 @@ export function appendToolRow(transcript: Transcript, name: string, input: unkno
   if (name === 'TodoWrite' && Array.isArray(todos)) toolRow.content.append(renderTodos(todos));
 
   transcript.appendToolEntry(toolRow.root);
+  if (ctx.live) toolRow.setRunning(true); // spin until the result lands
 
   // Background-task rows (run_in_background) get a live progress line.
   let progress: InstanceType<typeof Gtk.Label> | null = null;
   const entry: ToolEntry = {
     row: toolRow,
-    onResult: (isError, text) => fillToolResult(toolRow, name, isError, text),
+    onResult: (isError, text) => { toolRow.setRunning(false); fillToolResult(toolRow, name, isError, text); },
     onProgress: (p) => {
       if (!progress) {
         progress = new Gtk.Label({ xalign: 0, wrap: true });
@@ -131,7 +137,7 @@ export function bashRowParts(input: unknown): { headerText: string; headerIsComm
 // toggling the detail, which holds the full command (whenever the description owns the
 // header) above the output. A non-zero exit only reveals a trailing red dot — the icon and
 // header colour stay put (a miss is often normal).
-function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeDisposable): ToolEntry {
+function appendBashRow(transcript: Transcript, input: unknown, ctx: ToolRowContext): ToolEntry {
   const { headerText, headerIsCommand, detailCommand } = bashRowParts(input);
 
   // The command renders as plain monospace (no syntax highlighting); the description is prose.
@@ -168,7 +174,7 @@ function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeD
   header.append(label);
   header.append(errorDot);
 
-  const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle, subs });
+  const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle, subs: ctx.subs });
 
   // When the description owns the header, the command itself lives in the expanded
   // detail (monospace, selectable), above any output.
@@ -180,11 +186,13 @@ function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeD
   }
 
   transcript.appendToolEntry(toolRow.root);
+  if (ctx.live) toolRow.setRunning(true); // spin until the result lands
 
   let progress: InstanceType<typeof Gtk.Label> | null = null;
   const entry: ToolEntry = {
     row: toolRow,
     onResult: (isError, text) => {
+      toolRow.setRunning(false);
       const trimmed = text.trim();
       if (trimmed) {
         const out = new Gtk.Label({ xalign: 0, wrap: true, selectable: true, label: truncateLines(trimmed, 40, 4000) });

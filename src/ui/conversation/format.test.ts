@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { truncate, truncateLines, summarizeInput, formatCount, progressLine, parseLocalCommand } from './format.ts';
+import { truncate, truncateLines, summarizeInput, formatCount, formatElapsed, progressLine, parseLocalCommand } from './format.ts';
 
 test('truncate adds an ellipsis past max', () => {
   assert.equal(truncate('hello', 10), 'hello');
@@ -23,6 +23,15 @@ test('summarizeInput stringifies + caps at 200 chars', () => {
 test('formatCount compacts thousands', () => {
   assert.equal(formatCount(999), '999');
   assert.equal(formatCount(1500), '1.5k');
+});
+
+test('formatElapsed reads whole seconds, then m ss', () => {
+  assert.equal(formatElapsed(0), '0s');
+  assert.equal(formatElapsed(12_000), '12s');
+  assert.equal(formatElapsed(59_900), '59s');
+  assert.equal(formatElapsed(60_000), '1m 00s');
+  assert.equal(formatElapsed(75_000), '1m 15s');
+  assert.equal(formatElapsed(-5), '0s'); // never negative
 });
 
 test('progressLine composes head + meta', () => {

@@ -9,6 +9,7 @@
  * Callers append top-level entries through `appendEntry`; they never touch the box or
  * the class directly.
  */
+import Pango from 'gi:Pango-1.0';
 import Gtk from 'gi:Gtk-4.0';
 import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../../util/eventKit.ts';
@@ -142,11 +143,17 @@ export class Transcript {
     // Group by tool name (Read/Edit/…), with the tool's icon + name as the head.
     const items = this.ensureGroup(name, view.icon, view.title || name);
 
-    const button = new Gtk.Button({ halign: Gtk.Align.START });
+    // The path fills the row's width and ellipsizes in the MIDDLE — keeping the
+    // leading dirs AND the filename visible — so a long path never widens the
+    // transcript into horizontal scroll; the full path stays on the tooltip.
+    const label = new Gtk.Label({ xalign: 0, label: display, hexpand: true });
+    label.setSingleLineMode(true); // ellipsize needs a single line
+    label.setEllipsize(Pango.EllipsizeMode.MIDDLE);
+    const button = new Gtk.Button({ hexpand: true });
     button.addCssClass('flat');
     button.addCssClass('link');
     button.addCssClass('transcript-file-path');
-    button.setChild(new Gtk.Label({ xalign: 0, label: display }));
+    button.setChild(label);
     button.setTooltipText(absPath);
     this.subs.connect(button, 'clicked', () => opts.onOpenFile(absPath));
     items.append(button);

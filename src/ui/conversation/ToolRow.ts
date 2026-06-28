@@ -22,6 +22,7 @@
  */
 import Pango from 'gi:Pango-1.0';
 import Gtk from 'gi:Gtk-4.0';
+import Adw from 'gi:Adw-1';
 import { CompositeDisposable } from '../../util/eventKit.ts';
 import { addStyles } from '../../styles.ts';
 import { iconSpan } from '../icons.ts';
@@ -94,7 +95,11 @@ export class ToolRow {
   readonly root: InstanceType<typeof Gtk.Box>; // [icon][toggle]
   /** The details section below the header — append result/output/JSON/progress here. */
   readonly content: InstanceType<typeof Gtk.Box>;
+  // The leading slot holds the glyph icon and (lazily, while running) a spinner that
+  // swaps in for it — only one is visible at a time (see setRunning).
+  private readonly iconSlot: InstanceType<typeof Gtk.Box>;
   private readonly icon: InstanceType<typeof Gtk.Label>;
+  private spinner: InstanceType<typeof Adw.Spinner> | null = null;
   private readonly header: Widget; // the title widget — status-tinted alongside the icon
   private readonly toggle: InstanceType<typeof Gtk.Box>; // BUTTON + DETAILS; the bg-fade target
   private readonly revealer: InstanceType<typeof Gtk.Revealer> | null;
@@ -115,10 +120,12 @@ export class ToolRow {
     // the row itself carries no entry class.
 
     this.header = opts.header;
+    this.iconSlot = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, valign: Gtk.Align.START });
     this.icon = new Gtk.Label({ valign: Gtk.Align.START });
     this.icon.addCssClass('tool-row-icon');
     this.setIcon(opts.icon, opts.iconColor);
-    this.root.append(this.icon);
+    this.iconSlot.append(this.icon);
+    this.root.append(this.iconSlot);
 
     // The BUTTON + DETAILS column: the expander that grows + gains the bubble bg.
     this.toggle = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true });
@@ -134,10 +141,10 @@ export class ToolRow {
     if (opts.status) this.setStatus(opts.status);
 
     // Center the icon against the header button — not the whole toggle. A vertical
-    // size group ties the icon's height to the button's, so the (top-aligned) icon
+    // size group ties the icon slot's height to the button's, so the (top-aligned) icon
     // stays centered on the header row even once the details expand below it.
     const iconSizing = new Gtk.SizeGroup({ mode: Gtk.SizeGroupMode.VERTICAL });
-    iconSizing.addWidget(this.icon);
+    iconSizing.addWidget(this.iconSlot);
     iconSizing.addWidget(button);
 
     this.content = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
@@ -176,6 +183,27 @@ export class ToolRow {
     if (expanded) this.toggle.addCssClass('is-expanded');
     else this.toggle.removeCssClass('is-expanded');
     this.onToggle?.(expanded);
+  }
+
+  /** Show a spinner in the leading slot while the tool is executing, swapping back to
+   *  the glyph once the result lands. Live rows only — the conversation arms it on
+   *  tool-use and clears it on the result (or when the turn ends); replayed / static
+   *  rows never spin. Idempotent. */
+  setRunning(running: boolean): void {
+    if (running) {
+      if (!this.spinner) {
+        this.spinner = new Adw.Spinner();
+        this.spinner.setSizeRequest(14, 14); // Adw.Spinner fills its allocation otherwise
+        this.spinner.setValign(Gtk.Align.START);
+        this.spinner.addCssClass('tool-row-icon'); // same trailing pad as the glyph it replaces
+        this.iconSlot.append(this.spinner);
+      }
+      this.spinner.setVisible(true);
+      this.icon.setVisible(false);
+    } else {
+      this.icon.setVisible(true);
+      this.spinner?.setVisible(false);
+    }
   }
 
   /** Set the leading icon (glyph + optional colour). A status, if set, owns the

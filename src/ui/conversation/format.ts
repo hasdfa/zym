@@ -46,6 +46,16 @@ export function formatCount(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+/** A whole-second elapsed duration: `12s` under a minute, else `1m 05s`. Used by the
+ *  footer's working indicator so a long turn reads as "still going", not "stuck". */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+}
+
 /** One muted progress line for a subagent / background task. */
 export function progressLine(p: TaskProgress): string {
   const meta: string[] = [];
