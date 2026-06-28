@@ -152,6 +152,9 @@ These all work today, driven from the LSP core and surfaced through the editor:
 - [ ] Mouse-hover (hover-on-pointer; today hover is command-triggered).
 - [ ] Code lens.
 - [ ] Inline-rename UI.
+- [ ] File-rename LSP sync — on `file:move`/`file:rename` the moved file is
+  re-opened under its new URI, but servers aren't told of the rename
+  (`workspace/didRenameFiles`), so cross-file references (imports) don't update.
 
 ## Notes / gotchas
 
