@@ -17,7 +17,10 @@ It is fully documented in **[multibuffer.md](multibuffer.md)** — start there.
 `DiffView.root` is a `Gtk.Stack` swapping the editor for an empty state (an `Adw.StatusPage` built
 by `createEmptyMessage`, `src/ui/createEmptyMessage.ts`) whenever no file has a change — so a live
 diff whose changes are all discarded shows "No changes" rather than a blank editor. `reDiff` toggles
-it on `headerAnchors.length === 0`.
+it on `headerAnchors.length === 0`. `git:diff-current-changes` therefore opens the diff even on a
+clean tree (its empty state) instead of a "no changes" toast — `buildCurrentChangesDiff` returns null
+only outside a repo. (The file *set* is still a snapshot taken at open: `onGitChange` re-diffs those
+files live but doesn't add newly-changed ones — reopen to refresh.)
 
 ## Entry points
 

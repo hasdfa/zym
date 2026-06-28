@@ -2669,15 +2669,15 @@ export class AppWindow {
 
   /** Build a live, editable working-tree DiffView for `workbench`'s changes: NEW side = each
    *  changed file's current text (an open document's live text incl. unsaved edits, else from
-   *  disk; a deleted file → empty) backed by a live Document, OLD side = the HEAD blob. Null
-   *  outside a repo or when there are no changes. Shared by the `git:diff-current-changes` center
-   *  tab and the GitPanel's embedded diff (which calls it through GitPanelOptions.buildDiffView). */
+   *  disk; a deleted file → empty) backed by a live Document, OLD side = the HEAD blob. Null only
+   *  outside a repo; a clean working tree yields an empty diff (its "No changes" empty state).
+   *  Shared by the `git:diff-current-changes` center tab and the GitPanel's embedded diff (which
+   *  calls it through GitPanelOptions.buildDiffView). */
   private async buildCurrentChangesDiff(workbench: Workbench<'user' | Agent>): Promise<DiffView | null> {
     const cwd = workbench.cwd;
     const root = repoRoot(cwd);
     if (!root) return null;
     const paths = [...workbench.git.getFileStatuses().keys()].sort();
-    if (paths.length === 0) return null;
     const showHead = (rel: string): Promise<string> =>
       new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
     const files = await Promise.all(
@@ -2716,7 +2716,7 @@ export class AppWindow {
   private async openLiveDiff(): Promise<void> {
     const view = await this.buildCurrentChangesDiff(this.workbench);
     if (!view) {
-      this.toast(repoRoot(this.workbench.cwd) ? 'No changes against HEAD' : 'Not in a git repository');
+      this.toast('Not in a git repository'); // a clean tree still opens the diff (its empty state)
       return;
     }
     const title = () => {
