@@ -79,6 +79,16 @@ widget.
   Gtk.Paned handle survives a restore (an absent side falls back to its
   default width / `DOCK_FRACTION` height). The center `PanelGroup`'s own
   split positions ride along in the layout tree (`PanelNode.split.position`).
+- **The center is shrink-protected** so a dock can never collapse it away.
+  `applyDockExtent` restores a dragged dock extent by driving the dock Paned's
+  divider (`setPosition(max(0, extent − stored))`), which lands on `0` when a
+  restored dock size is wider/taller than the current paned (e.g. a session saved
+  on a larger window). At `0` the center child *unmaps* — the Git Panel and every
+  center tab vanish the instant the dock is revealed, right before `revealFileTree`
+  moves focus into the tree. The `Workbench` constructor therefore disables shrink
+  on the center side of each dock Paned (`hCenterRight`/`vBottom` start child,
+  `vTop` end child), so GTK clamps the divider to the center's own minimum and the
+  dock absorbs the slack. Pinned by `DockCenterCollapse.test.ts`.
 
 ## Active / focus management
 

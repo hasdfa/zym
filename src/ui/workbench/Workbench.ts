@@ -176,6 +176,18 @@ export class Workbench<TOwner = unknown> {
     this.hCenterRight.setResizeEndChild(false);
     this.hCenterRight.setShrinkEndChild(false);
 
+    // The center column must never be shrunk away to nothing by a dock. Without this,
+    // `applyDockExtent`'s `setPosition(max(0, extent - stored))` can drive the divider
+    // to 0 (when a dock's stored size is wider/taller than the current paned — e.g. a
+    // session saved on a larger window), which *unmaps* the center: the Git Panel (and
+    // every center tab) vanishes the instant the dock is revealed, just before it steals
+    // focus. Disabling shrink makes GTK clamp the divider to the center's own minimum
+    // instead, so the center keeps a floor and the dock absorbs the slack. The center is
+    // the start child of hCenterRight/vBottom and the end child of vTop.
+    this.hCenterRight.setShrinkStartChild(false);
+    this.vBottom.setShrinkStartChild(false);
+    this.vTop.setShrinkEndChild(false);
+
     this.root = this.hLeft;
     this.root.addCssClass('Workbench');
 
