@@ -15,6 +15,7 @@
 import changeCase from './changeCase.ts'
 import { Operator } from './operator.ts'
 import type { Selection } from '../Selection.ts'
+import type { Point } from '../../../text/Point.ts'
 
 // TransformString
 // ================================
@@ -106,6 +107,12 @@ type SurroundAction = 'surround' | 'delete-surround' | 'change-surround' | null
 class SurroundBase extends TransformString {
   static command = false
   surroundAction: SurroundAction = null
+  // The `f` (function) variants (`ysf`/`csf`) finish in insert mode so the user
+  // can type the function name. `enterInsertAfter` requests it; `surroundStartPoint`
+  // is where the inserted text begins (= where the cursor lands). See postMutate().
+  enterInsertAfter = false
+  changeFunctionName = false
+  surroundStartPoint: Point | null = null
   pairsByAlias: Record<string, string[]> = {
     '(': ['(', ')'],
     ')': ['(', ')'],
@@ -116,8 +123,8 @@ class SurroundBase extends TransformString {
     '<': ['<', '>'],
     '>': ['<', '>'],
     b: ['(', ')'],
-    B: ['{', '}'],
     r: ['[', ']'],
+    k: ['{', '}'], // curly alias (replaces vim-surround's `B`, to match the text objects)
     a: ['<', '>']
   }
 
@@ -167,12 +174,59 @@ class SurroundBase extends TransformString {
 
   getNewText (text: string, selection?: Selection): string | undefined {
     if (this.surroundAction === 'surround') {
+      // `ys{motion}f` — wrap in `(...)` and enter insert mode before the `(` so
+      // the user types the function name (e.g. `x` -> `|(x)`). A motion that runs
+      // to a line end (e.g. `ysw`) trails a newline; keep it outside the parens so
+      // the call stays inline rather than spanning the line.
+      if (this.input === 'f') {
+        this.enterInsertAfter = true
+        const newline = text.endsWith('\n') ? '\n' : ''
+        return '(' + text.slice(0, text.length - newline.length) + ')' + newline
+      }
       return this.surround(text, this.input, {selection})
     } else if (this.surroundAction === 'delete-surround') {
       return this.deleteSurround(text)
     } else if (this.surroundAction === 'change-surround') {
+      // `csf` — strip only the function name, keep `(...)` verbatim, and enter
+      // insert mode before the `(` (e.g. `fn(x)` -> `|(x)`).
+      if (this.changeFunctionName) {
+        this.enterInsertAfter = true
+        const pair = this.getTargetPair()
+        const nameLength = pair ? pair[0].length - 1 : 0 // pair[0] is `name(`
+        return text.slice(Math.max(0, nameLength))
+      }
       return this.surround(this.deleteSurround(text), this.input, {keepLayout: true})
     }
+  }
+
+  // Capture where the inserted text starts BEFORE the edit; the `f` variants put
+  // the cursor here in insert mode afterwards (see postMutate / enterInsertAfter).
+  mutateSelection (selection: Selection): void {
+    this.surroundStartPoint = selection.getBufferRange().start
+    super.mutateSelection(selection)
+  }
+
+  postMutate (): void {
+    if (this.enterInsertAfter && this.surroundStartPoint) {
+      this.groupChangesSinceBufferCheckpoint('undo')
+      this.emitDidFinishMutation()
+      this.editor.setCursorBufferPosition(this.surroundStartPoint)
+      this.activateMode('insert')
+    } else {
+      super.postMutate()
+    }
+  }
+
+  // The `f` (function) char targets the enclosing function *call* rather than a
+  // literal pair: `dsf` deletes `name(` … `)`; `csf` (overridden below) keeps the
+  // parens. Shared by Delete/ChangeSurround; read after the `ds`/`cs` prefix.
+  onConfirmSurroundChar (char: string): void {
+    if (char === 'f') {
+      this.setTarget(this.getInstance('FunctionCall'))
+    } else {
+      this.setTarget(this.getInstance('APair', {pair: this.getPair(char)}))
+    }
+    this.processOperation()
   }
 }
 
@@ -192,12 +246,7 @@ class DeleteSurround extends SurroundBase {
   surroundAction: SurroundAction = 'delete-surround'
   initialize (): void {
     if (!this.target) {
-      this.focusInput({
-        onConfirm: (char: string) => {
-          this.setTarget(this.getInstance('APair', {pair: this.getPair(char)}))
-          this.processOperation()
-        }
-      })
+      this.focusInput({onConfirm: (char: string) => this.onConfirmSurroundChar(char)})
     }
     super.initialize()
   }
@@ -284,6 +333,19 @@ class Join extends JoinTarget {
 class ChangeSurround extends DeleteSurround {
   surroundAction: SurroundAction = 'change-surround'
   readInputAfterSelect = true
+
+  // `csf` — change the function name: target the whole call, but skip reading a
+  // "to" pair (getNewText strips the name and we enter insert mode instead).
+  onConfirmSurroundChar (char: string): void {
+    if (char === 'f') {
+      this.changeFunctionName = true
+      this.readInputAfterSelect = false
+      this.setTarget(this.getInstance('FunctionCall'))
+      this.processOperation()
+    } else {
+      super.onConfirmSurroundChar(char)
+    }
+  }
 
   // Override to show changing char on hover
   async focusInputPromised (...args: Parameters<Operator['focusInputPromised']>): Promise<string | undefined> {

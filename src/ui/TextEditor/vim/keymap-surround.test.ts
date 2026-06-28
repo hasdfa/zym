@@ -95,6 +95,106 @@ test('ds( deletes the surrounding pair', async () => {
   assert.equal(line(), 'hello world');
 });
 
+// --- `r` (square) / `k` (curly) pair aliases, shared by surround + text objects ----
+
+test('ysiwr wraps the inner word in square brackets (r alias)', async () => {
+  const { type, line } = focusedEditor('hello world\n');
+  type('ysiwr');
+  await tick();
+  assert.equal(line(), '[hello] world');
+});
+
+test('ysiwk wraps the inner word in curly braces (k alias)', async () => {
+  const { type, line } = focusedEditor('hello world\n');
+  type('ysiwk');
+  await tick();
+  assert.equal(line(), '{hello} world');
+});
+
+test('dsk deletes a surrounding curly pair (k alias, not a literal k)', async () => {
+  const { editor, type, line } = focusedEditor('{hello} world\n');
+  editor.setCursorBufferPosition({ row: 0, column: 3 });
+  type('dsk');
+  await tick();
+  assert.equal(line(), 'hello world');
+});
+
+test('cs(k changes a paren pair to curly braces (k alias as the "to" char)', async () => {
+  const { editor, type, line } = focusedEditor('(hello) world\n');
+  editor.setCursorBufferPosition({ row: 0, column: 3 });
+  type('cs(k');
+  await tick();
+  assert.equal(line(), '{hello} world');
+});
+
+test('dir / dak operate on the square/curly text-object aliases', async () => {
+  const sq = focusedEditor('[abc] world\n');
+  sq.editor.setCursorBufferPosition({ row: 0, column: 2 }); // inside [ ]
+  sq.type('dir');
+  await tick();
+  assert.equal(sq.line(), '[] world');
+
+  const cu = focusedEditor('{abc} world\n');
+  cu.editor.setCursorBufferPosition({ row: 0, column: 2 }); // inside { }
+  cu.type('dak');
+  await tick();
+  assert.equal(cu.line(), ' world');
+});
+
+// --- `f` (function) surround target: dsf / csf / ysf ------------------------
+
+test('dsf deletes the surrounding function call (fn(x) -> x)', async () => {
+  const { editor, type, line } = focusedEditor('fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 3 }); // on 'x', inside the call
+  type('dsf');
+  await tick();
+  assert.equal(line(), 'x');
+});
+
+test('dsf deletes a method call including its receiver (obj.fn(x) -> x)', async () => {
+  const { editor, type, line } = focusedEditor('obj.fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 7 }); // inside the parens
+  type('dsf');
+  await tick();
+  assert.equal(line(), 'x');
+});
+
+test('dsf works with the cursor on the function name (forwarding)', async () => {
+  const { editor, type, line } = focusedEditor('fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 0 }); // on 'f' of the name
+  type('dsf');
+  await tick();
+  assert.equal(line(), 'x');
+});
+
+test('csf strips the function name and enters insert before "(" (fn(x) -> |(x))', async () => {
+  const { editor, view, type, line } = focusedEditor('fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 3 }); // inside the call
+  type('csf');
+  await tick();
+  assert.equal(line(), '(x)');
+  assert.equal(view.getEditable(), true); // insert mode
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 0]); // before '('
+});
+
+test('ysiwf wraps the inner word in a call and enters insert before "(" (x -> |(x))', async () => {
+  const { editor, view, type, line } = focusedEditor('x\n');
+  type('ysiwf');
+  await tick();
+  assert.equal(line(), '(x)');
+  assert.equal(view.getEditable(), true); // insert mode
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 0]); // before '('
+});
+
+test('yswf surrounds the word with a function (x -> |(x))', async () => {
+  const { editor, view, type, line } = focusedEditor('x\n');
+  type('yswf');
+  await tick();
+  assert.equal(line(), '(x)');
+  assert.equal(view.getEditable(), true); // insert mode
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 0]); // before '('
+});
+
 test('g~iw toggles case (Key ~ fix + g~ binding through the keymap)', () => {
   const { type, line } = focusedEditor('Hello world\n');
   type('g~iw');
