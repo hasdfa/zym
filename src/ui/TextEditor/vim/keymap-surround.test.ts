@@ -95,6 +95,60 @@ test('ds( deletes the surrounding pair', async () => {
   assert.equal(line(), 'hello world');
 });
 
+// --- `f` (function) surround target: dsf / csf / ysf ------------------------
+
+test('dsf deletes the surrounding function call (fn(x) -> x)', async () => {
+  const { editor, type, line } = focusedEditor('fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 3 }); // on 'x', inside the call
+  type('dsf');
+  await tick();
+  assert.equal(line(), 'x');
+});
+
+test('dsf deletes a method call including its receiver (obj.fn(x) -> x)', async () => {
+  const { editor, type, line } = focusedEditor('obj.fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 7 }); // inside the parens
+  type('dsf');
+  await tick();
+  assert.equal(line(), 'x');
+});
+
+test('dsf works with the cursor on the function name (forwarding)', async () => {
+  const { editor, type, line } = focusedEditor('fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 0 }); // on 'f' of the name
+  type('dsf');
+  await tick();
+  assert.equal(line(), 'x');
+});
+
+test('csf strips the function name and enters insert before "(" (fn(x) -> |(x))', async () => {
+  const { editor, view, type, line } = focusedEditor('fn(x)\n');
+  editor.setCursorBufferPosition({ row: 0, column: 3 }); // inside the call
+  type('csf');
+  await tick();
+  assert.equal(line(), '(x)');
+  assert.equal(view.getEditable(), true); // insert mode
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 0]); // before '('
+});
+
+test('ysiwf wraps the inner word in a call and enters insert before "(" (x -> |(x))', async () => {
+  const { editor, view, type, line } = focusedEditor('x\n');
+  type('ysiwf');
+  await tick();
+  assert.equal(line(), '(x)');
+  assert.equal(view.getEditable(), true); // insert mode
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 0]); // before '('
+});
+
+test('yswf surrounds the word with a function (x -> |(x))', async () => {
+  const { editor, view, type, line } = focusedEditor('x\n');
+  type('yswf');
+  await tick();
+  assert.equal(line(), '(x)');
+  assert.equal(view.getEditable(), true); // insert mode
+  assert.deepEqual(editor.getCursorBufferPosition().toArray(), [0, 0]); // before '('
+});
+
 test('g~iw toggles case (Key ~ fix + g~ binding through the keymap)', () => {
   const { type, line } = focusedEditor('Hello world\n');
   type('g~iw');
