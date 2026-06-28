@@ -205,10 +205,13 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     ...WORKBENCH_ACTIONS,
   },
 
-  // LSP hover on the symbol under the cursor. Bound only in normal mode so it
-  // doesn't shadow typing 'K' while inserting.
+  // LSP navigation on the symbol under the cursor. Normal mode only so the bare keys
+  // don't shadow typing 'K'/'g d' while inserting. `g d`/`g D` mirror vim's goto-(local/
+  // global)-declaration; the leader equivalents are `space l d`/`space l D`.
   '.TextEditor.normal-mode': {
     K: 'lsp:hover',
+    'g d': 'lsp:go-to-definition',
+    'g D': 'lsp:go-to-declaration',
   },
 
   // Comment the current line / selection to an agent (file editors only — `editor:comment` is
@@ -241,10 +244,11 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     o: 'git:open-diff', // open the selected change's diff (like `l`)
     enter: 'git:open-diff',
     s: 'git:stage', // stage the file under the cursor
+    S: 'git:stage-all', // stage every change (git add -A)
     u: 'git:unstage', // unstage the file under the cursor
-    A: 'git:stage-all', // stage everything (or unstage all when nothing is unstaged)
+    U: 'git:unstage-all', // unstage every change (git reset)
     X: 'git:discard', // restore (tracked) / delete (untracked) the file under the cursor
-    'c c': 'git:commit', // commit: edit the message in a tab, save+close to commit
+    'c c': 'git:commit', // commit the staged changes (embedded editor)
   },
 
   // Move between the panel's two "windows" — the change list and the embedded diff — with vim's
@@ -258,10 +262,24 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     'ctrl-w h': 'git-panel:focus-list',
   },
   // `q` closes the embedded diff (collapse back to the list). Normal-mode only — so it doesn't
-  // shadow typing 'q' while editing the diff — and 2 ids + a class, so it outranks vim's bare `q`
-  // (macro record) only inside the GitPanel's diff, not in ordinary editors.
-  '.GitPanel .TextEditor.normal-mode': {
+  // shadow typing 'q' while editing the diff — and more specific than vim's bare `q` (macro
+  // record) only inside the GitPanel's diff. `:not(.GitCommitInput)` keeps it off the commit
+  // editor (which binds its own `q` to cancel below).
+  '.GitPanel .TextEditor.normal-mode:not(.GitCommitInput)': {
     q: 'git-panel:close-diff',
+  },
+
+  // The embedded commit editor (the vertical split above the list): `ctrl-enter` commits,
+  // `alt-enter` inserts a newline (plain `enter` stays a newline — commit messages are
+  // multi-line), and `q`/`escape` in normal mode cancels. Scoped to `.GitCommitInput` so these
+  // don't collide with the diff's keys (and vice-versa, via the `:not` above).
+  '.GitPanel .GitCommitInput': {
+    'ctrl-enter': 'git-commit:submit',
+    'alt-enter': 'git-commit:newline',
+  },
+  '.GitPanel .GitCommitInput.normal-mode': {
+    q: 'git-commit:cancel',
+    escape: 'git-commit:cancel',
   },
 
   // Editable diff multibuffer (git:diff-current-changes): fold-style keys expand the elided `⋯`
@@ -277,14 +295,24 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
   // Scoped to `.normal-mode` so the `z`/`g` prefixes don't shadow typing those characters while
   // inserting (this surface is editable) — same reason `K: lsp:hover` is normal-mode only.
   '.TextEditor.continuous-diff.normal-mode': {
-    'z o': 'diff:expand-context', // reveal more unchanged lines at the nearest gap
-    'z R': 'diff:expand-all', // reveal all unchanged lines (show the full files)
-    'z m': 'diff:collapse-context', // re-collapse expanded context
-    // Per-FILE collapse (distinct axis from the context controls above): `z a` toggles the file
-    // under the cursor (matching the search surface); capital `z C`/`z O` fold/unfold every file.
+    // Per-FILE folding, vim-style: `z c`/`z o` close/open the file under the cursor, `z a` toggles
+    // it, `z r`/`z m` open/close every file. (Revealing the elided unchanged lines at a `⋯` gap is
+    // a click on the gap marker — `z o` is the file open now, not the context expand.)
+    'z c': 'diff:collapse-file',
+    'z o': 'diff:expand-file',
     'z a': 'diff:toggle-file',
-    'z C': 'diff:collapse-all-files',
-    'z O': 'diff:expand-all-files',
+    'z r': 'diff:expand-all-files',
+    'z m': 'diff:collapse-all-files',
+    // `z j`/`z k` step between files; `z /` opens a picker to jump to one.
+    'z j': 'diff:next-file',
+    'z k': 'diff:prev-file',
+    'z /': 'diff:go-to-file',
+    // Reveal the elided unchanged lines at a `⋯` gap (`.` mirrors the dots): `z .` expands the
+    // nearest gap a chunk at a time, `z >` reveals the whole files, `z <` re-collapses to the
+    // windowed diff. (Clicking a `⋯` marker also expands it.)
+    'z .': 'diff:expand-context',
+    'z >': 'diff:expand-all',
+    'z <': 'diff:collapse-context',
     // Hunk staging (`space h s`/`u` → git:hunk-stage/git:hunk-unstage) is the unified binding from
     // `.AppWindow`; it routes here automatically (this embedded editor registers no gutter
     // variant). Bare `s`/`u` are left to vim (substitute / undo) since this surface is editable.

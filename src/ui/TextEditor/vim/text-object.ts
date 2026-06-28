@@ -306,6 +306,32 @@ class APair extends Pair {
   static command = false
 }
 
+// Function-call target for vim-surround's `f` (`dsf`/`csf`). Finds the enclosing
+// (or, when the cursor sits on the name, the next forwarding) `(...)` call and
+// extends its start back over the function name, exposing `pair = ['name(', ')']`
+// so SurroundBase can strip the call (`dsf`) or keep just the parens (`csf`).
+// Distinct from `Function` below, which is the tree-sitter function *definition*
+// (`af`/`if`). See docs/text-editor/vim-mode.md.
+class FunctionCall extends TextObject {
+  static command = false
+  pair: [string, string] | null = null
+  functionName = ''
+
+  getRange (selection: Selection): Range | null | undefined {
+    const parenRange = (this.getInstance('AParenthesisAllowForwarding') as Pair).getRange(selection)
+    if (!parenRange) return
+    const openPoint = parenRange.start
+    const lineText = this.editor.lineTextForBufferRow(openPoint.row)
+    let column = openPoint.column
+    while (column > 0 && /[\w$.]/.test(lineText[column - 1])) column--
+    // The name is an identifier, so never let it begin with a member-access dot.
+    while (column < openPoint.column && lineText[column] === '.') column++
+    this.functionName = lineText.slice(column, openPoint.column)
+    this.pair = [this.functionName + '(', ')']
+    return new Range(new Point(openPoint.row, column), parenRange.end)
+  }
+}
+
 class AnyPair extends Pair {
   allowForwarding = false
   member = ['DoubleQuote', 'SingleQuote', 'BackTick', 'CurlyBracket', 'AngleBracket', 'SquareBracket', 'Parenthesis']
@@ -969,6 +995,7 @@ const __operations = Object.assign(
     Subword,
     Pair,
     APair,
+    FunctionCall,
     AnyPair,
     AnyPairAllowForwarding,
     AnyQuote,

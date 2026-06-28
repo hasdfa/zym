@@ -17,7 +17,7 @@
 import Gtk from 'gi:Gtk-4.0';
 import Adw from 'gi:Adw-1';
 import { addStyles } from '../styles.ts';
-import { GitBranchButton } from './GitBranchButton.ts';
+import { GitBranchButton } from './git/GitBranchButton.ts';
 import { GithubButtons } from './GithubButtons.ts';
 import { WorkbenchStatus } from './WorkbenchStatus.ts';
 import { WorkbenchActionsBar } from './workbench/WorkbenchActionsBar.ts';
@@ -67,8 +67,8 @@ export class HeaderBar {
   readonly github: GithubService;
   private readonly githubButtons: GithubButtons;
   private readonly workbenchStatus: WorkbenchStatus;
-  // The active workbench's actions (docs/workbench.md), shown in the centre title
-  // slot and rebound to the shown workbench's set on every `rebind`.
+  // The active workbench's actions (docs/workbench.md), right-aligned in the header
+  // and rebound to the shown workbench's set on every `rebind`.
   private readonly actions: WorkbenchActionsBar;
 
   private readonly getWorkbench: () => Workbench;

@@ -5,12 +5,18 @@ Custom modal editing ported from Atom's vim-mode-plus, driven by zym's
 `src/ui/TextEditor/vim/`). It replaces `GtkSource.VimIMContext` and is the
 default (no flag).
 
+For an exhaustive, per-mode table of every bound keystroke (and the notable
+standard-vim keys we don't map), see
+[vim-keymap-reference.md](vim-keymap-reference.md).
+
 ## What works
 
 - Motions, operators, text-objects, visual mode, registers, marks, counts,
   dot-repeat.
 - find-char (`f`/`F`/`t`/`T`/`;`/`,`), case ops (`gU`/`gu`/`g~`), surround
   (`ys`/`ds`/`cs`), indent/outdent/join.
+  - surround `f` = function *call* (text-based, not the tree-sitter `af`/`if`):
+    `dsf` `fn(x)`→`x`, `csf` `fn(x)`→`|(x)`, `ysiwf` `x`→`|(x)`.
 - `gv` reselects the last visual selection; `gb` selects the latest
   changed/yanked region (the `` `[ ``/`` `] `` change marks).
 - `]h`/`[h` jump to the next/previous git hunk; `]d`/`[d` to the next/previous

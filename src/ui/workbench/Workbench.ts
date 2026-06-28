@@ -30,7 +30,7 @@ import { releaseGitRepo, type GitRepo } from '../../git.ts';
 import { WorkbenchActions } from './WorkbenchActions.ts';
 import type { DiagnosticsPanel } from '../../lsp/diagnostics/DiagnosticsPanel.ts';
 import type { FileTree } from '../FileTree.ts';
-import type { GitPanel } from '../GitPanel.ts';
+import type { GitPanel } from '../git/GitPanel.ts';
 import type { KeymapPanel } from '../KeymapPanel.ts';
 import type { NotificationLog } from '../NotificationLog.ts';
 import type { Panel, PanelChild } from '../Panel.ts';

@@ -36,14 +36,14 @@ import { PROJECT_NAME } from './WorkbenchList.ts';
 import { Sidebar } from './Sidebar.ts';
 import { AgentSidebar } from './AgentSidebar.ts';
 import { HeaderBar } from './HeaderBar.ts';
-import { GitPanel } from './GitPanel.ts';
+import { GitPanel } from './git/GitPanel.ts';
 import { fileIconGlyph } from './fileIcons.ts';
 import { Icons } from './icons.ts';
 import { acquireGitRepo, releaseGitRepo, type GitOpResult } from '../git.ts';
-import { git, repoRoot, invalidateRepoRoot, commitMsgPath, listWorktrees, lastCommitMessage } from '../git.ts';
+import { git, repoRoot, invalidateRepoRoot, listWorktrees } from '../git.ts';
 import { stage, unstage, stageAll, unstageAll, type GitDone } from '../git.ts';
 import { openCommitDiff, openCommitPicker, openBranchDiff } from './diffViews.ts';
-import { GitLogView } from './GitLogView.ts';
+import { GitLogView } from './git/GitLogView.ts';
 import { registerGithubCommands } from './githubCommands.ts';
 import { Workbench, DOCK_SIDES, type BottomDock, type DockSide } from './workbench/Workbench.ts';
 import { openFilePicker } from './FilePicker.ts';
@@ -52,6 +52,7 @@ import { tildify } from '../util/tilde.ts';
 import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
+import { openDiffFilePicker } from './DiffFilePicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
 import { SearchResultsView } from './SearchResultsView.ts';
 import { ProjectSearchView } from './ProjectSearchView.ts';
@@ -69,8 +70,8 @@ import {
   openDeleteBranchPicker,
   openMergeBranchPicker,
   openRenameBranchPicker,
-} from './BranchPicker.ts';
-import { openStashPicker } from './StashPicker.ts';
+} from './git/BranchPicker.ts';
+import { openStashPicker } from './git/StashPicker.ts';
 import { openGithubCIChecksPicker } from './GithubCIChecksPicker.ts';
 import { openPicker, highlightSegment } from './Picker.ts';
 import { renderRowSingleLine } from './PickerRow.ts';
@@ -179,9 +180,6 @@ export class AppWindow {
   private readonly sidebar: Sidebar;
   private sidebarHidden = false; // user toggle (sidebar:toggle, `ctrl-w g s`); detaches the column entirely
   private sidebarShownWidth = SIDEBAR_WIDTH; // split position captured on hide, re-applied on show
-  // Commit-message editor tabs: the message file each is bound to, so closing the
-  // tab can commit (git-style: write the message, save, close to commit).
-  private readonly commitEditors = new Map<Widget, { repo: string; msgPath: string; amend: boolean }>();
   // Maps an editor's root widget to its center tab handle, so a location jump can
   // reveal an already-open file instead of opening a duplicate tab.
   private readonly editorChildren = new Map<Widget, PanelChild>();
@@ -1560,12 +1558,6 @@ export class AppWindow {
     this.conversations.get(widget)?.dispose(); // kill the claude child + IPC watchers
     this.conversations.delete(widget);
     this.updateModifiedMarker(); // a closed editor no longer counts as unsaved
-    // A closed commit-message tab finalizes the commit (if a message was saved).
-    const commitInfo = this.commitEditors.get(widget);
-    if (commitInfo) {
-      this.commitEditors.delete(widget);
-      this.finishCommit(commitInfo.repo, commitInfo.msgPath, commitInfo.amend);
-    }
   }
 
   // Rebuild one closed tab from its serialized state — the reopener `zym.workspace`
@@ -2091,6 +2083,16 @@ export class AppWindow {
       gitPanel.focus();
       return;
     }
+    // Still attached to the live window tree but not in this center — e.g. its tab was
+    // dragged into a dock (a Panel outside the center). Reveal it where it lives instead
+    // of unparenting it: unparenting a live page child corrupts it into a zombie that
+    // vanishes from the tree (the reveal rule in docs/panels.md). `getRoot()` is non-null
+    // only while it sits in the live tree, so it tells a live host from an orphaned page.
+    if (gitPanel.root.getRoot()) {
+      Panel.containing(gitPanel.root)?.reveal(gitPanel.root);
+      gitPanel.focus();
+      return;
+    }
     if (gitPanel.root.getParent()) gitPanel.root.unparent(); // drop any closed/orphaned page
     this.workbench.gitTab = this.workbench.center.add(gitPanel.root, {
       title: `${Icons.git}  Git`,
@@ -2108,7 +2110,6 @@ export class AppWindow {
       cwd: workbench.cwd,
       git: workbench.git,
       onOpenFile: (path) => this.openFile(path),
-      onCommit: () => this.startCommit(),
       // Build the embedded live diff against THIS workbench's repo (l/enter/o reveals the
       // selected change in it); the panel owns its lifecycle.
       buildDiffView: () => this.buildCurrentChangesDiff(workbench),
@@ -2214,6 +2215,13 @@ export class AppWindow {
 
   // List the current file's symbol outline (via its language server) in a picker
   // and jump to the chosen one within the active editor.
+  /** `diff:go-to-file` (`z /`) — pick a file in the active continuous diff and jump to its header. */
+  private diffFilePicker() {
+    const diff = this.activeContinuousDiff();
+    if (!diff) return;
+    openDiffFilePicker(this.overlay, diff);
+  }
+
   private async documentSymbolPicker() {
     const editor = this.activeEditor;
     if (!editor) return;
@@ -2478,6 +2486,31 @@ export class AppWindow {
         description: 'Collapse / expand the file under the cursor',
         when: () => this.activeContinuousDiff() !== null,
       },
+      'diff:collapse-file': {
+        didDispatch: () => this.activeContinuousDiff()?.collapseFileAtCursor(),
+        description: 'Collapse the file under the cursor to its header',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:expand-file': {
+        didDispatch: () => this.activeContinuousDiff()?.expandFileAtCursor(),
+        description: 'Expand the file under the cursor back to its diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:next-file': {
+        didDispatch: () => this.activeContinuousDiff()?.nextFile(),
+        description: 'Move to the next file in the diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:prev-file': {
+        didDispatch: () => this.activeContinuousDiff()?.previousFile(),
+        description: 'Move to the previous file in the diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:go-to-file': {
+        didDispatch: () => this.diffFilePicker(),
+        description: 'Jump to a file in the diff…',
+        when: () => this.activeContinuousDiff() !== null,
+      },
       'diff:collapse-all-files': {
         didDispatch: () => this.activeContinuousDiff()?.collapseAllFiles(),
         description: 'Collapse every file to a one-line header (overview)',
@@ -2670,15 +2703,15 @@ export class AppWindow {
 
   /** Build a live, editable working-tree DiffView for `workbench`'s changes: NEW side = each
    *  changed file's current text (an open document's live text incl. unsaved edits, else from
-   *  disk; a deleted file → empty) backed by a live Document, OLD side = the HEAD blob. Null
-   *  outside a repo or when there are no changes. Shared by the `git:diff-current-changes` center
-   *  tab and the GitPanel's embedded diff (which calls it through GitPanelOptions.buildDiffView). */
+   *  disk; a deleted file → empty) backed by a live Document, OLD side = the HEAD blob. Null only
+   *  outside a repo; a clean working tree yields an empty diff (its "No changes" empty state).
+   *  Shared by the `git:diff-current-changes` center tab and the GitPanel's embedded diff (which
+   *  calls it through GitPanelOptions.buildDiffView). */
   private async buildCurrentChangesDiff(workbench: Workbench<'user' | Agent>): Promise<DiffView | null> {
     const cwd = workbench.cwd;
     const root = repoRoot(cwd);
     if (!root) return null;
     const paths = [...workbench.git.getFileStatuses().keys()].sort();
-    if (paths.length === 0) return null;
     const showHead = (rel: string): Promise<string> =>
       new Promise((resolve) => git(root, ['show', `HEAD:${rel}`], (ok, out) => resolve(ok ? out : '')));
     const files = await Promise.all(
@@ -2686,14 +2719,15 @@ export class AppWindow {
         const oldText = await showHead(Path.relative(root, path));
         const open = this.documents.find(path);
         let newText = open ? open.getText() : '';
+        let deleted = false;
         if (!open) {
           try {
             newText = Fs.readFileSync(path, 'utf8');
           } catch {
-            /* deleted on disk */
+            deleted = true; // gone from the working tree (and not held open) → a deletion
           }
         }
-        return { path, oldText, newText };
+        return { path, oldText, newText, deleted };
       }),
     );
     return new DiffView({
@@ -2716,7 +2750,7 @@ export class AppWindow {
   private async openLiveDiff(): Promise<void> {
     const view = await this.buildCurrentChangesDiff(this.workbench);
     if (!view) {
-      this.toast(repoRoot(this.workbench.cwd) ? 'No changes against HEAD' : 'Not in a git repository');
+      this.toast('Not in a git repository'); // a clean tree still opens the diff (its empty state)
       return;
     }
     const title = () => {
@@ -2975,44 +3009,13 @@ export class AppWindow {
   // tab. Closing the tab finalizes it — git-style: write the message, save, close
   // to commit (close without a saved message aborts). Reuses the normal editor.
   // `amend` rewrites HEAD and prefills the tab with the last commit's message.
+  // Commit (`space g c` / the panel's `c c`) or amend (`space g C`): reveal Source Control
+  // and edit the message in its embedded commit editor (a vertical split above the change
+  // list) — no separate tab. The GitPanel owns the message → `git.commit` flow.
   private startCommit(amend = false) {
-    const repo = repoRoot(this.workbench.cwd);
-    if (!repo) return;
-    commitMsgPath(repo, (msgPath) => {
-      const open = (initial: string) => {
-        try {
-          Fs.writeFileSync(msgPath, initial);
-        } catch (error) {
-          zym.notifications.addError('Could not start commit', { detail: (error as Error).message });
-          return;
-        }
-        const editor = this.openFile(msgPath);
-        this.commitEditors.set(editor.root, { repo, msgPath, amend });
-      };
-      // Amend prefills the existing message so the user can edit it; a plain
-      // commit starts blank.
-      if (amend) lastCommitMessage(repo, open);
-      else open('');
-    });
-  }
-
-  // Finalize a commit when its message tab closes: commit the saved message, or
-  // abort if it is empty. Routed through zym.notifications.
-  private finishCommit(repo: string, msgPath: string, amend: boolean) {
-    let message = '';
-    try {
-      message = Fs.readFileSync(msgPath, 'utf8');
-    } catch {
-      // file gone — nothing to commit
-    }
-    if (!message.trim()) {
-      zym.notifications.addInfo('Commit aborted (empty message)');
-      return;
-    }
-    void this.workbench.git.commit(msgPath, amend).then((result) => {
-      if (result.isOk()) zym.notifications.addSuccess(amend ? 'Amended HEAD' : 'Committed');
-      else zym.notifications.addError(amend ? 'Amend failed' : 'Commit failed', { detail: result.unwrapErr().message.trim() });
-    });
+    if (!repoRoot(this.workbench.cwd)) return;
+    this.revealGitPanel();
+    this.workbench.gitPanel?.startCommit(amend);
   }
 
   // Notification log: show/hide the bottom-dock history, and clear it. Handlers
