@@ -191,10 +191,13 @@ export const DEFAULT_KEYMAP: Record<string, Record<string, Binding>> = {
     ...SPACE_COMMANDS,
   },
 
-  // LSP hover on the symbol under the cursor. Bound only in normal mode so it
-  // doesn't shadow typing 'K' while inserting.
+  // LSP navigation on the symbol under the cursor. Normal mode only so the bare keys
+  // don't shadow typing 'K'/'g d' while inserting. `g d`/`g D` mirror vim's goto-(local/
+  // global)-declaration; the leader equivalents are `space l d`/`space l D`.
   '.TextEditor.normal-mode': {
     K: 'lsp:hover',
+    'g d': 'lsp:go-to-definition',
+    'g D': 'lsp:go-to-declaration',
   },
 
   // Comment the current line / selection to an agent (file editors only — `editor:comment` is

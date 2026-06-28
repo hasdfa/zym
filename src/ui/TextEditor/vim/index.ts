@@ -41,6 +41,8 @@ const MODE_BINDINGS: Record<string, string> = {
   I: 'InsertAtFirstCharacterOfLine',
   A: 'InsertAfterEndOfLine',
   'g I': 'InsertAtBeginningOfLine',
+  // gi: resume insert at the position where insert mode was last left (the `^` mark).
+  'g i': 'InsertAtLastInsert',
   // R: replace (overwrite) mode — insert mode with the `replace` submode; the
   // host overwrites on type and restores on backspace.
   R: 'ActivateReplaceMode',
@@ -105,9 +107,17 @@ const SEQUENCE_BINDINGS: Record<string, string> = {
   'g E': 'MoveToPreviousEndOfWholeWord',
   'g ctrl-d': 'ScrollQuarterScreenDown',
   'g ctrl-u': 'ScrollQuarterScreenUp',
-  // gj/gk — move by display (soft-wrapped) line.
+  // gj/gk — move by display (soft-wrapped) line. g0/g^/g$ — start/first-non-blank/end
+  // of the *display* line (only differ from 0/^/$ under soft-wrap).
   'g j': 'MoveDownDisplayLine',
   'g k': 'MoveUpDisplayLine',
+  'g 0': 'MoveToBeginningOfScreenLine',
+  'g ^': 'MoveToFirstCharacterOfScreenLine',
+  'g $': 'MoveToLastCharacterOfScreenLine',
+  // ]m/[m — jump to the next/previous function start (tree-sitter), also usable as an
+  // operator target (`d ] m`). Same code-fold scope source as the `i f`/`a f` text objects.
+  '] m': 'MoveToNextFunction',
+  '[ m': 'MoveToPreviousFunction',
   // gv — reselect the last visual selection.
   'g v': 'SelectPreviousSelection',
   // gb — select the latest changed/yanked region (the `[`/`]` change marks).
@@ -165,8 +175,8 @@ const SCROLL_BINDINGS: Record<string, string> = {
 };
 
 // `z`-prefix: cursor-line redraw (zz/zt/zb — vim operations). The fold keys
-// (za/zo/zc/zr/zm) share the prefix but dispatch to the editor's `fold:*`
-// commands (registered by TextEditor over the SyntaxController), not vim
+// (za/zo/zc/zO/zC/zr/zm/zR/zM) share the prefix but dispatch to the editor's
+// `fold:*` commands (registered by TextEditor over the SyntaxController), not vim
 // operations — see FOLD_KEYMAP, kept out of NORMAL_OPERATIONS.
 const Z_SCROLL_BINDINGS: Record<string, string> = {
   'z z': 'RedrawCursorLineAtMiddle',
@@ -177,8 +187,15 @@ const FOLD_KEYMAP: Record<string, string> = {
   'z a': 'fold:toggle',
   'z o': 'fold:open',
   'z c': 'fold:close',
+  // zO/zC recurse into the cursor's fold subtree (open/close every nested fold).
+  'z O': 'fold:open-recursive',
+  'z C': 'fold:close-recursive',
+  // zr/zm open/close ALL folds; zR/zM are vim's capitals for the same here (no
+  // foldlevel-stepping, so the lowercase/uppercase pair are aliases).
   'z r': 'fold:open-all',
   'z m': 'fold:close-all',
+  'z R': 'fold:open-all',
+  'z M': 'fold:close-all',
 };
 
 // Find-char motions. These `requireInput`: the operation reads the next
@@ -326,6 +343,16 @@ const CASE_BINDINGS: Record<string, string> = {
   'g U': 'UpperCase',
   'g u': 'LowerCase',
   'g ~': 'ToggleCase',
+};
+
+// In VISUAL mode, bare u/U/~ transform the selection's case (vim's visual case keys),
+// not Undo/Redo (those are `.TextEditor:not(.insert-mode)` bindings). Registered at a
+// higher priority — like the display-line j/k — so the visual scope wins the tie.
+// Reuses the case operation classes already registered via CASE_BINDINGS.
+const VISUAL_CASE_BINDINGS: Record<string, string> = {
+  u: 'LowerCase',
+  U: 'UpperCase',
+  '~': 'ToggleCase',
 };
 
 // Replace-character (r): selects `count` chars to the right and reads a single
@@ -532,11 +559,11 @@ const NORMAL_OPERATIONS: Record<string, string> = {
   'insert:ctrl-u': 'DeleteToBeginningOfInsertLine',
   'insert:ctrl-r': 'InsertRegister',
   'insert:ctrl-a': 'InsertLastInserted',
-  // Occurrence operations reachable as commands but without a default keystroke
-  // (registered for command creation only; the keys here are arbitrary).
+  // SelectOccurrence reachable as a command but without a default keystroke (registered
+  // for command creation only; the key here is arbitrary). MoveToNext/PreviousOccurrence
+  // are intentionally not exposed — `n`/`N` (editor search-next/prev) already navigate the
+  // matches in zym's unified search/occurrence model.
   'occurrence:select': 'SelectOccurrence',
-  'occurrence:next': 'MoveToNextOccurrence',
-  'occurrence:prev': 'MoveToPreviousOccurrence',
 };
 
 let keymapsRegistered = false;
@@ -619,6 +646,16 @@ function registerKeymapsOnce(): void {
     {
       '.TextEditor.normal-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
       '.TextEditor.visual-mode': toKeymap(DISPLAY_LINE_DEFAULTS),
+    },
+    1,
+  );
+
+  // Visual-mode u/U/~ → case ops, at the same higher priority so they beat the shared
+  // not-insert u=Undo / U=Redo / ~=toggle-and-move bindings.
+  zym.keymaps.add(
+    'vim-mode-plus-visual-case',
+    {
+      '.TextEditor.visual-mode': toKeymap(VISUAL_CASE_BINDINGS),
     },
     1,
   );
