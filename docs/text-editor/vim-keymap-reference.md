@@ -89,7 +89,7 @@ space-separated, so `g g` is the two-press `gg` and `ctrl-v` is one chord.
 | `>` `<` `=` | Indent / Outdent / AutoIndent | `>>`/`<<`/`==` via same-key repeat |
 | `g U` `g u` `g ~` | UpperCase / LowerCase / ToggleCase | case operators |
 | `s` | ReplaceWithRegister | `s{motion}` replace with register; `ss` line |
-| `y s` / `d s` / `c s` | Surround / DeleteSurround / ChangeSurround | vim-surround |
+| `y s` / `d s` / `c s` | Surround / DeleteSurround / ChangeSurround | vim-surround; the target/replacement char is read as input — pairs `( [ { < b B`, quotes `" ' \``, tags `t`, plus `f` = function **call** (text-based: `dsf` `fn(x)`→`x`, `csf`/`ysiwf` wrap a call) |
 
 ### Shortcut operators (preset target — run immediately)
 
