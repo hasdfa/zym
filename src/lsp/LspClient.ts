@@ -19,6 +19,7 @@ import {
   StreamMessageWriter,
   type MessageConnection,
 } from 'vscode-jsonrpc/node';
+import type { CancellationToken } from 'vscode-jsonrpc';
 import { Emitter, Disposable } from '../util/eventKit.ts';
 import { nodeModulesBinDirs } from './which.ts';
 import { managedBinDir } from './installer.ts';
@@ -104,9 +105,13 @@ export class LspClient {
     return !!this.connection && !this.exited && !this.stopped && !!stdin && !stdin.destroyed;
   }
 
-  sendRequest<R = any>(type: any, params?: any): Promise<R> {
+  sendRequest<R = any>(type: any, params?: any, token?: CancellationToken): Promise<R> {
     if (!this.writable) return Promise.reject(new Error(`LspClient not writable: ${this.label}`));
-    return this.connection!.sendRequest(type, params);
+    // Only forward a token when given: vscode-jsonrpc treats a trailing non-token
+    // arg as an extra param, so passing `undefined` would corrupt the request.
+    return token
+      ? this.connection!.sendRequest(type, params, token)
+      : this.connection!.sendRequest(type, params);
   }
 
   sendNotification(type: any, params?: any): void {

@@ -138,6 +138,13 @@ These all work today, driven from the LSP core and surfaced through the editor:
   (`space l a`), applied via `workspaceEdit.ts`.
 - **Rename:** `textDocument/rename` (+ prepareRename) → `space l R`, applied
   via `workspaceEdit.ts`.
+- **File rename/move:** on `file:move`/`file:rename`, `workspace/willRenameFiles`
+  (primary server, gated on its `fileOperations` filter globs) returns a
+  `WorkspaceEdit` that rewrites references in other files — applied via
+  `workspaceEdit.ts` after a confirm, then the on-disk move, then
+  `workspace/didRenameFiles`. The willRename request is cancellable
+  (`$/cancelRequest`) behind a delayed "Updating references…" toast. Client
+  advertises `workspace.fileOperations.{willRename,didRename}`.
 - **Formatting:** document / range formatting (`space l f`).
 - **Inlay hints:** `textDocument/inlayHint` rendered as native end-of-line
   annotations (`InlayHintController` → `VirtualText`, debounced; toggle
@@ -152,9 +159,8 @@ These all work today, driven from the LSP core and surfaced through the editor:
 - [ ] Mouse-hover (hover-on-pointer; today hover is command-triggered).
 - [ ] Code lens.
 - [ ] Inline-rename UI.
-- [ ] File-rename LSP sync — on `file:move`/`file:rename` the moved file is
-  re-opened under its new URI, but servers aren't told of the rename
-  (`workspace/didRenameFiles`), so cross-file references (imports) don't update.
+- [ ] File rename/move targets only the *primary* server (covers TS/JS import
+  updates); a second server that also rewrites references is not consulted.
 
 ## Notes / gotchas
 

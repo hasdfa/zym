@@ -89,6 +89,7 @@ import { type NavigationKind, type LspConfig, type LspDocument } from '../lsp/Ls
 import { normalizeWorkspaceEdit, applyTextEdits } from '../lsp/workspaceEdit.ts';
 import { uriToPath, type PositionEncoding } from '../lsp/position.ts';
 import type { WorkspaceEdit, CodeAction, Command } from 'vscode-languageserver-protocol';
+import { CancellationTokenSource } from 'vscode-languageserver-protocol';
 import { NotificationToasts } from './NotificationToasts.ts';
 import { loadKeymaps, ensureUserKeymap } from '../keymaps/load.ts';
 import { loadConfig, configPath } from '../config/load.ts';
@@ -3410,19 +3411,39 @@ export class AppWindow {
       dialog.setDefaultResponse('cancel');
       dialog.setCloseResponse('cancel');
       dialog.on('response', (response: string) => {
-        if (response === 'overwrite') this.performRelocate(editor, from, to);
+        if (response === 'overwrite') void this.performRelocate(editor, from, to);
       });
       dialog.present(this.window);
       return;
     }
-    this.performRelocate(editor, from, to);
+    void this.performRelocate(editor, from, to);
   }
 
-  /** The disk move + editor re-point behind `relocateFile`, run after any overwrite
-   *  confirmation: create missing parent directories (mkdir -p), move the file, then
-   *  re-point the open editor at the new path. Falls back to copy+unlink when rename
-   *  crosses filesystems (EXDEV). */
-  private performRelocate(editor: TextEditor, from: string, to: string) {
+  /**
+   * The move behind `relocateFile`, run after any overwrite confirmation. First
+   * asks the language server how the move rewrites references in other files
+   * (`willRenameFiles`, cancellable, with a confirm before applying); then creates
+   * missing parents (mkdir -p), moves the file (copy+unlink across filesystems —
+   * EXDEV), re-points the open editor, and notifies the server (`didRenameFiles`).
+   */
+  private async performRelocate(editor: TextEditor, from: string, to: string) {
+    const rename = await this.collectRenameEdit(editor, from, to);
+    if (rename.cancelled) return; // user cancelled the willRename request
+
+    let refFiles = 0;
+    let refEdits = 0;
+    if (rename.edit) {
+      const { files } = normalizeWorkspaceEdit(rename.edit);
+      refFiles = files.length;
+      refEdits = files.reduce((n, f) => n + f.edits.length, 0);
+      // Confirm before touching other files; declining aborts the whole move so we
+      // never leave the file renamed with its references dangling.
+      if (refFiles > 0 && !(await this.confirmReferenceUpdate(from, refFiles, refEdits))) return;
+    }
+
+    // Apply the reference rewrites while everything is still at its old path (open
+    // files in their buffer, closed files on disk), then move + re-point + notify.
+    if (rename.edit) this.applyWorkspaceEdit(rename.edit, rename.encoding);
     try {
       Fs.mkdirSync(Path.dirname(to), { recursive: true });
       try {
@@ -3437,8 +3458,67 @@ export class AppWindow {
       return;
     }
     editor.renameTo(to); // the open editor follows the file (keeps buffer/undo/cursor)
+    zym.lsp.didRenameFiles(from, to);
     const inPlace = Path.dirname(from) === Path.dirname(to);
-    zym.notifications.addInfo(inPlace ? `Renamed to ${Path.basename(to)}` : `Moved to ${tildify(to)}`);
+    const base = inPlace ? `Renamed to ${Path.basename(to)}` : `Moved to ${tildify(to)}`;
+    const refs = refFiles > 0
+      ? ` — updated ${refEdits} reference${refEdits === 1 ? '' : 's'} in ${refFiles} file${refFiles === 1 ? '' : 's'}`
+      : '';
+    zym.notifications.addInfo(base + refs);
+  }
+
+  /**
+   * Ask the primary server how moving `from` → `to` rewrites other files. Shows a
+   * cancellable "Updating references…" toast — but only if the request is slow
+   * enough to outlast a short delay, so quick renames don't flash it. Returns the
+   * edit (possibly null when no server cares), or `{ cancelled }` if the user bailed.
+   */
+  private async collectRenameEdit(
+    editor: TextEditor,
+    from: string,
+    to: string,
+  ): Promise<{ cancelled: true } | { cancelled: false; edit: WorkspaceEdit | null; encoding: PositionEncoding }> {
+    const source = new CancellationTokenSource();
+    let cancelled = false;
+    let toast: ReturnType<typeof zym.notifications.addInfo> | undefined;
+    const spinner = setTimeout(() => {
+      toast = zym.notifications.addInfo('Updating references…', {
+        loading: true,
+        dismissable: true,
+        buttons: [{ text: 'Cancel', onDidClick: () => { cancelled = true; source.cancel(); } }],
+      });
+    }, 300);
+    let edit: WorkspaceEdit | null = null;
+    try {
+      edit = await zym.lsp.willRenameFiles(from, to, source.token);
+    } catch {
+      // Cancellation or a server error — fall through (a server error proceeds as a
+      // plain move; an explicit cancel is caught by the flag below).
+    } finally {
+      clearTimeout(spinner);
+      toast?.dismiss();
+    }
+    if (cancelled) return { cancelled: true };
+    return { cancelled: false, edit, encoding: zym.lsp.completionPositionEncoding(editor.lsp) ?? 'utf-16' };
+  }
+
+  /** Confirm applying the cross-file reference rewrites of a move (Move & Update / Cancel). */
+  private confirmReferenceUpdate(from: string, fileCount: number, editCount: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const dialog = new Adw.AlertDialog({
+        heading: 'Update references?',
+        body:
+          `Moving ${Path.basename(from)} updates ${editCount} reference${editCount === 1 ? '' : 's'} ` +
+          `across ${fileCount} file${fileCount === 1 ? '' : 's'}.`,
+      });
+      dialog.addResponse('cancel', 'Cancel');
+      dialog.addResponse('move', 'Move & Update');
+      dialog.setResponseAppearance('move', Adw.ResponseAppearance.SUGGESTED);
+      dialog.setDefaultResponse('move');
+      dialog.setCloseResponse('cancel');
+      dialog.on('response', (response: string) => resolve(response === 'move'));
+      dialog.present(this.window);
+    });
   }
 
   // --- Window chrome helpers -------------------------------------------------

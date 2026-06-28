@@ -45,8 +45,11 @@ import {
   DocumentRangeFormattingRequest,
   WorkspaceSymbolRequest,
   DocumentSymbolRequest,
+  WillRenameFilesRequest,
+  DidRenameFilesNotification,
   TextDocumentSyncKind,
   MessageType,
+  type CancellationToken,
   type ClientCapabilities,
   type ServerCapabilities,
   type Diagnostic,
@@ -495,6 +498,65 @@ export class LanguageServer {
     });
   }
 
+  /** Whether the server wants a `workspace/willRenameFiles` request matching `path`
+   *  (capability advertised + at least one file-operation filter glob matches). */
+  wantsWillRename(path: string): boolean {
+    return this.matchesFileOperation(this.capabilities.workspace?.fileOperations?.willRename, path);
+  }
+
+  /** Whether the server wants a `workspace/didRenameFiles` notification for `path`. */
+  wantsDidRename(path: string): boolean {
+    return this.matchesFileOperation(this.capabilities.workspace?.fileOperations?.didRename, path);
+  }
+
+  // A file-operation registration matches `path` when one of its filters does: a
+  // `file:` scheme (the only kind we move), a `file` (not `folder`) match, and a
+  // glob hit (compiled against the server root, like the watcher globs).
+  private matchesFileOperation(
+    reg: { filters?: { scheme?: string; pattern: { glob: string; matches?: string } }[] } | undefined,
+    path: string,
+  ): boolean {
+    return !!reg?.filters?.some((f) => {
+      if (f.scheme && f.scheme !== 'file') return false;
+      if (f.pattern.matches === 'folder') return false;
+      return watcherRegExp(this.rootDir, f.pattern.glob).test(path);
+    });
+  }
+
+  /**
+   * Ask the server how moving `oldPath` → `newPath` should update other files →
+   * a `WorkspaceEdit` (or null). Cancellable via `token` ($/cancelRequest).
+   */
+  async willRenameFiles(oldPath: string, newPath: string, token?: CancellationToken): Promise<WorkspaceEdit | null> {
+    if (!this.hasWillRename) return null;
+    await this.start();
+    return this.client.sendRequest(
+      WillRenameFilesRequest.type,
+      { files: [{ oldUri: pathToUri(oldPath), newUri: pathToUri(newPath) }] },
+      token,
+    );
+  }
+
+  /** Tell the server a file moved `oldPath` → `newPath` (post-move, informational). */
+  didRenameFiles(oldPath: string, newPath: string): void {
+    if (!this.hasDidRename) return;
+    this.send(() =>
+      this.client.sendNotification(DidRenameFilesNotification.type, {
+        files: [{ oldUri: pathToUri(oldPath), newUri: pathToUri(newPath) }],
+      }),
+    );
+  }
+
+  /** Whether the server advertised interest in `workspace/willRenameFiles`. */
+  get hasWillRename(): boolean {
+    return !!this.capabilities.workspace?.fileOperations?.willRename;
+  }
+
+  /** Whether the server advertised interest in `workspace/didRenameFiles`. */
+  get hasDidRename(): boolean {
+    return !!this.capabilities.workspace?.fileOperations?.didRename;
+  }
+
   /** Whether the server can format a whole document. */
   get hasFormatting(): boolean {
     return !!this.capabilities.documentFormattingProvider;
@@ -666,6 +728,9 @@ const CLIENT_CAPABILITIES: ClientCapabilities = {
     didChangeConfiguration: { dynamicRegistration: false },
     // We honor dynamically-registered file watchers (workspace/didChangeWatchedFiles).
     didChangeWatchedFiles: { dynamicRegistration: true },
+    // We send workspace/willRenameFiles (applying the returned edit) + didRenameFiles
+    // when a file is moved/renamed, so servers can update cross-file references.
+    fileOperations: { dynamicRegistration: false, willRename: true, didRename: true },
   },
   // Accept progress tokens (we ack window/workDoneProgress/create); not yet shown.
   window: { workDoneProgress: true },

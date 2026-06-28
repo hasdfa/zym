@@ -23,7 +23,7 @@ import { CompletionTriggerKind, MessageType } from 'vscode-languageserver-protoc
 import type {
   Definition, LocationLink, Location, Position, Hover, CompletionItem,
   CodeAction, Command, Range as LspRange, WorkspaceEdit, TextEdit, FormattingOptions, SignatureHelp,
-  SymbolInformation, WorkspaceSymbol, DocumentSymbol, InlayHint,
+  SymbolInformation, WorkspaceSymbol, DocumentSymbol, InlayHint, CancellationToken,
 } from 'vscode-languageserver-protocol';
 
 /** A normalized inlay hint for end-of-line rendering: which buffer row + the label. */
@@ -519,6 +519,26 @@ export class LspManager {
     const cursor = doc.getCursorBufferPosition();
     const position = pointToPosition(cursor, doc.lineTextForRow(cursor.row), server.positionEncoding);
     return server.rename(path, position, newName);
+  }
+
+  /**
+   * Ask the primary server how moving `oldPath` → `newPath` should update other
+   * files (`workspace/willRenameFiles`) → a `WorkspaceEdit`, or null when no server
+   * wants it. Cancellable via `token`. The caller applies the edit, then performs
+   * the on-disk move and calls `didRenameFiles`.
+   */
+  async willRenameFiles(oldPath: string, newPath: string, token?: CancellationToken): Promise<WorkspaceEdit | null> {
+    if (!this.enabled) return null;
+    const server = this.primaryServerForPath(oldPath);
+    if (!server || !server.wantsWillRename(oldPath)) return null;
+    return server.willRenameFiles(oldPath, newPath, token);
+  }
+
+  /** Notify the primary server that a file moved `oldPath` → `newPath` (post-move). */
+  didRenameFiles(oldPath: string, newPath: string): void {
+    if (!this.enabled) return;
+    const server = this.primaryServerForPath(oldPath);
+    if (server?.wantsDidRename(oldPath)) server.didRenameFiles(oldPath, newPath);
   }
 
   /**
