@@ -111,30 +111,54 @@ export function appendToolRow(transcript: Transcript, name: string, input: unkno
   return entry;
 }
 
-// Bash (shared ToolRow): the command (monospace) is the header toggling the detail
-// (its output); collapsed shows the first line. A non-zero exit only reveals a trailing
-// red dot — the icon and command colour stay put (a miss is often normal).
-function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeDisposable): ToolEntry {
+/** How a Bash tool-use splits across its row's header (the expander button) and the
+ *  expanded detail. The Bash tool input carries a human-readable command `description`;
+ *  when present, the header shows that prose and the command drops into the detail —
+ *  otherwise the header is the command itself (and the detail holds only the output).
+ *  Pure, so the split is unit-tested. */
+export function bashRowParts(input: unknown): { headerText: string; headerIsCommand: boolean; detailCommand: string | null } {
   const command = (input as { command?: unknown })?.command;
+  const description = (input as { description?: unknown })?.description;
   const cmd = typeof command === 'string' ? command : summarizeInput(input);
-  const firstLine = cmd.split('\n', 1)[0];
-  const multiline = cmd.includes('\n');
+  const desc = typeof description === 'string' ? description.trim() : '';
+  return desc
+    ? { headerText: desc, headerIsCommand: false, detailCommand: cmd }
+    : { headerText: cmd, headerIsCommand: true, detailCommand: null };
+}
 
-  // The command renders as plain monospace (no syntax highlighting).
+// Bash (shared ToolRow): the header — the command's description when one is given, else
+// the command itself (monospace, cropped to its first line collapsed) — is the button
+// toggling the detail, which holds the full command (whenever the description owns the
+// header) above the output. A non-zero exit only reveals a trailing red dot — the icon and
+// header colour stay put (a miss is often normal).
+function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeDisposable): ToolEntry {
+  const { headerText, headerIsCommand, detailCommand } = bashRowParts(input);
+
+  // The command renders as plain monospace (no syntax highlighting); the description is prose.
   const monoWrap = (text: string) => `<span face="${escapeMarkup(fonts.monospaceFamily)}">${escapeMarkup(text)}</span>`;
 
   const label = new Gtk.Label({ xalign: 0, hexpand: true });
   label.addCssClass('conversation-tool-header');
-  // Collapsed: the command is cropped to its first line; the full (multiline)
-  // command shows only once expanded.
-  const render = (expanded: boolean) => {
-    const full = expanded || !multiline;
-    const text = full ? cmd : firstLine;
-    label.setWrap(full);
-    label.setEllipsize(full ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END);
-    setMarkupSafe(label, monoWrap(text), text);
-  };
-  render(false);
+  let onToggle: ((expanded: boolean) => void) | undefined;
+  if (headerIsCommand) {
+    // Collapsed: the command is cropped to its first line; the full (multiline)
+    // command shows only once expanded.
+    const firstLine = headerText.split('\n', 1)[0];
+    const multiline = headerText.includes('\n');
+    onToggle = (expanded: boolean) => {
+      const full = expanded || !multiline;
+      const text = full ? headerText : firstLine;
+      label.setWrap(full);
+      label.setEllipsize(full ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END);
+      setMarkupSafe(label, monoWrap(text), text);
+    };
+    onToggle(false);
+  } else {
+    // The description is prose: a single ellipsized line, unchanged across toggles.
+    label.setSingleLineMode(true);
+    label.setEllipsize(Pango.EllipsizeMode.END);
+    setMarkupSafe(label, escapeMarkup(headerText), headerText);
+  }
 
   // A trailing red dot (shown on a non-zero exit) at the far end of the row.
   const errorDot = new Gtk.Label({ valign: Gtk.Align.CENTER, visible: false });
@@ -144,7 +168,17 @@ function appendBashRow(transcript: Transcript, input: unknown, subs?: CompositeD
   header.append(label);
   header.append(errorDot);
 
-  const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle: render, subs });
+  const toolRow = new ToolRow({ icon: describeTool('Bash', input).icon, header, onToggle, subs });
+
+  // When the description owns the header, the command itself lives in the expanded
+  // detail (monospace, selectable), above any output.
+  if (detailCommand !== null) {
+    const cmdLabel = new Gtk.Label({ xalign: 0, wrap: true, selectable: true });
+    cmdLabel.addCssClass('conversation-bash-command');
+    setMarkupSafe(cmdLabel, monoWrap(detailCommand), detailCommand);
+    toolRow.content.append(cmdLabel);
+  }
+
   transcript.appendToolEntry(toolRow.root);
 
   let progress: InstanceType<typeof Gtk.Label> | null = null;

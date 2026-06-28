@@ -68,7 +68,4 @@ export class Message {
 
   /** Render markdown into the message (re-render on each streaming delta). */
   setMarkdown(markdown: string): void { this.view.setMarkdown(markdown); }
-
-  /** The message's markdown source (for the copy action). */
-  getMarkdown(): string { return this.view.getMarkdown(); }
 }
