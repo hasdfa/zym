@@ -7,8 +7,8 @@
  * `describeTool` is the pure mapping (tested); `toolMarkup` builds the Pango markup
  * (icon in the icon font, title bold, detail in the app monospace font).
  */
-import * as Os from 'node:os';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
+import { tildify } from '../util/tilde.ts';
 import { escapeMarkup } from './proseMarkup.ts';
 import { NERDFONT } from './nerdfont.ts';
 import { truncate } from './conversation/format.ts';
@@ -202,9 +202,7 @@ export function toolBodyMarkup(name: string, input: unknown, opts: { cwd?: strin
 function shortenPath(path: string, cwd?: string): string {
   if (!path) return '';
   if (cwd && (path === cwd || path.startsWith(cwd + '/'))) return path.slice(cwd.length + 1) || path;
-  const home = Os.homedir();
-  if (home && (path === home || path.startsWith(home + '/'))) return '~' + path.slice(home.length);
-  return path;
+  return tildify(path);
 }
 
 function compactJson(input: unknown): string {

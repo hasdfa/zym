@@ -6,7 +6,6 @@
  * activating a directory toggles its expansion. The assembled, scrollable tree
  * is exposed via `root`.
  */
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import GObject from 'gi:GObject-2.0';
 import Gio from 'gi:Gio-2.0';
@@ -14,6 +13,7 @@ import Pango from 'gi:Pango-1.0';
 import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../fonts.ts';
 import { addStyles } from '../styles.ts';
+import { tildify } from '../util/tilde.ts';
 import { theme } from '../theme/theme.ts';
 import { zym } from '../zym.ts';
 import { CompositeDisposable, type Disposable } from '../util/eventKit.ts';
@@ -35,14 +35,6 @@ const treeConfig = zym.config.scope('fileTree').register({
     description: 'Hide files not tracked by git in the file tree (only inside a repo).',
   },
 });
-
-/** A directory path for display: the home directory collapsed to `~`. */
-function displayPath(path: string): string {
-  const home = Os.homedir();
-  if (path === home) return '~';
-  if (path.startsWith(home + Path.sep)) return '~' + path.slice(home.length);
-  return path;
-}
 
 // Git diff colors (theme success/error), matching GitBranchButton.
 const GIT_ADDED_COLOR = theme.ui.status.success;
@@ -266,7 +258,7 @@ export class FileTree {
     // Header label: the root directory's full path (home collapsed to `~`), with
     // the real absolute path as the tooltip.
     const header = new Gtk.Label({
-      label: displayPath(options.rootPath),
+      label: tildify(options.rootPath),
       tooltipText: options.rootPath,
       xalign: 0,
       ellipsize: Pango.EllipsizeMode.END,
@@ -315,7 +307,7 @@ export class FileTree {
     this.trackedFiles = new Set();
     this.trackedDirs = new Set();
     if (git) this.refreshTracked();
-    this.header.setLabel(displayPath(rootPath));
+    this.header.setLabel(tildify(rootPath));
     this.header.setTooltipText(rootPath);
     this.tree = this.buildTree();
     this.selection.setModel(this.tree);

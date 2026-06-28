@@ -7,13 +7,13 @@
  * A dumb view — it owns no GObject signal handlers, so it needs no dispose() (the editor
  * detaches it on tab close).
  */
-import * as Os from 'node:os';
 import * as Path from 'node:path';
 import Pango from 'gi:Pango-1.0';
 import Gtk from 'gi:Gtk-4.0';
 import { ICON_FONT_FAMILY } from '../../fonts.ts';
 import { NERDFONT } from '../nerdfont.ts';
 import { addStyles } from '../../styles.ts';
+import { tildify } from '../../util/tilde.ts';
 import { escapeMarkup } from '../proseMarkup.ts';
 import { resolveSyntaxColor } from '../../theme/theme.ts';
 import { type Crumb } from '../../syntax/breadcrumb.ts';
@@ -39,10 +39,7 @@ const SEP = `<span font_family="${ICON_FONT_FAMILY}"> ${NERDFONT.NAV.CHEVRON_RIG
 function displayPath(path: string, cwd: string): string {
   if (path === cwd) return Path.basename(path);
   if (path.startsWith(cwd + Path.sep)) return path.slice(cwd.length + 1);
-  const home = Os.homedir();
-  if (path === home) return '~';
-  if (path.startsWith(home + Path.sep)) return '~' + path.slice(home.length);
-  return path;
+  return tildify(path);
 }
 
 export class LocationBar {

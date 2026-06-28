@@ -117,11 +117,6 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     description:
       "Fields shown in the line-blame annotation, in order. Recognized tokens: message, time, author, date, sha (any surrounding punctuation is a separator).",
   },
-  'ui.lsColors': {
-    type: 'boolean',
-    default: true,
-    description: 'Color file names in the path opener (file:open-path) using the $LS_COLORS environment variable.',
-  },
   'editor.scrollPastEnd': {
     type: 'boolean',
     default: true,
