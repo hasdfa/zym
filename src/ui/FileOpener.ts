@@ -15,13 +15,15 @@
  * through the Picker's `fetch` source (re-queried, debounced, as the directory
  * part changes) and resolves immediately — no background walk needed.
  *
- * The prompt works in *tilde-reduced* path space: `$HOME` and anything under it
- * shows as `~`, and the prompt, the listed entries, and the fuzzy filter all use
- * that form (so the typed `~/…` still matches the rows). `~` is expanded back to
- * `$HOME` only at the filesystem boundary (`readdir`, open, create) and when a
- * path is handed back to the caller. Deleting the `~` navigates up out of home
- * into its parent (`/home`, or the OS-equivalent) rather than collapsing to
- * nothing — see `directoryOf`.
+ * The prompt works in *shortened* path space, displayed against the workbench
+ * `cwd`: a path under the cwd shows relative (`src/foo`, the cwd itself as the
+ * empty prompt), else `$HOME` collapses to `~`, else it's absolute. The prompt,
+ * the listed entries, and the fuzzy filter all use that same form (so the typed
+ * path matches the rows). A shortened path is resolved back to a real absolute
+ * path only at the filesystem boundary (`readdir`, open, create) and when handed
+ * to the caller. Deleting the leading `~` navigates up out of home into its parent
+ * (`/home`, or the OS-equivalent) rather than collapsing to nothing — see
+ * `directoryOf`.
  */
 import * as Fs from 'node:fs';
 import * as Path from 'node:path';
@@ -41,7 +43,7 @@ interface FileItem extends PickerItem {
 /**
  * A prompt-driven action row (e.g. "Create:", "Move here:", "Rename to:"). Same
  * shape as the Picker's `PickerAction`; `label`/`visible`/`run` all receive the
- * current (tilde-form) prompt, and the wrapper expands `~` as needed.
+ * current (shortened) prompt, and the wrapper resolves it against `cwd` as needed.
  */
 interface PathPickerAction {
   label: (query: string) => string;
@@ -52,14 +54,16 @@ interface PathPickerAction {
 interface PathPickerOptions {
   host: Overlay;
   placeholder: string;
-  /** Initial prompt (a tilde-form path): a directory with a trailing slash to list
+  /** Base directory that paths are shortened against (the workbench cwd). */
+  cwd: string;
+  /** Initial prompt (a shortened path): a directory with a trailing slash to list
    *  its contents, or a file path to seed an edit (cursor lands at the end). */
   query: string;
   /** List only directories (the folder picker). */
   foldersOnly?: boolean;
   /** Frecency namespace for ranking/recording chosen entries (omit to disable). */
   frecency?: string;
-  /** Called with the real (expanded) absolute path of a chosen *file* entry. */
+  /** Called with the real (resolved) absolute path of a chosen *file* entry. */
   onChoose?: (path: string) => void;
   /** The prompt-driven action row, if any. */
   action?: PathPickerAction;
@@ -76,7 +80,7 @@ function openPathPicker(opts: PathPickerOptions): void {
     // Re-list whenever the directory part of the path changes; the Picker's local
     // fuzzy filter narrows + highlights the entries against the typed path in
     // between (debounced re-list, instant filter).
-    fetch: (query, onResult) => onResult(listDir(directoryOf(query), opts.foldersOnly)),
+    fetch: (query, onResult) => onResult(listDir(directoryOf(query, opts.cwd), opts.cwd, opts.foldersOnly)),
     // Show just the entry's name with a file/folder glyph and (folders) a trailing
     // slash; the shared directory prefix is already in the prompt, so a muted detail
     // column would only repeat it on every row. The glyph needs a blank cell for
@@ -96,28 +100,29 @@ function openPathPicker(opts: PathPickerOptions): void {
     frecency: opts.frecency,
     onSelect: (value, item) => {
       // Descend into a folder by rewriting the prompt to it (Picker re-lists and
-      // stays open, keeping the `~` form); hand a chosen file back as its real
-      // absolute path (expanding any `~`).
+      // stays open, keeping the shortened form); hand a chosen file back as its
+      // real absolute path (resolving any relative/`~` prefix).
       if ((item as FileItem).isDir) return withTrailingSlash(value);
-      opts.onChoose?.(expandTilde(value));
+      opts.onChoose?.(resolvePath(value, opts.cwd));
     },
     action: opts.action,
   });
 }
 
 /**
- * Open the path-navigating file opener rooted at `dir` (an absolute path, e.g.
- * the workbench cwd). `onChoose` is called with the absolute path of the chosen
- * file; folders descend in place instead. The action row creates the typed file
- * (and any missing parent directories) when it doesn't already exist.
+ * Open the path-navigating file opener with paths shortened against `cwd` (the
+ * workbench cwd), starting by listing it. `onChoose` is called with the absolute
+ * path of the chosen file; folders descend in place instead. The action row
+ * creates the typed file (and any missing parent directories) when it doesn't
+ * already exist.
  */
-export function openFileOpener(host: Overlay, dir: string, onChoose: (path: string) => void): void {
+export function openFileOpener(host: Overlay, cwd: string, onChoose: (path: string) => void): void {
   openPathPicker({
     host,
+    cwd,
     placeholder: 'Open file…',
-    // The prompt holds a full path (with `$HOME` shown as `~`); seed it with the
-    // starting directory (trailing slash → list its contents, with an empty filter).
-    query: withTrailingSlash(tildify(dir)),
+    // Seed with the cwd itself — shortened to the empty prompt, listing its contents.
+    query: listSeed(cwd, cwd),
     frecency: 'file',
     onChoose,
     action: {
@@ -125,7 +130,7 @@ export function openFileOpener(host: Overlay, dir: string, onChoose: (path: stri
       // Only surface when the query names a file (non-empty basename, no trailing slash).
       visible: (query) => !query.endsWith('/') && Path.basename(query).length > 0,
       run: (query) => {
-        const target = expandTilde(query);
+        const target = resolvePath(query, cwd);
         Fs.mkdirSync(Path.dirname(target), { recursive: true });
         if (!Fs.existsSync(target)) Fs.writeFileSync(target, '');
         onChoose(target);
@@ -135,62 +140,102 @@ export function openFileOpener(host: Overlay, dir: string, onChoose: (path: stri
 }
 
 /**
- * Open a folder picker rooted at `dir`, listing *only* directories. Navigate by
- * descending into folders; the always-present action row picks the directory
- * currently being listed and hands its absolute path to `onChoose` (e.g. a move
- * destination).
+ * Open a folder picker rooted at `dir`, paths shortened against `cwd`, listing
+ * *only* directories. Navigate by descending into folders; the always-present
+ * action row picks the directory currently being listed and hands its absolute
+ * path to `onChoose` (e.g. a move destination).
  */
-export function openFolderPicker(host: Overlay, dir: string, onChoose: (folder: string) => void): void {
+export function openFolderPicker(host: Overlay, cwd: string, dir: string, onChoose: (folder: string) => void): void {
   openPathPicker({
     host,
+    cwd,
     placeholder: 'Move to folder…',
-    query: withTrailingSlash(tildify(dir)),
+    query: listSeed(dir, cwd),
     foldersOnly: true,
     action: {
       // The directory whose contents are listed is the destination; `directoryOf`
       // is exactly what `fetch` lists, so it stays in step as you descend / filter.
-      label: (query) => `Move here: ${directoryOf(query)}`,
-      run: (query) => onChoose(expandTilde(directoryOf(query))),
+      label: (query) => `Move here: ${directoryOf(query, cwd) || '.'}`,
+      run: (query) => onChoose(resolvePath(directoryOf(query, cwd), cwd)),
     },
   });
 }
 
 /**
- * Open a rename/relocate picker seeded with `file`'s full path (cursor at the
- * end, the directory listed and filtered by the current name). Edit the path and
- * confirm via the action row to rename to the typed path; selecting an existing
- * file targets it instead (the caller prompts before overwriting). `onChoose`
- * receives the real (expanded) absolute destination path.
+ * Open a rename/relocate picker seeded with `file`'s path (shortened against
+ * `cwd`, cursor at the end, the directory listed and filtered by the current
+ * name). Edit the path and confirm via the action row to rename to the typed
+ * path; selecting an existing file targets it instead (the caller prompts before
+ * overwriting). `onChoose` receives the real (resolved) absolute destination path.
  */
-export function openRenamePicker(host: Overlay, file: string, onChoose: (path: string) => void): void {
+export function openRenamePicker(host: Overlay, cwd: string, file: string, onChoose: (path: string) => void): void {
   openPathPicker({
     host,
+    cwd,
     placeholder: 'Rename to…',
-    query: tildify(file),
+    query: relativize(file, cwd),
     onChoose,
     action: {
       label: (query) => `Rename to: ${Path.basename(query)}`,
       // Surface when the query names a file (non-empty basename, no trailing slash)
-      // that differs from the source path.
+      // that resolves to somewhere other than the source path.
       visible: (query) =>
-        !query.endsWith('/') && Path.basename(query).length > 0 && expandTilde(query) !== file,
-      run: (query) => onChoose(expandTilde(query)),
+        !query.endsWith('/') && Path.basename(query).length > 0 && resolvePath(query, cwd) !== file,
+      run: (query) => onChoose(resolvePath(query, cwd)),
     },
   });
 }
 
 /**
- * The directory part of a typed path: everything up to (and not past) the last
- * `/`. Computed on the expanded (`~`→`$HOME`) path and re-tildified, so `~`
- * behaves exactly like the home path it stands for — in particular, the bare
- * `~` (its trailing slash deleted) yields home's parent (`/home`, or the
- * OS-equivalent), so deleting the `~` navigates up out of home.
+ * Shorten an absolute `path` for display against the workbench `cwd`: the cwd
+ * itself is the empty string, a path under it is cwd-relative (`src/foo`), and
+ * anything else falls back to `~`/absolute (see `tildify`). Inverse of
+ * `resolvePath`.
  */
-function directoryOf(input: string): string {
-  const expanded = expandTilde(input);
-  const slash = expanded.lastIndexOf('/');
-  if (slash < 0) return '.';
-  return tildify(expanded.slice(0, slash) || '/'); // keep root as "/", not ""
+function relativize(path: string, cwd: string): string {
+  if (path === cwd) return '';
+  if (path.startsWith(cwd + Path.sep)) return path.slice(cwd.length + 1);
+  return tildify(path);
+}
+
+/**
+ * Resolve a shortened prompt `input` back to a real absolute path: the empty
+ * string is the cwd, a `~`-rooted path expands to `$HOME`, an absolute path is
+ * itself, and anything else is relative to `cwd`. Inverse of `relativize`.
+ */
+function resolvePath(input: string, cwd: string): string {
+  if (input === '') return cwd;
+  if (input === '~' || input.startsWith('~' + Path.sep)) return expandTilde(input);
+  if (Path.isAbsolute(input)) return input;
+  return Path.resolve(cwd, input);
+}
+
+/** The prompt that lists `dir`'s contents (empty filter): its shortened form with
+ *  a trailing slash, or the empty prompt when `dir` is the cwd itself. */
+function listSeed(dir: string, cwd: string): string {
+  const rel = relativize(dir, cwd);
+  return rel === '' ? '' : withTrailingSlash(rel);
+}
+
+/**
+ * The directory part of a typed path: everything up to (and not past) the last
+ * `/`, resolved against `cwd` and re-shortened. The empty prompt is the cwd. A
+ * slashless prompt lists the parent of whatever it resolves to (so `src` filters
+ * the cwd and `~` — the home shorthand with its slash deleted — lands in home's
+ * parent, `/home` or the OS-equivalent), which is what makes deleting the `~`
+ * navigate up out of home.
+ */
+function directoryOf(input: string, cwd: string): string {
+  if (input === '') return relativize(cwd, cwd); // the cwd lists itself
+  const slash = input.lastIndexOf('/');
+  if (slash < 0) return relativize(parentOf(resolvePath(input, cwd)), cwd);
+  return relativize(resolvePath(input.slice(0, slash) || '/', cwd), cwd); // keep root as "/", not ""
+}
+
+/** The parent directory of an absolute `path` (root stays root). */
+function parentOf(path: string): string {
+  const slash = path.lastIndexOf('/');
+  return slash <= 0 ? '/' : path.slice(0, slash);
 }
 
 /** `path` with exactly one trailing slash (so it reads as "this directory"). */
@@ -200,15 +245,15 @@ function withTrailingSlash(path: string): string {
 
 /**
  * List `dir`'s entries as picker items (folders first, then files, each sorted
- * by name; `foldersOnly` drops the files). `dir` may be `~`-rooted; it's expanded
- * for the `readdir`, but each item's path is re-tildified so its `text` stays in
- * the same `~` form as the typed prompt (and so home itself, listed from `/home`,
- * reads as `~`). `text` is that path so it fuzzy-matches the typed prompt, with
- * `boostFrom` at the filename so name matches outrank directory ones. An
- * unreadable directory yields no entries (the picker shows "No matches").
+ * by name; `foldersOnly` drops the files). `dir` is a shortened path; it's
+ * resolved against `cwd` for the `readdir`, but each item's path is re-shortened
+ * so its `text` stays in the same form as the typed prompt. `text` is that path
+ * so it fuzzy-matches the typed prompt, with `boostFrom` at the filename so name
+ * matches outrank directory ones. An unreadable directory yields no entries (the
+ * picker shows "No matches").
  */
-function listDir(dir: string, foldersOnly = false): FileItem[] {
-  const abs = expandTilde(dir);
+function listDir(dir: string, cwd: string, foldersOnly = false): FileItem[] {
+  const abs = resolvePath(dir, cwd);
   let entries: Fs.Dirent[];
   try {
     entries = Fs.readdirSync(abs, { withFileTypes: true });
@@ -220,9 +265,13 @@ function listDir(dir: string, foldersOnly = false): FileItem[] {
   for (const entry of entries) {
     const isDir = entry.isDirectory();
     if (foldersOnly && !isDir) continue;
-    const value = tildify(Path.join(abs, entry.name));
-    // basename(value), not entry.name: tildify collapses home itself to `~`, whose
-    // basename is `~` rather than the directory's real name.
+    const full = Path.join(abs, entry.name);
+    // `relativize` collapses the cwd itself to "" — fine as the listing root, but a
+    // blank row when the cwd shows up as an *entry* (listing its parent), so fall
+    // back to its `~`/absolute form there.
+    const value = relativize(full, cwd) || tildify(full);
+    // basename(value), not entry.name: the shortened value may rename the leading
+    // segment (e.g. home collapsed to `~`), so derive the boost from `value` itself.
     const item: FileItem = { value, text: value, boostFrom: value.length - Path.basename(value).length, isDir };
     (isDir ? dirs : files).push(item);
   }

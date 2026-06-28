@@ -3381,7 +3381,7 @@ export class AppWindow {
     const editor = this.activeEditor;
     const file = editor?.currentFile;
     if (!editor || !file) return;
-    openFolderPicker(this.overlay, Path.dirname(file), (destDir) =>
+    openFolderPicker(this.overlay, this.workbench.cwd, Path.dirname(file), (destDir) =>
       this.relocateFile(editor, file, Path.join(destDir, Path.basename(file))),
     );
   }
@@ -3391,7 +3391,7 @@ export class AppWindow {
     const editor = this.activeEditor;
     const file = editor?.currentFile;
     if (!editor || !file) return;
-    openRenamePicker(this.overlay, file, (target) => this.relocateFile(editor, file, target));
+    openRenamePicker(this.overlay, this.workbench.cwd, file, (target) => this.relocateFile(editor, file, target));
   }
 
   /** Move/rename `from` → `to` on disk, prompting before clobbering an existing
