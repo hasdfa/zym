@@ -51,7 +51,7 @@ What exists, and whether it reacts to a live change:
   setting; should gate the follow-the-OS behavior once it exists.
 - **Fonts** — ✅ centralized in the `fonts` store (`FontStore` in
   `src/fonts.ts`). One reactive stylesheet
-  (`styles.set(..., { key: 'app-fonts' })`) carries every CSS widget's
+  (`styles.add(() => …)`, re-applied via the handle's `refresh()`) carries every CSS widget's
   font — components register a selector via `fonts.monospace(sel)` /
   `fonts.ui(sel)` instead of inlining declarations; Pango-markup callers
   read the live `fonts.monospaceFamily` / `fonts.uiFamily` at render
@@ -127,8 +127,8 @@ re-appliable.
 ## Notes / decisions
 
 - Prefer driving as much as possible through **CSS variables + a single
-  `Gtk.CssProvider` reload** (see `src/styles.ts`, which already supports
-  keyed, replaceable stylesheets) so one re-emit updates every CSS
+  dynamic stylesheet** (a `styles.add(() => …)` render sheet, re-applied via the
+  handle's `refresh()`) so one re-emit updates every CSS
   consumer, rather than per-widget imperative re-styling. Colors baked
   into Pango markup at row-build time (picker highlight) can't be CSS vars
   — those callers must rebuild on the signal instead.

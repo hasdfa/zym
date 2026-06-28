@@ -32,8 +32,7 @@ addStyles(/* css */`
     background: var(--user-bubble-bg);
   }
   .Message.is-assistant .message-bubble {
-    // background: var(--card-bg-color);
-    // border: 1px solid var(--border-color);
+    /* No background or border: the assistant bubble blends into the surface. */
   }
   .Message.is-thinking .message-bubble { 
     border: none;
@@ -68,7 +67,4 @@ export class Message {
 
   /** Render markdown into the message (re-render on each streaming delta). */
   setMarkdown(markdown: string): void { this.view.setMarkdown(markdown); }
-
-  /** The message's markdown source (for the copy action). */
-  getMarkdown(): string { return this.view.getMarkdown(); }
 }

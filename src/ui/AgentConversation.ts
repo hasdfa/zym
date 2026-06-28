@@ -26,8 +26,7 @@ import { TextEditor, createInput } from './TextEditor/TextEditor.ts';
 import { createSlashCommandSource } from './TextEditor/createSlashCommandSource.ts';
 import { MarkdownView } from './markdown/MarkdownView.ts';
 import { escapeMarkup, setMarkupSafe } from './proseMarkup.ts';
-import { iconSpan, iconLabel } from './icons.ts';
-import { clipboard } from './TextEditor/vim/clipboard.ts';
+import { iconSpan } from './icons.ts';
 import { formatCount, parseLocalCommand } from './conversation/format.ts';
 import { StickyListPanel } from './conversation/StickyListPanel.ts';
 import { Transcript } from './conversation/Transcript.ts';
@@ -119,10 +118,6 @@ addStyles(/* css */`
   .AgentConversation .conversation-mode.is-auto { color: var(--t-ui-status-warning); }
   .AgentConversation .conversation-mode.is-plan { color: var(--t-ui-status-info); }
 
-  /* The floating "copy message" button, pinned top-right of the transcript viewport. */
-  .AgentConversation .conversation-copy { margin: 10px; padding: 2px 6px; min-height: 0; min-width: 0; opacity: 0.5; }
-  .AgentConversation .conversation-copy:hover { opacity: 1; }
-
   /* A single wrapped, left-aligned row (interrupted / error / system / resume). */
   .AgentConversation .conversation-row { padding: 6px 0; }
   /* Tool-use header text (tool rows / subagent / monitor / answered question). */
@@ -137,6 +132,9 @@ addStyles(/* css */`
      The warning is carried by the ToolRow warning status (icon + header tint). */
   .AgentConversation .conversation-unknown-body { opacity: 0.75; }
 
+  /* The Bash command, relocated into the expanded detail when its description owns the
+     header (toolRows.ts). Plain monospace, a touch of bottom margin off the output card. */
+  .AgentConversation .conversation-bash-command { margin-bottom: 4px; }
   /* Truncated tool-output preview tucked under a row. */
   .AgentConversation .conversation-result {
     opacity: 0.7;
@@ -167,6 +165,7 @@ addStyles(/* css */`
 
   /* The monospace bits (tool detail, results, JSON dumps) follow the font store. */
   .AgentConversation .conversation-perm-detail,
+  .AgentConversation .conversation-bash-command,
   .AgentConversation .conversation-result,
   .AgentConversation .conversation-unknown-body { font-family: var(--t-font-monospace-family); }
 `);
@@ -231,12 +230,6 @@ export class AgentConversation implements Agent {
   private readonly cwd: string;
   // The scrollable column of entries (entries box + spacing + stick-to-bottom).
   private readonly transcript = new Transcript({ maxWidth: 820 });
-  // A "copy message" button floated over the transcript viewport (so it stays sticky
-  // while scrolling a long message); revealed when the pointer is over a message,
-  // copying that message's markdown source.
-  private readonly copyButton: InstanceType<typeof Gtk.Button>;
-  private copyTargetView: MarkdownView | null = null;
-  private readonly bubbleViews = new Map<InstanceType<typeof Gtk.Widget>, MarkdownView>();
   private readonly thinkingReveal: InstanceType<typeof Gtk.Revealer>; // pending (queued) message above the prompt
   private readonly thinkingLabel: InstanceType<typeof Gtk.Label>; // "Thinking…" + live token count (footer)
   private readonly thinkingFooter: InstanceType<typeof Gtk.Box>; // footer slot: spinner + label, replaces the status icon while working
@@ -361,31 +354,6 @@ export class AgentConversation implements Agent {
     this.session = new SdkSession({ cwd: options.cwd, command: options.command, resume: options.resume, createTransport: options.createTransport });
     this.oneShot = options.oneShot ?? createOneShotAgent();
 
-    // The copy button lives in an overlay OVER the transcript, so it's positioned
-    // relative to the viewport — it stays pinned top-right while the message scrolls.
-    this.copyButton = new Gtk.Button();
-    this.copyButton.addCssClass('flat');
-    this.copyButton.addCssClass('conversation-copy');
-    this.copyButton.setChild(iconLabel(NERDFONT.ACTION.COPY));
-    this.copyButton.setTooltipText('Copy message');
-    this.copyButton.setHalign(Gtk.Align.END);
-    this.copyButton.setValign(Gtk.Align.START);
-    this.copyButton.setVisible(false);
-    this.subs.connect(this.copyButton, 'clicked', () => {
-      if (!this.copyTargetView) return;
-      clipboard.write(this.copyTargetView.getMarkdown());
-      this.copyButton.setTooltipText('Copied');
-    });
-    const transcriptOverlay = new Gtk.Overlay();
-    transcriptOverlay.setChild(this.transcript.root);
-    transcriptOverlay.addOverlay(this.copyButton);
-    // Track the message under the pointer to target + reveal the button. The
-    // controller is on the overlay so moving onto the (overlaid) button isn't a leave.
-    const copyMotion = new Gtk.EventControllerMotion();
-    copyMotion.on('motion', (x: number, y: number) => this.updateCopyButton(transcriptOverlay, x, y));
-    copyMotion.on('leave', () => this.copyButton.setVisible(false));
-    this.subs.addController(transcriptOverlay, copyMotion);
-
     // The footer's left slot: a live "Thinking… (N tokens)" indicator (spinner +
     // label) that REPLACES the status icon while the agent works (see refreshThinking
     // + the footer below). Built here so the label exists before onThinkingTokens fires.
@@ -492,7 +460,7 @@ export class AgentConversation implements Agent {
     const mainBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
     mainBox.addCssClass('conversation-surface');
     mainBox.append(this.tasksPanel.root);
-    mainBox.append(transcriptOverlay); // the scroller, with the floating copy button over it
+    mainBox.append(this.transcript.root); // the scrollable transcript column
     mainBox.append(this.thinkingReveal); // the thinking spinner sits just above the prompt
     mainBox.append(this.actionsBar.root);
     mainBox.append(inputCard);
@@ -1073,28 +1041,8 @@ export class AgentConversation implements Agent {
   private addMarkdownBlock(kind: MessageKind): MarkdownView {
     const message = new Message(kind);
     this.transcript.appendEntry(message.root); // a MESSAGE entry (not a tool entry)
-    // Register the message as a copy target (skip thinking — it's an ephemeral note).
-    if (kind !== 'thinking') this.bubbleViews.set(message.root, message.view);
     this.transcript.scrollToBottom();
     return message.view;
-  }
-
-  // Point the floating copy button at the message under the pointer, revealing it
-  // over that message (or hide it when the pointer isn't over a copyable message).
-  private updateCopyButton(overlay: InstanceType<typeof Gtk.Overlay>, x: number, y: number): void {
-    let w: InstanceType<typeof Gtk.Widget> | null = overlay.pick(x, y, Gtk.PickFlags.DEFAULT);
-    while (w) {
-      if (w === this.copyButton) return; // over the button itself — leave it shown
-      const view = this.bubbleViews.get(w);
-      if (view) {
-        this.copyTargetView = view;
-        this.copyButton.setTooltipText('Copy message');
-        this.copyButton.setVisible(true);
-        return;
-      }
-      w = w.getParent();
-    }
-    this.copyButton.setVisible(false);
   }
 
   // A single wrapped, left-aligned row (thinking / tool / system).

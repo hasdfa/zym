@@ -1,8 +1,8 @@
 /*
- * chromeStyles — the window's themeable chrome stylesheets. AppWindow installs
- * these once on construction (and could re-apply them on a future theme switch).
- * They are pure: each reads the current `theme` and writes a single keyed,
- * replaceable stylesheet via `styles.set`, so nothing here touches the window.
+ * chromeStyles — the window's themeable chrome stylesheet. Self-registers a
+ * single dynamic, hot-reloadable sheet at module load (this module only registers
+ * styles, so a re-import is safe). It reads the current `theme`; on a future theme
+ * switch, `applyNotificationStyles()` re-applies it. Nothing here touches a window.
  */
 import { styles } from '../styles.ts';
 import { theme } from '../theme/theme.ts';
@@ -12,8 +12,8 @@ import { theme } from '../theme/theme.ts';
 // severity is legible at a glance. Colors come from the theme's semantic keys
 // (fatal reuses error); applied independently of the chrome so it works even
 // for themes that leave the chrome to Adwaita.
-export function applyNotificationStyles(): void {
-  const { status: { info, success, warning, error }, text: { muted: textMuted }, surface: { popover: popoverBg }, border, shadow } = theme.ui;
+function notificationCss(): string {
+  const { status: { info, success, warning, error }, text: { muted: textMuted }, surface: { popover: popoverBg }, shadow } = theme.ui;
   const colors: Record<string, string> = {
     trace: textMuted,
     info,
@@ -41,5 +41,14 @@ export function applyNotificationStyles(): void {
     rules.push(`.NotificationRow.notification-${type} { border-left: 3px solid ${color}; padding-left: 6px; }`);
   }
 
-  styles.set(rules.join('\n'), { key: 'notification-colors' });
+  return rules.join('\n');
+}
+
+// A render function (re-applied on hot-reload and via refresh()), since the sheet
+// is theme-derived. Module-top so node-gtk watches this file.
+const notificationSheet = styles.add(notificationCss);
+
+/** Re-apply the notification chrome (e.g. after a future theme switch). */
+export function applyNotificationStyles(): void {
+  notificationSheet.refresh();
 }

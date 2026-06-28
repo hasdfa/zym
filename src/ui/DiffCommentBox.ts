@@ -75,6 +75,10 @@ export interface DiffCommentBoxOptions {
   onCancel: () => void;
   /** Ctrl+Enter — start review mode (accumulate). No-op when already reviewing (the badge shows). */
   onStartReview?: () => void;
+  /** Whether review mode is offered at all (default true). `false` (the file-editor comment box,
+   *  which only sends single comments) hides the "Ctrl+Enter to review" hint and turns Ctrl+Enter
+   *  into a plain submit. */
+  reviewable?: boolean;
   /** Initial review state — sets the submit hint and whether the badge shows. */
   reviewing?: boolean;
   /** Editing an existing pending comment (changes the hint to "update"). */
@@ -168,7 +172,9 @@ export class DiffCommentBox {
   }
 
   // Ctrl+Enter: turn review mode on (if off), then submit this comment — so it's accumulated.
+  // When review mode is disabled (`reviewable: false`), Ctrl+Enter is just a plain submit.
   private reviewAndSubmit(): void {
+    if (this.options.reviewable === false) return void this.options.onSubmit(this.input.getText());
     if (!this.reviewing) {
       this.reviewing = true;
       this.options.onStartReview?.(); // flips the view into review mode BEFORE the submit reads it
@@ -180,7 +186,7 @@ export class DiffCommentBox {
 
   private hintText(): string {
     const submit = this.options.editing ? 'Enter to update' : this.reviewing ? 'Enter to add to review' : 'Enter to send';
-    const review = this.options.editing || this.reviewing ? '' : ' · Ctrl+Enter to review';
+    const review = this.options.editing || this.reviewing || this.options.reviewable === false ? '' : ' · Ctrl+Enter to review';
     return `${submit} · Alt+Enter for newline${review}`;
   }
 }

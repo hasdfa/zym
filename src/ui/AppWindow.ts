@@ -125,7 +125,7 @@ const SIDEBAR_COLLAPSED_WIDTH = 48;
 const AGENT_SIDEBAR_WIDTH = 480;
 
 addStyles(/* css */`
-  .AppWindow--paned > separator { opacity: 0 }
+  .AppWindow--paned > separator { opacity: 0; }
 `)
 
 type Widget = InstanceType<typeof Gtk.Widget>;
@@ -727,6 +727,9 @@ export class AppWindow {
       cwd: () => owner.cwd, // the LocationBar shortens paths against the workbench's (live) root
       document,
       onReleaseDocument: () => this.documents.release(document),
+      // `enter` (normal mode / visual selection) comments the line to an agent — same seam every
+      // diff's review routes through; with no agent running it opens the picker / launches one.
+      onComment: (message) => this.reviewToAgent(message),
     });
     this.editors.set(editor.root, editor);
     this.editorOwners.set(editor.root, owner);
@@ -1037,18 +1040,20 @@ export class AppWindow {
     });
   }
 
-  // The "Send to new agent" review path: open the launcher (model / permission / worktree), then
-  // deliver the review to the agent it starts — as a turn, queued after any worktree-setup launch
-  // prompt. openAgent already reveals a foreground agent, so don't re-reveal here.
+  // The "Send to new agent" review path: open the launcher (model / permission / worktree) with the
+  // review PRE-FILLED as the prompt, so it's the agent's FIRST turn (the launch prompt is the spawn
+  // argument, reliably delivered). It used to start the agent and then send the review as a separate
+  // post-launch turn — that races with the just-spawned agent and is dropped, so the agent got the
+  // launcher's prompt but not the review. The user can edit the pre-filled review or just launch.
   private launchAgentForReview(message: string): void {
     openAgentLauncher(this.overlay, {
       cwd: this.workbench.cwd,
       defaultKind: resolveAgentKind(zym.config.get('agent.implementation')),
       initialWorktree: 'current', // a review runs against the working tree by default
+      initialPrompt: message, // the review is the prompt → delivered as the agent's first turn
       onLaunch: ({ prompt, command, cwd, kind, worktree, background }) => {
         const { agentPrompt, userPrompt } = launchPrompt(prompt, worktree);
-        const agent = this.openAgent({ prompt: agentPrompt, userPrompt, command, cwd, kind, background });
-        this.deliverToAgent(agent, message, { submit: true, reveal: false });
+        this.openAgent({ prompt: agentPrompt, userPrompt, command, cwd, kind, background });
       },
     });
   }
@@ -2432,6 +2437,21 @@ export class AppWindow {
       'diff:collapse-context': {
         didDispatch: () => this.activeContinuousDiff()?.collapseContext(),
         description: 'Re-collapse expanded context back to the windowed diff',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:toggle-file': {
+        didDispatch: () => this.activeContinuousDiff()?.toggleFileCollapseAtCursor(),
+        description: 'Collapse / expand the file under the cursor',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:collapse-all-files': {
+        didDispatch: () => this.activeContinuousDiff()?.collapseAllFiles(),
+        description: 'Collapse every file to a one-line header (overview)',
+        when: () => this.activeContinuousDiff() !== null,
+      },
+      'diff:expand-all-files': {
+        didDispatch: () => this.activeContinuousDiff()?.expandAllFiles(),
+        description: 'Expand every collapsed file back to its diff',
         when: () => this.activeContinuousDiff() !== null,
       },
       'search:toggle-collapse': {

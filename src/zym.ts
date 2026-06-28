@@ -53,6 +53,14 @@ const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
     description:
       "Monospace font as a Pango description, e.g. 'JetBrains Mono 13'; empty follows the system monospace font.",
   },
+  'keymap.partialMatchTimeoutMs': {
+    type: 'integer',
+    default: 1000,
+    minimum: 100,
+    maximum: 10000,
+    description:
+      'How long (ms) an incomplete multi-key chord prefix is held before it is abandoned — the keys then fall through to the focused widget (or a shorter binding fires). Longer gives more time to finish a chord; shorter lets a lone prefix key reach the widget sooner.',
+  },
   'editor.tabLength': {
     type: 'integer',
     default: 2,
