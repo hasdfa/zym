@@ -61,7 +61,14 @@ export function createSourceScheme(theme: Theme): StyleScheme {
 
   const id = `zym-${theme.name}`;
   Fs.mkdirSync(searchDir, { recursive: true }); // self-heal if the cache dir was removed mid-session
-  Fs.writeFileSync(Path.join(searchDir, `${id}.xml`), schemeXml(id, theme));
+  // Write atomically (temp + rename) so a concurrent instance's forceRescan never reads a
+  // half-written/truncated file — a plain writeFileSync truncates in place, and a reader hitting
+  // that window parses an empty document and the scheme fails to load. The temp name is
+  // per-process so two instances can't clobber each other's temp; the rename is atomic.
+  const dest = Path.join(searchDir, `${id}.xml`);
+  const tmp = `${dest}.${process.pid}.tmp`;
+  Fs.writeFileSync(tmp, schemeXml(id, theme));
+  Fs.renameSync(tmp, dest);
   manager.forceRescan();
 
   const scheme = manager.getScheme(id);

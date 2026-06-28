@@ -294,11 +294,14 @@ test('an external git fetch refreshes ahead/behind via the ref watch (no manual 
       setTimeout(() => {
         un();
         resolve();
-      }, 8000).unref?.();
+      }, 15000).unref?.(); // generous so a starved event loop (full suite runs 6 suites at once) can't trip it
     });
 
-    // Let the ref watch establish, then fetch externally (refs-only move).
-    await new Promise<void>((res) => setTimeout(res, 300).unref?.());
+    // Let the ref watch establish, then fetch externally (refs-only move). The wait must outlast
+    // chokidar's initial scan — if the fetch lands before the watcher is ready the one-shot ref
+    // `change` is missed and only the 60s heartbeat would catch it. 1s leaves headroom under the
+    // parallel full-suite load that a tight 300ms occasionally lost to.
+    await new Promise<void>((res) => setTimeout(res, 1000).unref?.());
     execFileSync('git', ['fetch', 'origin'], { cwd: d });
 
     await fired;

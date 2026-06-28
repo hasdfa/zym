@@ -20,6 +20,7 @@ function setup(text: string) {
   buffer.setText(text, -1);
   const view = new GtkSource.View({ buffer });
   const editor = new EditorModel(view, buffer);
+  editor.setFocused(true); // an active editor paints the block caret (else focused=false hides it)
   const vimState = new VimState(editor, new StatusBarManager());
   const run = (klass: string) => vimState.operationStack.run(klass);
   const at = (row: number, col: number) => editor.setCursorBufferPosition(new Point(row, col));
