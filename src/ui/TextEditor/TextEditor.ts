@@ -1272,6 +1272,7 @@ export class TextEditor implements DocumentHost {
     const onComment = this.onComment;
     if (!onComment) return;
     if (this.commentBox) this.closeComment(); // re-target onto the current row
+    const hadSelection = !this.editorModel.getSelectedBufferRange().isEmpty();
     const target = this.buildEditorCommentTarget();
     if (!target) return void zym.notifications.addTrace('No file line to comment on');
     const { anchorRow, ...parts } = target;
@@ -1282,6 +1283,9 @@ export class TextEditor implements DocumentHost {
         const comment = text.trim();
         this.closeComment();
         if (!comment) return;
+        // Sending consumes a visual selection — drop it (back to normal mode, like Esc) so the
+        // commented range isn't left highlighted. A bare-cursor comment leaves the cursor as-is.
+        if (hadSelection) this.vimState.resetNormalMode();
         onComment(formatAgentComment({ ...parts, comment }));
       },
       onCancel: () => this.closeComment(),
