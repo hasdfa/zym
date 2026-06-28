@@ -167,11 +167,19 @@ test('ia / aa operate on a function argument (with separator)', () => {
   assert.equal(around.editor.getText(), 'fn(a, c)\n'); // arg + its separator
 });
 
-test('ii selects the indentation block', () => {
+test('Indentation selects the indentation block (ii and ai both map to it)', () => {
   const { editor, run, at } = setup('def f():\n    a\n    b\nc\n');
   at(1, 5); // inside the indented body
   run('Delete');
-  run('InnerIndentation');
+  run('Indentation');
+  assert.equal(editor.getText(), 'def f():\nc\n');
+});
+
+test('ii spans blank lines inside the block (acts like ai)', () => {
+  const { editor, run, at } = setup('def f():\n    a\n\n    b\nc\n');
+  at(1, 5); // inside the indented body, above the blank line
+  run('Delete');
+  run('Indentation');
   assert.equal(editor.getText(), 'def f():\nc\n');
 });
 
