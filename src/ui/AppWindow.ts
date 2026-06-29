@@ -1199,8 +1199,12 @@ export class AppWindow {
     let agent: Agent;
     if (a.sessionId) {
       const session = listResumableSessions(this.agentSessionRoots()).find((s) => s.id === a.sessionId);
+      // The saved workbench cwd (`ws.root`) is authoritative for where the editor
+      // roots — `resumeOptions` still relocates the transcript and supplies the
+      // resume id + title, but its transcript-derived root is overridden by the
+      // recorded one, so restore needs no set_worktree re-announce from the agent.
       agent = session
-        ? this.openAgent({ ...this.resumeOptions(session), kind })
+        ? this.openAgent({ ...this.resumeOptions(session), root: ws.root, kind })
         : this.openAgent({ kind, root: ws.root, resume: { sessionId: a.sessionId } });
     } else {
       agent = this.openAgent({ kind, root: ws.root, prompt: a.prompt });

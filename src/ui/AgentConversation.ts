@@ -657,15 +657,17 @@ export class AgentConversation implements Agent {
 
   clearUnannouncedWorktree(): void { /* no worktree validator for sdk */ }
 
-  /** Session state: base argv + cwd + prompt + session id, tagged `claude-sdk` so a
-   *  restore relaunches this native host (not the terminal agent) and resumes the
-   *  conversation rather than starting over. */
+  /** Session state: base argv + the workbench (worktree) cwd + prompt + session id,
+   *  tagged `claude-sdk` so a restore relaunches this native host (not the terminal
+   *  agent) and resumes the conversation rather than starting over. The cwd recorded
+   *  is `effectiveCwd` (the worktree the editor roots at), not the process spawn dir
+   *  (always the main dir) — restore re-roots there. */
   serialize(): TabState | null {
     return {
       kind: 'agent',
       agentKind: 'claude-sdk',
       command: this.baseCommand ?? ['claude'],
-      cwd: this.cwd,
+      cwd: this.effectiveCwd,
       prompt: this.launchPrompt,
       // Fall back to the resume id: a lazily-resumed agent that the user hasn't
       // sent a turn to yet has no live (init-reported) session id, but must still

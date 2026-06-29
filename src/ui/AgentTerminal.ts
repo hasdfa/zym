@@ -292,14 +292,16 @@ export class AgentTerminal extends Terminal implements Agent {
     return this.driver?.sessionId ?? null;
   }
 
-  /** Session state: base argv + cwd + prompt, plus the session id so a restore can
-   *  resume the conversation rather than start over. */
+  /** Session state: base argv + the workbench (worktree) cwd + prompt, plus the
+   *  session id so a restore can resume the conversation rather than start over. The
+   *  cwd recorded is `effectiveCwd` (the worktree the editor roots at), not the
+   *  process spawn dir (always the main dir) — restore re-roots there. */
   serialize(): TabState | null {
     return {
       kind: 'agent',
       agentKind: 'claude-tui',
       command: this.baseCommand,
-      cwd: this.cwd,
+      cwd: this.effectiveCwd,
       prompt: this.launchPrompt,
       sessionId: this.sessionId ?? undefined,
     };

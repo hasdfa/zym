@@ -82,7 +82,9 @@ These shape everything below:
   - **`Terminal`** — a shell; only its `cwd` is meaningful (process
     can't restore).
   - **`AgentTerminal`** — `command` + `cwd` + launch `prompt`; process
-    relaunch-only.
+    relaunch-only. The `cwd` recorded is the **workbench (worktree) cwd**
+    (`effectiveCwd`), not the process spawn dir (always the main dir — see the cwd
+    invariant in agents.md); restore re-roots the editor there.
 - **`FileTree` (left dock)** — `rootPath` + which directories are
   expanded.
 - **`AgentManager` (`zym.agents`)** — the live agent registry.
@@ -341,10 +343,14 @@ null` (null = the default autosave session): `serialize()` stamps
 - **Agents** are recorded as their own workspaces (one
   `WorkspaceState` per agent workbench, marked by an `agent` field —
   its relaunch identity from `AgentTerminal.serialize`) after the
-  primary (user) workspace. On **restore** each is relaunched
-  **resumed** (`--resume <id>`, via `resumeOptions`), which also
-  restores its worktree (see agents.md) and does *not* re-run the
-  original launch prompt. Relaunch is fine because restore is explicit
+  primary (user) workspace. Each workspace's `root` is the agent's
+  **workbench cwd** (its worktree); restore re-roots the editor there
+  directly (`openAgent({ root: ws.root })`), so it needs no
+  set_worktree re-announce from the agent. On **restore** each is
+  relaunched **resumed** (`--resume <id>`, via `resumeOptions` — which
+  relocates the transcript under the main dir and supplies the resume
+  id, while `ws.root` overrides where the editor roots) and does *not*
+  re-run the original launch prompt. Relaunch is fine because restore is explicit
   (or the opt-in `restoreOnLaunch`), not a surprise. An agent with no
   session id is relaunched fresh with its prompt; one already open is
   skipped (no duplicate). After relaunch, the agent's work-area
