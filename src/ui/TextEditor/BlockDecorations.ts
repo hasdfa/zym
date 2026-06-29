@@ -98,9 +98,15 @@ interface Block {
   lastWidth: number; // last width forced on the slot (sticky = full viewport width; -1 = natural)
 }
 
-// Frames to keep repositioning after a layout-changing event (fold toggle, edit).
-// A tick callback runs each frame; geometry settles within a couple, then it stops.
+// Consecutive STABLE frames (no band moved) that end the reposition window after a layout-changing
+// event (fold toggle, edit, collapse/expand). The window is stabilization-based, NOT a fixed frame
+// count: GtkTextView re-allocates changed line heights (e.g. an `on` header growing to its widget
+// height) over an unpredictable number of real frames — a fixed window can close mid-relayout and
+// strand a band at a partially-settled Y (the diff-header misposition). So we keep repositioning
+// while anything is still moving and only stop once positions have held steady for this many frames.
 const REPOSITION_FRAMES = 6;
+// Hard cap on the window (a never-settling guard) — far above any real relayout.
+const REPOSITION_MAX_FRAMES = 180;
 
 /** getIter*, defensively unwrapping node-gtk's [ok, iter] return shape. */
 const unwrap = (res: any): any => (Array.isArray(res) ? res[1] : res);
@@ -115,7 +121,8 @@ export class BlockDecorations {
   private nextTagId = 0;
   private flushPending = false;
   private repositionTickId = 0;
-  private repositionFrames = 0;
+  private repositionStableFrames = 0; // consecutive frames with no band movement (window end)
+  private repositionTotalFrames = 0; // frames since the window opened (hard-cap guard)
   private vadjHooked = false;
   // The view/buffer/adjustment signal handlers below. Each closure captures `this`, so an
   // un-disconnected handler pins this controller (and the view + buffer it holds) forever;
@@ -281,21 +288,27 @@ export class BlockDecorations {
 
   // --- internals -------------------------------------------------------------
 
-  /** Reposition every placed block once per frame for a short window, then stop.
-   *  A layout-changing event (fold toggle) settles over a frame or two, and a tick
-   *  callback runs in sync with the frame clock — so each pass reads progressively
-   *  fresher geometry (vs. an idle/timeout, which fires at an unpredictable point in
-   *  node-gtk's cooperative loop and can read mid-transition coordinates). */
+  /** Reposition every placed block once per frame until the layout STABILIZES, then stop.
+   *  A tick callback runs in sync with the frame clock — so each pass reads progressively fresher
+   *  geometry (vs. an idle/timeout, which fires at an unpredictable point in node-gtk's cooperative
+   *  loop and can read mid-transition coordinates) AND, by returning CONTINUE, keeps the frame clock
+   *  ticking so GtkTextView actually re-allocates. The window ends after REPOSITION_FRAMES consecutive
+   *  frames with no movement (not a fixed frame count): an `on` header line grows to its widget height
+   *  over an unpredictable number of frames, and a fixed window can close mid-relayout, stranding the
+   *  band at a partially-settled Y (the diff-header misposition). Capped to never spin forever. */
   private scheduleReposition(): void {
-    this.repositionFrames = 0; // (re)start the settle window
+    this.repositionStableFrames = 0; // (re)start the stabilization window
     if (this.repositionTickId) return; // a tick is already running
+    this.repositionTotalFrames = 0;
     this.repositionTickId = this.view.addTickCallback(() => {
-      for (const block of this.blocks) if (block.placed) this.reposition(block);
-      if (++this.repositionFrames >= REPOSITION_FRAMES) {
+      let moved = false;
+      for (const block of this.blocks) if (block.placed && this.reposition(block)) moved = true;
+      this.repositionStableFrames = moved ? 0 : this.repositionStableFrames + 1;
+      if (this.repositionStableFrames >= REPOSITION_FRAMES || ++this.repositionTotalFrames >= REPOSITION_MAX_FRAMES) {
         this.repositionTickId = 0;
-        return false; // G_SOURCE_REMOVE
+        return false; // G_SOURCE_REMOVE — positions have held steady (or the hard cap hit)
       }
-      return true; // G_SOURCE_CONTINUE
+      return true; // G_SOURCE_CONTINUE — still settling, keep the frame clock ticking
     });
   }
 
@@ -404,19 +417,21 @@ export class BlockDecorations {
     this.reposition(block);
   }
 
-  private reposition(block: Block): void {
+  /** Move a placed block to its current correct overlay position. Returns whether it actually moved
+   *  (the stabilization window in `scheduleReposition` watches this to know when the layout settled). */
+  private reposition(block: Block): boolean {
     const rect = this.lineRect(this.markLine(block));
-    if (rect.height === 0) return; // geometry momentarily invalid — keep last position
+    if (rect.height === 0) return false; // geometry momentarily invalid — keep last position
     let y = this.bandTop(block, rect);
     if (!block.sticky) {
       // Non-sticky: anchored at the text-window left (buffer x=0), scrolls natively on both axes.
       // A full-width band still gets its slot fitted to the visible width (re-fit before the no-op
       // guard so a width-only change — e.g. a resize that leaves Y put — still lands).
       if (block.fullWidth) this.fitWidth(block);
-      if (y === block.lastY) return; // no-op move (avoids churn during the settle window)
+      if (y === block.lastY) return false; // no-op move (avoids churn during the settle window)
       block.lastY = y;
       this.view.moveOverlay(block.slot, 0, y);
-      return;
+      return true;
     }
     // STICKY — a full-width bar pinned to the viewport. VERTICALLY: pin to the viewport top once the
     // band scrolls above it; PUSH UP so stacked bands don't accumulate (the earlier header slides up
@@ -429,10 +444,11 @@ export class BlockDecorations {
     const hadj = this.view.getHadjustment?.();
     const x = hadj ? Math.round(hadj.getValue()) : 0;
     this.fitWidth(block);
-    if (x === block.lastX && y === block.lastY) return; // no-op move
+    if (x === block.lastX && y === block.lastY) return false; // no-op move
     block.lastX = x;
     block.lastY = y;
     this.view.moveOverlay(block.slot, x, y);
+    return true;
   }
 
   /** Width-request the slot to the viewport's visible width (full-width / sticky bands), so the band
