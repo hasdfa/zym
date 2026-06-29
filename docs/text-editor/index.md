@@ -241,10 +241,24 @@ All built (`src/ui/TextEditor/`):
 
 `SearchController` (incremental literal/regex over `EditorModel.scan`,
 decoration highlights, next/previous, replace-current/all with regex backrefs) +
-`SearchBar` (floating top-right; search+replace entries, 3-way case button,
+`SearchBar` (tucked flush into the top-right corner, only its bottom-left corner
+rounded; adapts to the editor width — a `get-child-position` handler caps the
+panel to the available width, so the two inputs shrink together from their
+preferred `max-width-chars` toward `width-chars` instead of overflowing a narrow
+editor; search+replace entries, 3-way case button,
 regex toggle with inline regex highlighting; **`alt-s`** case, **`alt-r`** regex;
-`enter`/`shift-enter` step, `ctrl-enter` replace-all). Vim `/` `?` `n` `N` wired;
-smartcase default. Tests: `SearchController.test.ts`. Not yet (low priority):
+`enter`/`shift-enter` step, `ctrl-enter` replace-all; the case + regex toggles
+form a `.linked` `.raised` segmented control set slightly apart from the inputs,
+their glyphs forced monospace so cycling the 3-way case button — `Aa`/`AA`/`aa` —
+can't reflow the bar). The match count is **inset at the right of the search field**
+(small, dimmed; the field reserves room so the query never slides under it) and
+reads `current/total`, or a warning-colored **No results** — plus a warning
+outline on the search field (Adwaita's `.warning` entry mechanism: recolor
+`--accent-color`, which drives the focus outline, from our `--t-ui-status-warning`)
+— when a compiling query matches nothing (an uncompilable pattern shows **Bad
+pattern** + a red entry tint instead). Vim `/` `?` `n` `N` wired;
+smartcase default. Tests: `SearchController.test.ts`, `SearchBar.test.ts`
+(eyeball: `src/poc/search-bar-gallery.ts`). Not yet (low priority):
 `*`/`#` word search, history, operator-pending search-as-motion.
 
 ### Command line (`:` ex-commands) — *won't do*
