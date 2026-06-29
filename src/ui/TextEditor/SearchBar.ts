@@ -1,6 +1,7 @@
 /*
- * SearchBar — the search/replace widget: a compact bar floating at the editor's
- * top-right corner, driving a `SearchController`.
+ * SearchBar — the search/replace widget: a compact bar tucked flush into the
+ * editor's top-right corner (only its inner, bottom-left corner is rounded),
+ * driving a `SearchController`.
  *
  * Layout is a 2-row grid so the search and replace entries line up in one column
  * (fixed-width, so the match count never reflows the input); the options sit in a
@@ -39,8 +40,12 @@ type Overlay = InstanceType<typeof Gtk.Overlay>;
 // a panel over the editor, not part of it.
 const POPOVER_BG = theme.ui.surface.popover;
 
-const ENTRY_WIDTH_CHARS = 28;
-const COUNT_WIDTH_CHARS = 11; // fits the longest label ("Bad pattern") so it never reflows
+const ENTRY_WIDTH_CHARS = 28; // preferred (natural) width per input — its max-width-chars
+const MIN_ENTRY_CHARS = 6; // min width-chars: lets both inputs shrink so the bar fits a narrow editor
+// Right-side room reserved inside the search field for the inset count so the
+// query text never slides under it (fits the longest label, "Bad pattern", at the
+// small font). Kept in sync with the `.search-input` padding-right below.
+const COUNT_RESERVE = '6.5em';
 
 // Search history is global (shared across editors/tabs, like vim's), most-recent
 // first, deduped, and capped. Recalled in the bar with Ctrl+P / Ctrl+N.
@@ -57,21 +62,44 @@ function recordSearchHistory(query: string): void {
 addStyles(`
   .SearchBar {
     background-color: ${POPOVER_BG};
+    /* Tucked into the editor's top-right corner: the top + right edges meet the
+       editor flush (no border or radius there), while the interior bottom + left
+       edges are bordered and the inner (bottom-left) corner is rounded. The shadow
+       is aimed down + left, away from the flush edges, so it doesn't bleed past the
+       corner onto the surrounding chrome. */
     border: 1px solid var(--border-color);
-    border-radius: var(--popover-radius);
-    box-shadow: 0px 6px 20px 8px var(--t-ui-shadow);
+    border-width: 0 0 1px 1px;
+    border-radius: 0 0 0 var(--popover-radius);
+    box-shadow: -6px 8px 16px -6px var(--t-ui-shadow);
     padding: 4px;
   }
   .SearchBar entry { min-height: 0; }
   /* The search/replace inputs match the editor's monospace font. */
   .SearchBar entry > text { font: var(--t-font-monospace); }
-  .SearchBar .search-count { opacity: 0.6; margin: 0 4px; }
+  /* The match count is inset at the right end of the search field as small,
+     dimmed text; the field reserves room on the right so the query never slides
+     under it. */
+  .SearchBar .search-count { opacity: 0.6; font: var(--t-font-monospace-small); margin-right: 8px; }
+  .SearchBar .search-input { padding-right: ${COUNT_RESERVE}; }
+  /* No matches: warn in the theme's warning color (full opacity) so an empty
+     search reads as a deliberate signal rather than muted chrome — on the inset
+     count and, like Adwaita's own .warning entry style, on the search field's
+     border + focus outline (Adwaita draws the outline from --accent-color). We
+     drive both from our warning token instead of libadwaita's so they match. */
+  .SearchBar .search-count.no-results { color: var(--t-ui-status-warning); opacity: 1; }
+  .SearchBar entry.no-results {
+    box-shadow: inset 0 0 0 1px var(--t-ui-status-warning);
+    --accent-color: var(--t-ui-status-warning);
+  }
   /* Bad regex: tint the entry text. */
   .SearchBar entry.invalid > text { color: var(--t-ui-status-error); }
-  .SearchBar button.toggle { min-width: 0; padding: 2px 6px; }
+  /* Monospace glyphs so the case button's Aa / AA / aa share an advance width —
+     otherwise cycling the case mode reflows the (right-pinned) bar. */
+  .SearchBar button.toggle { min-width: 0; padding: 2px 6px; font-family: var(--t-font-monospace-family); }
   /* Linked search+replace inputs: square the touching corners and merge the
-     shared border so the two entries read as one control. */
-  .SearchBar .input-group > entry:first-child {
+     shared border so the two entries read as one control. (The search field is
+     wrapped in an overlay for the inset count, so target it by class.) */
+  .SearchBar .input-group .search-input {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
   }
@@ -126,6 +154,7 @@ export class SearchBar {
     this.view = view;
 
     this.searchEntry = this.makeEntry('Search');
+    this.searchEntry.addCssClass('search-input'); // carries the inset count + warning outline
     this.disposables.connect(this.searchEntry, 'changed', () => {
       if (this.suppressChange) return; // programmatic mirror of an external search — don't re-run it
       if (!this.applyingHistory) this.historyIndex = -1; // manual edit leaves history recall
@@ -135,40 +164,71 @@ export class SearchBar {
     this.replaceEntry = this.makeEntry('Replace');
     this.disposables.connect(this.replaceEntry, 'changed', () => this.refreshHighlight());
 
+    // Inset at the right end of the search field via an overlay. Pinned to the
+    // right edge, vertically centered, and click-through so it never steals a
+    // click meant for the entry beneath it.
     this.countLabel = new Gtk.Label({ label: '', xalign: 1 });
     this.countLabel.addCssClass('search-count');
-    this.countLabel.setWidthChars(COUNT_WIDTH_CHARS);
+    this.countLabel.setHalign(Gtk.Align.END);
+    this.countLabel.setValign(Gtk.Align.CENTER);
+    this.countLabel.setCanTarget(false);
     this.caseButton = this.makeCaseButton();
     this.regexToggle = this.toggle('.*', () => this.regexTooltip(), (active) => {
       this.render(this.controller.setOptions({ useRegex: active }));
       this.refreshHighlight();
     });
 
-    // The search and replace entries (both always shown) sit in a linked group so
-    // they touch with no border-radius on the shared edge.
+    // The search field carries the inset count via an overlay; it and the replace
+    // entry (both always shown) sit in a linked group so they touch with no
+    // border-radius on the shared edge.
+    const searchField = new Gtk.Overlay();
+    searchField.setChild(this.searchEntry);
+    searchField.addOverlay(this.countLabel);
     this.inputGroup = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
     this.inputGroup.addCssClass('input-group');
-    this.inputGroup.append(this.searchEntry);
+    this.inputGroup.append(searchField);
     this.inputGroup.append(this.replaceEntry);
 
-    // One horizontal row: the input group, then the count and option toggles.
+    // The option toggles, joined as one linked segmented control (spacing 0 so
+    // their shared borders merge).
+    const options = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 0 });
+    options.addCssClass('linked');
+    options.append(this.caseButton);
+    options.append(this.regexToggle);
+
+    // One horizontal row: the input group, then the linked option toggles, with a
+    // small gap between the two (the count lives inside the search field).
     this.panel = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6 });
     this.panel.addCssClass('SearchBar');
+    // Pinned flush to the editor's top-right corner (no margins).
     this.panel.setHalign(Gtk.Align.END);
     this.panel.setValign(Gtk.Align.START);
-    this.panel.setMarginTop(8);
-    this.panel.setMarginEnd(8);
     this.panel.overflow = Gtk.Overflow.HIDDEN;
     this.panel.append(this.inputGroup);
-    this.panel.append(this.countLabel);
-    this.panel.append(this.caseButton);
-    this.panel.append(this.regexToggle);
+    this.panel.append(options);
     this.panel.setVisible(false);
 
     this.installKeys();
     this.installFocusOut();
     this.host.addOverlay(this.panel);
+    this.installAdaptiveWidth();
     this.refreshCaseButton();
+  }
+
+  /** Keep the bar inside the editor's width. GtkOverlay would otherwise allocate
+   *  the panel its full natural width and, pinned right, push its left edge off the
+   *  left of a narrow editor (clipping the search field). We cap the panel to the
+   *  available width — the inputs then shrink (min → preferred width-chars) — and
+   *  keep it flush to the top-right corner. */
+  private installAdaptiveWidth(): void {
+    this.disposables.connect(this.host, 'get-child-position', (widget: unknown, alloc: InstanceType<typeof Gdk.Rectangle>) => {
+      if (widget !== this.panel) return false; // other overlay children keep the default
+      const avail = this.host.getWidth();
+      if (alloc.width > avail) alloc.width = avail;
+      alloc.x = avail - alloc.width; // flush right
+      alloc.y = 0; // flush top
+      return true;
+    });
   }
 
   // Set while the bar is serving a vim search-motion (`d/foo`) rather than a
@@ -272,14 +332,18 @@ export class SearchBar {
   private makeEntry(placeholder: string): InstanceType<typeof Gtk.Entry> {
     const entry = new Gtk.Entry({ placeholderText: placeholder });
     entry.addCssClass('has-text-input'); // release the space leader so it types
-    entry.setWidthChars(ENTRY_WIDTH_CHARS); // fixed so the count label can't reflow it
+    // width-chars is the MIN, max-width-chars the natural/preferred: both inputs sit
+    // at the preferred width when there's room and shrink together (down to the min)
+    // when the editor is too narrow — see installAdaptiveWidth().
+    entry.setWidthChars(MIN_ENTRY_CHARS);
+    entry.setMaxWidthChars(ENTRY_WIDTH_CHARS);
     return entry;
   }
 
   private makeCaseButton(): InstanceType<typeof Gtk.Button> {
     const button = new Gtk.Button();
     button.addCssClass('toggle');
-    button.addCssClass('flat');
+    button.addCssClass('raised'); // raised + linked → one segmented control
     button.setCanFocus(false); // keep focus in the entry
     this.disposables.connect(button, 'clicked', () => this.cycleCase());
     return button;
@@ -304,7 +368,7 @@ export class SearchBar {
   private toggle(label: string, tooltip: () => string, onToggle: (active: boolean) => void) {
     const button = new Gtk.ToggleButton({ label });
     button.addCssClass('toggle');
-    button.addCssClass('flat');
+    button.addCssClass('raised'); // raised + linked → one segmented control
     button.setCanFocus(false);
     button.setTooltipText(tooltip());
     this.disposables.connect(button, 'toggled', () => {
@@ -331,6 +395,14 @@ export class SearchBar {
 
   private render(state: SearchState): void {
     this.countLabel.setLabel(countText(state));
+    // A non-empty query that compiles but matches nothing warns in amber — on the
+    // count label and as a warning outline on the search field; an uncompilable
+    // pattern stays the entry's error tint instead.
+    const noResults = state.query.length > 0 && !state.invalid && state.count === 0;
+    for (const w of [this.countLabel, this.searchEntry]) {
+      if (noResults) w.addCssClass('no-results');
+      else w.removeCssClass('no-results');
+    }
     if (state.invalid) this.searchEntry.addCssClass('invalid');
     else this.searchEntry.removeCssClass('invalid');
   }
