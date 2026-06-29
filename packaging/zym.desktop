@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=zym
+GenericName=Code Editor
+Comment=A keyboard-driven, modal source-code editor built with GTK 4
+Exec=zym %F
+Icon=zym
+Terminal=false
+Categories=Development;TextEditor;IDE;GTK;
+Keywords=editor;code;vim;ide;
+StartupWMClass=zym
+MimeType=text/plain;inode/directory;

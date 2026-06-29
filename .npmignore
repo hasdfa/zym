@@ -24,3 +24,7 @@ src/poc/
 # Lockfiles / workspace (consumers resolve their own)
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# Packaging / build tooling (not needed at runtime)
+packaging/
+dist/

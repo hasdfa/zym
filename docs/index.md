@@ -229,6 +229,16 @@ agent's diff (needs the editor Diff renderer first), and worktree lifecycle
 This project is the flagship demo for `node-gtk`, and bugs in `node-gtk` should be
 surfaced and fixed at the source.
 
+## Packaging & releases
+
+Release artifacts run zym from source via node-gtk, so the build installs the GTK
+stack, compiles the native addon, and bundles Node + the app + the whole
+GTK/GObject-Introspection runtime per OS: a Docker-built Linux **AppImage**
+(`packaging/build-linux.sh`, on `ubuntu:26.04` for GtkSourceView 5.18) and a
+macOS **.app/.dmg** (`packaging/macos/build-macos.sh`, must run on macOS).
+Releases pin the published `node-gtk@3.0.0` in place of the dev `../node-gtk`
+link. See [packaging.md](packaging.md).
+
 ## Tasks & runners
 
 Idea — not started.
