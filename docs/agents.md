@@ -350,13 +350,17 @@ Built in `src/agentSessions.ts`, `AgentTerminal`, `AppWindow`:
   worktree has since been **removed**: the transcript outlives the worktree, but
   the path is no longer a live root to pass. The `-`-separator guard stops
   `…/zym` from also matching `…/zymfoo`.
-- **Resume into a vanished cwd** — `resolveResumeCwd(session, mainRoot)` decides
-  where to spawn `--resume`: the cwd Claude recorded if it still exists, else it
-  **relocates** the transcript under `mainRoot`'s project dir and resumes there
-  (claude resolves `--resume <id>` relative to cwd, so the file must sit under the
-  spawn dir). So a removed-worktree conversation resumes in the main repo. The
-  dynamic-worktree re-announce is skipped on a relocated resume (that worktree is
-  gone too).
+- **Resume always spawns in the main dir** — because of the cwd invariant (see
+  *git worktree integration → The cwd invariant* below), `--resume <id>` always
+  runs from the main dir, so it must find the transcript there.
+  `relocateTranscriptToMainRoot(session, mainRoot)` ensures that: it copies the
+  transcript under `mainRoot`'s project dir when it lives elsewhere (a session
+  launched in a worktree — legacy — or one surfaced by the worktree scan in
+  *Enumerate*). New sessions are already born under the main dir (the invariant), so
+  this is a no-op for them and only recovers older/worktree-dir transcripts. The
+  editor re-roots to the session's worktree separately (see *git worktree
+  integration → Resume* below), not via the spawn cwd — so a removed worktree just
+  resumes in the main dir with no crash.
 - **Resume** — `AgentTerminal` takes a `resume: { sessionId? | continue?; fork?
   }` option → prepends `--resume <id>` / `--continue` (+ `--fork-session`) to
   the claude argv. Commands: `agent:resume` (`space a r`, resume the current
@@ -448,6 +452,30 @@ mid-session); dynamic detection is **cooperative** (the agent announces via an
 MCP tool) with a hook **validator** that warns if it changes worktree without
 announcing.
 
+### The cwd invariant
+
+**An agent's *process* always spawns in the editor's main dir
+(`AppWindow.mainRoot()` = `process.cwd()`), never a worktree.** A worktree is an
+*editor* concern, decoupled from the process cwd along three axes:
+
+- **process cwd** — fixed at the main dir for the agent's whole life. The OS cwd
+  of the spawned `claude` never sits inside a worktree, so removing a worktree
+  can't pull the dir out from under a live agent (which crashes it with a failing
+  `getcwd()`). It's also why every transcript lands under one project dir
+  (`~/.claude/projects/<encoded-main-dir>`), so `claude --resume <id>` always
+  resolves — no relocation dance, no "resume into a vanished cwd".
+- **editor root** (`workbench.cwd`) — the worktree the user sees: Files/Git/gutters.
+  Seeded from `openAgent({ root })` and moved by `set_worktree` (`reRootWorkbench`).
+- **where the agent edits** — the worktree, reached via the agent's own Bash `cd`
+  / absolute paths; `set_worktree` keeps the editor root in step.
+
+So `openAgent` spawns at `mainRoot` and threads the worktree separately as
+`AgentLaunch.worktree` (→ the agent's `effectiveCwd`, seeding the workbench root);
+a vanished `root` falls back to `mainRoot`. Resume/branch/restart pass the worktree
+as `root` (editor only) — they never put it on the process cwd. The trade-off: the
+transcript records the *main dir* as Claude's cwd, not the worktree (already true
+for dynamic moves) — recovered by the `<id>.zym-worktree` sidecar (*Resume* below).
+
 ### Architecture
 
 Root ownership lives on the **`Workbench`** (`cwd` + `git`), not the window.
@@ -494,24 +522,22 @@ can re-root independently. Pieces and how they connect:
   (`agent:new-in-worktree` / `-this-worktree` / `-worktree`) seed the worktree
   choice up front; the agent then realizes it via `set_worktree`, which re-roots
   the workbench (see `launchPrompt`). (`cli.listWorktrees()` + the standalone
-  `WorktreePicker` — rooting directly via `openAgent({cwd})` — is no longer wired
+  `WorktreePicker` — rooting directly via `openAgent({root})` — is no longer wired
   to a command.)
-- **Resume** — restores a conversation's branch/worktree/cwd (`resumeOptions`).
-  `AgentSession.cwd` is read from the transcript (Claude records its cwd per
-  entry); `agent:picker` / `agent:resume-conversation` list sessions across
-  every worktree (`agentSessionRoots()` → `listResumableSessions`) and resume
-  in that cwd (`openAgent({cwd, resume})`) — both where `claude --resume`
-  resolves the session *and* where the workbench roots. **Launch-time**
-  worktrees restore directly (the transcript cwd *is* the worktree).
-  **Dynamic** moves (the agent `cd`'d into a worktree mid-session via
-  set_worktree; Claude's own cwd never changed, so the transcript still says
-  the launch dir) are handled by a sidecar: on each announce
-  `recordSessionWorktree` writes `effectiveCwd` next to the transcript
-  (`<id>.zym-worktree`); on resume we still spawn in the launch cwd (so
-  `--resume` resolves) but inject a terse prompt telling the agent to **only**
-  call `set_worktree(<W>)` and then stop — re-rooting the editor without
-  kicking off work (Tier 1: cooperative, via the announce loop; no touching
-  Claude's transcript storage).
+- **Resume** — restores a conversation's worktree into the editor (`resumeOptions`).
+  Per the cwd invariant the process spawns at `mainRoot`, so resume only ensures the
+  transcript resolves there (`relocateTranscriptToMainRoot`) — it does *not* spawn in
+  the session's old cwd. `agent:picker` / `agent:resume-conversation` list sessions
+  across every worktree (`agentSessionRoots()` → `listResumableSessions`). The editor
+  re-roots to the worktree the session worked in: a **dynamic** move
+  (`session.effectiveCwd`, from the `<id>.zym-worktree` sidecar
+  `recordSessionWorktree` wrote on each announce) wins over the launch cwd
+  (`session.cwd`). When that worktree still exists, `resumeOptions` passes it as
+  `root` and `buildWorkbench` roots the editor (Files/Git/gutters) there directly —
+  no "call `set_worktree` and stop" re-announce turn (the seed restores the view, so
+  resume is silent). A worktree that's since been removed simply resumes in the main
+  dir (no spawn there, so no crash). Launch-time and dynamic worktrees are now one
+  path — both spawn at the main dir and re-root the editor from the sidecar/cwd.
 
 Key files: `git.ts` (pool), `git/cli.ts` (`listWorktrees`), `Workbench.ts`,
 `AppWindow.ts` (build/activate/re-root), `claudeAgent.ts` +

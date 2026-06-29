@@ -38,6 +38,9 @@ export type { AgentMode, AgentResume, AgentStatus } from '../agents/types.ts';
 export type { WorktreeInfo } from '../git.ts';
 
 export interface AgentTerminalOptions extends TerminalOptions {
+  /** The worktree the agent logically works in — seeds `effectiveCwd` (the workbench
+   *  root) while the process spawns in `cwd` (the main dir). Defaults to `cwd`. */
+  worktree?: string;
   /** An initial prompt to launch the agent with (appended to its argv). */
   prompt?: string;
   /** Resume a past conversation rather than starting a new one. */
@@ -69,9 +72,10 @@ export class AgentTerminal extends Terminal implements Agent {
   // agent keeps no action copy — it pipes its reported set_actions straight in. Null
   // until bound (set_actions only arrives once the agent runs, well after binding).
   private boundActions: WorkbenchActions | null = null;
-  // The agent's current working directory: its launch cwd, or a worktree it has
-  // since moved into (reported via the set_worktree bridge tool).
-  private _effectiveCwd: string = this.cwd;
+  // The worktree the agent logically works in (the workbench root): seeded from
+  // `options.worktree` (else the spawn cwd) and updated when the agent moves via the
+  // set_worktree bridge tool. Distinct from `this.cwd`, the process's (main-dir) cwd.
+  private _effectiveCwd: string;
   // The git worktree the agent is in, computed lazily from `_effectiveCwd` and
   // cached; recomputed on a cwd change. `null` = not inside a repo.
   private _worktree: WorktreeInfo | null | undefined;
@@ -107,6 +111,7 @@ export class AgentTerminal extends Terminal implements Agent {
     this.driverFactory = options.driverFactory;
     this.baseCommand = baseCommand;
     this.launchPrompt = options.prompt;
+    this._effectiveCwd = options.worktree ?? this.cwd;
     this.root.addCssClass('AgentTerminal');
     this.applyThemeColors();
 
