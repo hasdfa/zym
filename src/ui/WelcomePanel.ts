@@ -43,12 +43,12 @@ const CAT_ICON_SIZE = 52;
 // shown as a single badge (e.g. `space f f`).
 const WELCOME_SHORTCUTS: ReadonlyArray<{ action: string; keys: string }> = [
   { action: 'Command palette', keys: 'space space' }, // command-palette:toggle
-  { action: 'Find a file', keys: 'space o' }, // file:find
-  { action: 'Search in project', keys: 'space /' }, // project:search
+  { action: 'Git panel', keys: 'space g g' }, // git-panel:focus
   { action: 'File tree', keys: 'space f f' }, // file-tree:focus
-  { action: 'Source control', keys: 'space g g' }, // git-panel:focus
+  { action: 'Find a file', keys: 'space f o' }, // file:find
+  { action: 'Search in project', keys: 'space /' }, // project:search
   { action: 'New terminal', keys: 'space t' }, // terminal:new
-  { action: 'New agent', keys: 'space a n n' }, // agent:new
+  { action: 'Show configuration', keys: 'space , ,' }, // config:open-editor
   { action: 'Show all keybindings', keys: 'space ?' }, // keymap:show
 ];
 

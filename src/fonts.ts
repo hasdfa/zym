@@ -10,11 +10,14 @@
  * the app's monospace/UI fonts — the `core.monospaceFont` / `core.uiFont` config
  * value when set, else the live GNOME interface font. It publishes them three ways,
  * one per consumer kind:
- *   - **CSS** — reactive custom properties on `.AppWindow` (`--t-font-ui-family`,
- *     `--t-font-monospace`, …; see `themeFontCssVariables`-style block in `css()`).
- *     A root `font-family: var(--t-font-ui-family)` baseline makes every widget
- *     follow the UI font by inheritance; monospace surfaces opt in with
- *     `font: var(--t-font-monospace)` (or `font-family: var(--t-font-monospace-family)`).
+ *   - **CSS** — reactive custom properties on `*` (`--t-font-ui-family`,
+ *     `--t-font-monospace`, …; see `css()`). They must be on `*` (not `.AppWindow`):
+ *     GTK (≤4.22) resolves `var()` inside `font-family`/`font` only against the
+ *     SAME element's custom properties, never inherited ones, so `.AppWindow`-only
+ *     vars left every descendant's `font: var(--t-font-monospace)` silently
+ *     proportional. A `font-family: var(--t-font-ui-family)` baseline on `.AppWindow`
+ *     makes every widget follow the UI font by inheritance; monospace surfaces opt
+ *     in with `font: var(--t-font-monospace)` (or `font-family: var(--t-font-monospace-family)`).
  *   - **Pango markup** — read the live family (`fonts.monospaceFamily` /
  *     `fonts.uiFamily`) at render time; markup can't read CSS variables.
  *   - **Font-description consumers** (e.g. VTE) — `fonts.monospaceDescription()` plus
@@ -209,10 +212,19 @@ class FontStore {
     this.sheet?.refresh();   // re-render the sheet with the current fonts
   }
 
-  /** The reactive font sheet: the `--t-font-*` variables + the UI-font baseline,
-   *  both on `.AppWindow` so every descendant inherits the UI font. */
+  /** The reactive font sheet: the `--t-font-*` variables + the UI-font baseline.
+   *
+   *  The variables are emitted on `*` (every element), not just `.AppWindow`,
+   *  because GTK (≤4.22) resolves `var()` inside `font-family` / the `font`
+   *  shorthand only against custom properties declared on the SAME element — it
+   *  ignores inherited ones. With the vars on `.AppWindow` alone, a descendant's
+   *  `font: var(--t-font-monospace)` silently fell back to the proportional
+   *  default (colors and `font-size` resolve fine when inherited; only the family
+   *  / `font` shorthand hit this). `*` also reaches popovers and other surfaces
+   *  that don't inherit from `.AppWindow`. The UI-font baseline stays on
+   *  `.AppWindow` — it inherits onward as an ordinary computed `font-family`. */
   private css(): string {
-    return `.AppWindow {\n${this.variables()}\n  font-family: var(--t-font-ui-family);\n}`;
+    return `* {\n${this.variables()}\n}\n.AppWindow {\n  font-family: var(--t-font-ui-family);\n}`;
   }
 
   private variables(): string {

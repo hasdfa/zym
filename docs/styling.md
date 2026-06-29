@@ -93,10 +93,19 @@ The font store `src/fonts.ts` (`fonts`) is the single source of the app's
 UI and monospace fonts. Each is the `core.uiFont` / `core.monospaceFont`
 config value (a Pango description) when set, else the live GNOME interface
 font — the store follows both. It publishes them as **reactive CSS
-variables on `.AppWindow`** (re-set on every change). A root
+variables on `*`** (re-set on every change). A root
 `.AppWindow { font-family: var(--t-font-ui-family) }` baseline makes **all
 UI text follow the UI font by inheritance** — so only monospace surfaces
 need a rule.
+
+> **Why the variables live on `*`, not `.AppWindow`.** GTK (≤4.22) resolves
+> `var()` inside the `font-family` property (and the `font` shorthand) **only
+> against custom properties declared on the same element — it ignores inherited
+> ones**. With the font vars on `.AppWindow` alone, every descendant's
+> `font: var(--t-font-monospace)` silently fell back to the proportional default
+> (the editor included). Emitting them on `*` makes them same-element for every
+> widget so the token resolves. Colors and `font-size` resolve fine inherited;
+> this quirk is specific to `font-family`/`font`. Re-test on a GTK bump.
 
 The picked font supplies the **medium** size; **small** (×0.85) and
 **large** (×1.2) are derived, rounded to the nearest half-point. Both
