@@ -212,8 +212,12 @@ function registerPromptKeymapOnce(): void {
 const PERMISSION_CYCLE: AgentMode[] = ['default', 'acceptEdits', 'auto', 'plan'];
 
 export interface AgentConversationOptions {
-  /** Working directory for claude. */
+  /** The directory claude is spawned in — always the editor's main dir (the cwd
+   *  invariant), never a worktree. See docs/agents.md. */
   cwd: string;
+  /** The worktree the agent logically works in — seeds `effectiveCwd` (the workbench
+   *  root) while the process spawns in `cwd`. Defaults to `cwd`. */
+  worktree?: string;
   /** Base argv (default `['claude']`). */
   command?: string[];
   /** Resume a past conversation (`--resume`/`--continue`) instead of starting fresh.
@@ -356,8 +360,9 @@ export class AgentConversation implements Agent {
   private autoNaming = false;
   private disposed = false;
   private _changedFiles: string[] = [];
-  // The agent's current working directory: its launch cwd, or a worktree it has
-  // since moved into (announced via the set_worktree bridge tool).
+  // The worktree the agent logically works in (the workbench root): seeded from
+  // `options.worktree` (else the spawn cwd) and updated when the agent moves via the
+  // set_worktree bridge tool. Distinct from `this.cwd`, the process's (main-dir) cwd.
   private _effectiveCwd: string;
   private _worktree: WorktreeInfo | null | undefined;
   private _viewed = false;
@@ -370,7 +375,7 @@ export class AgentConversation implements Agent {
 
   constructor(options: AgentConversationOptions) {
     this.cwd = options.cwd;
-    this._effectiveCwd = options.cwd;
+    this._effectiveCwd = options.worktree ?? options.cwd;
     this.launchPrompt = options.prompt;
     this.userPrompt = options.userPrompt;
     this.baseCommand = options.command;
@@ -694,15 +699,17 @@ export class AgentConversation implements Agent {
 
   clearUnannouncedWorktree(): void { /* no worktree validator for sdk */ }
 
-  /** Session state: base argv + cwd + prompt + session id, tagged `claude-sdk` so a
-   *  restore relaunches this native host (not the terminal agent) and resumes the
-   *  conversation rather than starting over. */
+  /** Session state: base argv + the workbench (worktree) cwd + prompt + session id,
+   *  tagged `claude-sdk` so a restore relaunches this native host (not the terminal
+   *  agent) and resumes the conversation rather than starting over. The cwd recorded
+   *  is `effectiveCwd` (the worktree the editor roots at), not the process spawn dir
+   *  (always the main dir) — restore re-roots there. */
   serialize(): TabState | null {
     return {
       kind: 'agent',
       agentKind: 'claude-sdk',
       command: this.baseCommand ?? ['claude'],
-      cwd: this.cwd,
+      cwd: this.effectiveCwd,
       prompt: this.launchPrompt,
       // Fall back to the resume id: a lazily-resumed agent that the user hasn't
       // sent a turn to yet has no live (init-reported) session id, but must still

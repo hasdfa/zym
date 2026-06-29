@@ -31,18 +31,19 @@ export interface AgentSession {
   /** Whether `label` is a real title (any of the three) rather than the
    *  first-message fallback — lets the picker de-emphasise untitled sessions. */
   titled: boolean;
-  /** The cwd Claude ran in for this session (read from the transcript) — where
-   *  `--resume` must be spawned and where a resumed agent's workbench should be
-   *  rooted, so its branch/worktree is restored. Null when the transcript records
-   *  none (then the caller falls back to the project cwd). */
+  /** The cwd Claude ran in for this session (read from the transcript). Resume no
+   *  longer spawns here — the process always spawns in the main dir (the cwd
+   *  invariant) — but it's the worktree a resumed agent's editor re-roots to when it
+   *  still exists. Null when the transcript records none. */
   cwd: string | null;
   /** A worktree the agent moved into *dynamically* mid-session (announced via the
    *  set_worktree bridge tool), recorded by zym as a sidecar — distinct from
-   *  `cwd` (Claude's launch dir, where `--resume` must run). When it differs from
-   *  `cwd`, resume nudges the agent to `cd` back here. Null when it never moved. */
+   *  `cwd` (Claude's launch dir). It's the worktree resume re-roots the editor to
+   *  (and nudges the agent to re-announce), winning over `cwd`. Null if it never moved. */
   effectiveCwd: string | null;
   /** Absolute path of the transcript JSONL on disk. Lets a resume relocate the
-   *  transcript when the session's original cwd (a removed worktree) is gone. */
+   *  transcript under the main root so `--resume` resolves there (see
+   *  `relocateTranscriptToMainRoot`). */
   transcript: string;
   /** Last-activity time (the transcript's mtime), epoch ms. */
   modified: number;
@@ -149,13 +150,13 @@ export function listResumableSessions(roots: string[]): AgentSession[] {
   return [...byId.values()].sort((a, b) => b.modified - a.modified);
 }
 
-/** The cwd to spawn `claude --resume <session>` in. Normally the cwd Claude
- *  recorded (where it resolves the transcript). When that cwd is gone — a removed
- *  worktree — the transcript is relocated under `mainRoot`'s project dir so the
- *  resume resolves there, and `mainRoot` is returned. Best-effort: on any failure
- *  it still returns `mainRoot`, so a resume never spawns into a missing directory. */
-export function resolveResumeCwd(session: AgentSession, mainRoot: string): string {
-  if (session.cwd && Fs.existsSync(session.cwd)) return session.cwd;
+/** Ensure `session`'s transcript is resolvable from the main root, where every agent
+ *  process now spawns (the cwd invariant — see docs/agents.md). `claude --resume <id>`
+ *  reads the transcript relative to its cwd, so when the file lives under a different
+ *  project dir — a session launched in a worktree (legacy), or one discovered via the
+ *  worktree scan in `listResumableSessions` — copy it under `mainRoot`'s project dir.
+ *  Best-effort: a failure just means that one resume starts without its history. */
+export function relocateTranscriptToMainRoot(session: AgentSession, mainRoot: string): void {
   try {
     const dest = Path.join(transcriptDir(mainRoot), `${session.id}.jsonl`);
     if (session.transcript !== dest && !Fs.existsSync(dest)) {
@@ -163,9 +164,8 @@ export function resolveResumeCwd(session: AgentSession, mainRoot: string): strin
       Fs.copyFileSync(session.transcript, dest);
     }
   } catch {
-    /* best effort — fall through to mainRoot regardless */
+    /* best effort — this resume falls back to the main dir with no transcript */
   }
-  return mainRoot;
 }
 
 // Sidecar (next to the transcript) recording a worktree the agent moved into

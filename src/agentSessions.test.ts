@@ -9,7 +9,7 @@ import type { AgentSession } from './agentSessions.ts';
 // it at a throwaway dir so the round-trip never touches the real ~/.claude. Safe
 // because `node --test` runs each test file in its own process.
 process.env.HOME = tmpDir('agent-sessions-home');
-const { transcriptDir, writeCustomTitle, readSessionName, listResumableSessions, resolveResumeCwd } =
+const { transcriptDir, writeCustomTitle, readSessionName, listResumableSessions, relocateTranscriptToMainRoot } =
   await import('./agentSessions.ts');
 
 // Seed a one-line transcript whose recorded `cwd` is `cwd`, under its project dir.
@@ -71,19 +71,27 @@ test('listResumableSessions recovers a removed-worktree transcript via the main-
   assert.equal(recovered.cwd, removed); // its real (now-gone) cwd, from the transcript
 });
 
-test('resolveResumeCwd keeps an existing cwd but relocates a gone one to the main root', () => {
-  const main = tmpDir('resume-main'); // a real, existing dir
+test('relocateTranscriptToMainRoot copies a worktree-dir transcript under the main root', () => {
+  const main = tmpDir('resume-main'); // a real, existing dir (the process spawns here)
 
-  // Existing cwd → spawn right there, nothing relocated.
+  // A transcript launched in a (still-live) worktree is copied under main's project dir
+  // so `--resume` resolves there — the process always spawns at main, never the worktree.
   const liveCwd = tmpDir('resume-live');
   const liveSid = 'cccccccc-0000-0000-0000-000000000003';
   const live: AgentSession = { id: liveSid, label: 'x', titled: false, cwd: liveCwd, effectiveCwd: null, transcript: seedAt(liveCwd, liveSid), modified: 0 };
-  assert.equal(resolveResumeCwd(live, main), liveCwd);
+  relocateTranscriptToMainRoot(live, main);
+  assert.ok(Fs.existsSync(Path.join(transcriptDir(main), `${liveSid}.jsonl`)), 'live-worktree transcript relocated under main root');
 
-  // Gone cwd → transcript copied under main's project dir, resume resolves there.
+  // A gone worktree's transcript is relocated all the same.
   const goneSid = 'dddddddd-0000-0000-0000-000000000004';
   const goneCwd = '/home/u/repo-gone-worktree'; // never created → does not exist
   const gone: AgentSession = { id: goneSid, label: 'y', titled: false, cwd: goneCwd, effectiveCwd: null, transcript: seedAt(goneCwd, goneSid), modified: 0 };
-  assert.equal(resolveResumeCwd(gone, main), main);
-  assert.ok(Fs.existsSync(Path.join(transcriptDir(main), `${goneSid}.jsonl`)), 'transcript relocated under main root');
+  relocateTranscriptToMainRoot(gone, main);
+  assert.ok(Fs.existsSync(Path.join(transcriptDir(main), `${goneSid}.jsonl`)), 'gone-worktree transcript relocated under main root');
+
+  // A transcript already under the main root is left untouched (no needless copy).
+  const homeSid = 'eeeeeeee-0000-0000-0000-000000000005';
+  const home: AgentSession = { id: homeSid, label: 'z', titled: false, cwd: main, effectiveCwd: null, transcript: seedAt(main, homeSid), modified: 0 };
+  relocateTranscriptToMainRoot(home, main); // must not throw
+  assert.ok(Fs.existsSync(Path.join(transcriptDir(main), `${homeSid}.jsonl`)));
 });

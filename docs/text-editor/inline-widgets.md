@@ -178,9 +178,18 @@ child is the work:
   flush so the invalidation settles first.
 - **Force the relayout.** Callers `queueResize()` after a layout change —
   the cooperative loop won't otherwise re-allocate.
-- **Reposition via a frame-clock tick callback** (a few frames after a
-  change), not idle/timeout (which fire mid-transition and read bogus
-  coordinates); guard against moving to a zero-height (invalid) rect.
+- **Reposition via a frame-clock tick callback** (after a change), not
+  idle/timeout (which fire mid-transition and read bogus coordinates); guard
+  against moving to a zero-height (invalid) rect. The window is
+  **stabilization-based, not a fixed frame count**: GtkTextView re-allocates
+  changed line heights (e.g. an `on` header line growing to its widget height
+  on collapse/expand) over an unpredictable number of frames, so the tick keeps
+  repositioning *while any band still moves* and stops only after positions hold
+  steady (`REPOSITION_FRAMES` consecutive still frames), capped by
+  `REPOSITION_MAX_FRAMES`. A fixed window could close mid-relayout and strand a
+  sticky header at a partially-grown Y — the "headerbands float over the wrong
+  location after collapsing a file" bug — recovering only if a later scroll /
+  `vadjustment::changed` happened to re-fire.
 - **The overlay caret is a consumer too.** `TextEditor.renderCursorOverlay`
   / `renderExtraCarets` place the hollow/filled/beam caret boxes from
   `bufferToWindowCoords`, which is all-zero before the first allocation —

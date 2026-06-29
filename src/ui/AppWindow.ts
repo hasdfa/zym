@@ -31,7 +31,7 @@ import { ensureProjectActionsFile, type Action } from '../actions.ts';
 import { openActionRunner } from './workbench/ActionPicker.ts';
 import { AgentConversation } from './AgentConversation.ts';
 import { AGENT_CONFIGS, resolveAgentKind, type AgentKind } from '../agents/configs.ts';
-import { listResumableSessions, recordSessionWorktree, relativeTime, resolveResumeCwd, type AgentSession } from '../agentSessions.ts';
+import { listResumableSessions, recordSessionWorktree, relativeTime, relocateTranscriptToMainRoot, type AgentSession } from '../agentSessions.ts';
 import { PROJECT_NAME } from './WorkbenchList.ts';
 import { Sidebar } from './Sidebar.ts';
 import { AgentSidebar } from './AgentSidebar.ts';
@@ -53,6 +53,7 @@ import { openScriptRunner, detectPackageManager } from './ScriptRunner.ts';
 import { openWorkspaceSymbolPicker } from './WorkspaceSymbolPicker.ts';
 import { openDocumentSymbolPicker } from './DocumentSymbolPicker.ts';
 import { openDiffFilePicker } from './DiffFilePicker.ts';
+import { openDiffCollapseGlobPicker } from './DiffCollapseGlobPicker.ts';
 import { openSearchPicker } from './SearchPicker.ts';
 import { SearchResultsView } from './SearchResultsView.ts';
 import { ProjectSearchView } from './ProjectSearchView.ts';
@@ -911,15 +912,23 @@ export class AppWindow {
    * terminal already spawned in its constructor; the headless kind spawns here).
    */
   private openAgent(
-    options: { kind?: AgentKind; prompt?: string; userPrompt?: string; resume?: AgentResume; title?: string; cwd?: string; command?: string[]; background?: boolean } = {},
+    options: { kind?: AgentKind; prompt?: string; userPrompt?: string; resume?: AgentResume; title?: string; root?: string; command?: string[]; background?: boolean } = {},
   ): Agent {
     // Both kinds can resume now (claude-sdk rebuilds its transcript from disk), so a
     // resume no longer forces the terminal agent — it respects the configured kind
     // unless a caller pins one (e.g. restoreAgent passes the saved agent's kind).
     const kind = options.kind ?? resolveAgentKind(zym.config.get('agent.implementation'));
-    const cwd = options.cwd ?? process.cwd();
+    // Invariant: the agent *process* always spawns in the editor's main dir, never a
+    // worktree — its OS cwd then can't sit inside a worktree that gets removed (which
+    // crashes the agent), and every transcript lands under one project dir so
+    // `--resume` always resolves. A worktree is an editor concern only: `root` re-roots
+    // the workbench (Files/Git/gutters) and seeds the agent's effectiveCwd, while the
+    // agent itself works in it via set_worktree / its own `cd`. See docs/agents.md.
+    const mainRoot = this.mainRoot();
+    let root = options.root ?? mainRoot;
+    if (root !== mainRoot && !Fs.existsSync(root)) root = mainRoot; // a vanished worktree → main dir
     const agent = AGENT_CONFIGS[kind].create({
-      cwd, command: options.command, prompt: options.prompt, userPrompt: options.userPrompt, resume: options.resume, title: options.title,
+      cwd: mainRoot, worktree: root, command: options.command, prompt: options.prompt, userPrompt: options.userPrompt, resume: options.resume, title: options.title,
       onOpenFile: (path) => this.openFile(path),
     });
     // Track in the kind's map (terminal focus-routing / headless disposal key off these).
@@ -927,7 +936,7 @@ export class AppWindow {
     else if (agent instanceof AgentConversation) this.conversations.set(agent.root, agent);
     // Background launch: build the agent's workbench and start it, but stay on the
     // current workbench and don't focus it (it's listed in the sidebar; switch to it later).
-    const workbench = this.buildWorkbench(agent, cwd);
+    const workbench = this.buildWorkbench(agent, root);
     // Pipe the agent's `set_actions` straight into its workbench's action set (the
     // agent keeps no copy). The set is shown as buttons in the window header bar when
     // this workbench is active; pruning stale terminal tabs is driven off the workbench
@@ -960,9 +969,9 @@ export class AppWindow {
     // different worktree — re-root its workbench to match.
     agentSubs.add(new Disposable(agent.onDidChangeWorktree(() => {
       this.reRootWorkbench(workbench, agent.effectiveCwd);
-      // Persist the dynamically-entered worktree (keyed under the launch cwd's
-      // transcript dir) so a later resume can send the agent back to it.
-      if (agent.sessionId) recordSessionWorktree(cwd, agent.sessionId, agent.effectiveCwd);
+      // Persist the worktree as a sidecar under the spawn dir's transcript dir (the
+      // main dir, where the transcript lives) so a later resume can re-root to it.
+      if (agent.sessionId) recordSessionWorktree(mainRoot, agent.sessionId, agent.effectiveCwd);
     })));
     // When the agent edits files, re-check git now instead of waiting for the poll,
     // so its changes surface in Source Control / the branch indicator promptly, and
@@ -1062,7 +1071,7 @@ export class AppWindow {
       initialPrompt: message, // the review is the prompt → delivered as the agent's first turn
       onLaunch: ({ prompt, command, cwd, kind, worktree, background }) => {
         const { agentPrompt, userPrompt } = launchPrompt(prompt, worktree);
-        this.openAgent({ prompt: agentPrompt, userPrompt, command, cwd, kind, background });
+        this.openAgent({ prompt: agentPrompt, userPrompt, command, root: cwd, kind, background });
       },
     });
   }
@@ -1107,34 +1116,31 @@ export class AppWindow {
     return roots;
   }
 
-  /** This repo's main worktree — where a resume falls back to when the session's
-   *  own (worktree) cwd is gone. */
-  private repoRoot(): string {
-    return this.agentSessionRoots()[0] ?? process.cwd();
+  /** The directory every agent process spawns in: the editor's own root
+   *  (`process.cwd()`), fixed for the process's life and never a throw-away worktree.
+   *  Keeping every agent's OS cwd here means none sits inside a worktree that might be
+   *  removed (which would crash it), and every transcript lands under one project dir
+   *  so `--resume` always resolves. Worktree association is an editor re-root
+   *  (set_worktree), not the process cwd. See docs/agents.md. */
+  private mainRoot(): string {
+    return process.cwd();
   }
 
-  // `openAgent` options to resume `session`, restoring its branch/worktree/cwd:
-  // spawn in the cwd Claude recorded (where `--resume` resolves the session and the
-  // workbench roots). If the agent had moved into a worktree *dynamically* (a sidecar
-  // `effectiveCwd` differing from the transcript cwd), tell it to re-announce that
-  // worktree via the bridge so the editor re-roots — and to do nothing else, so a
-  // resume just restores the view without kicking off work.
-  private resumeOptions(session: AgentSession): { cwd?: string; resume: AgentResume; prompt?: string; title: string } {
-    // Spawn where Claude recorded the session; if that worktree is gone, the
-    // transcript is relocated under the main repo and we resume there instead.
-    const cwd = resolveResumeCwd(session, this.repoRoot());
-    const relocated = cwd !== session.cwd;
-    // The dynamic-worktree re-announce only makes sense when we're still in the
-    // original tree — a relocated resume's worktree is gone too, so skip it.
-    const moved =
-      !relocated && session.effectiveCwd && session.effectiveCwd !== session.cwd ? session.effectiveCwd : null;
+  // `openAgent` options to resume `session`. The process spawns in the main dir (the
+  // cwd invariant), so we only ensure the transcript is resolvable there (relocating
+  // it if it lived under a worktree's dir). The editor re-roots to the worktree the
+  // session worked in — a dynamic move (`effectiveCwd`) wins over the launch cwd —
+  // by passing it as `root`, which `buildWorkbench` roots directly; no re-announce
+  // prompt is needed (that just restored the view, which the seed now does), so a
+  // resume restores the worktree silently. A removed worktree resumes in the main dir.
+  private resumeOptions(session: AgentSession): { root?: string; resume: AgentResume; title: string } {
+    const mainRoot = this.mainRoot();
+    relocateTranscriptToMainRoot(session, mainRoot); // so `--resume <id>` resolves under the main dir
+    const wt = session.effectiveCwd ?? session.cwd;
+    const worktree = wt && wt !== mainRoot && Fs.existsSync(wt) ? wt : undefined;
     return {
-      cwd,
+      root: worktree,
       resume: { sessionId: session.id },
-      prompt: moved
-        ? `Call the set_worktree tool with the path ${moved} now, and do nothing else — ` +
-          `no other tools, commands, or commentary. Then stop and wait for my next instruction.`
-        : undefined,
       title: truncate(session.label, 40),
     };
   }
@@ -1193,11 +1199,15 @@ export class AppWindow {
     let agent: Agent;
     if (a.sessionId) {
       const session = listResumableSessions(this.agentSessionRoots()).find((s) => s.id === a.sessionId);
+      // The saved workbench cwd (`ws.root`) is authoritative for where the editor
+      // roots — `resumeOptions` still relocates the transcript and supplies the
+      // resume id + title, but its transcript-derived root is overridden by the
+      // recorded one, so restore needs no set_worktree re-announce from the agent.
       agent = session
-        ? this.openAgent({ ...this.resumeOptions(session), kind })
-        : this.openAgent({ kind, cwd: a.cwd, resume: { sessionId: a.sessionId } });
+        ? this.openAgent({ ...this.resumeOptions(session), root: ws.root, kind })
+        : this.openAgent({ kind, root: ws.root, resume: { sessionId: a.sessionId } });
     } else {
-      agent = this.openAgent({ kind, cwd: a.cwd, prompt: a.prompt });
+      agent = this.openAgent({ kind, root: ws.root, prompt: a.prompt });
     }
     // Reopen the files that were in this agent's work area (its reviewed files). The
     // agent leaf itself is recreated by openAgent; the work-area split geometry
@@ -1353,11 +1363,11 @@ export class AppWindow {
       zym.notifications.addWarning('No conversation to branch yet');
       return;
     }
-    // Branch into the same kind as the source agent, rooted where it ran (so
-    // `--resume` resolves the transcript and the workbench roots correctly).
+    // Branch into the same kind as the source agent, its editor rooted at the same
+    // worktree (the process spawns in the main dir, where `--resume` resolves).
     this.openAgent({
       kind: agent instanceof AgentConversation ? 'claude-sdk' : 'claude-tui',
-      cwd: agent.effectiveCwd,
+      root: agent.effectiveCwd,
       resume: { sessionId, fork: true },
       title: `${agent.title} (branch)`,
     });
@@ -1418,19 +1428,19 @@ export class AppWindow {
     this.openFileIn(path, panel, { focus: false, owner: workbench, select });
   }
 
-  // Restart an agent: retire the old one and relaunch with the same cwd, resuming
-  // its claude conversation (forking a still-live session so the original
-  // transcript isn't clobbered). A pinned (renamed) title carries over.
+  // Restart an agent: retire the old one and relaunch in place, resuming its claude
+  // conversation (forking a still-live session so the original transcript isn't
+  // clobbered). A pinned (renamed) title carries over.
   private restartAgent(agent: Agent): void {
     const kind: AgentKind = agent instanceof AgentConversation ? 'claude-sdk' : 'claude-tui';
     const title = agent.renamed ? agent.title : undefined;
     // Both kinds resume by session id now; fork a copy if the agent is still live so
-    // the original keeps running. A headless agent restarts in its own (possibly
-    // moved) cwd, which is also where --resume resolves its transcript.
+    // the original keeps running. The editor re-roots to its (possibly moved)
+    // worktree; the process spawns in the main dir, where `--resume` resolves.
     const resume = agent.sessionId ? { sessionId: agent.sessionId, fork: !agent.exited } : undefined;
-    const cwd = kind === 'claude-sdk' ? agent.effectiveCwd : undefined;
+    const root = agent.effectiveCwd;
     this.closeAgent(agent);
-    this.openAgent({ kind, resume, title, cwd });
+    this.openAgent({ kind, resume, title, root });
   }
 
   // Close an agent for good: SIGTERM a live child, drop its workbench (returning to
@@ -2222,6 +2232,14 @@ export class AppWindow {
     openDiffFilePicker(this.overlay, diff);
   }
 
+  /** `diff:collapse-files-matching` (`z x`) — collapse every file in the active diff matching a
+   *  comma-separated glob filter typed into a picker. */
+  private diffCollapseGlobPicker() {
+    const diff = this.activeContinuousDiff();
+    if (!diff) return;
+    openDiffCollapseGlobPicker(this.overlay, diff);
+  }
+
   private async documentSymbolPicker() {
     const editor = this.activeEditor;
     if (!editor) return;
@@ -2516,6 +2534,11 @@ export class AppWindow {
         description: 'Collapse every file to a one-line header (overview)',
         when: () => this.activeContinuousDiff() !== null,
       },
+      'diff:collapse-files-matching': {
+        didDispatch: () => this.diffCollapseGlobPicker(),
+        description: 'Collapse files matching a glob…',
+        when: () => this.activeContinuousDiff() !== null,
+      },
       'diff:expand-all-files': {
         didDispatch: () => this.activeContinuousDiff()?.expandAllFiles(),
         description: 'Expand every collapsed file back to its diff',
@@ -2804,7 +2827,7 @@ export class AppWindow {
         mode,
         onLaunch: ({ prompt, command, cwd, kind, worktree, background }) => {
           const { agentPrompt, userPrompt } = launchPrompt(prompt, worktree);
-          this.openAgent({ prompt: agentPrompt, userPrompt, command, cwd, kind, background });
+          this.openAgent({ prompt: agentPrompt, userPrompt, command, root: cwd, kind, background });
         },
       });
     zym.commands.add('.AppWindow', {
