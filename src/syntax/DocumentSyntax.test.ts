@@ -122,7 +122,7 @@ test('an edit through one view reparses the shared model and repaints both views
   // model edit drives ONE (debounced) reparse on the shared DocumentSyntax.
   const buf = a.buffer;
   buf.insert(buf.getEndIter(), 'const y = 42;\n', -1);
-  await new Promise((r) => setTimeout(r, 120)); // let the 60ms reparse debounce fire
+  await new Promise((r) => setTimeout(r, 120)); // let the reparse debounce fire
 
   assert.ok((doc.syntax.captureCounts()['number'] ?? 0) > before, 'incremental reparse saw the new number literal');
   // The new `42` is highlighted in BOTH views (each repainted off the one reparse).

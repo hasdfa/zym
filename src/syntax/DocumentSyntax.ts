@@ -26,8 +26,14 @@ import { tagNamesAt, type TagName } from './tags.ts';
 import { breadcrumbAt, type Crumb } from './breadcrumb.ts';
 import { isFunctionNodeType, isClassNodeType, STRING_COMMENT_RE, RUN_FOLD_RE } from './nodeTypes.ts';
 
-// Reparse this long after the last edit. One debounce per document (was per view).
-const HIGHLIGHT_DEBOUNCE_MS = 60;
+// Reparse this long after the last edit — one debounce per document (was per view). Kept
+// to ~one frame so highlighting tracks typing without a perceptible lag: human keystrokes
+// are tens of ms apart (far longer than this), so a key followed by a pause repaints within
+// a frame and continuous fast typing never freezes the highlight (a longer window did). Its
+// real job now is coalescing the synchronous edits of a single tick (multi-cursor, paste,
+// vim operators) into one reparse — those reset the timer within the tick regardless of its
+// length. Per-keystroke cost stays cheap: an incremental reparse + a viewport-bounded repaint.
+const HIGHLIGHT_DEBOUNCE_MS = 16;
 
 // On first open (and reload), parse only the HEAD of the file synchronously, then run the
 // full parse deferred (scheduleFullParse) — so a large file opens without a full-file parse
